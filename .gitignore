@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# App state (auto-learning weights, session artifacts)
+data/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

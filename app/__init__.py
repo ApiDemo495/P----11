@@ -1,0 +1,1 @@
+"""Crypto prediction application package."""

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Crypto Prediction 4 — BTC · PAXG · ETH · BNB</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<!-- ============ HEADER ============ -->
+<header id="topbar">
+  <div class="brand">
+    <span class="logo">◈</span>
+    <div>
+      <h1>CRYPTO PREDICTION 4</h1>
+      <div class="sub">World Clock Alignment · 15 GRC / hour · Formulas 1–31</div>
+    </div>
+  </div>
+  <div class="clockbox">
+    <div class="clock-label">NEXT GRC</div>
+    <div class="clock-value" id="grc-countdown">--:--</div>
+    <div class="clock-meta" id="grc-meta">cycle #—</div>
+  </div>
+  <div class="clockbox">
+    <div class="clock-label">SESSION</div>
+    <div class="clock-value small" id="phase-label">ANALYSIS</div>
+    <div class="clock-meta" id="feed-label">feed: —</div>
+  </div>
+</header>
+
+<!-- ============ INITIAL ANALYSIS OVERLAY ============ -->
+<div id="analysis-overlay" class="overlay hidden">
+  <div class="overlay-card">
+    <div class="overlay-title">INITIAL ANALYSIS PHASE</div>
+    <div class="big-countdown" id="analysis-countdown">240</div>
+    <div class="overlay-sub">seconds until hard lock</div>
+    <ul class="readiness" id="readiness-list">
+      <li data-k="bars"><span class="dot"></span> Rolling windows populated</li>
+      <li data-k="formulas"><span class="dot"></span> Formulas 1–21 executed</li>
+      <li data-k="brains"><span class="dot"></span> 4 Drosophila brain instances initialized</li>
+      <li data-k="emotions"><span class="dot"></span> Emotion states computed</li>
+      <li data-k="news"><span class="dot"></span> News impact processed</li>
+      <li data-k="weights"><span class="dot"></span> Weightages computed</li>
+    </ul>
+    <div class="overlay-note">Prediction locks the moment every subsystem reports ready.</div>
+  </div>
+</div>
+
+<!-- ============ SL EVENT BANNER ============ -->
+<div id="event-banner" class="event-banner hidden"></div>
+
+<!-- ============ MAIN GRID ============ -->
+<main id="grid"></main>
+
+<!-- ============ SYSTEM PANEL ============ -->
+<section id="system-panel">
+  <div class="panel">
+    <div class="panel-title">Bgn Synchronization Matrix <span class="hint">(β = 1.2 · coherence-adjusted)</span></div>
+    <table id="bgn-table"><thead></thead><tbody></tbody></table>
+  </div>
+  <div class="panel">
+    <div class="panel-title">Formula Weights ω<sub>f</sub> <span class="hint">(auto-learning η = 0.02, clamped [0.005, 0.15])</span></div>
+    <div id="weights-list"></div>
+  </div>
+  <div class="panel wide">
+    <div class="panel-title">Formula Monitor <span class="hint">Bgn-adjusted outputs feeding the Composite Confidence Index</span></div>
+    <div id="formula-monitor"></div>
+  </div>
+</section>
+
+<footer>
+  Four timeframes · sequential sub-target locks · Tp4 macro thesis · SL protocol armed ·
+  <span id="conn-status" class="conn connecting">connecting…</span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
