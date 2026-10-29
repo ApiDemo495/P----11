@@ -408,7 +408,9 @@ class EmotionSystem:
                 reward = 0.0
             else:
                 reward = 1.0 if sign(term) == move_dir else -1.0
-            w[i] = _clamp(w[i] + ETA * reward, W_CLAMP_LO, W_CLAMP_HI)
+            # same multiplicative eta rule as the CCI weight learning:
+            # omega(t) = omega(t-1) * (1 + eta * reward), then clamp
+            w[i] = _clamp(w[i] * (1.0 + ETA * reward), W_CLAMP_LO, W_CLAMP_HI)
         total = sum(w)
         if total > 0:
             for i in range(21):

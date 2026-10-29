@@ -153,9 +153,19 @@ class CCIEngine:
             for key_s, w in payload.get("weights", {}).items():
                 symbol, tf = key_s.split("|", 1)
                 if tf in TF_ORDER:
-                    self.weights[(symbol, tf)] = {
-                        int(k): float(v) for k, v in w.items()
-                    }
+                    loaded = {int(k): float(v) for k, v in w.items()}
+                    if set(loaded) != set(WEIGHT_IDS) or not loaded:
+                        # part-1 state file (19 components) or corrupt entry:
+                        # restart this series at the uniform prior
+                        loaded = {fid: 1.0 / len(WEIGHT_IDS) for fid in WEIGHT_IDS}
+                    # defensive clamp + renormalize on load
+                    for fid in loaded:
+                        loaded[fid] = max(WEIGHT_MIN, min(WEIGHT_MAX, loaded[fid]))
+                    total = sum(loaded.values())
+                    if total > 0:
+                        for fid in loaded:
+                            loaded[fid] /= total
+                    self.weights[(symbol, tf)] = loaded
         except (OSError, ValueError, KeyError):
             pass
 

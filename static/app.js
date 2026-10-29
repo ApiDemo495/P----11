@@ -17,8 +17,20 @@ const state = {
   ws: null,
   connected: false,
   fmTf: { BTC: "tf1", PAXG: "tf1", ETH: "tf1", BNB: "tf1" },
+  detail: { sym: "BTC", tf: "tf1" },   // drives brain / emotion / risk panels
   history: { BTC: [], PAXG: [], ETH: [], BNB: [] },  // [ts, price] for sparklines
   bannerTimer: null,
+};
+
+const EMOTION_META = {
+  1: ["FII", "Fear Intensity"], 2: ["GSL", "Guardian Loss"], 3: ["FPR", "Fear Put"],
+  4: ["PCP", "Panic Coeff"], 5: ["CD", "Octo Reflex"], 6: ["ESi", "Endorphin"],
+  7: ["DPI", "Dopamine"], 8: ["ATR", "Vol Climax"], 9: ["RTP", "Trauma"],
+  10: ["ABS", "Absorption"], 11: ["HMC", "Herd Mirror"], 12: ["DRD", "Range Dev"],
+  13: ["ERI", "Extreme Rev"], 14: ["OFS", "Opt/Fear"], 15: ["IAF", "Intent/Act"],
+  16: ["LAI", "Lead Impulse"], 17: ["CDP", "Crowd Pull"], 18: ["HTI", "Trend Inv"],
+  19: ["SMDM", "Smart Diverge"], 20: ["NMS", "News Surge"], 21: ["TEDR", "Trend Exh"],
+  22: ["CERC", "Composite"],
 };
 
 /* ======================= formatting ======================= */
@@ -194,8 +206,11 @@ function renderSnapshot(snap) {
   }
 
   renderBgn(snap.bgn);
-  renderWeights(snap.weights, snap.formula_names);
+  renderWeights(snap.weights, snap.weight_labels || snap.formula_names);
   renderFormulaMonitor(snap);
+  renderBrainPanel(snap);
+  renderEmotionPanel(snap);
+  renderRiskPanel(snap);
 }
 
 function renderTf(sym, tf, cyc) {
@@ -390,6 +405,154 @@ function renderFormulaMonitor(snap) {
         <span class="fnum">${v >= 0 ? "+" : ""}${v.toFixed(3)}</span></div>`;
     }).join("");
   }
+}
+
+/* ---------- Part-2 panels: brains / emotions / risk ---------- */
+function detailSelectorHTML() {
+  const { sym, tf } = state.detail;
+  return `<span class="sel-group">${SYMBOLS.map(s =>
+    `<button data-kind="sym" data-v="${s}" class="${s === sym ? "on" : ""}">${s}</button>`).join("")}</span>
+    <span class="sel-group">${TF_ORDER.map(t =>
+    `<button data-kind="tf" data-v="${t}" class="${t === tf ? "on" : ""}">${TF_LABEL[t]}</button>`).join("")}</span>`;
+}
+
+function wireSelector(id, rerender) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = detailSelectorHTML();
+  el.querySelectorAll("button").forEach(b => {
+    b.addEventListener("click", () => {
+      state.detail[b.dataset.kind] = b.dataset.v;
+      rerender(state.snap);
+    });
+  });
+}
+
+function renderBrainPanel(snap) {
+  if (!snap) return;
+  wireSelector("brain-selector", renderBrainPanel);
+  const el = document.getElementById("brain-panel");
+  const sys = snap.systems && snap.systems[`${state.detail.sym}|${state.detail.tf}`];
+  const info = snap.brains || {};
+  const conn = info.connectome || {};
+  const head = `<div class="conn-line">
+    <span>connectome: <b>${conn.source || "—"}</b></span>
+    <span>${conn.units_per_brain ?? "—"} units/brain</span>
+    <span>${conn.edges != null ? conn.edges.toLocaleString() : "—"} edges</span>
+    <span>${conn.layout || ""}</span>
+    <span>instances: ${(info.instances || []).map(i => `${i.id}${i.ready ? " ✓" : " …"}`).join(" · ")}</span>
+  </div>`;
+  if (!sys || !sys.brain) { el.innerHTML = head + `<div class="fm-item">awaiting first GRC…</div>`; return; }
+  const br = sys.brain;
+  const polBadge = br.polarity > 0 ? `<span class="pol bull">▲ BULLISH</span>`
+    : br.polarity < 0 ? `<span class="pol bear">▼ BEARISH</span>` : `<span class="pol flat">◆ NEUTRAL</span>`;
+  const rows = (br.instances || []).map(i => {
+    const hPct = Math.round((i.hormone_state || 0) * 100);
+    const sPct = Math.round(((i.h_signal || 0) + 1) / 2 * 100);
+    return `<tr>
+      <td><b>${i.id}</b><span class="role">${i.role || ""}</span></td>
+      <td>H ${hPct}%<span class="mini-bar"><span style="width:${hPct}%"></span></span></td>
+      <td class="${(i.h_signal || 0) >= 0 ? "pos" : "neg"}">${(i.h_signal || 0) >= 0 ? "+" : ""}${(i.h_signal || 0).toFixed(4)}</td>
+      <td>EQ ${(i.experience || 0).toFixed(3)}</td>
+      <td>pat ${(i.pattern || 0) >= 0 ? "+" : ""}${(i.pattern || 0).toFixed(3)}</td>
+      <td>${i.dominant || "—"} ${(i.p_dominant || 0).toFixed(2)}</td>
+      <td><span class="mini-bar wide"><span style="width:${sPct}%"></span></span></td>
+    </tr>`;
+  }).join("");
+  const hormones = Object.entries(br.hormones_avg || {}).map(([k, v]) =>
+    `<span class="horm">I_${k} <b>${(+v).toFixed(3)}</b></span>`).join("");
+  el.innerHTML = `${head}
+    <div class="consensus-line">
+      <b>${state.detail.sym} ${state.detail.tf.toUpperCase()}</b>
+      consensus ${br.consensus >= 0 ? "+" : ""}${(+br.consensus).toFixed(4)} ${polBadge}
+      strength ${(br.strength || 0).toFixed(3)} · agreement ${((br.agreement || 0) * 100).toFixed(0)}%
+      · EQ(B2) ${(br.experience || 0).toFixed(3)} · P(dom) ${(br.p_dominant || 0).toFixed(2)}
+    </div>
+    <div class="horm-row">${hormones}</div>
+    <table class="brain-table"><thead><tr>
+      <th>Instance / role</th><th>MBON H</th><th>H_signal</th><th>Experience</th><th>Pattern</th><th>Dominant state</th><th>readout</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderEmotionPanel(snap) {
+  if (!snap) return;
+  wireSelector("emotion-selector", renderEmotionPanel);
+  const el = document.getElementById("emotion-panel");
+  const sys = snap.systems && snap.systems[`${state.detail.sym}|${state.detail.tf}`];
+  if (!sys || !sys.emotion) { el.innerHTML = `<div class="fm-item">awaiting first GRC…</div>`; return; }
+  const em = sys.emotion;
+  const chips = [];
+  for (let eid = 1; eid <= 22; eid++) {
+    const meta = EMOTION_META[eid];
+    const val = eid === 22 ? (em.cerc ?? em.aggregate) : (em.emotions ? em.emotions[eid] : null);
+    if (val == null) continue;
+    const dir = eid === 22 ? Math.sign(val) : (em.directions ? em.directions[eid] : 0);
+    const arrow = dir > 0 ? "▲" : dir < 0 ? "▼" : "·";
+    const dcls = dir > 0 ? "up" : dir < 0 ? "down" : "flat";
+    const v = Math.max(0, Math.min(1, Math.abs(eid === 22 ? val : val)));
+    chips.push(`<div class="emo-chip ${eid === 22 ? "cerc" : ""}" title="E${eid} ${meta[1]}">
+      <span class="eid">E${eid}</span><span class="ename">${meta[0]}</span>
+      <span class="ebar"><span style="width:${(v * 100).toFixed(0)}%"></span></span>
+      <span class="eval">${(+val).toFixed(3)}</span>
+      <span class="edir ${dcls}">${arrow}</span></div>`);
+  }
+  const weights = (em.weights || []).map((w, i) => {
+    const meta = EMOTION_META[i + 1];
+    return `<div class="wrow slim">
+      <span class="wname">E${i + 1} ${meta[0]}</span>
+      <span class="wbar"><span class="wfill" style="width:${Math.min(100, w / 0.15 * 100).toFixed(1)}%"></span></span>
+      <span class="wval">${w.toFixed(3)}</span></div>`;
+  }).join("");
+  const cerc = +(em.cerc ?? em.aggregate ?? 0);
+  el.innerHTML = `
+    <div class="consensus-line">
+      <b>${state.detail.sym} ${state.detail.tf.toUpperCase()}</b>
+      E22 CERC <b class="${cerc >= 0 ? "pos" : "neg"}">${cerc >= 0 ? "+" : ""}${cerc.toFixed(4)}</b>
+      → CCI component 98 · aggregate ${(+em.aggregate).toFixed(4)}
+      · RTP ${(em.rtp ?? 0).toFixed(3)} · TEDR ${(em.tedr ?? 0).toFixed(3)}
+      <span class="pol ${em.polarity > 0 ? "bull" : em.polarity < 0 ? "bear" : "flat"}">
+        ${em.polarity > 0 ? "▲" : em.polarity < 0 ? "▼" : "◆"}</span>
+    </div>
+    <div class="emo-grid">${chips.join("")}</div>
+    <div class="emo-weights"><div class="sub-h">CERC weights w<sub>e</sub> (init 1/21 · η = 0.02 · clamp [0.005, 0.15])</div>${weights}</div>`;
+}
+
+function renderRiskPanel(snap) {
+  if (!snap) return;
+  wireSelector("risk-selector", renderRiskPanel);
+  const el = document.getElementById("risk-panel");
+  if (!snap.systems) { el.innerHTML = `<div class="fm-item">awaiting first GRC…</div>`; return; }
+  // per-(asset, tf) matrix of F28 ratio bands + conflict flags
+  const matrix = `<table class="risk-matrix"><thead><tr><th></th>${TF_ORDER.map(t =>
+    `<th>${TF_LABEL[t]}</th>`).join("")}</tr></thead><tbody>${SYMBOLS.map(s =>
+    `<tr><th>${s}</th>${TF_ORDER.map(t => {
+      const x = snap.systems[`${s}|${t}`];
+      if (!x) return `<td>—</td>`;
+      const band = x.arc_ratio ? (x.arc_ratio === 3 ? "3:1" : x.arc_ratio === 1.5 ? "3:2" : "1:1") : "NO TRD";
+      const cls = x.arc_ratio === 3 ? "r31" : x.arc_ratio === 1.5 ? "r32" : x.arc_ratio === 1 ? "r11" : "rnt";
+      const warn = x.conflicting ? `<span class="conflict-flag" title="F30 PCV conflicting signals">⚠</span>` : "";
+      return `<td class="band ${cls}" title="ARC ${(+x.arc).toFixed(3)} · PCV ${(+x.pcv).toFixed(3)}">${band}${warn}</td>`;
+    }).join("")}</tr>`).join("")}</tbody></table>`;
+  const x = snap.systems[`${state.detail.sym}|${state.detail.tf}`];
+  if (!x) { el.innerHTML = matrix; return; }
+  const arc = +(x.arc ?? 0);
+  const band = x.arc_ratio ? (x.arc_ratio === 3 ? "3:1" : x.arc_ratio === 1.5 ? "3:2" : "1:1") : "NO TRADE (conf < 0.35)";
+  const pcv = +(x.pcv ?? 0);
+  const conflict = x.conflicting || pcv < 0;
+  const sig = x.sigma || {};
+  const detail = `<div class="risk-detail">
+    <div class="rd-cell"><label>F28 ARC</label><b>${arc.toFixed(3)}</b><span>→ ${band}</span></div>
+    <div class="rd-cell"><label>σ current</label><b>${(+sig.cur || 0).toExponential(2)}</b><span>σ base ${(+sig.base || 0).toExponential(2)}</span></div>
+    <div class="rd-cell"><label>F30 PCV</label><b class="${pcv < 0 ? "neg" : "pos"}">${pcv >= 0 ? "+" : ""}${pcv.toFixed(4)}</b>
+      <span>${conflict ? "⚠ CONFLICTING SIGNALS" : "aligned with CCI"}</span></div>
+    <div class="rd-cell"><label>Confidence</label><b>${((x.confidence ?? 0) * 100).toFixed(1)}%</b>
+      <span>base ${((x.base_confidence ?? 0) * 100).toFixed(1)}% · DRHE ${(+x.drhe ?? 0).toFixed(3)}</span></div>
+    <div class="rd-cell"><label>ATR</label><b>${(+x.atr ?? 0).toFixed(4)}</b><span>win streak ${(+x.win_ratio ?? 0).toFixed(2)}</span></div>
+  </div>`;
+  const confLine = conflict
+    ? `<div class="conflict-banner">⚠ CONFLICTING SIGNALS — F30 PCV opposes the CCI · confidence −|PCV| × 0.3</div>`
+    : "";
+  el.innerHTML = `${matrix}<div class="sub-h">${state.detail.sym} ${state.detail.tf.toUpperCase()} detail</div>${detail}${confLine}`;
 }
 
 /* ======================= connection ======================= */

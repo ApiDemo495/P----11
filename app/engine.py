@@ -566,8 +566,11 @@ class PredictionEngine:
                 "news": news_agg,
             }
             if record:
-                self.cci.store_signals(symbol, tf, comp)
-                self.prev_comp[(symbol, tf)] = dict(comp)
+                # reward-rule storage: the 28 weighted components only
+                # (DRHE is a multiplier, not a rewarded signal)
+                comp_w = {fid: comp[fid] for fid in WEIGHT_IDS}
+                self.cci.store_signals(symbol, tf, comp_w)
+                self.prev_comp[(symbol, tf)] = comp_w
                 self.prev_brain_signals[(symbol, tf)] = [
                     inst["h_signal"] for inst in br["instances"]
                 ]
@@ -608,7 +611,13 @@ class PredictionEngine:
                     "drhe": round(drhe, 4),
                     "atr": results[tf]["atr"],
                     "pcv": round(pcv, 5),
+                    "conflicting": fin["conflicting"],
                     "arc": round(arc, 4),
+                    "arc_ratio": ratio_band,
+                    "sigma": {"cur": round(sigma_cur, 8),
+                              "base": round(sigma_base, 8)},
+                    "confidence": round(fin["confidence"], 4),
+                    "base_confidence": round(pack["confidence"], 4),
                     "win_ratio": round(self.hist.win_ratio.get(symbol, 0.0), 3),
                 }
         if record:
@@ -1237,6 +1246,16 @@ class PredictionEngine:
             "formula_names": {
                 f: FORMULA_NAMES[f] for f in FORMULA_FUNCTIONS
             },
+            "weight_labels": {
+                **{str(f): FORMULA_NAMES[f] for f in FORMULA_FUNCTIONS},
+                str(BRAIN_COMPONENT_ID): "BRAIN CONSENSUS",
+                str(EMOTION_COMPONENT_ID): "CERC COMPOSITE",
+                "20": FORMULA_NAMES[20],
+                "28": "ARC (risk)",
+                "29": "DLP (risk)",
+                "30": "PCV (validator)",
+            },
+            "brains": self.brains.status(),
             "formula_values": {
                 f"{s}|{tf}": data
                 for (s, tf), data in self.display_formulas.items()

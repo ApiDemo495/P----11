@@ -73,7 +73,12 @@ def _sigmoid(x: float) -> float:
 class Connectome:
     """Reduced weighted directed graph shared by the four instances."""
 
-    def __init__(self, seed: int = 495):
+    def __init__(self, seed: int = 495, *, backbone: tuple[float, float] = (0.01, 0.06),
+                 mbon_inhib: int = 56, hormone_w: tuple[float, float] = (0.15, 0.35),
+                 thing2_w: tuple[float, float] = (0.15, 0.35)):
+        """Weights/inhibition chosen empirically so the neutral fixed point
+        sits near H=0.5 (h_signal ~ 0) with +/-0.1..0.2 hormone modulation
+        range — a mean-0.5 weight graph saturates the readout at the ceiling."""
         self.neuprint_status = "structural-fallback"
         self.unit_count = BRAIN_TOTAL_UNITS
         self.pop: dict[str, range] = {}
@@ -112,11 +117,15 @@ class Connectome:
         def add_edge(src: int, dst: int, w: float | None = None,
                      g: float | None = None) -> None:
             if w is None:
-                w = rng.uniform(0.1, 1.0)
+                # small-magnitude weights keep the recurrent fixed point near
+                # A ~ 0.5 so hormone inputs can modulate MBON activity instead
+                # of the saturating ceiling a mean-0.5 graph would produce
+                w = rng.uniform(*backbone)
             if g is None:
                 # inhibitory predominantly on mushroom-body -> output synapses
                 is_mb_out = (src in self.pop["MBON"] or src in self.pop["KC"] or
-                             src in self.pop["PAM"]) and dst in self.pop["MBON"]
+                             src in self.pop["PAM"] or src in self.pop["SE"]) \
+                    and dst in self.pop["MBON"]
                 g = -1.0 if (is_mb_out and rng.random() < 0.7) else 1.0
             edges.append((src, dst, w, g))
 
@@ -124,11 +133,12 @@ class Connectome:
         for src in range(n):
             for _ in range(BRAIN_OUT_DEGREE):
                 add_edge(src, rng.randrange(n))
-        # hormone populations -> MBON decision layer (guaranteed pathway)
+        # hormone populations -> MBON decision layer (guaranteed pathway,
+        # strongest tract in the network — reward/panic drives dominate MBON)
         for pop_name in ("PAM", "SE", "OA", "TA"):
             for src in self.pop[pop_name]:
                 for _ in range(3):
-                    add_edge(src, rng.choice(mbon))
+                    add_edge(src, rng.choice(mbon), w=rng.uniform(*hormone_w))
         # KC -> pattern MBONs (B1 pathway)
         kc_list = list(self.pop["KC"])
         for src in kc_list[:400]:
@@ -153,6 +163,23 @@ class Connectome:
         for cell in aff:
             for dst in rng.sample(mbon, 2):
                 add_edge(cell, dst, g=1.0)
+        # Thing-2 pathways into the shared decision layer (B1 via KC->pattern
+        # MBON above; B2 lateral horn, B3 central complex, B4 descending
+        # neurons also project to MBONs so each instance's extra inputs
+        # modulate the shared hormone readout — the spec's stated mechanism
+        # for per-instance output differences)
+        for src in rng.sample(self.lh_pos + self.lh_neg, 120):
+            add_edge(src, rng.choice(mbon), w=rng.uniform(*thing2_w))
+        for src in rng.sample(cc_list, 40):
+            add_edge(src, rng.choice(mbon), w=rng.uniform(*thing2_w))
+        for src in rng.sample(list(self.pop["DN"]), 80):
+            add_edge(src, rng.choice(mbon), w=rng.uniform(*thing2_w))
+        # local inhibitory interneurons onto the output layer: centers the
+        # neutral operating point of MBON activity at ~0.5 (H -> 0.5)
+        for _ in range(mbon_inhib):
+            for dst in mbon:
+                add_edge(rng.randrange(n), dst,
+                         w=rng.uniform(*backbone), g=-1.0)
 
         # build forward out-adjacency for sweeps
         out: list[list[tuple[int, float, float]]] = [[] for _ in range(n)]
@@ -329,12 +356,15 @@ class BrainSystem:
         """
         conn = self.connectome
         hormones = self.hormone_inputs(market)
-        # normalize hormone inputs into sigmoid-relevant range
+        # map raw hormone drives into the sigmoid-relevant input range
+        # (dopamine is a small positive product -> x10; serotonin is already
+        # a sigma -> centered; octopamine centered on its neutral 1/3 level;
+        # tyramine is a volatility ratio -> centered on 1.0)
         i_map = {
-            "dopamine": hormones["dopamine"] * 2.5,
+            "dopamine": min(3.0, hormones["dopamine"] * 10.0),
             "serotonin": (hormones["serotonin"] - 0.5) * 4.0,
-            "octopamine": hormones["octopamine"] * 3.0,
-            "tyramine": (min(2.0, hormones["tyramine"]) - 1.0) * 3.0,
+            "octopamine": (hormones["octopamine"] - 1.0 / 3.0) * 3.0,
+            "tyramine": (min(2.0, hormones["tyramine"]) - 1.0) * 2.0,
         }
 
         results = []
@@ -432,7 +462,7 @@ class BrainSystem:
 
             results.append({
                 "id": brain.id,
-                "hormone_state": round(h_state, 5),
+                "hormone_state": h_state,   # raw; display layers round
                 "h_signal": max(-1.0, min(1.0, h_signal)),
                 "hormones": hormones,
                 "pattern": pattern_signal,
