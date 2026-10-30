@@ -186,6 +186,139 @@ async def override(symbol: str, tf: str) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Part 4 — learning, history, agents, settings (Sections 10/11/13/15)
+# ---------------------------------------------------------------------------
+@app.get("/api/learning")
+async def learning_state() -> JSONResponse:
+    snap = engine.last_snapshot or engine.build_snapshot()
+    return JSONResponse({"ok": True, "learning": snap.get("learning", {}),
+                         "shares": engine.learning.subsystem_shares,
+                         "state_file": "data/auto_learning_state.json"})
+
+
+@app.post("/api/learning/macro")
+async def learning_macro() -> JSONResponse:
+    """Manual/cron trigger for the macro learning cycle (15 GRCs)."""
+    try:
+        engine.learning.macro_cycle(engine)
+        engine.learning.save(engine)
+    except Exception as e:
+        log.exception("macro trigger failed")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    return JSONResponse({"ok": True, "macro_count": engine.learning.macro_count,
+                         "shares": engine.learning.subsystem_shares})
+
+
+@app.post("/api/learning/deep")
+async def learning_deep() -> JSONResponse:
+    """Manual trigger for the deep learning cycle (247 minutes)."""
+    try:
+        engine.learning.deep_cycle(engine)
+        engine.learning.save(engine)
+    except Exception as e:
+        log.exception("deep trigger failed")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    return JSONResponse({"ok": True, "deep_count": engine.learning.deep_count,
+                         "shares": engine.learning.subsystem_shares})
+
+
+@app.post("/api/learning/reset")
+async def learning_reset() -> JSONResponse:
+    """Reset ALL learned weights to the uniform prior (confirmation)."""
+    engine.learning.reset(engine)
+    engine.learning.save(engine)
+    return JSONResponse({"ok": True, "message": "learning state reset"})
+
+
+@app.get("/api/history/days")
+async def history_days() -> JSONResponse:
+    return JSONResponse({"ok": True, "days": engine.historydb.days()})
+
+
+@app.get("/api/history/day")
+async def history_day(date: str) -> JSONResponse:
+    rows = engine.historydb.day(date)
+    return JSONResponse({"ok": True, "date": date, "records": rows})
+
+
+@app.get("/api/history/replay")
+async def history_replay(date: str, i: int = 0) -> JSONResponse:
+    rows = engine.historydb.day(date)
+    if not rows or i < 0 or i >= len(rows):
+        return JSONResponse({"ok": False, "error": "no record"}, status_code=404)
+    return JSONResponse({"ok": True, "date": date, "i": i,
+                         "total": len(rows), "record": rows[i]})
+
+
+@app.get("/api/history/leaderboard")
+async def history_leaderboard() -> JSONResponse:
+    """Formula accuracy leaderboard (rolling 500, Section 13)."""
+    from .formulas import FORMULA_NAMES
+    from .config import WEIGHT_IDS as _WIDS
+    rows = []
+    for fid in _WIDS:
+        acc = engine.learning.formula_accuracy(fid)
+        if acc is not None:
+            rows.append({"formula": fid,
+                         "name": FORMULA_NAMES.get(fid, f"F{fid}"),
+                         "accuracy": round(acc, 4)})
+    rows.sort(key=lambda r: -r["accuracy"])
+    return JSONResponse({"ok": True, "leaderboard": rows})
+
+
+@app.get("/api/settings")
+async def settings_get() -> JSONResponse:
+    s = dict(engine.agents.settings)
+    return JSONResponse({"ok": True, "settings": s})
+
+
+@app.put("/api/settings")
+async def settings_put(body: dict) -> JSONResponse:
+    engine.agents.configure(**{k: v for k, v in body.items()
+                               if k in engine.agents.settings})
+    return JSONResponse({"ok": True, "settings": engine.agents.settings})
+
+
+@app.get("/api/agents/status")
+async def agents_status() -> JSONResponse:
+    return JSONResponse({"ok": True, "agents": engine.agents.status(),
+                         "signal": engine.last_agent_signal or {}})
+
+
+@app.post("/api/agents/test/{slot}")
+async def agents_test(slot: str) -> JSONResponse:
+    if slot not in ("gemini", "backup1", "backup2", "backup3", "local"):
+        return JSONResponse({"ok": False, "error": "unknown slot"}, status_code=400)
+    res = await engine.agents.test(slot)
+    return JSONResponse({"ok": True, "slot": slot, "result": res})
+
+
+@app.get("/api/state/export")
+async def state_export() -> JSONResponse:
+    """Full learned state as a downloadable JSON object."""
+    data = engine.learning.state_dict(engine)
+    data["agents_settings"] = {
+        k: v for k, v in engine.agents.settings.items() if "key" not in k
+    }
+    return JSONResponse({"ok": True, "state": data})
+
+
+@app.post("/api/state/import")
+async def state_import(body: dict) -> JSONResponse:
+    state = body.get("state") or {}
+    try:
+        import json as _json
+        import os as _os
+        _os.makedirs("data", exist_ok=True)
+        with open("data/auto_learning_state.json", "w") as fh:
+            _json.dump(state, fh)
+        engine.learning.load_state(engine=engine, brains=engine.brains)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "message": "state imported + reloaded"})
+
+
+# ---------------------------------------------------------------------------
 # WebSocket
 # ---------------------------------------------------------------------------
 @app.websocket("/ws")

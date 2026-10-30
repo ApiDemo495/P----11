@@ -11,3 +11,9 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# Part 4 runtime data (Section 13 history stays local)
+data/history/
+data/learning_cron.log
+data/learning_cron.log.tmp
+models/

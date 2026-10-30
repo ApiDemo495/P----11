@@ -28,9 +28,9 @@ from .config import HIST_EMOTION_LAG
 from .models import FormulaContext
 from .formulas._helpers import pearson, sign, std_pop
 
-ETA = 0.02
-W_CLAMP_LO = 0.005
-W_CLAMP_HI = 0.15
+ETA = 0.015               # Section 10: η_emotion
+W_CLAMP_LO = 0.01
+W_CLAMP_HI = 0.12
 EMO_IDS = list(range(1, 22))          # CERC is E22 = the composite itself
 CERC_WEIGHT_ID = 22
 
@@ -95,6 +95,9 @@ class EmotionSystem:
     def initialize(self) -> None:
         """No external dependencies (history rings bootstrap themselves)."""
         return
+
+    def reset_weights(self) -> None:
+        self.weights.clear()
 
     # ------------------------------------------------------------------
     def _weights(self, symbol: str, tf: str) -> list[float]:
@@ -396,8 +399,9 @@ class EmotionSystem:
     # ------------------------------------------------------------------
     def reward_update(self, symbol: str, tf: str, emos: dict[int, float],
                       dirs: dict[int, int], cerc_before: float,
-                      move: float) -> None:
+                      move: float, eta: float | None = None) -> None:
         """GRC-cadence auto-learning for the 21 CERC weights (eta rule)."""
+        rate = ETA if eta is None else eta
         w = self._weights(symbol, tf)
         move_dir = sign(move)
         for i, eid in enumerate(EMO_IDS):
@@ -410,7 +414,7 @@ class EmotionSystem:
                 reward = 1.0 if sign(term) == move_dir else -1.0
             # same multiplicative eta rule as the CCI weight learning:
             # omega(t) = omega(t-1) * (1 + eta * reward), then clamp
-            w[i] = _clamp(w[i] * (1.0 + ETA * reward), W_CLAMP_LO, W_CLAMP_HI)
+            w[i] = _clamp(w[i] * (1.0 + rate * reward), W_CLAMP_LO, W_CLAMP_HI)
         total = sum(w)
         if total > 0:
             for i in range(21):

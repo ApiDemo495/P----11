@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 
 from .config import (
     BRAIN_CLUSTER_UNITS,
@@ -264,6 +265,10 @@ class BrainSystem:
         self._prev_signal_price: dict[tuple[str, str], float] = {}
         self.reward_windows: dict[int, list[float]] = {w: [] for w in WEIGHT_IDS}
         self.brain_reward_windows: dict[int, list[float]] = {i: [] for i in range(4)}
+        # --- Section 10/11 learning hooks --------------------------------
+        self._influence: dict[tuple[str, str], list[float]] = {}
+        self._inhibited: dict[tuple[str, int], float] = {}   # (tf, fid)->until
+        self._macro_metrics: dict[int, float] = {}           # fid -> accuracy
 
     # ------------------------------------------------------------------
     @property
@@ -387,12 +392,18 @@ class BrainSystem:
                 inputs[n_i] = max(-1.0, min(1.0, news_value)) * 2.0
 
             # --- brain-formula affinity coupling (|F_f| > 0.7) ----------
+            # Section 10 deep-cycle inhibitory input (247-minute window)
             aff_list = list(conn.pop["AFF"])
             per_formula = _AFFINITY_CELLS // 31
+            now_ts = time.time()
             for f_pos, fid in enumerate(range(1, 32)):
                 if fid in affinity:
+                    factor = 1.0
+                    until = self._inhibited.get((tf, fid), 0.0)
+                    if until > now_ts:
+                        factor = 0.5      # diagnostic inhibition
                     for k in range(per_formula):
-                        inputs[aff_list[f_pos * per_formula + k]] = affinity[fid]
+                        inputs[aff_list[f_pos * per_formula + k]] = affinity[fid] * factor
 
             # --- Thing 2 assignments ------------------------------------
             if brain.id == "DB-1":
@@ -469,6 +480,12 @@ class BrainSystem:
                 wid: state[conn.dn_for_weight[wid]] - 0.5
                 for wid in WEIGHT_IDS
             }
+            # Section 10 macro loop: Brain 4 receives the macro accuracy
+            # metrics on its FSB drive; DN outputs modulate those weights.
+            if brain.index == 3 and self._macro_metrics:
+                for wid, acc in self._macro_metrics.items():
+                    if wid in weight_adj:
+                        weight_adj[wid] += (acc - 0.5) * 0.05
 
             results.append({
                 "id": brain.id,
@@ -486,7 +503,11 @@ class BrainSystem:
             })
 
         # --- consensus across all four instances -----------------------
-        mean_signal = sum(r["h_signal"] for r in results) / 4.0
+        # Section 10: learned per-brain influence weights (renormalized)
+        wts = self._influence.get((symbol, tf), [0.25, 0.25, 0.25, 0.25])
+        w_tot = sum(wts) or 1.0
+        mean_signal = sum(r["h_signal"] * wts[i]
+                          for i, r in enumerate(results)) / w_tot
         polarity = 1 if mean_signal > 1e-6 else (-1 if mean_signal < -1e-6 else 0)
         agree = sum(1 for r in results if r["h_signal"] != 0
                     and (r["h_signal"] > 0) == (mean_signal > 0))
@@ -570,6 +591,56 @@ class BrainSystem:
         # caller stores the fresh activation after the GRC pass
 
     # ------------------------------------------------------------------
+    # -- Section 10 learning API -------------------------------------------
+    def set_influence(self, symbol: str, tf: str, weights: list[float]) -> None:
+        self._influence[(symbol, tf)] = list(weights[:4])
+
+    def influence_for(self, symbol: str, tf: str) -> list[float]:
+        return list(self._influence.get((symbol, tf), [0.25] * 4))
+
+    def macro_feedback(self, metrics: dict[int, float]) -> float:
+        """Section 10 macro step 5: feed formula accuracies into the Brain-4
+        FSB drive.  Returns the controller tone in [-0.5, +0.5]."""
+        self._macro_metrics = {int(k): float(v) for k, v in metrics.items()}
+        if not metrics:
+            return 0.0
+        tone = sum(metrics.values()) / len(metrics) - 0.5
+        return max(-0.5, min(0.5, tone))
+
+    def diagnostic_inhibit(self, tf: str, fids: list[int], until: float) -> None:
+        """Section 10 deep step 4: affinity cells of the top-3 wrong
+        formulas are inhibited for the next 247 minutes."""
+        for fid in fids:
+            self._inhibited[(tf, int(fid))] = until
+
+    def state_dict(self) -> dict:
+        return {
+            "pattern_valence": {s: [round(x, 5) for x in v]
+                                for s, v in self.pattern_valence.items()},
+            "influence": {f"{s}|{tf}": [round(x, 5) for x in w]
+                          for (s, tf), w in self._influence.items()},
+            "macro_metrics": {str(k): round(v, 5)
+                              for k, v in self._macro_metrics.items()},
+            "inhibited": {f"{tf}|{fid}": until
+                          for (tf, fid), until in self._inhibited.items()},
+            "reward_windows": {str(k): v for k, v in self.reward_windows.items()},
+        }
+
+    def load_state(self, d: dict) -> None:
+        for s, v in (d.get("pattern_valence") or {}).items():
+            if s in self.pattern_valence and len(v) == len(self.pattern_valence[s]):
+                self.pattern_valence[s] = [float(x) for x in v]
+        for key, w in (d.get("influence") or {}).items():
+            s, tf = key.split("|", 1)
+            self._influence[(s, tf)] = [float(x) for x in w]
+        self._macro_metrics = {int(k): float(v)
+                               for k, v in (d.get("macro_metrics") or {}).items()}
+        for key, until in (d.get("inhibited") or {}).items():
+            tf, fid = key.split("|", 1)
+            self._inhibited[(tf, int(fid))] = float(until)
+        for key, v in (d.get("reward_windows") or {}).items():
+            self.reward_windows[int(key)] = [float(x) for x in v[-50:]]
+
     def status(self) -> dict:
         return {
             "ready": self.ready,

@@ -50,7 +50,10 @@ import numpy as np
 
 from .config import (
     CONFIDENCE_FLOOR,
+    ETA_PHYSICS,
     LEARNING_RATE_ETA,
+    PHYSICS_W_MAX,
+    PHYSICS_W_MIN,
     PHYSICS_ALPHA_COUNT,
     PHYSICS_COUPLING_WINDOW,
     PHYSICS_NAMES,
@@ -1078,6 +1081,11 @@ class PhysicsSystem:
         self.ready = True
         self.load()
 
+    def reset_weights(self) -> None:
+        self.alpha.clear()
+        self._loaded = True
+        self._weights_cache = {} if hasattr(self, "_weights_cache") else {}
+
     def _weights(self, symbol: str, tf: str) -> dict[int, float]:
         key = (symbol, tf)
         w = self.alpha.get(key)
@@ -1087,17 +1095,19 @@ class PhysicsSystem:
         return w
 
     def reward_update(self, symbol: str, tf: str,
-                      prev_values: dict[int, float], move: float) -> None:
-        """Same multiplicative rule as the CCI weights (P22): alpha *=
-        (1 + eta * reward), clamp, renormalize."""
+                      prev_values: dict[int, float], move: float,
+                      eta: float | None = None) -> None:
+        """Section 10 micro-learning (physics): alpha *= (1 + η·reward),
+        clamp [0.01, 0.12], renormalize across the P-group."""
         if move == 0.0 or not prev_values:
             return
+        rate = ETA_PHYSICS if eta is None else eta
         w = self._weights(symbol, tf)
         for p in list(w.keys()):
             v_prev = prev_values.get(p, 0.0)
             reward = 1.0 if _sign(v_prev) == _sign(move) else -1.0
-            w[p] = w[p] * (1.0 + LEARNING_RATE_ETA * reward)
-            w[p] = max(WEIGHT_MIN, min(WEIGHT_MAX, w[p]))
+            w[p] = w[p] * (1.0 + rate * reward)
+            w[p] = max(PHYSICS_W_MIN, min(PHYSICS_W_MAX, w[p]))
         total = sum(w.values())
         if total > 0:
             for p in w:

@@ -38,14 +38,20 @@ import json
 import os
 
 from .config import (
+    BRAIN_COMPONENT_ID,
     CONFIDENCE_FLOOR,
+    CORE_SIGNAL_IDS,
     DOUBLE_CHECK_PENALTY,
     DOUBLE_CHECK_RATIO,
+    EMOTION_COMPONENT_ID,
+    ETA_MICRO,
     HEDGE_COMPONENT_ID,
     HEDGE_INITIAL_WEIGHT,
     LEARNING_RATE_ETA,
+    NEWS_COMPONENT_ID,
     PHYSICS_COMPONENT_ID,
     STATE_FILE,
+    SUBSYSTEM_SHARES_INIT,
     TF_ORDER,
     WEIGHT_IDS,
     WEIGHT_MAX,
@@ -83,9 +89,11 @@ class CCIEngine:
             self.weights[key] = w
         return w
 
-    def update_weights(self, symbol: str, tf: str, current_price: float) -> None:
-        """Called exactly once per GRC.  Uses the previous GRC's signals and
-        the actual price move over the GRC interval (4 minutes)."""
+    def update_weights(self, symbol: str, tf: str, current_price: float,
+                       eta: float | None = None) -> None:
+        """Micro-learning (Section 10): called exactly once per GRC using
+        the previous GRC's signals and the actual price move."""
+        rate = ETA_MICRO if eta is None else eta
         key = self._key(symbol, tf)
         prev = self.prev_signals.get(key)
         prev_price = self.prev_price.get(symbol)
@@ -98,7 +106,7 @@ class CCIEngine:
         for fid in list(w.keys()):
             f_prev = prev.get(fid, 0.0)
             reward = 1.0 if _sign(f_prev) == _sign(move) else -1.0
-            w[fid] = w[fid] * (1.0 + LEARNING_RATE_ETA * reward)
+            w[fid] = w[fid] * (1.0 + rate * reward)
             w[fid] = max(WEIGHT_MIN, min(WEIGHT_MAX, w[fid]))
         total = sum(w.values())
         if total > 0:
@@ -112,6 +120,26 @@ class CCIEngine:
         self.prev_price[symbol] = price
 
     # -- aggregation --------------------------------------------------------
+    @staticmethod
+    def effective_weights(w: dict[int, float],
+                          shares: dict[str, float] | None) -> dict[int, float]:
+        """Section 14 Level 1+2: core signals share `shares['core']`
+        (split ∝ their learned ω); components 97..101 take their
+        subsystem's share directly."""
+        if not shares:
+            return w
+        sig = {f: w.get(f, 0.0) for f in CORE_SIGNAL_IDS if f in w}
+        tot = sum(sig.values())
+        eff: dict[int, float] = {}
+        for f, v in sig.items():
+            eff[f] = shares["core"] * (v / tot if tot > 0 else 1.0 / len(sig or [1]))
+        eff[BRAIN_COMPONENT_ID] = shares["brain"]
+        eff[EMOTION_COMPONENT_ID] = shares["emotion"]
+        eff[PHYSICS_COMPONENT_ID] = shares["physics"]
+        eff[NEWS_COMPONENT_ID] = shares["news"]
+        eff[HEDGE_COMPONENT_ID] = shares["hf"]
+        return eff
+
     def compute(
         self,
         symbol: str,
@@ -120,8 +148,11 @@ class CCIEngine:
         drhe: float,
         *,
         tme: float = 1.0,
+        shares: dict[str, float] | None = None,
+        raw_weights: dict[int, float] | None = None,
     ) -> dict:
-        w = self.get_weights(symbol, tf)
+        raw_w = raw_weights or self.get_weights(symbol, tf)
+        w = self.effective_weights(raw_w, shares or SUBSYSTEM_SHARES_INIT)
         # P9: the physics component's effective weight is base * TME
         scaled = {
             fid: (val * tme if fid == PHYSICS_COMPONENT_ID else val)
@@ -151,7 +182,50 @@ class CCIEngine:
             "direction": _sign(cci_adjusted),
             "issued": issued,
             "drhe": drhe,
+            "weights_used": {str(k): round(v, 5) for k, v in w.items()},
         }
+
+    # -- Section 16 mandatory double-check ---------------------------------
+    @staticmethod
+    def double_check(direction: int, confidence: float,
+                     votes: dict[str, int]) -> dict:
+        """Compare CCI / PCV / agent / brain assessments.
+
+        3-4 agree  -> confirmed, confidence × 1.05
+        2 agree    -> stands, × 0.85, MIXED SIGNALS
+        <=1 agrees -> majority direction wins; no majority -> NO TRADE
+        """
+        others = [v for v in votes.values() if v]
+        agree = sum(1 for v in others if v == direction)
+        voices = 1 + len(others)
+        if voices >= 3 and agree <= 0:
+            # CCI alone against everyone: take the majority of the others
+            pos = sum(1 for v in others if v > 0)
+            neg = len(others) - pos
+            if pos > neg:
+                return {"direction": 1, "confidence": confidence,
+                        "issued": False, "label": "overridden",
+                        "agree": agree, "voices": voices}
+            if neg > pos:
+                return {"direction": -1, "confidence": confidence,
+                        "issued": False, "label": "overridden",
+                        "agree": agree, "voices": voices}
+            return {"direction": direction, "confidence": 0.0,
+                    "issued": False, "label": "no_trade",
+                    "agree": agree, "voices": voices}
+        if agree >= 2:
+            return {"direction": direction,
+                    "confidence": confidence * 1.05,
+                    "issued": True, "label": "confirmed",
+                    "agree": agree, "voices": voices}
+        if agree == 1 and len(others) >= 2:
+            return {"direction": direction,
+                    "confidence": confidence * 0.85,
+                    "issued": True, "label": "mixed",
+                    "agree": agree, "voices": voices}
+        return {"direction": direction, "confidence": confidence,
+                "issued": True, "label": "standalone",
+                "agree": agree, "voices": voices}
 
     # -- persistence --------------------------------------------------------
     def save(self) -> None:

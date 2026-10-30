@@ -59,6 +59,57 @@ DOUBLE_CHECK_RATIO = 0.6
 DOUBLE_CHECK_PENALTY = 0.5
 
 # ---------------------------------------------------------------------------
+# Section 10 — auto-learning timescales
+# ---------------------------------------------------------------------------
+ETA_MICRO = 0.02                  # core formula weights (every GRC)
+ETA_BRAIN = 0.01                  # per-brain influence weights (every GRC)
+ETA_EMOTION = 0.015               # CERC member weights (every GRC)
+ETA_PHYSICS = 0.015               # physics alpha weights (every GRC)
+BRAIN_W_MIN, BRAIN_W_MAX = 0.1, 0.4           # per-brain influence clamp
+EMOTION_W_MIN, EMOTION_W_MAX = 0.01, 0.12     # CERC member clamp
+PHYSICS_W_MIN, PHYSICS_W_MAX = 0.01, 0.12     # physics alpha clamp
+MACRO_PERIOD_GRC = 15             # every 60 minutes
+MACRO_ACC_WINDOW = 15             # rolling accuracy window (GRCs)
+MACRO_PROBATION = 0.4             # below -> halve weight + flag
+MACRO_BONUS = 0.7                 # above -> +20% weight
+MACRO_CORR_REDUNDANCY = 0.85      # pairwise correlation above -> cut 30%
+MACRO_CUT = 0.30
+DEEP_PERIOD_MINUTES = 247         # one full TF4 cycle
+DEEP_DIAGNOSTIC_HR = 0.5          # HR below -> diagnostic mode
+DEEP_WRONG_CUT = 0.40             # top-3 wrong formulas: -40%
+DEEP_RIGHT_BOOST = 0.50           # rescued formulas: +50%
+ACCURACY_TARGET = 0.90
+HIGH_ALERT_LOW = 0.85             # rolling-100 accuracy below -> double rates
+HIGH_ALERT_HIGH = 0.92            # above -> return to normal rates
+HIGH_ALERT_PROBATION = 0.5        # probation threshold while in high-alert
+ACCURACY_ROLLING = 100            # per-timeframe rolling window
+
+# Section 14 Level 1 — subsystem weightages of the CCI
+SUBSYSTEM_SHARES_INIT: dict[str, float] = {
+    "core": 0.45, "brain": 0.10, "emotion": 0.15,
+    "physics": 0.15, "news": 0.07, "hf": 0.08,
+}
+SUBSYSTEM_BEARINGS: dict[str, tuple[float, float]] = {
+    "core": (0.05, 0.60), "brain": (0.05, 0.25), "emotion": (0.05, 0.25),
+    "physics": (0.05, 0.25), "news": (0.03, 0.15), "hf": (0.03, 0.12),
+}
+SUBSYSTEM_STEP = 0.02             # Level-1 adjustment step (Section 14)
+
+# Section 11 — agent integration
+AGENT_GEMINI_WEIGHT = 0.10
+AGENT_LOCAL_WEIGHT = 0.08
+AGENT_COMBINED_WEIGHT = 0.12
+AGENT_FREE_RPH = 15               # free-tier requests per hour (1 / GRC)
+AGENT_PAID_PER_GRC = 4            # per-asset calls when paid tier detected
+AGENT_FALLBACK_GRCS = 3           # reuse last signal for 3 failed GRCs
+AGENT_EPS = 1e-6
+
+# Section 13 — history retention
+HISTORY_DIR = "data/history"
+HISTORY_RETENTION_DAYS = 90
+LEARN_STATE_FILE = "data/auto_learning_state.json"
+
+# ---------------------------------------------------------------------------
 # Bgn synchronization
 # ---------------------------------------------------------------------------
 BGN_BETA = 1.2

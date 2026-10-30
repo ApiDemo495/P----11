@@ -1,0 +1,10 @@
+# Section 11/15 — optional agent + local-model dependencies.
+# Install with:  pip install -r requirements-agents.txt
+# The core app runs WITHOUT these (agents fall back to formula-only mode).
+# RAM tiers (auto-selected at runtime):
+#   >=14 GB  Phi-3-mini-4k-instruct  Q4_K_M
+#   >= 7 GB  TinyLlama-1.1B-Chat     Q4_K_M
+#   else     Qwen2-0.5B-Instruct     Q4_K_M
+llama-cpp-python>=0.2.90
+huggingface_hub>=0.27.0
+httpx>=0.27.0

@@ -65,6 +65,9 @@ from .news import NewsSystem
 from . import hedgefund, orderflow
 from .physics import PhysicsSystem
 from .risk import arc_ratio, dynamic_level_placement
+from .learning import LearningSystem
+from .agents import AgentManager
+from .historydb import HistoryDB, empty_record
 
 log = logging.getLogger("engine")
 
@@ -133,6 +136,13 @@ class PredictionEngine:
         self._market_cache: dict[str, dict] = {}
         self._market_cache_ts: float = 0.0
 
+        # --- Part-4 learning / agents / history ---------------------------
+        self.learning = LearningSystem()
+        self.agents = AgentManager()
+        self.historydb = HistoryDB()
+        self.last_agent_signal: dict[str, Any] = {}
+        self.last_grc_signals: dict[tuple[str, str], dict] = {}
+
         self._tasks: list[asyncio.Task] = []
         self._busy = asyncio.Lock()
         self._stop = asyncio.Event()
@@ -142,6 +152,12 @@ class PredictionEngine:
     # ==================================================================
     async def start(self) -> None:
         self.cci.load()
+        # Section 10: learned weights/brain state resume from the JSON file
+        self.learning.load_state(engine=self, brains=self.brains)
+        try:
+            self.historydb.compress_old()
+        except Exception:
+            log.exception("history retention pass failed")
         await self._initialize_subsystems()
         self._tasks.append(asyncio.create_task(self._analysis_loop()))
         self._tasks.append(asyncio.create_task(self._tick_loop()))
@@ -153,6 +169,7 @@ class PredictionEngine:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self.cci.save()
         self.physics.save()
+        self.learning.save(self)
 
     async def _initialize_subsystems(self) -> None:
         # wait for the feed to deliver history
@@ -453,17 +470,21 @@ class PredictionEngine:
                                 self.hist.tf_key(symbol, tf, f"facc{fid}"), 50
                             ).append(r)
                 # Formula 21 weight learning + Brain-4 secondary adjustment
-                self.cci.update_weights(symbol, tf, price)
+                # (Section 10 micro-learning with adaptive eta rates)
+                self.cci.update_weights(symbol, tf, price,
+                                        eta=self.learning.rates["micro"])
                 self._apply_brain4(symbol, tf)
                 # P22 physics alpha learning (same eta reward rule)
                 prev_ph = self.prev_physics.get((symbol, tf))
                 if prev_ph and move != 0:
-                    self.physics.reward_update(symbol, tf, prev_ph, move)
+                    self.physics.reward_update(symbol, tf, prev_ph, move,
+                                               eta=self.learning.rates["physics"])
                 # CERC emotion-weight rewards (21 channels, eta rule)
                 prev_em = self.prev_emotions.get((symbol, tf))
                 if prev_em and move != 0:
                     self.emotions.reward_update(
-                        symbol, tf, prev_em[0], prev_em[1], 0.0, move
+                        symbol, tf, prev_em[0], prev_em[1], 0.0, move,
+                        eta=self.learning.rates["emotion"],
                     )
                 # consecutive-correct running ratio (0..1, last 10)
                 pdir = self.prev_cci_dir.get((symbol, tf), 0)
@@ -486,6 +507,9 @@ class PredictionEngine:
                 for fid in FORMULA_FUNCTIONS
                 if abs(raws[tf].get(fid, 0.0)) > 0.7
             }
+            self.brains.set_influence(
+                symbol, tf, self.learning.brain_influence(symbol, tf)
+            )
             brain_res[tf] = self.brains.evaluate(
                 symbol, tf, market, affinity, self._thing2(symbol, tf, tf_ctx, atr_tf, market),
                 advance=record,
@@ -575,7 +599,19 @@ class PredictionEngine:
             comp[NEWS_COMPONENT_ID] = news_sync[tf]
             comp[HEDGE_COMPONENT_ID] = hedge_sync[tf]
             phys = phys_raw[tf]
-            pack = self.cci.compute(symbol, tf, comp, drhe, tme=phys["tme"])
+            # Section 14 Level 3/4: performance-scaled raw weights
+            base_w = self.cci.get_weights(symbol, tf)
+            raw_mod = {
+                fid: base_w.get(fid, 0.0)
+                * self.learning.performance_multiplier(fid, "tf", tf)
+                * self.learning.performance_multiplier(fid, "sym", symbol)
+                for fid in WEIGHT_IDS
+            }
+            pack = self.cci.compute(
+                symbol, tf, comp, drhe, tme=phys["tme"],
+                shares=self.learning.subsystem_shares,
+                raw_weights=raw_mod,
+            )
 
             # F30 PCV validator — runs on the CCI (post-aggregation)
             pcv_detail = f30_pcv(ctxs[tf].P, pack["cci_adjusted"])
@@ -671,6 +707,12 @@ class PredictionEngine:
                 "hedge": phys["hedge"],
                 "news_value": news_sync[tf],
                 "qdpc_tau": phys["details"]["p21"]["tau"],
+                "weight_profile": self._weight_profile(symbol, tf, {
+                    "raw": raws[tf], "drhe": drhe,
+                    "physics": {"ufp": phys["ufp"]["value"]},
+                }),
+                "agent": None,           # filled by _apply_agents at GRC
+                "double_check": None,
             }
             if record:
                 # reward-rule storage: the 28 weighted components only
@@ -921,6 +963,186 @@ class PredictionEngine:
     # ==================================================================
     # cycle helpers
     # ==================================================================
+    def _weight_profile(self, symbol: str, tf: str, res: dict) -> dict:
+        """Section 14 Level 5 — sub-target relevance profiles (Tp1 fast:
+        SATD/VAD/WRPP; Tp3: MSRC/DIQ; Tp4 slow: CLRE/DRHE/UFP)."""
+        raw = res.get("raw") or {}
+        return {
+            "l3_tf": round(self.learning.performance_multiplier(21, "tf", tf), 4),
+            "l4_sym": round(self.learning.performance_multiplier(21, "sym", symbol), 4),
+            "l5": {
+                "tp1": {"SATD": round(raw.get(1, 0.0), 4),      # F1 SATE
+                        "VAD": round(raw.get(2, 0.0), 4),       # F2
+                        "WRPP": round(raw.get(3, 0.0), 4)},     # F3
+                "tp3": {"MSRC": round(raw.get(11, 0.0), 4),     # F11
+                        "DIQ": round(raw.get(15, 0.0), 4)},     # F15
+                "tp4": {"CLRE": round(raw.get(19, 0.0), 4),     # F19
+                        "DRHE": round(res.get("drhe", 0.0), 4),
+                        "UFP": round(res.get("physics", {}).get("ufp", 0.0), 4)},
+            },
+        }
+
+    async def _apply_agents(self, symbol: str, res_pack: dict[str, dict]) -> None:
+        """Section 11: one Gemini call per GRC (+ local model), then the
+        CCI multiplier, then the Section-16 mandatory double-check."""
+        if symbol != SYMBOL_ORDER[0]:
+            # one agent call per GRC (BTC anchor) — the signal is shared
+            # across assets with each asset's own CCI/confidence multipliers
+            sig = self.last_agent_signal or {}
+        else:
+            tf1 = res_pack.get("tf1") or {}
+            prices = self.feed.prices()
+            returns = {}
+            for s2 in SYMBOL_ORDER:
+                st = self.feed.state(s2)
+                cl = st.closes
+                if len(cl) >= 11 and cl[-11]:
+                    returns[s2] = round(cl[-1] / cl[-11] - 1.0, 6)
+            w = self.cci.get_weights(symbol, "tf1")
+            top5 = sorted(
+                ((fid, v) for fid, v in w.items() if fid <= 31),
+                key=lambda kv: -abs(kv[1]))[:5]
+            ctx = {
+                "prices": prices,
+                "returns": returns,
+                "cci_dir": tf1.get("direction"),
+                "cci_conf": round(tf1.get("confidence", 0.0), 4),
+                "top5": [{"formula": int(f), "weight": round(v, 5),
+                          "signal": round((tf1.get("adj") or {}).get(int(f), 0.0), 4)}
+                         for f, v in top5],
+                "brain_consensus": tf1.get("brain", {}).get("polarity"),
+                "headline": ((self.news._live_items() or [{}])[0]
+                             .get("headline", "")),
+                "news_sentiment": round(self.news.aggregate(symbol).get("polarity", 0.0), 4),
+                "cerc": tf1.get("emotion", {}).get("cerc"),
+            }
+            try:
+                sig = await self.agents.query(ctx)
+            except Exception:
+                log.exception("agent query failed")
+                sig = {"direction": 0, "confidence": 0.0, "weight": 0.0,
+                       "source": "error", "insight": ""}
+            self.last_agent_signal = sig
+        gd = float(sig.get("confidence") or 0.0)
+        g_dir = int(sig.get("direction") or 0)
+        gw = float(sig.get("weight") or 0.0)
+        for tf in TF_ORDER:
+            res = res_pack.get(tf)
+            if not res:
+                continue
+            # Section 11: CCI × (1 + w_agent × gd × gc)
+            if gw > 0 and gd > 0:
+                factor = 1.0 + gw * gd * res.get("base_confidence", 0.0)
+                res["cci_adjusted"] = res["cci_adjusted"] * factor
+                res["direction"] = _sign(res["cci_adjusted"])
+            res["agent"] = {
+                "direction": g_dir, "confidence": round(gd, 4),
+                "weight": round(gw, 5), "source": sig.get("source", "none"),
+                "insight": sig.get("insight", ""),
+                "warning": sig.get("warning", ""),
+            }
+            # Section 16: mandatory 4-vote double-check
+            votes = {
+                "pcv": 1 if res.get("pcv", 0.0) > 0 else (
+                    -1 if res.get("pcv", 0.0) < 0 else 0),
+                "agent": g_dir,
+                "brain": int(res.get("brain", {}).get("polarity", 0)),
+            }
+            dc = self.cci.double_check(res["direction"], res["confidence"], votes)
+            if dc["label"] == "mixed":
+                dc["message"] = "MIXED SIGNALS"
+            res["double_check"] = dc
+            if not dc["issued"]:
+                res["issued"] = False
+            res["confidence"] = dc["confidence"]
+            if dc["label"] == "overridden":
+                res["direction"] = dc["direction"]
+            self.last_result[(symbol, tf)] = res
+
+    def _record_learning(self, symbol: str, res_pack: dict[str, dict],
+                         now: float) -> None:
+        """Section 10/13 bookkeeping after the lock rules ran."""
+        prices = self.feed.prices()
+        price = prices.get(symbol, 0.0)
+        record = empty_record(now)
+        record["prices"] = {s: round(p, 6) for s, p in prices.items()}
+        prev_price = self.cci.prev_price.get(symbol)
+        move_sign = _sign(price - prev_price) if prev_price else 0
+        for tf in TF_ORDER:
+            res = res_pack.get(tf)
+            if not res:
+                continue
+            cyc = self.cycles.get((symbol, tf))
+            evs = [e for e in (cyc.events if cyc else [])
+                   if e.get("ts", 0) > now - 260]
+            target_hit = any(e["type"] == "target_hit" for e in evs)
+            sl_hit = any(e["type"] == "sl_hit" for e in evs)
+            sub = {
+                "emotion": 1 if res.get("emotion", {}).get("aggregate", 0) > 0 else -1,
+                "physics": 1 if res.get("physics", {}).get("ufp", 0) > 0 else -1,
+                "news": 1 if res.get("news_value", 0) > 0 else -1,
+                "hf": 1 if res.get("hedge", {}).get("combined", 0) > 0 else -1,
+                "brain": int(res.get("brain", {}).get("polarity", 0)),
+                "core": int(res.get("direction", 0)),
+                "final": int(res.get("direction", 0)),
+            }
+            signals = {int(f): _sign(v)
+                       for f, v in (res.get("adj") or {}).items()}
+            brain_sigs = [float(inst.get("h_signal", 0.0))
+                          for inst in res.get("brain", {}).get("instances", [])]
+            self.learning.record_micro(
+                symbol, tf, move_sign, signals, sub, brain_sigs,
+                1 if target_hit else None,
+                1 if sl_hit else None,
+            )
+            if res.get("direction") and prev_price:
+                self.learning.feed_return(symbol, tf, price / prev_price - 1.0)
+            # --- Section 13 per-GRC record ------------------------------
+            record["predictions"][tf] = {
+                "direction": res.get("direction"),
+                "confidence": round(res.get("confidence", 0.0), 5),
+                "tp_sl": {
+                    "tp": (cyc.tp if cyc else None),
+                    "sl": (cyc.sl if cyc else None),
+                },
+                "lock_status": ({
+                    str(getattr(t, "k", i)): getattr(t, "status", "idle")
+                    for i, t in enumerate(getattr(cyc, "targets", []) or [])
+                } if cyc else {}),
+                "issued": bool(cyc.issued) if cyc else False,
+            }
+            record["outcomes"][tf] = {
+                "target_hit": target_hit,
+                "sl_hit": sl_hit,
+                "pnl_pct": (round((price / cyc.tp - 1.0) * 100, 4)
+                            if target_hit and cyc and cyc.direction > 0 and cyc.tp
+                            else 0.0),
+            }
+            record["formula_outputs"][tf] = {
+                str(f): round(v, 5) for f, v in (res.get("adj") or {}).items()
+            }
+            record["brain_states"][tf] = {
+                "polarity": res.get("brain", {}).get("polarity"),
+                "dominant": res.get("brain", {}).get("dominant"),
+                "state_dist": res.get("brain", {}).get("state_dist"),
+            }
+            record["emotion_composite"] = round(
+                (res.get("emotion", {}).get("cerc") or 0.0), 5)
+            record["physics_composite"] = round(
+                (res.get("physics", {}).get("ufp") or 0.0), 5)
+            record["news_impact"] = round(res.get("news_value") or 0.0, 5)
+            record["agent_signals"] = {
+                "gemini": (res.get("agent") or {}),
+                "local": self.agents.status().get("local", {}).get("last") or {},
+            }
+            w = self.cci.get_weights(symbol, tf)
+            record["weights"][tf] = {str(f): round(w.get(f, 0.0), 5)
+                                     for f in WEIGHT_IDS}
+        try:
+            self.historydb.append(record)
+        except Exception:
+            log.exception("history append failed")
+
     def _project_level(
         self, price: float, direction: int, confidence: float, atr: float, minutes: int
     ) -> float:
@@ -1167,10 +1389,27 @@ class PredictionEngine:
                 except Exception:
                     log.exception("GRC compute failed for %s", symbol)
                     continue
+                # Section 11 agent signal + multiplier, Section 16 double-check
+                try:
+                    await self._apply_agents(symbol, res_pack)
+                except Exception:
+                    log.exception("agent pass failed for %s", symbol)
                 for tf in TF_ORDER:
                     res = res_pack[tf]
                     self.last_result[(symbol, tf)] = res
                     self._apply_grc_lock_rules(symbol, tf, now, res)
+                # Sections 10/13 learning + history bookkeeping
+                try:
+                    self._record_learning(symbol, res_pack, now)
+                except Exception:
+                    log.exception("learning bookkeeping failed for %s", symbol)
+            # Section 10 macro (every 15 GRCs) + deep (every 247 min)
+            try:
+                self.learning.maybe_macro(self.grc_count, self)
+                self.learning.maybe_deep(self)
+                self.learning.save(self)
+            except Exception:
+                log.exception("macro/deep learning cycle failed")
             self.cci.save()
             self.physics.save()
             await self._broadcast_full("grc")
@@ -1579,6 +1818,38 @@ class PredictionEngine:
                 f"{s}|{tf}": data
                 for (s, tf), data in self.display_systems.items()
             },
+            # --- Part 4 blocks (Sections 10/11/13/14) ----------------------
+            "learning": {
+                "rates": dict(self.learning.rates),
+                "high_alert": self.learning.high_alert,
+                "probation_threshold": self.learning.probation_threshold,
+                "subsystem_shares": {
+                    k: round(v, 4)
+                    for k, v in self.learning.subsystem_shares.items()
+                },
+                "tf_hr": {tf: round(self.learning.tf_hr.get(tf, 0.5), 4)
+                          for tf in TF_ORDER},
+                "macro": {"count": self.learning.macro_count,
+                          "last_grc": self.learning.last_macro_grc,
+                          "tone": round(self.learning.macro_tone, 4)},
+                "deep": {"count": self.learning.deep_count,
+                         "last_ts": self.learning.last_deep_ts,
+                         "minutes_to_next": round(
+                             max(0.0, self.learning.last_deep_ts
+                                 + 247 * 60 - now) / 60, 1)},
+                "brain_influence": {
+                    tf: [round(x, 4) for x in
+                         self.learning.brain_influence("BTC", tf)]
+                    for tf in TF_ORDER
+                },
+                "formula_accuracy": {
+                    str(f): (round(a, 4) if (a := self.learning.formula_accuracy(f)) is not None else None)
+                    for f in list(WEIGHT_IDS)[:12]
+                },
+                "probation_count": len(self.learning.probation),
+            },
+            "agents": self.agents.status(),
+            "agent_signal": self.last_agent_signal or {},
         }
 
     async def _broadcast_full(self, reason: str) -> None:
