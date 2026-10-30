@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .clock import MasterClock, seconds_to_next_grc
-from .config import SYMBOLS, TIMEFRAMES
+from .config import SYMBOLS, TF_ORDER, TIMEFRAMES
 from .engine import PredictionEngine
 from .feed import MarketFeed
 
@@ -172,6 +172,16 @@ async def candles(symbol: str = "BTC", n: int = 180) -> JSONResponse:
                      "o": st.live_open, "h": st.live_high, "l": st.live_low,
                      "c": st.live_price, "v": st.live_volume, "live": True})
     return JSONResponse({"ok": True, "symbol": symbol, "bars": bars})
+
+
+@app.get("/api/systems")
+async def systems(symbol: str = "BTC") -> JSONResponse:
+    """Per-timeframe display systems (brain/emotion/physics/news/hedge)."""
+    if symbol not in SYMBOLS:
+        return JSONResponse({"ok": False, "error": "unknown symbol"}, status_code=400)
+    data = {f"{symbol}|{tf}": engine.display_systems.get((symbol, tf))
+            for tf in TF_ORDER if (symbol, tf) in engine.display_systems}
+    return JSONResponse({"ok": True, "symbol": symbol, "systems": data})
 
 
 @app.post("/api/override/{symbol}/{tf}")

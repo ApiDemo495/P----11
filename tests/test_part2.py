@@ -359,8 +359,8 @@ def test_all_emotions_bounded_and_cerc_consistent():
 
 def test_cerc_weight_reward_rule():
     def spec_legal_state(sys_):
-        # within [0.005, 0.15], sum 1 (eta clamps respect these bounds)
-        w = [0.14, 0.09] + [0.77 / 19] * 19
+        # Part-4 clamps [0.01, 0.12], sum 1 (eta rule respects these bounds)
+        w = [0.11, 0.08] + [0.81 / 19] * 19
         sys_.weights[("BTC", "tf1")] = list(w)
         return list(sys_._weights("BTC", "tf1"))
 

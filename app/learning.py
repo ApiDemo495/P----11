@@ -152,13 +152,13 @@ class HMM2:
                 if a_den[s] > 1e-300:
                     self.A[s] = [a_num[s][j] / a_den[s] for j in (0, 1)]
             for s in (0, 1):
-                w = sum(g[i][s] for i in range(n))
-                if w > 1e-12:
-                    self.mu[s] = sum(gam[i][s] * xs[i] for i in range(n)) / w
+                gw = sum(gam[i][s] for i in range(n))
+                if gw > 1e-12:
+                    self.mu[s] = sum(gam[i][s] * xs[i] for i in range(n)) / gw
                     self.var[s] = max(
                         1e-12,
                         sum(gam[i][s] * (xs[i] - self.mu[s]) ** 2
-                            for i in range(n)) / w,
+                            for i in range(n)) / gw,
                     )
             self.pi = pi0
             ll = sum(math.log(x) for x in c) / n
@@ -301,11 +301,12 @@ class LearningSystem:
             else:
                 row[2] += 1 if final_ok else 0
                 row[3] += 1
-        # per-brain micro rewards
+        # per-brain micro rewards (h_signal is float -> compare signs)
         w = self.brain_w.setdefault((symbol, tf), [0.25] * 4)
         for b, sig in enumerate(brain_sigs):
             if sig:
-                reward = 1.0 if sig == move_sign else -1.0
+                sgn = 1 if sig > 0 else (-1 if sig < 0 else 0)
+                reward = 1.0 if sgn == move_sign else -1.0
                 w[b] = _clamp(w[b] * (1.0 + self.rates["brain"] * reward),
                               0.1, 0.4)
         tot = sum(w)
@@ -433,6 +434,11 @@ class LearningSystem:
                             w[loser] = _clamp(
                                 w[loser] * (1.0 - MACRO_CUT), WEIGHT_MIN, WEIGHT_MAX)
                 engine.cci.weights[(symbol, tf)] = w
+                # Section 14: renormalize the row to sum 1 after weight edits
+                _tot = sum(w.values())
+                if _tot > 0:
+                    for _fid in w:
+                        w[_fid] /= _tot
                 engine.cci.save()
         # Step 5: Brain-4 biological loop — FSB receives the macro metrics
         metrics = {}
@@ -513,6 +519,11 @@ class LearningSystem:
                         w[fid] = _clamp(w[fid] * (1.0 + DEEP_RIGHT_BOOST),
                                         WEIGHT_MIN, WEIGHT_MAX)
                 engine.cci.weights[(symbol, tf)] = w
+                # Section 14: renormalize the row to sum 1 after weight edits
+                _tot = sum(w.values())
+                if _tot > 0:
+                    for _fid in w:
+                        w[_fid] /= _tot
                 engine.cci.save()
             # brain affinity inhibitory input for the next 247 minutes
             engine.brains.diagnostic_inhibit(tf, bad, until)

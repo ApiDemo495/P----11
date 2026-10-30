@@ -392,6 +392,8 @@ existing indicators anywhere.
 | P18 | σ_β1 = 0 → z = 0 |
 | P21 τ | τ literal ⇒ boot τ ≈ 3.9e11 min (decay ≈ 1 for any realistic age; spec-literal, documented) |
 | P6 inputs | Formula unchanged; user delegated: msrc = `&#124;F11&#124;` coherence level (signed MSRC would max DRPT on coherent down-trends) and cthr = 0.35 confidence floor (raw signed DVDI made `(1−cthr)` ≈ 1.76 and pinned DRPT ≈ 1, blocking organic issuance entirely — verified by a 240-GRC probe before the fix) |
+| Part-4 η supersession | Section 10's `η_emotion = η_physics = 0.015` with clamps `[0.01, 0.12]` supersedes Part 2's CERC `η=0.02` / `[0.005, 0.15]` (newer spec section wins; formula rule unchanged) |
+| S10 vs S14 subsystem step | S10 deep says ±5%, S14 L1 says ±2%: implemented **multiplicative ±5%** (deep-cycle-specific) then the S10 clamps `[0.05,0.25]/[0.05,0.25]/[0.03,0.15]/[0.03,0.12]` then S14's renormalize-to-1 — all three constraints satisfied in that order |
 
 ## Protocol (WebSocket `/ws`)
 
@@ -402,3 +404,62 @@ payloads). REST: `GET /api/snapshot`, `GET /api/health`,
 `GET /api/brain-activations`, `GET /api/news/{symbol}`,
 `POST /api/override/{symbol}/{tf}`. The dashboard automatically falls back
 to REST polling if the WebSocket is blocked by a proxy.
+
+---
+
+## Part 4 — Auto-Learning, Agents, UI Redesign, History, Weightage ✅
+
+### Section 10 — the permanently active auto-learning system (`app/learning.py`)
+
+| Cycle | Cadence | What happens (spec-exact) |
+|-------|---------|---------------------------|
+| **Micro** | every GRC | Core formula weights `ω ← ω·(1 + η_micro·reward)` η=0.02 clamp `[0.005,0.15]` renormalized (engine). Per-brain influence `w_b ← w_b·(1 + 0.01·reward)` clamp `[0.1,0.4]` renormalized across the 4 brains (weighted consensus). CERC 21-member weights η_emotion=0.015 clamp `[0.01,0.12]`. Physics P-group α η_physics=0.015 clamp `[0.01,0.12]`. |
+| **Macro** | every 15 GRCs (~60 min) | Rolling-15 accuracy: `<0.4` → halve weight + probation flag until next review; `>0.7` → ×1.2 bonus (scaled by the Brain-4 DN tone). Cross-formula output correlation `>0.85` → the lower-accuracy twin loses 30%. Brain 4 receives the full macro metrics on its FSB drive; DN outputs modulate those weights. Weibull `(k,λ)` snapshots for regime durations; λ_critical streaks keep streaming into F18 every GRC. |
+| **Deep** | every 247 min (one TF4 cycle) | Per-timeframe hit-rate check: `HR<0.5` → diagnostic mode — top-3 wrong formulas ×0.6 (`−40%`) and 247-min brain-affinity inhibitory input, top-3 right-despite-wrong ×1.5 (`+50%`). Bgn coherence re-anchored from the full 247-min RPIC history (blended 50/50 with the rolling-50 while fresh). Baum-Welch HMM retrain per (asset, timeframe) — the MSRC **formula is unchanged**; the HMM is its regime-context module. Weibull refit for all five regime types. CERC/physics/news/HF subsystem shares re-evaluated from agreement-vs-outcome contributions with the Section-10 clamps and Section-14 renormalization. |
+
+Adaptive rates: rolling-100 per-timeframe accuracy `<85%` → **high-alert mode** (η_micro=0.04, η_emotion/physics=0.03, probation 0.5); all timeframes `>92%` → normal rates. Target: **90%** Tp-before-SL accuracy per timeframe over the rolling 100.
+
+State persists to **`data/auto_learning_state.json`** (committed; survives restarts — weights, brain influence, HMMs, Weibull, shares, probation). Hourly safety net: `scripts/learning_cron.sh` → `POST /api/learning/macro`.
+
+### Section 11 — agent integration (`app/agents.py`)
+
+* **Gemini** — one call per GRC. Prompt = prices + 10-min returns + CCI direction/confidence + top-5 formula signals + brain consensus + latest news + CERC composite → JSON `{direction, confidence, insight}`.
+* Multipliers: cloud-only `CCI × (1 + 0.10·gd·gc)`; local-only `× (1 + 0.08·ld·lc)`; both `× (1 + 0.12·ad·ac)`.
+* Failover after 3 consecutive failures: Gemini → Backup1 (Gemini) → Backup2 (OpenAI GPT-4o) → Backup3 (Anthropic Claude); rate-limited slots skip forward; last-good signal reused for 3 GRCs, then neutral + warning.
+* **Local model** via llama-cpp-python, auto-selected by RAM: ≥14 GB Phi-3-mini-4k Q4_K_M · ≥7 GB TinyLlama-1.1B Q4_K_M · else Qwen2-0.5B. Doubles as the news sentiment analyzer. Optional deps in `requirements-agents.txt`; keys in `data/settings.json` or env (`GEMINI_API_KEY`, …) — see **API_SETUP.md**.
+
+### Section 12 — UI redesign (`static/`)
+
+Fixed **280px sidebar**, **9 tabs** (Dashboard · Brain Monitor · Formula Lab · Emotion Grid · Physics Engine · News Feed · Agent Control · History · Settings), palette `#0a0a0f / #00e5ff / #ff1744 / #ffd600`, Inter + JetBrains Mono. Dashboard: four TF quadrants, circular countdown rings (cyan flash on GRC reset), vendored **lightweight-charts** candlesticks with dashed→solid TP/SL price lines, translucent quantum-probability strip, Tp1–4 lock dots (Tp4 always filled), circular confidence gauge (red→yellow→green, 0.5 s ease), TP:SL ratio, per-quadrant asset buttons, full-width alert bar (amber SAFE / pulsing-red CLOSE). Formula Lab: searchable/filterable **75 cards** with KaTeX LaTeX + live Term Breakdown. Emotion Grid: 22 alias cells (FOMO…Complacency) with intensity circles, ELEVATED/NEUTRAL/EXTREME/DECAYING tags, pulse `>0.7`, CERC regime labels (EUPHORIC/PANICKED/COMPLACENT/CONFLICTED/EXHAUSTED). Physics: P1 quantum-level probability curve with price/TP/SL markers, Quantum State Summary, density-colored phase-space scatter. News: timestamp / headline / gold-silver-bronze reliability / category+weight / sentiment / impact bar / decay countdown. Agent Control: masked keys, status LEDs, hourly rate bars, local-model stats, **Test Connection** buttons. History + Settings below. Haptics: lock 50 ms · Tp double · SL 200 ms · CLOSE triple-strong · GRC 20 ms.
+
+### Section 13 — history (`app/historydb.py`)
+
+Every GRC writes `data/history_YYYY-MM-DD.json`: timestamp, prices, per-tf/asset predictions (tp/sl + lock_status), outcomes (`target_hit` / `sl_hit` / pnl%), 31 formula outputs, brain states, CERC, physics UFP, news impact, agent signals, weight snapshot. Retention **90 days → weekly summaries** (daily accuracy + GRC counts only). History tab: accuracy calendar (green >80 / yellow 60–80 / red <60), day-detail table, rolling-100 hit-rate chart, formula leaderboard, GRC-by-GRC **Prediction Replay** (prev/next/play).
+
+### Section 14 — weightage (five levels)
+
+* **L1** subsystem shares of the CCI: core 0.45 · brain 0.10 · emotion 0.15 · physics 0.15 · news 0.07 · HF 0.08 — components 97–101 take their share directly; the 26 core signals share `core` ∝ their learned ω. Deep cycle adjusts with the contribution rule + clamps + renormalize.
+* **L2** within-core ω per formula (micro η rule).
+* **L3** timeframe multiplier: `ω_f × perf_f_TF / avg_perf_f` (rolling 100).
+* **L4** asset multiplier: same rule per symbol.
+* **L5** sub-target relevance profiles — Tp1 fast: SATD/VAD/WRPP · Tp3: MSRC/DIQ · Tp4 slow: CLRE/DRHE/UFP (exposed per GRC in `weight_profile`).
+
+### Section 15 — API setup
+
+**API_SETUP.md** (repo root): Gemini keys, neuPrint + 3 backups, NewsAPI + 3 backups, Binance + 3 backups, local-model dependencies.
+
+### Section 16 — integration
+
+* `&#124;F_f&#124; > 0.7` → brain affinity clusters (existing coupling, now with deep-cycle inhibitory modulation).
+* CERC → Brain-2 LH experience input; brain-3 dominant state → emotion weights (existing); TEDR → P6 DRPT modulation; TME → emotion weight share.
+* IFR×OFTI / DPAD×LVD / SMDI×SMDM confirmation flags (hedge panel).
+* **Mandatory 4-vote double-check** every GRC: CCI · PCV · agents · brain consensus — ≥3 agree → `confidence × 1.05`; 2 agree → stands with `× 0.85` + **MIXED SIGNALS**; ≤1 agrees → majority direction wins (issued=False — decision requires human confirmation) or **NO TRADE** on a 2–2 tie.
+* Optimization priority honored: correctness → data quality → parameter optimization (macro) → execution speed (threaded local model, cached geometry) → redundancy pruning (macro step 4).
+
+### New endpoints
+
+`GET /api/learning` · `POST /api/learning/macro` · `POST /api/learning/deep` · `POST /api/learning/reset` ·
+`GET /api/history/days|day|replay|leaderboard` · `GET|PUT /api/settings` · `GET /api/agents/status` ·
+`POST /api/agents/test/{slot}` · `GET /api/state/export` · `POST /api/state/import` · `GET /api/systems`.
+
+**Tests: 119 passed** (test_part1/2/3 + `tests/test_part4.py` — learning cycles, HMM, persistence round-trip, two-tier CCI, double-check matrix, agents failover, history retention, UI contract).

@@ -152,7 +152,9 @@ class CCIEngine:
         raw_weights: dict[int, float] | None = None,
     ) -> dict:
         raw_w = raw_weights or self.get_weights(symbol, tf)
-        w = self.effective_weights(raw_w, shares or SUBSYSTEM_SHARES_INIT)
+        # two-tier weighting (Section 14) applies when the engine supplies
+        # the live subsystem shares; plain calls keep the flat ω semantics
+        w = self.effective_weights(raw_w, shares) if shares else raw_w
         # P9: the physics component's effective weight is base * TME
         scaled = {
             fid: (val * tme if fid == PHYSICS_COMPONENT_ID else val)
