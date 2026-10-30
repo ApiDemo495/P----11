@@ -441,13 +441,19 @@ def test_finalize_confidence_pipeline_order():
     assert fin5["issued"] is (fin5["confidence"] > CONFIDENCE_FLOOR)
 
 
-def test_cci_has_28_weighted_components():
+def test_cci_has_31_weighted_components():
+    from app.config import HEDGE_COMPONENT_ID, HEDGE_INITIAL_WEIGHT
+
     eng = CCIEngine()
     w = eng.get_weights("BTC", "tf1")
     assert set(w) == set(WEIGHT_IDS)
-    assert len(w) == 28
+    assert len(w) == 31
     assert sum(w.values()) == pytest.approx(1.0, abs=1e-9)
     assert all(W_CLAMP_LO <= v for v in w.values())
+    # Section 8: hedge/dark-pool combined starts at exactly 0.08
+    assert w[HEDGE_COMPONENT_ID] == pytest.approx(HEDGE_INITIAL_WEIGHT)
+    others = [v for f, v in w.items() if f != HEDGE_COMPONENT_ID]
+    assert all(v == pytest.approx(0.92 / 30, abs=1e-12) for v in others)
 
 
 def test_brain4_secondary_weight_adjustment():

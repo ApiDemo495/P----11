@@ -211,6 +211,7 @@ function renderSnapshot(snap) {
   renderBrainPanel(snap);
   renderEmotionPanel(snap);
   renderRiskPanel(snap);
+  onSnapshotExtras(snap);
 }
 
 function renderTf(sym, tf, cyc) {
@@ -424,6 +425,7 @@ function wireSelector(id, rerender) {
     b.addEventListener("click", () => {
       state.detail[b.dataset.kind] = b.dataset.v;
       rerender(state.snap);
+      onDetailChange();
     });
   });
 }
@@ -667,3 +669,799 @@ buildGrid();
 connectWS();
 pollFallback();
 window.addEventListener("resize", () => SYMBOLS.forEach(drawSpark));
+
+/* ======================= PART 3: tabs / chart / gauges / panels =======================
+ * Data contracts:
+ *   GET /api/formula-history?symbol&tf  -> core(31) + emotion(22) + physics(22)
+ *      sparklines, accuracy rings, names, CCI weights, physics alpha
+ *   GET /api/candles?symbol&n           -> OHLC bars (+ live partial minute)
+ *   GET /api/news/{symbol}             -> signed aggregate, per-TF impacts, items
+ *   GET /api/brain-activations         -> 4 x u8 b64 (drives the WebGL flash)
+ *   snapshot.systems[|tf]              -> physics values/alpha/couplings/p1,
+ *      news, hedge, corelation (50-GRC network), brain consensus, emotion
+ */
+const NON_DIR_P = new Set([2, 6, 9, 19, 21]);   // P22 non-directional inputs
+const stateExtras = {
+  tab: "dash",
+  fh: null, fhFor: "", fhAt: 0,
+  news: null, newsFor: "", newsAt: 0,
+  bars: [], barsFor: "", barsAt: 0,
+  actAt: 0, lastGrc: -1,
+  corelTipNode: null,
+};
+
+function activeTab() { return stateExtras.tab; }
+
+function switchTab(name) {
+  if (!["dash", "brains", "formulas", "corel", "news"].includes(name)) name = "dash";
+  stateExtras.tab = name;
+  document.querySelectorAll(".tab-btn").forEach(b =>
+    b.classList.toggle("on", b.dataset.tab === name));
+  document.querySelectorAll(".tabpage").forEach(p =>
+    p.classList.toggle("on", p.id === "tab-" + name));
+  if (window.brain3D) window.brain3D.setVisible(name === "brains");
+  if (name === "formulas") ensureFH(true);
+  if (name === "news") ensureNews(true);
+  if (name === "corel") renderCorel();
+  if (name === "dash") { drawChart(); renderGauges(state.snap); }
+  if (name === "brains") refreshActivations(true);
+  try { history.replaceState(null, "", "#" + name); } catch (e) {}
+}
+
+function wireTabs() {
+  document.querySelectorAll(".tab-btn").forEach(b =>
+    b.addEventListener("click", () => switchTab(b.dataset.tab)));
+  const h = (location.hash || "").replace("#", "");
+  if (h) switchTab(h);
+}
+
+/* selectors that mirror state.detail (shared with brain/emotion/risk panels) */
+function wireExtraSelectors() {
+  wireSelector("chart-selector", () => { renderGauges(state.snap); drawChart(); });
+  wireSelector("gauge-selector", renderGauges);
+  wireSelector("panels-selector", () => { stateExtras.fhFor = ""; ensureFH(true); renderPanels(state.snap); });
+  wireSelector("corel-selector", renderCorel);
+  wireSelector("news-selector", () => { stateExtras.newsFor = ""; ensureNews(true); });
+  wireSelector("brain3d-selector", () => {
+    refreshActivations(true);
+    renderBrain3dSide(state.snap);
+  });
+}
+
+/* called by renderSnapshot + detail changes */
+function onSnapshotExtras(snap) {
+  if (!snap) return;
+  const grcChanged = snap.grc.count !== stateExtras.lastGrc;
+  if (grcChanged) stateExtras.lastGrc = snap.grc.count;
+  renderGauges(snap);
+  if (stateExtras.tab === "dash") drawChart();
+  if (stateExtras.tab === "formulas") { if (grcChanged) stateExtras.fhAt = 0; ensureFH(); renderPanels(snap); }
+  if (stateExtras.tab === "news") { if (grcChanged) stateExtras.newsAt = 0; ensureNews(); renderNewsTab(snap); renderHF(snap); }
+  if (stateExtras.tab === "corel") renderCorel(snap);
+  if (stateExtras.tab === "brains") renderBrain3dSide(snap);
+  if (grcChanged) refreshActivations();
+  if (stateExtras.tab !== "formulas") renderPanels.deferred = snap;
+}
+
+function onDetailChange() {
+  stateExtras.fhFor = "";
+  stateExtras.newsFor = "";
+  if (stateExtras.tab === "formulas") ensureFH(true);
+  if (stateExtras.tab === "news") ensureNews(true);
+  if (stateExtras.tab === "corel") renderCorel();
+  refreshActivations(true);
+  stateExtras.barsAt = 0;
+  drawChart();
+  renderGauges(state.snap);
+}
+
+/* ---------------- gauges ---------------- */
+const GAUGE_DEFS = [
+  { key: "confidence", label: "CONFIDENCE", lo: 0, hi: 1, fmt: v => (v * 100).toFixed(1) + "%", warn: v => v > 0.35 },
+  { key: "base_confidence", label: "BASE CCI", lo: 0, hi: 1, fmt: v => (v * 100).toFixed(1) + "%" },
+  { key: "ufp", label: "PHYSICS UFP", lo: -1, hi: 1, fmt: v => v.toFixed(3) },
+  { key: "tme", label: "P9 · TME", lo: 0, hi: 1, fmt: v => v.toFixed(3) },
+  { key: "wfcp", label: "P2 · WFCP", lo: 0, hi: 1, fmt: v => v.toFixed(3) },
+  { key: "drpt", label: "P6 · DRPT", lo: 0, hi: 1, fmt: v => v.toFixed(3) },
+  { key: "gspi", label: "P19 · GSPI", lo: 0, hi: 1, fmt: v => v.toFixed(3) },
+  { key: "news", label: "NEWS (signed)", lo: -1, hi: 1, fmt: v => v.toFixed(3) },
+  { key: "cerc", label: "E22 · CERC", lo: -1, hi: 1, fmt: v => v.toFixed(3) },
+];
+
+function gaugeValue(sys) {
+  if (!sys) return {};
+  return {
+    confidence: sys.confidence,
+    base_confidence: sys.base_confidence,
+    ufp: sys.physics && sys.physics.ufp,
+    tme: sys.physics && sys.physics.tme,
+    wfcp: sys.physics && sys.physics.wfcp,
+    drpt: sys.physics && sys.physics.drpt,
+    gspi: sys.physics && sys.physics.gspi,
+    news: sys.news && sys.news.value,
+    cerc: sys.emotion && sys.emotion.cerc,
+  };
+}
+
+function drawGauge(cv, v, def) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth || 150, h = cv.clientHeight || 92;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const ctx = cv.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  const cx = w / 2, cy = h - 14, R = Math.min(w / 2 - 10, h - 26);
+  const a0 = Math.PI * 0.9, a1 = Math.PI * 2.1;
+  /* track */
+  ctx.beginPath(); ctx.arc(cx, cy, R, a0, a1);
+  ctx.lineWidth = 10; ctx.lineCap = "round";
+  ctx.strokeStyle = "#1c2a45"; ctx.stroke();
+  const t = v == null ? null : Math.max(0, Math.min(1, (v - def.lo) / (def.hi - def.lo)));
+  if (t != null) {
+    const neg = def.lo < 0 && v < 0;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, a0, a0 + (a1 - a0) * t);
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = neg ? "#ff5d73" : (def.warn && def.warn(v) ? "#2fd48f" : "#ffb02e");
+    ctx.stroke();
+    /* needle */
+    const an = a0 + (a1 - a0) * t;
+    ctx.beginPath();
+    ctx.moveTo(cx - Math.cos(an) * 6, cy - Math.sin(an) * 6);
+    ctx.lineTo(cx + Math.cos(an) * (R - 14), cy + Math.sin(an) * (R - 14));
+    ctx.strokeStyle = "#e8eefc"; ctx.lineWidth = 1.6; ctx.stroke();
+  }
+  ctx.fillStyle = "#8ea0c4"; ctx.font = "10px system-ui";
+  ctx.textAlign = "center";
+  ctx.fillText(def.label, cx, h - 2);
+  ctx.fillStyle = "#e8eefc"; ctx.font = "600 13px system-ui";
+  ctx.fillText(v == null ? "—" : def.fmt(v), cx, cy - R * 0.34);
+}
+
+function renderGauges(snap) {
+  const row = document.getElementById("gauge-row");
+  if (!row) return;
+  const key = `${state.detail.sym}|${state.detail.tf}`;
+  const sys = snap && snap.systems && snap.systems[key];
+  const vals = gaugeValue(sys);
+  if (!row.children.length) {
+    row.innerHTML = GAUGE_DEFS.map((d, i) =>
+      `<div class="gauge"><canvas id="gauge-${i}"></canvas></div>`).join("");
+  }
+  GAUGE_DEFS.forEach((d, i) => {
+    const cv = document.getElementById(`gauge-${i}`);
+    if (cv) drawGauge(cv, vals[d.key], d);
+  });
+}
+
+/* ---------------- candle chart + TP/SL + P1 overlay ---------------- */
+async function ensureBars(force) {
+  const sym = state.detail.sym;
+  const fresh = Date.now() - stateExtras.barsAt < 12000;
+  if (!force && stateExtras.barsFor === sym && fresh) return;
+  try {
+    const r = await fetch(`/api/candles?symbol=${sym}&n=240`);
+    if (!r.ok) return;
+    const j = await r.json();
+    stateExtras.bars = j.bars || [];
+    stateExtras.barsFor = sym;
+    stateExtras.barsAt = Date.now();
+    if (stateExtras.tab === "dash" && activeTab() === "dash") drawChart();
+  } catch (e) { /* retry next tick */ }
+}
+
+function drawChart() {
+  const cv = document.getElementById("chart-canvas");
+  if (!cv || stateExtras.tab !== "dash") return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const ctx = cv.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  const bars = stateExtras.bars;
+  const sym = state.detail.sym, tf = state.detail.tf;
+  const gutter = 132;                       // right gutter for the P1 ladder
+  const pw = w - gutter;
+  if (!bars || bars.length < 3) {
+    ctx.fillStyle = "#8ea0c4"; ctx.font = "12px system-ui";
+    ctx.fillText("loading bars…", 14, 24);
+    return;
+  }
+
+  /* levels: TP/SL/targets of this pair + P1 quantum levels */
+  const cyc = state.snap && state.snap.assets[sym] && state.snap.assets[sym].tfs[tf];
+  const lgTp = document.querySelector("#chart-legend .lg.tp");
+  const lgSl = document.querySelector("#chart-legend .lg.sl");
+  const lgTg = document.querySelector("#chart-legend .lg.tgt");
+  if (lgTp) lgTp.textContent = cyc && cyc.tp != null ? "TP " + fmtPrice(cyc.tp) : "— TP";
+  if (lgSl) lgSl.textContent = cyc && cyc.sl != null ? "SL " + fmtPrice(cyc.sl) : "— SL";
+  let activeT = null;
+  if (cyc && cyc.active_k && cyc.targets) {
+    const t = (cyc.targets || []).find(x => x.k === cyc.active_k);
+    if (t && t.level != null && t.status === "locked") activeT = t;
+  }
+  if (lgTg) lgTg.textContent = activeT ? `active target Tp${activeT.k} ${fmtPrice(activeT.level)}` : "— active target";
+  const levels = [];
+  if (cyc && cyc.issued) {
+    if (cyc.sl != null) levels.push([cyc.sl, "#ff5d73", "SL", 2]);
+    if (cyc.tp != null) levels.push([cyc.tp, "#2fd48f", "TP", 2]);
+    (cyc.targets || []).forEach(t => {
+      if (t.level != null && (t.status === "locked" || t.status === "hit"))
+        levels.push([t.level, "#ffb02e", `Tp${t.k}`, 1.4]);
+    });
+  }
+  const sys = state.snap && state.snap.systems && state.snap.systems[`${sym}|${tf}`];
+  const p1 = sys && sys.physics && sys.physics.p1;
+  const ladder = [];
+  if (p1 && p1.levels && p1.probs) {
+    for (let i = 0; i < p1.levels.length; i++)
+      ladder.push([p1.levels[i], p1.probs[i]]);
+  }
+
+  let lo = Math.min(...bars.map(b => b.l)), hi = Math.max(...bars.map(b => b.h));
+  for (const [lv] of levels) { lo = Math.min(lo, lv); hi = Math.max(hi, lv); }
+  if (ladder.length) {
+    lo = Math.min(lo, ladder[0][0]);
+    hi = Math.max(hi, ladder[ladder.length - 1][0]);
+  }
+  const pad = (hi - lo) * 0.06 || 1;
+  lo -= pad; hi += pad;
+  const Y = p => h - 18 - ((p - lo) / (hi - lo)) * (h - 30);
+  const step = pw / bars.length;
+  const bw = Math.max(1.5, step * 0.62);
+
+  /* grid + price axis */
+  ctx.strokeStyle = "rgba(31,43,69,0.7)"; ctx.fillStyle = "#6b7ba0";
+  ctx.font = "10px system-ui"; ctx.textAlign = "left";
+  for (let g = 0; g <= 4; g++) {
+    const y = 6 + ((h - 24) * g) / 4;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(pw, y); ctx.stroke();
+    const price = hi - ((hi - lo) * g) / 4;
+    ctx.fillText(fmtPrice(price), pw + 4, y + 3);
+  }
+
+  /* candles */
+  bars.forEach((b, i) => {
+    const x = i * step + step / 2;
+    const up = b.c >= b.o;
+    ctx.strokeStyle = ctx.fillStyle = up ? "#2fd48f" : "#ff5d73";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, Y(b.h)); ctx.lineTo(x, Y(b.l)); ctx.stroke();
+    const yO = Y(b.o), yC = Y(b.c);
+    const top = Math.min(yO, yC), bh = Math.max(1, Math.abs(yC - yO));
+    ctx.fillRect(x - bw / 2, top, bw, bh);
+  });
+
+  /* TP / SL / target layers */
+  ctx.setLineDash([6, 5]);
+  for (const [lv, col, tag, lw] of levels) {
+    ctx.strokeStyle = col; ctx.lineWidth = lw;
+    ctx.beginPath(); ctx.moveTo(0, Y(lv)); ctx.lineTo(pw, Y(lv)); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = col; ctx.font = "600 10px system-ui";
+    ctx.fillText(tag + " " + fmtPrice(lv), 6, Y(lv) - 3);
+    ctx.setLineDash([6, 5]);
+  }
+  ctx.setLineDash([]);
+
+  /* live price dot */
+  const last = bars[bars.length - 1];
+  ctx.beginPath(); ctx.arc(bars.length * step - step / 2, Y(last.c), 3, 0, Math.PI * 2);
+  ctx.fillStyle = "#e8eefc"; ctx.fill();
+
+  /* -------- P1 probability overlay (right gutter ladder) -------- */
+  if (ladder.length) {
+    const gx = pw + 56;
+    ctx.fillStyle = "#5f719a"; ctx.font = "600 9px system-ui"; ctx.textAlign = "left";
+    ctx.fillText("P1 · max|c|²", gx, 12);
+    const maxP = Math.max(...ladder.map(l => l[1]), 1e-9);
+    ladder.forEach(([lvl, prob]) => {
+      const y = Y(lvl);
+      if (y < 4 || y > h - 8) return;
+      const bwid = 64 * (prob / maxP);
+      ctx.fillStyle = "rgba(47,212,143,0.75)";
+      ctx.fillRect(gx, y - 3, Math.max(1, bwid), 6);
+      ctx.fillStyle = "#9fb0d4"; ctx.font = "9px system-ui";
+      if (prob >= maxP * 0.35) {
+        ctx.fillText(prob.toFixed(3), gx + bwid + 3, y + 3);
+      }
+    });
+    /* headline: highest-probability level */
+    let best = ladder[0];
+    for (const l of ladder) if (l[1] > best[1]) best = l;
+    ctx.fillStyle = "#ffd166"; ctx.font = "600 10px system-ui";
+    ctx.fillText("peak " + fmtPrice(best[0]), gx, h - 4);
+  }
+}
+
+/* ---------------- 75 formula panels ---------------- */
+async function ensureFH(force) {
+  const { sym, tf } = state.detail;
+  const tag = `${sym}|${tf}`;
+  const fresh = Date.now() - stateExtras.fhAt < 30000;
+  if (!force && stateExtras.fhFor === tag && fresh && stateExtras.fh) return;
+  try {
+    const r = await fetch(`/api/formula-history?symbol=${sym}&tf=${tf}`);
+    if (!r.ok) return;
+    const j = await r.json();
+    stateExtras.fh = j;
+    stateExtras.fhFor = tag;
+    stateExtras.fhAt = Date.now();
+    renderPanels(state.snap);
+  } catch (e) { /* retry */ }
+}
+
+function drawMini(cv, arr, color) {
+  if (!cv) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth || 120, h = cv.clientHeight || 26;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const ctx = cv.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  if (!arr || arr.length < 2) {
+    ctx.fillStyle = "#43506e"; ctx.font = "9px system-ui";
+    ctx.fillText("awaiting…", 4, h / 2 + 3);
+    return;
+  }
+  let lo = Math.min(...arr), hi = Math.max(...arr);
+  if (hi === lo) { hi += 1; lo -= 1; }
+  const X = i => (i / (arr.length - 1)) * (w - 2) + 1;
+  const Y = v => h - 2 - ((v - lo) / (hi - lo)) * (h - 4);
+  /* zero line if straddling */
+  if (lo < 0 && hi > 0) {
+    ctx.strokeStyle = "rgba(110,130,170,0.35)";
+    ctx.beginPath(); ctx.moveTo(0, Y(0)); ctx.lineTo(w, Y(0)); ctx.stroke();
+  }
+  ctx.beginPath();
+  arr.forEach((v, i) => (i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v))));
+  ctx.strokeStyle = color || "#5b8cff"; ctx.lineWidth = 1.3; ctx.stroke();
+  ctx.beginPath(); ctx.arc(X(arr.length - 1), Y(arr[arr.length - 1]), 2, 0, Math.PI * 2);
+  ctx.fillStyle = color || "#5b8cff"; ctx.fill();
+}
+
+function accPct(arr) {
+  if (!arr || !arr.length) return null;
+  const pos = arr.filter(x => x > 0).length;
+  const neg = arr.filter(x => x < 0).length;
+  const n = pos + neg;
+  if (!n) return null;
+  return Math.round((pos / n) * 100);
+}
+
+function fpPanelHTML(id, name, value, weightTxt, acc, contrib, cls) {
+  const v = value == null ? "—" : (value >= 0 ? "+" : "") + (+value).toFixed(3);
+  const w = weightTxt == null ? "ω —" : weightTxt;
+  const a = acc == null ? "acc —" : `acc ${acc >= 0 ? "+" : ""}${acc}%`;
+  const c = contrib == null ? "Δ —" : `Δ ${contrib >= 0 ? "+" : ""}${(+contrib).toFixed(4)}`;
+  return `<div class="fpanel">
+    <div class="fp-top"><span class="fp-id">${id}</span><span class="fp-name">${name}</span></div>
+    <div class="fp-val ${cls || (value >= 0 ? "pos" : "neg")}">${v}</div>
+    <canvas class="fp-spark"></canvas>
+    <div class="fp-meta"><span class="fp-w">${w}</span><span class="fp-acc ${acc != null && acc >= 50 ? "good" : acc != null && acc < 40 ? "bad" : ""}">${a}</span><span class="fp-ct">${c}</span></div>
+  </div>`;
+}
+
+function renderPanels(snap) {
+  const fh = stateExtras.fh;
+  if (!fh) return;
+  const { sym, tf } = state.detail;
+  const key = `${sym}|${tf}`;
+  const fv = snap && snap.formula_values && snap.formula_values[key];
+  const sys = snap && snap.systems && snap.systems[key];
+
+  /* --- core 31 --- */
+  const coreEl = document.getElementById("panels-core");
+  if (coreEl) {
+    const names = fh.names.core || {};
+    const weights = fh.weights || {};
+    const wSum = Object.entries(weights)
+      .filter(([k]) => +k <= 31)
+      .reduce((a, [, b]) => a + (+b), 0) || 1;
+    let html = "";
+    const sparks = [];
+    for (let f = 1; f <= 31; f++) {
+      let value = null;
+      if (fv && fv.adj && fv.adj[String(f)] != null) value = fv.adj[String(f)];
+      else if (fv && fv.extra && fv.extra[String(f)] != null) value = fv.extra[String(f)];
+      else if (f === 21 && sys && sys.base_confidence != null) value = sys.base_confidence;
+      else if (f === 29 && cyc0(snap, sym, tf) != null) value = cyc0(snap, sym, tf);
+      const w = weights[String(f)];
+      const wTxt = w == null ? null
+        : `ω ${(+w).toFixed(3)} · ${((w / wSum) * 100).toFixed(1)}%`;
+      const acc = accPct(fh.core_accuracy[String(f)]);
+      const contrib = (w != null && value != null) ? w * value : null;
+      html += fpPanelHTML(`F${f}`, names[String(f)] || "", value, wTxt, acc, contrib,
+        value == null ? "" : value >= 0 ? "pos" : "neg");
+      sparks.push(fh.core[String(f)]);
+    }
+    coreEl.innerHTML = html;
+    coreEl.querySelectorAll(".fp-spark").forEach((cv, i) =>
+      drawMini(cv, sparks[i], sparks[i] && sparks[i].length && sparks[i][sparks[i].length - 1] >= 0 ? "#2fd48f" : "#ff5d73"));
+  }
+
+  /* --- emotions 22 --- */
+  const emoEl = document.getElementById("panels-emotion");
+  if (emoEl) {
+    const em = sys && sys.emotion;
+    const wts = (em && em.weights) || [];
+    let html = "";
+    const sparks = [];
+    for (let e = 1; e <= 22; e++) {
+      const value = e === 22 ? (em && (em.cerc ?? em.aggregate)) : (em && em.emotions ? em.emotions[e] : null);
+      const w = wts[e - 1];
+      const wTxt = e <= 21 && w != null ? `ω ${(+w).toFixed(3)} · ${((w / 1.0) * 100).toFixed(1)}%` : "CERC Σ";
+      const acc = accPct(fh.emotion_accuracy[String(e)]);
+      const contrib = (e <= 21 && w != null && value != null) ? w * value : (e === 22 && value != null ? value : null);
+      const meta = EMOTION_META[e];
+      html += fpPanelHTML(`E${e} ${meta[0]}`, meta[1], value, wTxt, acc, contrib, value >= 0 ? "pos" : "neg");
+      sparks.push(fh.emotion[String(e)]);
+    }
+    emoEl.innerHTML = html;
+    emoEl.querySelectorAll(".fp-spark").forEach((cv, i) =>
+      drawMini(cv, sparks[i], "#ffb02e"));
+  }
+
+  /* --- physics 22 (P1..P21 + P22 UFP) --- */
+  const phEl = document.getElementById("panels-physics");
+  if (phEl) {
+    const ph = sys && sys.physics;
+    const alpha = fh.alpha || {};
+    const cpl = (ph && ph.couplings) || {};
+    const tme = (ph && ph.tme) != null ? ph.tme : 1;
+    let html = "";
+    const sparks = [];
+    for (let p = 1; p <= 22; p++) {
+      let value = null, contrib = null;
+      if (ph) {
+        if (p === 22) { value = ph.ufp; contrib = ph.ufp; }
+        else if (ph.values) value = ph.values[p];
+      }
+      if (p <= 21 && value != null && alpha[p] != null) {
+        const adj = NON_DIR_P.has(p) ? 2 * value - 1 : value * tme;
+        contrib = (+alpha[p]) * adj * ((cpl[p] != null ? cpl[p] : 1));
+      }
+      const wTxt = p <= 21 && alpha[p] != null
+        ? `α ${(alpha[p] * 100).toFixed(1)}%` : "Σα → comp 99";
+      const acc = accPct(fh.physics_accuracy[String(p)]);
+      const name = (fh.names.physics && fh.names.physics[String(p)]) || "";
+      html += fpPanelHTML(`P${p} ${name}`, specLabel(p), value, wTxt, acc, contrib, value >= 0 ? "pos" : "neg");
+      sparks.push(fh.physics[String(p)]);
+    }
+    phEl.innerHTML = html;
+    phEl.querySelectorAll(".fp-spark").forEach((cv, i) =>
+      drawMini(cv, sparks[i], "#5b8cff"));
+  }
+}
+
+function cyc0(snap, sym, tf) {
+  /* F29 DLP placement: direction-based display when no numeric series */
+  const c = snap && snap.assets[sym] && snap.assets[sym].tfs[tf];
+  if (!c || !c.issued) return 0;
+  return c.direction > 0 ? 1 : -1;
+}
+
+function specLabel(p) {
+  const L = {
+    1: "PSSA superposition", 2: "WFCP ground state", 3: "HPVU", 4: "QTPB barriers",
+    5: "MEE", 6: "DRPT drag", 7: "BEOFC", 8: "FDPD", 9: "TME Carnot",
+    10: "PIPP random walk", 11: "RGVF", 12: "SSBD order", 13: "GLPLO gravity",
+    14: "CELG", 15: "DSMS", 16: "RTDMP", 17: "BBIR", 18: "TPTI topology",
+    19: "GSPI gauge", 20: "PDOBV", 21: "QDPC decay", 22: "Unified Physics Field",
+  };
+  return L[p] || "";
+}
+
+/* ---------------- System Co-relation network ---------------- */
+function renderCorel(snapIn) {
+  const cv = document.getElementById("corel-canvas");
+  if (!cv) return;
+  const snap = snapIn || state.snap;
+  const { sym, tf } = state.detail;
+  const sys = snap && snap.systems && snap.systems[`${sym}|${tf}`];
+  const corel = sys && sys.corelation;
+  const stats = document.getElementById("corel-stats");
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const ctx = cv.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  if (!corel || !corel.nodes) {
+    ctx.fillStyle = "#8ea0c4"; ctx.font = "12px system-ui";
+    ctx.fillText("awaiting first GRC — correlation needs ≥ 3 passes…", 16, 28);
+    return;
+  }
+
+  /* fixed radial layout by kind */
+  const POS = {
+    "CORE": [0.50, 0.46],
+    "EMOTION": [0.74, 0.26], "PHYSICS": [0.76, 0.68],
+    "DB-1": [0.24, 0.16], "DB-2": [0.16, 0.37], "DB-3": [0.16, 0.63], "DB-4": [0.24, 0.84],
+    "AGENT-G": [0.46, 0.90], "AGENT-L": [0.60, 0.90],
+  };
+  const KIND_COLOR = {
+    brain: "#ffb02e", emotion: "#e879f9", physics: "#5b8cff",
+    core: "#2fd48f", agent: "#5f719a",
+  };
+  const nodes = {};
+  corel.nodes.forEach(n => {
+    const p = POS[n.id] || [0.5, 0.5];
+    nodes[n.id] = { ...n, x: p[0] * w, y: p[1] * (h - 20) + 10 };
+  });
+
+  /* edges */
+  let strong = 0;
+  (corel.edges || []).forEach(e => {
+    const A = nodes[e.a], B = nodes[e.b];
+    if (!A || !B) return;
+    const r = e.corr;
+    if (Math.abs(r) >= 0.6) strong++;
+    const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2 - Math.abs(A.x - B.x) * 0.08;
+    ctx.beginPath();
+    ctx.moveTo(A.x, A.y);
+    ctx.quadraticCurveTo(mx, my, B.x, B.y);
+    ctx.strokeStyle = r >= 0 ? `rgba(47,212,143,${0.25 + Math.abs(r) * 0.6})`
+                             : `rgba(255,93,115,${0.25 + Math.abs(r) * 0.6})`;
+    ctx.lineWidth = 1 + Math.abs(r) * 6;
+    ctx.stroke();
+    /* mid label for strong links */
+    if (Math.abs(r) >= 0.75) {
+      ctx.fillStyle = "#c9d4ee"; ctx.font = "9px system-ui"; ctx.textAlign = "center";
+      ctx.fillText(r.toFixed(2), mx, my - 4);
+    }
+  });
+
+  /* nodes */
+  for (const id in nodes) {
+    const n = nodes[id];
+    const R = n.id === "CORE" ? 30 : n.kind === "brain" ? 24 : n.kind === "agent" ? 16 : 26;
+    ctx.beginPath(); ctx.arc(n.x, n.y, R, 0, Math.PI * 2);
+    ctx.fillStyle = (KIND_COLOR[n.kind] || "#5f719a") + (n.ready === false ? "44" : "cc");
+    ctx.fill();
+    ctx.strokeStyle = "#0a1020"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = "#e8eefc"; ctx.font = "600 10px system-ui";
+    ctx.textAlign = "center";
+    ctx.fillText(n.id, n.x, n.y + 3);
+    if (n.ready === false) {
+      ctx.fillStyle = "#5f719a"; ctx.font = "8px system-ui";
+      ctx.fillText("Part 4", n.x, n.y + R + 10);
+    }
+  }
+
+  if (stats) {
+    stats.innerHTML =
+      `<span>pair: <b>${sym} ${tf.toUpperCase()}</b></span>` +
+      `<span>nodes: <b>${corel.nodes.length}</b></span>` +
+      `<span>edges (window ≥3 passes): <b>${(corel.edges || []).length}</b></span>` +
+      `<span>strong |r| ≥ 0.6: <b>${strong}</b></span>` +
+      `<span>window: <b>50 GRCs</b></span>` +
+      `<span class="lg-edge ex">r &gt; 0</span><span class="lg-edge in">r &lt; 0</span>`;
+  }
+}
+
+function wireCorelHover() {
+  const cv = document.getElementById("corel-canvas");
+  const tip = document.getElementById("corel-tip");
+  if (!cv || !tip) return;
+  cv.addEventListener("mousemove", e => {
+    const snap = state.snap;
+    const { sym, tf } = state.detail;
+    const sys = snap && snap.systems && snap.systems[`${sym}|${tf}`];
+    const corel = sys && sys.corelation;
+    if (!corel) { tip.classList.add("hidden"); return; }
+    const rect = cv.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const POS = {
+      "CORE": [0.50, 0.46], "EMOTION": [0.74, 0.26], "PHYSICS": [0.76, 0.68],
+      "DB-1": [0.24, 0.16], "DB-2": [0.16, 0.37], "DB-3": [0.16, 0.63], "DB-4": [0.24, 0.84],
+      "AGENT-G": [0.46, 0.90], "AGENT-L": [0.60, 0.90],
+    };
+    let hit = null;
+    for (const n of corel.nodes) {
+      const p = POS[n.id] || [0.5, 0.5];
+      const x = p[0] * rect.width, y = p[1] * (rect.height - 20) + 10;
+      if ((mx - x) ** 2 + (my - y) ** 2 < 34 ** 2) { hit = n; break; }
+    }
+    if (!hit) { tip.classList.add("hidden"); return; }
+    const links = (corel.edges || []).filter(e => e.a === hit.id || e.b === hit.id);
+    tip.innerHTML = `<b>${hit.id}</b>` + (links.length
+      ? links.map(e => `<div>${e.a === hit.id ? e.b : e.a}: <span class="${e.corr >= 0 ? "pos" : "neg"}">${e.corr >= 0 ? "+" : ""}${e.corr.toFixed(3)}</span></div>`).join("")
+      : `<div>no edges yet (needs ≥3 GRC passes)</div>`);
+    tip.style.left = Math.min(rect.width - 170, mx + 14) + "px";
+    tip.style.top = (my + 14) + "px";
+    tip.classList.remove("hidden");
+  });
+  cv.addEventListener("mouseleave", () => tip.classList.add("hidden"));
+}
+
+/* ---------------- News & HF tab ---------------- */
+async function ensureNews(force) {
+  const sym = state.detail.sym;
+  const fresh = Date.now() - stateExtras.newsAt < 45000;
+  if (!force && stateExtras.newsFor === sym && fresh && stateExtras.news) return;
+  try {
+    const r = await fetch(`/api/news/${sym}`);
+    if (!r.ok) return;
+    const j = await r.json();
+    stateExtras.news = j;
+    stateExtras.newsFor = sym;
+    stateExtras.newsAt = Date.now();
+    renderNewsTab(state.snap);
+  } catch (e) { /* retry */ }
+}
+
+function renderNewsTab(snap) {
+  const el = document.getElementById("news-tab-content");
+  if (!el) return;
+  const nd = stateExtras.news;
+  const { sym, tf } = state.detail;
+  const key = `${sym}|${tf}`;
+  const sys = snap && snap.systems && snap.systems[key];
+  const meta = (snap && snap.news_meta && snap.news_meta.categories) || {};
+  if (!nd && !sys) { el.innerHTML = `<div class="fm-item">awaiting data…</div>`; return; }
+  const agg = (nd && nd.value) != null ? nd : (sys && sys.news);
+  if (!agg) { el.innerHTML = `<div class="fm-item">awaiting data…</div>`; return; }
+
+  /* category breakdown from live items */
+  const byCat = {};
+  (agg.items || []).forEach(it => {
+    byCat[it.category] = byCat[it.category] || { n: 0, sum: 0, dur: it.duration };
+    byCat[it.category].n++;
+    byCat[it.category].sum += it.impact;
+  });
+  const catRows = Object.keys(meta).map(c => {
+    const m = meta[c], b = byCat[c] || { n: 0, sum: 0, dur: m.duration };
+    return `<tr class="${b.n ? "on" : ""}"><td>${c}</td>
+      <td>${m.weight.toFixed(2)}</td><td>${m.duration} min</td>
+      <td>${b.n}</td>
+      <td class="${b.sum >= 0 ? "pos" : "neg"}">${b.sum ? (b.sum >= 0 ? "+" : "") + b.sum.toFixed(4) : "—"}</td></tr>`;
+  }).join("");
+
+  const tfRows = [["tf1", "22 min"], ["tf2", "44 min"], ["tf3", "130 min"], ["tf4", "247 min"]]
+    .map(([t, lbl]) => {
+      const v = (agg.impacts && agg.impacts[t]) != null ? agg.impacts[t] : 0;
+      const pct = Math.round(Math.abs(v) * 100);
+      return `<div class="tf-impact">
+        <span class="ti-lbl">${lbl} · ${t.toUpperCase()}</span>
+        <span class="ti-bar"><span class="${v >= 0 ? "up" : "down"}" style="width:${pct}%"></span></span>
+        <span class="ti-val ${v >= 0 ? "pos" : "neg"}">${v >= 0 ? "+" : ""}${(+v).toFixed(4)}</span>
+      </div>`;
+    }).join("");
+
+  const itemRows = (agg.items || []).map(it => `
+    <tr>
+      <td class="ni-cat">${it.category}</td>
+      <td class="ni-head">${it.direction != null ? (it.direction > 0 ? "▲" : "▼") : (it.impact >= 0 ? "▲" : "▼")} ${it.headline}</td>
+      <td class="${it.impact >= 0 ? "pos" : "neg"}">${it.impact >= 0 ? "+" : ""}${(+it.impact).toFixed(4)}</td>
+      <td>${(+it.age_min).toFixed(1)} / ${it.duration}</td>
+      <td>${it.source}</td>
+      <td>${it.reliability.toFixed(1)}</td>
+    </tr>`).join("");
+
+  el.innerHTML = `
+    <div class="news-top">
+      <div class="agg-box ${agg.value >= 0 ? "pos" : "neg"}">
+        <label>SIGNED AGGREGATE (247 min, clamped ±1)</label>
+        <b>${agg.value >= 0 ? "+" : ""}${(+agg.value).toFixed(4)}</b>
+        <span>bull ${(agg.bull ?? 0).toFixed(3)} · bear ${(agg.bear ?? 0).toFixed(3)} · items ${agg.count ?? (agg.items || []).length}</span>
+        <span class="src">source: ${agg.source || "sim"}</span>
+      </div>
+      <div class="tf-impacts">${tfRows}</div>
+    </div>
+    <div class="sub-h">Category table <span class="hint">weight × sentiment × exp(−D/halflife) × reliability</span></div>
+    <table class="news-table"><thead><tr><th>category</th><th>weight</th><th>halflife D</th><th>active</th><th>scored</th></tr></thead>
+      <tbody>${catRows}</tbody></table>
+    <div class="sub-h">Live items <span class="hint">age in minutes / duration</span></div>
+    <div class="news-scroll"><table class="news-table"><thead><tr><th>cat</th><th>headline</th><th>impact</th><th>age/D</th><th>source</th><th>rel</th></tr></thead>
+      <tbody>${itemRows || `<tr><td colspan="6">no active headlines</td></tr>`}</tbody></table></div>`;
+}
+
+function renderHF(snap) {
+  const el = document.getElementById("hf-content");
+  if (!el || !snap) return;
+  const { sym, tf } = state.detail;
+  const sys = snap.systems && snap.systems[`${sym}|${tf}`];
+  const hf = sys && sys.hedge;
+  if (!hf) { el.innerHTML = `<div class="fm-item">awaiting data…</div>`; return; }
+  const cells = Object.entries(hf).map(([k, v]) => {
+    if (typeof v !== "number") return "";
+    return `<div class="hf-cell ${v >= 0 ? "pos" : "neg"}">
+      <label>${k.toUpperCase()}</label><b>${v >= 0 ? "+" : ""}${(+v).toFixed(4)}</b></div>`;
+  }).join("");
+  const w = snap.weights && snap.weights["101"];
+  el.innerHTML = `<div class="hf-row">${cells}</div>
+    <div class="hint">retail_flow = −H_signal · IFR = institutional absorption · DPAD = dark-pool print ·
+    SMDI = tanh((IFR − retail)/2) · component 101 weight ${w != null ? (+w).toFixed(4) : "0.0800"} (init 0.08, η-learned)</div>`;
+}
+
+/* ---------------- brain 3D glue ---------------- */
+let actTimer = null;
+function refreshActivations(force) {
+  const now = Date.now();
+  if (!force && now - stateExtras.actAt < 8000) return;
+  stateExtras.actAt = now;
+  const { sym, tf } = state.detail;
+  clearTimeout(actTimer);
+  actTimer = setTimeout(async () => {
+    try {
+      const r = await fetch(`/api/brain-activations?symbol=${sym}&tf=${tf}`);
+      if (!r.ok) return;
+      const j = await r.json();
+      if (window.brain3D && window.brain3D.ready) window.brain3D.setActivations(j.per_instance);
+    } catch (e) { /* retry next GRC */ }
+  }, 60);
+}
+
+function renderBrain3dSide(snap) {
+  const bars = document.getElementById("horm-bars");
+  const stats = document.getElementById("brain3d-stats");
+  if (!bars || !snap) return;
+  const { sym, tf } = state.detail;
+  const sys = snap.systems && snap.systems[`${sym}|${tf}`];
+  const br = sys && sys.brain;
+  const info = snap.brains || {};
+  const conn = info.connectome || {};
+  if (!br) {
+    bars.innerHTML = `<div class="fm-item">awaiting first GRC…</div>`;
+    stats.innerHTML = "";
+    return;
+  }
+  /* hormone average bars */
+  const hs = Object.entries(br.hormones_avg || {});
+  bars.innerHTML = `<div class="sub-h">Hormone flow (4-instance average) · ${sym} ${tf.toUpperCase()}</div>` +
+    hs.map(([k, v]) => {
+      const p = Math.round(Math.max(0, Math.min(1, (+v))) * 100);
+      return `<div class="horm-bar"><span class="hb-lbl">I_${k}</span>
+        <span class="hb-track"><span style="width:${p}%"></span></span>
+        <span class="hb-val">${(+v).toFixed(3)}</span></div>`;
+    }).join("") +
+    `<div class="consensus-line">consensus ${br.consensus >= 0 ? "+" : ""}${(+br.consensus).toFixed(4)}
+      · strength ${(br.strength || 0).toFixed(3)} · agreement ${((br.agreement || 0) * 100).toFixed(0)}%</div>`;
+
+  stats.innerHTML = `<div class="sub-h">Instances</div>` +
+    `<table class="brain-table"><thead><tr><th>unit</th><th>MBON H</th><th>H_signal</th><th>EQ</th><th>dominant</th></tr></thead><tbody>` +
+    (br.instances || []).map(i => `<tr><td><b>${i.id}</b></td>
+      <td>${(i.hormone_state || 0).toFixed(3)}</td>
+      <td class="${(i.h_signal || 0) >= 0 ? "pos" : "neg"}">${(i.h_signal || 0) >= 0 ? "+" : ""}${(i.h_signal || 0).toFixed(4)}</td>
+      <td>${(i.experience || 0).toFixed(3)}</td>
+      <td>${i.dominant || "—"}</td></tr>`).join("") +
+    `</tbody></table>
+    <div class="conn-line"><span>geometry: <b>${conn.units_per_brain ?? "?"} units</b></span>
+      <span>${conn.edges != null ? conn.edges.toLocaleString() : "?"} edges</span>
+      <span>source ${conn.source || "synthetic (spec populations)"}</span></div>`;
+}
+
+/* ---------------- wiring / intervals ---------------- */
+function bootPart3() {
+  wireTabs();
+  wireExtraSelectors();
+  wireCorelHover();
+  renderGauges(state.snap);
+  renderPanels(state.snap);
+  const cr = document.getElementById("chart-refresh");
+  if (cr) cr.addEventListener("click", () => ensureBars(true));
+  /* chart bars: fetch at boot, refresh every 15 s and on every GRC */
+  ensureBars(true);
+  setInterval(() => ensureBars(), 15000);
+  /* lazy refresh of heavy endpoints while their tab is open */
+  setInterval(() => {
+    if (stateExtras.tab === "formulas") ensureFH();
+    if (stateExtras.tab === "news") ensureNews();
+  }, 20000);
+  window.addEventListener("resize", () => {
+    drawChart(); renderGauges(state.snap);
+    if (stateExtras.tab === "corel") renderCorel();
+  });
+  /* first activations once the brain module is ready */
+  const waitBrain = tries => {
+    if (window.brain3D && window.brain3D.ready) { refreshActivations(true); return; }
+    if (tries > 0) setTimeout(() => waitBrain(tries - 1), 500);
+  };
+  waitBrain(20);
+}
+bootPart3();

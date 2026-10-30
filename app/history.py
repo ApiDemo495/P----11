@@ -26,6 +26,12 @@ class Ring:
     def values(self) -> list[float]:
         return list(self._q)
 
+    def __iter__(self):
+        return iter(self._q)
+
+    def __getitem__(self, i):
+        return self._q[i]
+
     def last(self) -> float | None:
         return self._q[-1] if self._q else None
 

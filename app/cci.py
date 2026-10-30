@@ -1,10 +1,13 @@
 """Formula 21 — Composite Confidence Index (CCI).
 
-Master aggregation.  The 28 weighted components (config.WEIGHT_IDS):
+Master aggregation.  The 31 weighted components (config.WEIGHT_IDS):
 
   * signals F1..F19, F22..F27, F31           (Bgn-adjusted, [-1,+1])
   * brain consensus                           (id 97, Bgn-adjusted)
   * CERC composite emotion flow               (id 98, Bgn-adjusted)
+  * physics UFP (P22)                         (id 99, Bgn-adjusted, x TME)
+  * News Impact Aggregate                     (id 100, Bgn-adjusted)
+  * HF1+HF2+HF3 combined (initial weight 0.08)(id 101, Bgn-adjusted)
 
 Excluded from the sum by design: F20/DRHE enters as the confidence
 multiplier min(1, DRHE); F28 is a risk formula; F29 outputs price levels;
@@ -15,15 +18,18 @@ F30 validates the CCI after it exists; F21 is this aggregator.
                -1 otherwise
     renormalized to sum 1, each weight clamped to [0.005, 0.15]
 
-    CCI = sum_f omega_f * F_f_adjusted
+    CCI = sum_f omega_f * F_f_adjusted        (id 99 scaled by TME, P9)
     double-check: if |CCI_reversed| > 0.6 * |CCI| ->
                   CCI_adjusted = CCI * (1 - 0.5 * |CCI_rev| / |CCI|)
     Confidence_base = |CCI_adjusted| * min(1, DRHE)
     Confidence_final = pipeline (engine.final stage):
-        x min(1, EQ_B2)                       experience-quality multiplier
+        x (0.7 + 0.3 * EQ)                    experience-quality multiplier
         + 0.1 * P(dominant state) if sign matches state direction
         - RTP * 0.2 when RTP > 0.6
         - |PCV| * 0.3 when PCV < 0
+        x (0.5 + 0.5 * WFCP)                  physics: wave-function collapse
+        x (1 - DRPT)                          physics: trend decoherence
+        x (1 - GSPI)                          physics: gauge non-invariance
     issued only when Confidence_final > 0.35
 """
 from __future__ import annotations
@@ -35,13 +41,25 @@ from .config import (
     CONFIDENCE_FLOOR,
     DOUBLE_CHECK_PENALTY,
     DOUBLE_CHECK_RATIO,
+    HEDGE_COMPONENT_ID,
+    HEDGE_INITIAL_WEIGHT,
     LEARNING_RATE_ETA,
+    PHYSICS_COMPONENT_ID,
     STATE_FILE,
     TF_ORDER,
     WEIGHT_IDS,
     WEIGHT_MAX,
     WEIGHT_MIN,
 )
+
+
+def uniform_prior() -> dict[int, float]:
+    """Section 8: hedge/dark-pool combined starts at exactly 0.08; the
+    remaining components share (1 - 0.08) equally."""
+    n = len(WEIGHT_IDS)
+    w = {fid: (1.0 - HEDGE_INITIAL_WEIGHT) / (n - 1) for fid in WEIGHT_IDS}
+    w[HEDGE_COMPONENT_ID] = HEDGE_INITIAL_WEIGHT
+    return w
 
 
 class CCIEngine:
@@ -61,7 +79,7 @@ class CCIEngine:
         key = self._key(symbol, tf)
         w = self.weights.get(key)
         if w is None:
-            w = {fid: 1.0 / len(WEIGHT_IDS) for fid in WEIGHT_IDS}
+            w = uniform_prior()
             self.weights[key] = w
         return w
 
@@ -100,14 +118,21 @@ class CCIEngine:
         tf: str,
         adjusted: dict[int, float],
         drhe: float,
+        *,
+        tme: float = 1.0,
     ) -> dict:
         w = self.get_weights(symbol, tf)
-        cci = sum(w.get(fid, 0.0) * val for fid, val in adjusted.items())
+        # P9: the physics component's effective weight is base * TME
+        scaled = {
+            fid: (val * tme if fid == PHYSICS_COMPONENT_ID else val)
+            for fid, val in adjusted.items()
+        }
+        cci = sum(w.get(fid, 0.0) * val for fid, val in scaled.items())
 
         # double-check: minority disagreement penalty
         cci_reversed = sum(
             w.get(fid, 0.0) * val
-            for fid, val in adjusted.items()
+            for fid, val in scaled.items()
             if _sign(val) != _sign(cci) and _sign(val) != 0
         )
         cci_adjusted = cci
@@ -155,9 +180,9 @@ class CCIEngine:
                 if tf in TF_ORDER:
                     loaded = {int(k): float(v) for k, v in w.items()}
                     if set(loaded) != set(WEIGHT_IDS) or not loaded:
-                        # part-1 state file (19 components) or corrupt entry:
-                        # restart this series at the uniform prior
-                        loaded = {fid: 1.0 / len(WEIGHT_IDS) for fid in WEIGHT_IDS}
+                        # part-1/2 state file (28 components) or corrupt
+                        # entry: restart this series at the spec prior
+                        loaded = uniform_prior()
                     # defensive clamp + renormalize on load
                     for fid in loaded:
                         loaded[fid] = max(WEIGHT_MIN, min(WEIGHT_MAX, loaded[fid]))
@@ -178,8 +203,11 @@ def finalize_confidence(
     state_aligned: bool,
     rtp: float,
     pcv: float,
+    wfcp: float = 1.0,
+    drpt: float = 0.0,
+    gspi: float = 0.0,
 ) -> dict:
-    """The Part-2 confidence pipeline, applied in spec order after the base
+    """The confidence pipeline, applied in spec order after the base
     confidence |CCI_adj| * min(1, DRHE):
 
         1. x (0.7 + 0.3 * EQ)                Brain-2 experience multiplier
@@ -187,7 +215,11 @@ def finalize_confidence(
                                              matches the state direction
         3. - RTP * 0.2 when RTP > 0.6        E9 trauma reduction
         4. - |PCV| * 0.3 when PCV < 0        F30 conflicting-signals reduction
-        5. clamp >= 0, issue when > 0.35
+        5. x (0.5 + 0.5 * WFCP)              P2  wave-function collapse
+        6. x (1 - DRPT)                      P6  trend decoherence
+        7. x (1 - GSPI)                      P19 gauge non-invariance
+        8. clamp >= 0, issue when > 0.35
+    Neutral physics defaults (WFCP=1, DRPT=0, GSPI=0) leave steps 1-4 exact.
     """
     conf = max(0.0, pack["confidence"])
     conf *= 0.7 + 0.3 * max(0.0, min(1.0, experience_quality))
@@ -197,12 +229,19 @@ def finalize_confidence(
         conf -= rtp * 0.2
     if pcv < 0.0:
         conf -= abs(pcv) * 0.3
+    # Section 6 physics modifiers (P2/P6/P19)
+    conf *= 0.5 + 0.5 * max(0.0, min(1.0, wfcp))
+    conf *= 1.0 - max(0.0, min(1.0, drpt))
+    conf *= 1.0 - max(0.0, min(1.0, gspi))
     conf = max(0.0, conf)
     return {
         "confidence": conf,
         "issued": conf > CONFIDENCE_FLOOR,
         "pcv": pcv,
         "conflicting": pcv < 0.0,
+        "wfcp": wfcp,
+        "drpt": drpt,
+        "gspi": gspi,
     }
 
 

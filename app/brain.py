@@ -111,6 +111,11 @@ class Connectome:
         # DN assigned per weighted CCI component (first N descending neurons)
         self.dn_for_weight = {wid: list(self.pop["DN"])[i]
                               for i, wid in enumerate(WEIGHT_IDS)}
+        # News sensory slice: Section 7 feeds the News Impact Aggregate into
+        # the brain inputs — the first 10 generic individual neurons receive
+        # the signed aggregate as a shared external drive (parallel to how
+        # the hormone populations receive Thing-1 drives).
+        self.news_units = list(range(_GENERIC_START, _GENERIC_START + 10))
 
         edges: list[tuple[int, int, float, float]] = []
 
@@ -376,6 +381,11 @@ class BrainSystem:
                 for n_i in conn.pop[pop_name]:
                     inputs[n_i] = i_map[key]
 
+            # --- News Impact Aggregate -> sensory slice (Section 7) -----
+            news_value = thing2.get("news_value", 0.0)
+            for n_i in conn.news_units:
+                inputs[n_i] = max(-1.0, min(1.0, news_value)) * 2.0
+
             # --- brain-formula affinity coupling (|F_f| > 0.7) ----------
             aff_list = list(conn.pop["AFF"])
             per_formula = _AFFINITY_CELLS // 31
@@ -573,6 +583,131 @@ class BrainSystem:
                 {"id": b.id, "role": b.role, "ready": b.ready}
                 for b in self.instances
             ],
+        }
+
+    # ------------------------------------------------------------------
+    # Section 9 — brain visualization data
+    # ------------------------------------------------------------------
+    def geometry(self) -> dict:
+        """Static WebGL payload: unit positions, edges and region labels for
+        the 2x2 four-instance network graph (computed once, cached)."""
+        conn = self.connectome
+        cached = getattr(self, "_geometry_cache", None)
+        if cached is not None:
+            return cached
+
+        import base64
+
+        import numpy as np
+
+        # deterministic region centroids (spec labels)
+        centroids: dict[str, tuple[float, float, float]] = {
+            "neuromod": (-0.70, 0.50, 0.30),     # PAM + SE + OA + TA
+            "mbon": (0.60, 0.40, 0.40),
+            "kc": (0.20, 0.70, -0.30),
+            "cc": (0.00, -0.50, 0.50),
+            "fsb": (-0.40, -0.60, -0.20),
+            "eb": (0.35, -0.70, 0.10),
+            "lh": (-0.60, 0.00, -0.50),
+            "dn": (0.50, 0.00, -0.60),
+            "gen": (0.00, 0.05, 0.00),
+            "clu": (0.05, -0.15, 0.10),
+        }
+        spread = {"neuromod": 0.14, "mbon": 0.10, "kc": 0.16, "cc": 0.12,
+                  "fsb": 0.08, "eb": 0.07, "lh": 0.15, "dn": 0.13,
+                  "gen": 0.85, "clu": 0.95}
+
+        def bucket(unit: int) -> str:
+            for name in ("PAM", "SE", "OA", "TA"):
+                if unit in conn.pop[name]:
+                    return "neuromod"
+            if unit in conn.pop["MBON"]:
+                return "mbon"
+            if unit in conn.pop["KC"]:
+                return "kc"
+            if unit in conn.pop["CC"]:
+                return "cc"
+            if unit in conn.pop["FSB"]:
+                return "fsb"
+            if unit in conn.pop["EB"]:
+                return "eb"
+            if unit in conn.pop["LH"]:
+                return "lh"
+            if unit in conn.pop["DN"]:
+                return "dn"
+            if unit in conn.pop["AFF"]:
+                return "clu"
+            return "clu" if unit >= BRAIN_INDIVIDUAL_UNITS else "gen"
+
+        rng = random.Random(49507)
+        positions = np.zeros((conn.unit_count, 3), dtype=np.int16)
+        for unit in range(conn.unit_count):
+            b = bucket(unit)
+            cx, cy, cz = centroids[b]
+            r = spread[b]
+            positions[unit, 0] = int((cx + rng.uniform(-r, r)) * 1000)
+            positions[unit, 1] = int((cy + rng.uniform(-r, r)) * 1000)
+            positions[unit, 2] = int((cz + rng.uniform(-r, r)) * 1000)
+
+        pairs: list[tuple[int, int]] = []
+        weights: list[int] = []
+        for src, outs in enumerate(conn.out_edges):
+            for dst, w, g in outs:
+                pairs.append((src, dst))
+                weights.append(int(max(-127, min(127, round(g * w * 127.0)))))
+        edge_arr = np.array(pairs, dtype=np.uint16).reshape(-1)
+        w_arr = np.array(weights, dtype=np.int8)
+
+        regions = [
+            {"name": "PAM cluster", "color": "#4caf50",
+             "center": list(centroids["neuromod"]),
+             "count": sum(len(conn.pop[p]) for p in ("PAM", "SE", "OA", "TA"))},
+            {"name": "Mushroom Body", "color": "#ff9800",
+             "center": list(centroids["mbon"]), "count": len(conn.pop["MBON"])},
+            {"name": "Kenyon Cells", "color": "#ffc107",
+             "center": list(centroids["kc"]), "count": len(conn.pop["KC"])},
+            {"name": "Central Complex", "color": "#2196f3",
+             "center": list(centroids["cc"]), "count": len(conn.pop["CC"])},
+            {"name": "Fan-Shaped Body", "color": "#00bcd4",
+             "center": list(centroids["fsb"]), "count": len(conn.pop["FSB"])},
+            {"name": "Ellipsoid Body", "color": "#9c27b0",
+             "center": list(centroids["eb"]), "count": len(conn.pop["EB"])},
+            {"name": "Lateral Horn", "color": "#e91e63",
+             "center": list(centroids["lh"]), "count": len(conn.pop["LH"])},
+            {"name": "Descending Neurons", "color": "#8bc34a",
+             "center": list(centroids["dn"]), "count": len(conn.pop["DN"])},
+        ]
+        geom = {
+            "units": conn.unit_count,
+            "edges": len(pairs),
+            "encoding": {"pos": "int16x3 b64 (x1000)", "edges": "uint16x2 b64",
+                         "weights": "int8 b64 (g*w*127)"},
+            "positions": base64.b64encode(positions.tobytes()).decode(),
+            "edge_pairs": base64.b64encode(edge_arr.tobytes()).decode(),
+            "edge_weights": base64.b64encode(w_arr.tobytes()).decode(),
+            "regions": regions,
+            "news_units": list(conn.news_units),
+        }
+        self._geometry_cache = geom
+        return geom
+
+    def activations(self, symbol: str, tf: str) -> dict:
+        """Per-instance unit activation snapshot (uint8 base64) — one byte
+        per neuron, updated every GRC by the client after each snapshot."""
+        import base64
+
+        import numpy as np
+
+        states = []
+        for brain in self.instances:
+            st = brain.state_for(symbol, tf)
+            arr = np.clip(np.array(st, dtype=float) * 255.0, 0, 255
+                          ).astype(np.uint8)
+            states.append(base64.b64encode(arr.tobytes()).decode())
+        return {
+            "symbol": symbol, "tf": tf,
+            "encoding": "u8 b64 (activation*255)",
+            "per_instance": states,
         }
 
 

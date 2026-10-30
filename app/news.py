@@ -1,116 +1,466 @@
-"""News impact system.
+"""Section 7 — News system with categories and weightages.
 
-PART 1 STATUS: the aggregation contract required by Section 1 is live:
-per-direction impact aggregates with time decay, the 'News Impact Aggregate'
-used by the Extreme Override (>0.8 opposing direction), and the news input to
-Formula 28.  A seeded local headline store stands in until part 2 defines the
-production news pipeline.
+Every news item is classified into one of the seven spec categories, scored
+
+    Impact_Score(n) = Category_Weight(n) * Sentiment(n)
+                      * Freshness(n) * Source_Reliability(n)
+
+with Freshness = exp(-0.05 * age_minutes) and Sentiment in [-1, +1].
+The aggregate
+
+    News_Impact_Aggregate(t) = sum(impact of items younger than 247 min)
+
+is clamped to [-1, +1] and feeds the CCI (component id 100), the Extreme
+Override check, the Drosophila brain inputs and the risk display.
+
+Per-timeframe impacts follow the spec table: a timeframe of duration D_min
+receives Impact_Score * min(1, D_min / duration) when duration >= D_min.
+
+Live ingestion: NewsAPI (NEWS_API_KEY) when configured, with the seeded /
+simulated store as the always-available backup source (sandbox egress and
+Codespaces firewalls otherwise block the API).
 """
 from __future__ import annotations
 
+import math
+import random
 import time
+from typing import Any
 
-from .config import SYMBOL_ORDER
+from .config import (
+    NEWS_AGGREGATE_WINDOW,
+    NEWS_API_KEY,
+    NEWS_API_URL,
+    NEWS_CATEGORIES,
+    NEWS_FRESHNESS_RATE,
+    NEWS_MID_SOURCES,
+    NEWS_POLL_SECONDS,
+    NEWS_QUERY,
+    NEWS_RELIABILITY_LOW,
+    NEWS_RELIABILITY_MID,
+    NEWS_RELIABILITY_TOP,
+    NEWS_TOP_SOURCES,
+    SYMBOL_ORDER,
+    TIMEFRAMES,
+    TF_ORDER,
+)
 
-# Seeded local headlines (direction: +1 bullish / -1 bearish for the asset).
-_SEED_HEADLINES: dict[str, list[tuple[str, float, int, float]]] = {
-    # (headline, base_impact, direction, age_minutes_at_start)
-    "BTC": [
-        ("Spot ETF net inflows accelerate for a fourth session", 0.55, 1, 12),
-        ("Miners rotate treasury reserves to exchanges", 0.35, -1, 40),
-    ],
-    "PAXG": [
-        ("Real yields slip after soft labor print", 0.45, 1, 25),
-        ("Central bank gold purchases slow QoQ", 0.40, -1, 70),
-    ],
-    "ETH": [
-        ("L2 settlement volume hits monthly high", 0.42, 1, 18),
-        ("Large validator queue exits observed", 0.38, -1, 55),
-    ],
-    "BNB": [
-        ("Launchpool listing sparks platform demand", 0.44, 1, 30),
-        ("Regulatory hearing scheduled next week", 0.50, -1, 90),
-    ],
-}
+# --------------------------------------------------------------------------
+# Category classification: first matching keyword wins (most specific first).
+# Order follows spec example sets; unmatched headlines fall back to the
+# sentiment category (lowest weight, shortest duration — documented default).
+# --------------------------------------------------------------------------
+_CATEGORY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("regulatory", (
+        "sec ", "sec-", "securities", "ruling", "regulat", "ban ", "banned",
+        "central bank", "cbdc", "tax ", "taxation", "government", "law ",
+        "lawsuit", "legal", "court", "compliance", "clampdown", "restrict",
+    )),
+    ("institutional", (
+        "etf", "hedge fund", "bank ", "banking", "custody", "institutional",
+        "treasury", "acquisition", "buys ", "buying ", "adoption", "adopt",
+        "spot ", "fund manager", "asset manager", "allocation",
+    )),
+    ("protocol", (
+        "upgrade", "fork", "exploit", "vulnerability", "smart contract",
+        "mainnet", "testnet", "release", "validator", "congestion",
+        "protocol", "burn ", "staking", "airdrop", "hard fork",
+    )),
+    ("macro", (
+        "cpi", "fed ", "fomc", "rate decision", "interest rate", "inflation",
+        "employment", "nonfarm", "jobs ", "gdp", "recession", "dollar",
+        "treasury yield", "macro",
+    )),
+    ("structure", (
+        "hack", "hacked", "depeg", "liquidation", "delist", "listing",
+        "exchange outage", "outage", "halted", "insolvent", "bankrupt",
+        "market structure", "order book",
+    )),
+    ("geopolitical", (
+        "war ", "sanction", "trade agreement", "election", "geopolit",
+        "military", "conflict", "tariff", "embargo", "unrest",
+    )),
+    ("sentiment", (
+        "tweet", "reddit", "viral", "trending", "influencer", "google trends",
+        "survey", "poll ", "sentiment", "social", "meme", "hype",
+    )),
+]
+
+# Deterministic local sentiment lexicon -> [-1, +1] (Part 4's agent layer
+# replaces this scorer when an LLM is configured).
+_BULL = (
+    "approv", "adoption", "inflow", "upgrade", "partnership", "record",
+    "surge", "rally", "bullish", "breakout", "growth", "accumulat",
+    "launch", "boost", "soar", "gain", "support", "approval", "buy",
+)
+_BEAR = (
+    "ban ", "hack", "exploit", "lawsuit", "outflow", "crash", "bearish",
+    "downgrade", "depeg", "liquidat", "fraud", "scam", " plunge", "drop",
+    "selloff", "fear", "reject", "suspend", "probe", "risk",
+)
+
+# Seed headlines (pre-launch content so the pipeline is never empty at boot).
+_SEED: list[tuple[str, str, float, int, tuple[str, ...]]] = [
+    # (headline, category, sentiment, age_min, symbols)
+    ("Spot ETF net inflows accelerate for a fourth session",
+     "institutional", 0.8, 12, ("BTC",)),
+    ("Miners rotate treasury reserves to exchanges",
+     "structure", -0.3, 40, ("BTC",)),
+    ("SEC signals review of staking services",
+     "regulatory", -0.5, 25, ("ETH", "BTC")),
+    ("Real yields slip after soft labor print",
+     "macro", 0.45, 28, ("PAXG",)),
+    ("Central bank gold purchases slow QoQ",
+     "institutional", -0.4, 70, ("PAXG",)),
+    ("L2 settlement volume hits monthly high",
+     "protocol", 0.42, 18, ("ETH",)),
+    ("Large validator queue exits observed",
+     "protocol", -0.38, 55, ("ETH",)),
+    ("Launchpool listing sparks platform demand",
+     "institutional", 0.44, 30, ("BNB",)),
+    ("Regulatory hearing scheduled next week",
+     "regulatory", -0.5, 90, ("BNB",)),
+    ("Community sentiment turns euphoric on social channels",
+     "sentiment", 0.5, 6, ("BTC", "ETH", "BNB")),
+]
+
+
+def classify_category(headline: str) -> str:
+    """Keyword classifier for the seven spec categories (documented default:
+    'sentiment' when nothing matches)."""
+    low = headline.lower()
+    for cat, keys in _CATEGORY_KEYWORDS:
+        for k in keys:
+            if k in low:
+                return cat
+    return "sentiment"
+
+
+def sentiment_score(headline: str, body: str = "") -> float:
+    """Local lexicon sentiment in [-1, +1]: (bull_hits - bear_hits) / total,
+    0.0 when the lexicon sees nothing."""
+    low = (headline + " " + body).lower()
+    bull = sum(1 for k in _BULL if k in low)
+    bear = sum(1 for k in _BEAR if k in low)
+    total = bull + bear
+    if total == 0:
+        return 0.0
+    return max(-1.0, min(1.0, (bull - bear) / total))
+
+
+def source_reliability(source: str) -> float:
+    s = (source or "").lower()
+    if any(t in s for t in NEWS_TOP_SOURCES):
+        return NEWS_RELIABILITY_TOP
+    if any(m in s for m in NEWS_MID_SOURCES):
+        return NEWS_RELIABILITY_MID
+    return NEWS_RELIABILITY_LOW
+
+
+def impact_score(category: str, sentiment: float, age_minutes: float,
+                 reliability: float) -> float:
+    """Impact_Score(n) = Category_Weight * Sentiment * Freshness * Reliability."""
+    cat = NEWS_CATEGORIES.get(category) or NEWS_CATEGORIES["sentiment"]
+    freshness = math.exp(-NEWS_FRESHNESS_RATE * max(0.0, age_minutes))
+    return cat["weight"] * sentiment * freshness * reliability
+
+
+def tf_impact(score: float, duration: int, tf: str) -> float:
+    """Section 7 timeframe distribution: TF receives the score scaled by
+    min(1, tf_minutes / duration), only when duration covers that TF."""
+    tf_min = TIMEFRAMES[tf]["minutes"]
+    if duration < tf_min:
+        return 0.0
+    return score * min(1.0, tf_min / duration)
 
 
 class NewsSystem:
     def __init__(self, now: float | None = None) -> None:
         self.ready = False
         self._t0 = now if now is not None else time.time()
-        self.items: dict[str, list[dict]] = {}
+        self.items: list[dict[str, Any]] = []
+        self._rng = random.Random(49507)
+        self._last_poll = 0.0
+        self.source = "seed"
 
+    # -- lifecycle ----------------------------------------------------------
     def initialize(self) -> None:
         self.ready = True
         self._seed()
+        self.refresh()
 
     def _seed(self) -> None:
         now = time.time()
-        for sym in SYMBOL_ORDER:
-            self.items[sym] = [
-                {
-                    "headline": h,
-                    "base_impact": imp,
-                    "direction": d,
-                    "ts": now - age * 60.0,
-                }
-                for (h, imp, d, age) in _SEED_HEADLINES.get(sym, [])
-            ]
+        self.items = []
+        for headline, cat, sent, age, syms in _SEED:
+            category = NEWS_CATEGORIES.get(cat)
+            if category is None:
+                cat_key = classify_category(headline)
+            else:
+                cat_key = cat
+            self._append({
+                "headline": headline,
+                "category": cat_key,
+                "sentiment": sent,
+                "reliability": NEWS_RELIABILITY_MID,
+                "source": "seed",
+                "symbols": list(syms),
+                "ts": now - age * 60.0,
+            })
+
+    def _append(self, item: dict[str, Any]) -> None:
+        dur = NEWS_CATEGORIES[item["category"]]["duration"]
+        item["duration"] = dur
+        item["arrival_impact"] = impact_score(
+            item["category"], item["sentiment"], 0.0, item["reliability"]
+        )
+        self.items.append(item)
 
     def refresh(self) -> None:
-        """Recomputed at each GRC; part 2 replaces this with the live feed."""
-        if not self.items:
-            self._seed()
+        """Drop expired items, poll the live source when configured, and top
+        up the simulated stream (backup source) so live demos keep moving."""
+        now = time.time()
+        self.items = [
+            it for it in self.items
+            if (now - it["ts"]) / 60.0 < NEWS_AGGREGATE_WINDOW
+        ]
+        if NEWS_API_KEY and now - self._last_poll >= NEWS_POLL_SECONDS:
+            self._last_poll = now
+            self._poll_newsapi(now)
+        if self.source != "newsapi" or len(self.items) < 3:
+            self._sim_tick(now)
 
-    @staticmethod
-    def _decay(age_seconds: float) -> float:
-        return pow(2.718281828, -0.05 * max(0.0, age_seconds) / 60.0)
+    # -- live source (optional) --------------------------------------------
+    def _poll_newsapi(self, now: float) -> None:
+        try:                                   # pragma: no cover - external
+            import httpx
+            resp = httpx.get(
+                NEWS_API_URL,
+                params={"q": NEWS_QUERY, "pageSize": 30,
+                        "sortBy": "publishedAt", "language": "en",
+                        "apiKey": NEWS_API_KEY},
+                timeout=8.0,
+            )
+            data = resp.json()
+            if data.get("status") != "ok":
+                return
+            for art in data.get("articles", []):
+                title = art.get("title") or ""
+                if not title:
+                    continue
+                source = ((art.get("source") or {}).get("name") or "")
+                ts = _parse_ts(art.get("publishedAt")) or now
+                self._append({
+                    "headline": title,
+                    "category": classify_category(title),
+                    "sentiment": sentiment_score(
+                        title, (art.get("description") or "")
+                    ),
+                    "reliability": source_reliability(source),
+                    "source": source,
+                    "symbols": _symbol_tags(title),
+                    "ts": ts,
+                })
+            self.source = "newsapi"
+        except Exception:
+            self.source = "sim"
+
+    # -- backup source: deterministic simulator -----------------------------
+    def _sim_tick(self, now: float) -> None:
+        # roughly one new headline every 1.5 minutes on average
+        if self._rng.random() > 0.12:
+            return
+        cat = self._rng.choice(list(NEWS_CATEGORIES))
+        sent = round(self._rng.uniform(-1.0, 1.0), 2)
+        tier = self._rng.random()
+        rel = (NEWS_RELIABILITY_TOP if tier > 0.75 else
+               NEWS_RELIABILITY_MID if tier > 0.35 else
+               NEWS_RELIABILITY_LOW)
+        src = self._rng.choice(
+            ["Reuters", "CoinDesk", "CryptoBlog", "forum-post", "X feed",
+             "Bloomberg", "The Block"]
+        )
+        sym = self._rng.choice(SYMBOL_ORDER)
+        headline = _SIM_TEMPLATES[cat][self._rng.randrange(
+            len(_SIM_TEMPLATES[cat])
+        )].format(s=sym)
+        self.source = "sim"
+        self._append({
+            "headline": headline,
+            "category": cat,
+            "sentiment": sent,
+            "reliability": rel,
+            "source": src,
+            "symbols": [sym],
+            "ts": now,
+        })
+
+    # -- reads --------------------------------------------------------------
+    def _live_items(self) -> list[dict[str, Any]]:
+        now = time.time()
+        return [
+            it for it in self.items
+            if 0.0 <= (now - it["ts"]) / 60.0 < NEWS_AGGREGATE_WINDOW
+        ]
 
     def aggregate(self, symbol: str) -> dict:
-        """Per-direction News Impact Aggregate in [0,1] with time decay."""
+        """Signed News Impact Aggregate + per-TF impacts for one asset."""
         now = time.time()
+        mine = [it for it in self._live_items() if symbol in it["symbols"]]
+        total = 0.0
         bull = 0.0
         bear = 0.0
-        for it in self.items.get(symbol, []):
-            impact = it["base_impact"] * self._decay(now - it["ts"])
-            if it["direction"] >= 0:
-                bull += impact
+        rows: list[dict] = []
+        impacts = {tf: 0.0 for tf in TF_ORDER}
+        for it in mine:
+            age = (now - it["ts"]) / 60.0
+            score = impact_score(
+                it["category"], it["sentiment"], age, it["reliability"]
+            )
+            total += score
+            if score >= 0:
+                bull += score
             else:
-                bear += impact
-        bull = min(1.0, bull)
-        bear = min(1.0, bear)
-        opposing_of = {"bull": bear, "bear": bull}
-        return {
-            "bull": round(bull, 4),
-            "bear": round(bear, 4),
-            "polarity": 1 if bull > bear else (-1 if bear > bull else 0),
-            "items": [
-                {
-                    "headline": it["headline"],
-                    "direction": it["direction"],
-                    "impact": round(
-                        it["base_impact"] * self._decay(now - it["ts"]), 4
-                    ),
-                }
-                for it in self.items.get(symbol, [])
-            ],
-            "_opposing": opposing_of,
+                bear += score
+            dur = it["duration"]
+            for tf in TF_ORDER:
+                impacts[tf] += tf_impact(score, dur, tf)
+            rows.append({
+                "headline": it["headline"],
+                "category": it["category"],
+                "sentiment": round(it["sentiment"], 3),
+                "impact": round(score, 4),
+                "duration": dur,
+                "age_min": round(age, 1),
+                "source": it["source"],
+                "reliability": it["reliability"],
+            })
+        total = max(-1.0, min(1.0, total))
+        agg = {
+            # signed Section-7 aggregate (component 100 / override / brains)
+            "value": round(total, 4),
+            # legacy split view (UI + E17/E20 consumers)
+            "bull": round(max(0.0, min(1.0, bull)), 4),
+            "bear": round(max(0.0, min(1.0, -bear)), 4),
+            "polarity": round(total, 4),
+            "count": len(mine),
+            "impacts": {tf: round(max(-1.0, min(1.0, impacts[tf])), 4)
+                        for tf in TF_ORDER},
+            "source": self.source,
+            "items": rows,
+            "_opposing": {"bull": max(0.0, min(1.0, bull)),
+                          "bear": max(0.0, min(1.0, -bear))},
         }
+        return agg
 
     def impact_against(self, symbol: str, direction: int) -> float:
-        """News Impact Aggregate opposing `direction` (used by Extreme Override)."""
-        agg = self.aggregate(symbol)
+        """Opposing news impact magnitude in [0,1] (Extreme Override > 0.8)."""
+        value = self.aggregate(symbol)["value"]
         if direction >= 0:
-            return agg["bear"]
-        return agg["bull"]
+            return max(0.0, -value)
+        return max(0.0, value)
 
     def agrees_with(self, symbol: str, direction: int) -> bool:
-        """For Formula 28: neutral (both near zero) counts as agreement."""
-        agg = self.aggregate(symbol)
-        if agg["bull"] < 0.05 and agg["bear"] < 0.05:
+        """Neutral aggregate counts as agreement (risk-layer convention)."""
+        value = self.aggregate(symbol)["value"]
+        if abs(value) < 0.05:
             return True
-        dominant = 1 if agg["bull"] >= agg["bear"] else -1
-        return dominant == direction or max(agg["bull"], agg["bear"]) < 0.15
+        return (1 if value > 0 else -1) == direction or abs(value) < 0.15
+
+    def arrival_scores_last(self, minutes: int) -> list[float]:
+        """Arrival impact scores within `minutes` (QDPC event counting)."""
+        now = time.time()
+        return [
+            it["arrival_impact"] for it in self.items
+            if 0.0 <= (now - it["ts"]) / 60.0 <= minutes
+        ]
+
+    def arrival_minutes_last(self, minutes: int) -> dict[int, float]:
+        """Minute epoch -> summed arrival impact score for the last
+        `minutes` (P9 hot flags, P21 significant-event counting)."""
+        now = time.time()
+        cutoff = now - minutes * 60.0
+        buckets: dict[int, float] = {}
+        for it in self.items:
+            if it["ts"] >= cutoff:
+                minute = int(it["ts"] // 60) * 60
+                buckets[minute] = buckets.get(minute, 0.0) + it["arrival_impact"]
+        return buckets
 
     def status(self) -> dict:
-        return {"ready": self.ready, "items": sum(len(v) for v in self.items.values())}
+        live = self._live_items()
+        return {
+            "ready": self.ready,
+            "items": len(live),
+            "total": len(self.items),
+            "source": self.source,
+            "categories": len(NEWS_CATEGORIES),
+        }
+
+
+# --------------------------------------------------------------------------
+# helpers
+# --------------------------------------------------------------------------
+def _symbol_tags(headline: str) -> list[str]:
+    low = headline.lower()
+    tags: list[str] = []
+    if any(k in low for k in ("bitcoin", "btc", "spot etf")):
+        tags.append("BTC")
+    if any(k in low for k in ("ethereum", "eth ", "ether")):
+        tags.append("ETH")
+    if any(k in low for k in ("bnb", "binance")):
+        tags.append("BNB")
+    if any(k in low for k in ("gold", "paxg")):
+        tags.append("PAXG")
+    return tags or ["BTC", "ETH", "BNB", "PAXG"]
+
+
+def _parse_ts(value: Any) -> float | None:      # pragma: no cover - external
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        from datetime import datetime, timezone
+        return datetime.fromisoformat(
+            value.replace("Z", "+00:00")
+        ).astimezone(timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+_SIM_TEMPLATES: dict[str, list[str]] = {
+    "regulatory": [
+        "SEC issues guidance on {s} custody rulemaking",
+        "Lawmakers propose new tax treatment for {s} staking",
+        "Central bank reiterates caution on {s} adoption",
+    ],
+    "institutional": [
+        "Fund manager discloses larger {s} spot position",
+        "Bank announces {s} custody service rollout",
+        "ETF provider files amended {s} registration",
+    ],
+    "protocol": [
+        "{s} mainnet upgrade activates performance patch",
+        "Developers patch vulnerability in {s} contract",
+        "{s} network congestion eases after fee spike",
+    ],
+    "macro": [
+        "CPI print lands hot; {s} reacts to rate path shift",
+        "Fed minutes point to extended hold; {s} consolidates",
+        "GDP beat lifts risk appetite across {s} pairs",
+    ],
+    "structure": [
+        "Exchange reports partial outage in {s} order book",
+        "Liquidation cluster cleared in {s} perpetuals",
+        "Stablecoin depeg fears pressure {s} liquidity",
+    ],
+    "sentiment": [
+        "Social chatter on {s} spikes to weekly high",
+        "Influencer thread on {s} goes viral overnight",
+        "Search interest in {s} trends upward",
+    ],
+    "geopolitical": [
+        "New sanctions package complicates {s} flows",
+        "Election uncertainty lifts safe-haven {s} demand",
+        "Trade tensions resurface; {s} volatility bid",
+    ],
+}

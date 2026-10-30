@@ -116,7 +116,9 @@ STATE_FILE = "data/state.json"
 # PART 2 — Formulas 22-31, Drosophila Brain system, 22 Emotion formulas
 # ---------------------------------------------------------------------------
 
-# Weighted CCI summands: core signal formulas + brain consensus + CERC.
+# Weighted CCI summands: core signal formulas + brain consensus + CERC
+# (part 2), then physics UFP + news aggregate + hedge/dark-pool combined
+# (part 3) -> 31 components.
 #   F20 (DRHE)     -> multiplier only (not a directional signal)
 #   F28 (ARC)      -> risk management, not a signal ("not a signal formula")
 #   F29 (DLP)      -> level placement (price outputs, not [-1,1])
@@ -125,8 +127,19 @@ STATE_FILE = "data/state.json"
 CORE_SIGNAL_IDS: list[int] = list(range(1, 20)) + [22, 23, 24, 25, 26, 27, 31]
 BRAIN_COMPONENT_ID = 97        # brain_consensus weighted input to CCI
 EMOTION_COMPONENT_ID = 98      # CERC weighted input to CCI
-WEIGHT_IDS: list[int] = CORE_SIGNAL_IDS + [BRAIN_COMPONENT_ID, EMOTION_COMPONENT_ID]
-N_WEIGHT_COMPONENTS = len(WEIGHT_IDS)   # 28
+PHYSICS_COMPONENT_ID = 99      # P22 Unified Field Prediction (Bgn-synced)
+NEWS_COMPONENT_ID = 100        # News Impact Aggregate (Bgn-synced)
+HEDGE_COMPONENT_ID = 101       # HF1+HF2+HF3 combined (Bgn-synced)
+WEIGHT_IDS: list[int] = (
+    CORE_SIGNAL_IDS
+    + [BRAIN_COMPONENT_ID, EMOTION_COMPONENT_ID,
+       PHYSICS_COMPONENT_ID, NEWS_COMPONENT_ID, HEDGE_COMPONENT_ID]
+)
+N_WEIGHT_COMPONENTS = len(WEIGHT_IDS)   # 31
+# Section 8: "Their initial combined weight is 0.08 (8% of total CCI)."
+HEDGE_INITIAL_WEIGHT = 0.08
+# P22: physics layer's total contribution weighted by TME (P9):
+# effective_omega(UFP) = omega(UFP) * TME(t)  (stored weight is the base)
 
 # Formula 30 — PCV validator
 PCV_CONFIDENCE_REDUCTION = 0.3   # when PCV < 0: confidence -= |PCV| * 0.3
@@ -182,3 +195,68 @@ HIST_EMOTION_LAG = 10
 
 # E21 — composite emotion volatility over last 10 GRCs
 HIST_COMPOSITE_EMOTION = 10
+
+# ---------------------------------------------------------------------------
+# PART 3 — Section 6: 22 Physics Formulas (Market Quantum State Framework)
+# ---------------------------------------------------------------------------
+PHYSICS_ALPHA_COUNT = 21            # alpha_p weights inside P22 UFP (1/21 each)
+UFP_ALPHA_IDS: list[int] = list(range(1, 22))
+PHYSICS_NAMES: dict[int, str] = {
+    1: "PSSA", 2: "WFCP", 3: "HPVU", 4: "QTPB", 5: "MEE", 6: "DRPT",
+    7: "BEOFC", 8: "FDPD", 9: "TME", 10: "PIPP", 11: "RGVF",
+    12: "SSBD", 13: "GLPLO", 14: "CELG", 15: "DSMS", 16: "RTDMP",
+    17: "BBIR", 18: "TPTI", 19: "GSPI", 20: "PDOBV", 21: "QDPC",
+    22: "UFP",
+}
+PHYSICS_DISPLAY_IDS: list[int] = list(range(1, 23))   # P1..P22 for panels
+
+QUANTUM_LEVELS = 21                # P1: N = 21 (odd, centered on price)
+TAU_REF_MINUTES = 60.0             # P1 sigma scaling + P11 RGVF tau_ref
+PIPP_PATHS = 1000                  # P10 Monte Carlo K
+PIPP_MAX_STEPS = 20                # P10 M = min(20, tau)
+QTPB_INTEGRAL_POINTS = 20          # P4 numerical integral points
+PROFILE_BINS = 100                 # P13 volume profile bins
+LVD_VACUUM_RATIO = 0.5             # P1 LVD: local volume ratio ramp anchor
+TME_HOT_VOLUME_MULT = 2.0          # P9 hot minute: V > 2 * V_avg
+TME_COLD_VOLUME_MULT = 0.5         # P9 cold minute: V < 0.5 * V_avg
+TME_NEWS_GATE = 0.5                # P9 hot minute: news_impact(i) > 0.5
+TME_NEWS_PRICE_GATE = 0.3          # P21 significant news event: > 0.3
+SSBD_NEIGHBORS = 2                 # P12 z = 2 (Ising neighbours)
+QDPC_K_B = 1.0                     # P21 Boltzmann constant set to 1
+BBIR_K_B = 1.0                     # P17 Boltzmann constant set to 1
+PHYSICS_COUPLING_WINDOW = 50       # P22 coupling: corr over last 50 GRCs
+HIST_TPTI = 200                    # P18 beta1 baseline over last 200 GRCs
+HIST_T_BASELINE = 200              # P17 T_baseline over last 200 GRCs
+C_MARKET_WINDOW = 500              # P16 speed of light: max |r1min| / 500 min
+C_MARKET_LEAD_WINDOW = 200         # P15 speed of light: / 200 min across assets
+
+# ---------------------------------------------------------------------------
+# PART 3 — Section 7: News categories, base weightages, impact durations
+# ---------------------------------------------------------------------------
+NEWS_CATEGORIES: dict[str, dict] = {
+    "regulatory":   {"weight": 0.25, "duration": 247},   # TF4 full window
+    "institutional": {"weight": 0.20, "duration": 130},  # TF3 window
+    "protocol":     {"weight": 0.15, "duration": 44},    # TF2 window
+    "macro":        {"weight": 0.15, "duration": 130},   # TF3 window
+    "structure":    {"weight": 0.10, "duration": 44},    # TF2 window
+    "sentiment":    {"weight": 0.08, "duration": 22},    # TF1 window
+    "geopolitical": {"weight": 0.07, "duration": 247},   # TF4, low immediate
+}
+NEWS_FRESHNESS_RATE = 0.05         # Freshness = exp(-0.05 * age_minutes)
+NEWS_AGGREGATE_WINDOW = 247        # sum over the last 247 minutes, clamp [-1,1]
+# Source_Reliability tiers (Section 7)
+NEWS_RELIABILITY_TOP = 1.0         # Reuters, Bloomberg, CoinDesk
+NEWS_RELIABILITY_MID = 0.7         # crypto blogs, verified accounts
+NEWS_RELIABILITY_LOW = 0.4         # unverified social media, forums
+NEWS_TOP_SOURCES = {
+    "reuters", "bloomberg", "coindesk", "wsj", "ft", "cnbc",
+}
+NEWS_MID_SOURCES = {
+    "cointelegraph", "theblock", "the block", "coingeek", "decrypt",
+    "messari", "glassnode", "cryptoquant", "twitter", "x",
+}
+NEWS_API_URL = "https://newsapi.org/v2/everything"
+NEWS_API_KEY = ""                  # optional live key -> falls back to simulator
+NEWS_POLL_SECONDS = 60             # live poll cadence
+NEWS_QUERY = "bitcoin OR ethereum OR crypto"
+PHYSICS_STATE_FILE = "data/physics_weights.json"

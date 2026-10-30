@@ -1,6 +1,7 @@
 """Shared data structures for the prediction application."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -100,18 +101,25 @@ class TFCycle:
     safe_alert: bool = False         # one-shot UI flag
     warning: bool = False            # initial-analysis 4-minute expiry warning
     refreshed_at: float = 0.0        # last time prediction values changed
+    qdpc_tau: float | None = None    # P21 confidence-decoherence timescale
     events: list[dict[str, Any]] = field(default_factory=list)
 
     def target(self, k: int) -> TargetState:
         return self.targets[k - 1]
 
     def to_dict(self, now: float | None = None) -> dict[str, Any]:
+        # P21: effective confidence ages as the prediction window progresses
+        eff = self.confidence
+        if self.qdpc_tau and now:
+            age = max(0.0, now - self.cycle_start)
+            eff = self.confidence * math.exp(-age / max(self.qdpc_tau, 1e-9))
         return {
             "symbol": self.symbol,
             "tf": self.tf,
             "W": self.W,
             "direction": self.direction,
             "confidence": round(self.confidence, 4),
+            "confidence_effective": round(eff, 4),
             "cci": round(self.cci, 4),
             "drhe": round(self.drhe, 4),
             "issued": self.issued,

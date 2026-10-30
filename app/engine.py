@@ -31,6 +31,7 @@ from .config import (
     EMOTION_COMPONENT_ID,
     EXTREME_OVERRIDE_CCI,
     EXTREME_OVERRIDE_NEWS,
+    HEDGE_COMPONENT_ID,
     HIST_COMPOSITE_EMOTION,
     HIST_EMOTION_LAG,
     HIST_STD_R,
@@ -38,12 +39,17 @@ from .config import (
     LOCK_SHIFT_ADJUST,
     MIN_BARS_COMPUTE,
     MIN_BARS_FULL_WINDOW,
+    NEWS_COMPONENT_ID,
+    NEWS_CATEGORIES,
+    PHYSICS_COMPONENT_ID,
+    PHYSICS_NAMES,
     SL_CONFIDENCE_PENALTY,
     SL_TIGHTEN_FACTOR,
     SYMBOL_ORDER,
     TARGET_SCALE,
     TF_ORDER,
     TIMEFRAMES,
+    UFP_ALPHA_IDS,
     WEIGHT_IDS,
 )
 from .brain import BrainSystem
@@ -51,12 +57,12 @@ from .emotion import EmotionSystem
 from .feed import MarketFeed
 from .formulas import FORMULA_FUNCTIONS, FORMULA_NAMES, compute_all
 from .formulas.f01_f10 import abs_changes as _abs_changes
-from .formulas._helpers import mean as _mean, sign as _sign, std_pop as _std_pop
+from .formulas._helpers import mean as _mean, pearson as _pearson, sign as _sign, std_pop as _std_pop
 from .formulas.f22_f31 import f30_pcv, fractal_boundary_levels
 from .history import HistoryStore
 from .models import FormulaContext, TargetState, TFCycle
 from .news import NewsSystem
-from . import orderflow
+from . import hedgefund, orderflow
 from .physics import PhysicsSystem
 from .risk import arc_ratio, dynamic_level_placement
 
@@ -102,6 +108,7 @@ class PredictionEngine:
             "brains": False,
             "emotions": False,
             "news": False,
+            "physics": False,
             "weights": False,
         }
 
@@ -120,6 +127,7 @@ class PredictionEngine:
         self.prev_brain_signals: dict[tuple[str, str], list[float]] = {}
         self.prev_emotions: dict[tuple[str, str], tuple[dict, dict]] = {}
         self.prev_cci_dir: dict[tuple[str, str], int] = {}
+        self.prev_physics: dict[tuple[str, str], dict[int, float]] = {}
         self.brain_weight_adj: dict[tuple[str, str], dict[int, float]] = {}
         self.news_polarity: deque[float] = deque(maxlen=30)
         self._market_cache: dict[str, dict] = {}
@@ -144,6 +152,7 @@ class PredictionEngine:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self.cci.save()
+        self.physics.save()
 
     async def _initialize_subsystems(self) -> None:
         # wait for the feed to deliver history
@@ -158,6 +167,7 @@ class PredictionEngine:
         self.readiness["brains"] = self.brains.ready
         self.readiness["emotions"] = self.emotions.ready
         self.readiness["news"] = self.news.ready
+        self.readiness["physics"] = self.physics.ready
 
     # ==================================================================
     # context construction
@@ -350,6 +360,7 @@ class PredictionEngine:
             "tp_dist": tp_dist,
             "sl_dist": sl_dist,
             "cc_inputs": cc_inputs,
+            "news_value": market.get("news_value", 0.0),
             **self.brains.performance_inputs(),
         }
 
@@ -397,6 +408,13 @@ class PredictionEngine:
         market = self._build_market(symbol)
         self.news.refresh()
         news_agg = self.news.aggregate(symbol)
+        market["news_value"] = news_agg["value"]
+        market["news_impacts"] = news_agg["impacts"]
+        # minute-epoch news arrival map (P9 hot flags / P21 events) + the
+        # long close series every physics formula needs for c_market/leader
+        news_minutes = self.news.arrival_minutes_last(600)
+        long_closes = {sym: list(self.feed.state(sym).closes)
+                       for sym in SYMBOL_ORDER}
 
         price = self.feed.prices().get(symbol) or (
             ctxs["tf1"].P[-1] if ctxs["tf1"].P else 0.0
@@ -427,9 +445,20 @@ class PredictionEngine:
                         for i, sig in enumerate(prev_bs) if sig != 0
                     }
                     self.brains.push_rewards(rewards, brain_rewards)
+                    # rolling accuracy rings (last 50 scored GRCs) for the
+                    # formula panels — same reward rule as weight learning
+                    for fid, r in rewards.items():
+                        if fid in FORMULA_FUNCTIONS or fid in (28, 30):
+                            self.hist.ring(
+                                self.hist.tf_key(symbol, tf, f"facc{fid}"), 50
+                            ).append(r)
                 # Formula 21 weight learning + Brain-4 secondary adjustment
                 self.cci.update_weights(symbol, tf, price)
                 self._apply_brain4(symbol, tf)
+                # P22 physics alpha learning (same eta reward rule)
+                prev_ph = self.prev_physics.get((symbol, tf))
+                if prev_ph and move != 0:
+                    self.physics.reward_update(symbol, tf, prev_ph, move)
                 # CERC emotion-weight rewards (21 channels, eta rule)
                 prev_em = self.prev_emotions.get((symbol, tf))
                 if prev_em and move != 0:
@@ -440,6 +469,11 @@ class PredictionEngine:
                 pdir = self.prev_cci_dir.get((symbol, tf), 0)
                 if move != 0 and pdir != 0:
                     self.hist.commit_win_streak(symbol, pdir == _sign(move))
+                    # F21 (CCI) panel accuracy: sign of the previous pass'
+                    # adjusted CCI vs the realized move
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, "facc21"), 50
+                    ).append(1.0 if pdir == _sign(move) else -1.0)
 
         # 5) brains (4 instances per asset x timeframe) + emotions
         brain_res: dict[str, dict] = {}
@@ -472,16 +506,76 @@ class PredictionEngine:
         cerc_sync = BgnSynchronizer.adjust(
             matrix, {tf: emotion_res[tf]["cerc"] for tf in TF_ORDER}
         )
-        physics_raw = {tf: self.physics.aggregate(symbol, tf)["aggregate"] for tf in TF_ORDER}
-        physics_sync = BgnSynchronizer.adjust(matrix, physics_raw)
 
-        # 7) Formula 21 per timeframe + Part-2 confidence pipeline
+        # 7a) physics layer (P1..P21 + P22 UFP) and hedge/dark-pool layer
+        # (HF1..HF3) per timeframe.  Physics references the PRE-physics core
+        # CCI (P16 sign, P22 coupling correlation, P19 top-5 gauge check);
+        # HF3 needs this pass' brain consensus (retail_flow = -H_signal).
+        phys_raw: dict[str, dict] = {}
+        hedge_raw: dict[str, float] = {}
+
+        def _recompute(g: FormulaContext) -> dict[int, float]:
+            # P19 gauge recomputes: full formula pass on transformed prices,
+            # record=False so the GRC-cadence rings stay untouched
+            return compute_all(g, record=False)
+
         for tf in TF_ORDER:
+            drhe = adj[tf].get(20, 1.0)
+            comp_core: dict[int, float] = {fid: adj[tf][fid] for fid in FORMULA_FUNCTIONS}
+            comp_core[BRAIN_COMPONENT_ID] = brain_sync[tf]
+            comp_core[EMOTION_COMPONENT_ID] = cerc_sync[tf]
+            w = self.cci.get_weights(symbol, tf)
+            wsum = sum(w.get(fid, 0.0) for fid in comp_core)
+            cci_ref = (
+                sum(w.get(fid, 0.0) * v for fid, v in comp_core.items()) / wsum
+                if wsum else 0.0
+            )
+            phys_raw[tf] = self.physics.evaluate(
+                symbol, tf, ctxs[tf], atr=self._atr(ctxs[tf]), raws=raws[tf],
+                cci_ref=cci_ref, long_closes=long_closes,
+                news_minutes=news_minutes, weights=w,
+                recompute=_recompute, hist=self.hist,
+                record=record, move=move,
+            )
+            ifr = hedgefund.institutional_flow(ctxs[tf])
+            dpad = hedgefund.dark_pool_flow(ctxs[tf])
+            smdi = hedgefund.smart_money_divergence(
+                ifr["value"], brain_res[tf]["consensus"]
+            )
+            hedge_raw[tf] = hedgefund.combined_signal(
+                ifr["value"], dpad["value"], smdi
+            )
+            # per-tf hedge detail kept for the display layer
+            phys_raw[tf]["hedge"] = {
+                "ifr": round(ifr["value"], 6),
+                "dpad": round(dpad["value"], 6),
+                "smdi": round(smdi, 6),
+                "events": ifr["events"],
+                "prints": dpad["prints"],
+                "combined": round(hedge_raw[tf], 6),
+            }
+
+        # 7b) Bgn synchronization of the part-3 signals across timeframes
+        physics_sync = BgnSynchronizer.adjust(
+            matrix, {tf: phys_raw[tf]["ufp"]["value"] for tf in TF_ORDER}
+        )
+        hedge_sync = BgnSynchronizer.adjust(matrix, hedge_raw)
+        news_sync = BgnSynchronizer.adjust(
+            matrix, {tf: news_agg["value"] for tf in TF_ORDER}
+        )
+
+        # 7) Formula 21 per timeframe: 31 weighted components + confidence
+        for tf in TF_ORDER:
+            atr_tf = self._atr(ctxs[tf])        # per-tf ATR (fixes leak from step 5)
             drhe = adj[tf].get(20, 1.0)
             comp: dict[int, float] = {fid: adj[tf][fid] for fid in FORMULA_FUNCTIONS}
             comp[BRAIN_COMPONENT_ID] = brain_sync[tf]
             comp[EMOTION_COMPONENT_ID] = cerc_sync[tf]
-            pack = self.cci.compute(symbol, tf, comp, drhe)
+            comp[PHYSICS_COMPONENT_ID] = physics_sync[tf]
+            comp[NEWS_COMPONENT_ID] = news_sync[tf]
+            comp[HEDGE_COMPONENT_ID] = hedge_sync[tf]
+            phys = phys_raw[tf]
+            pack = self.cci.compute(symbol, tf, comp, drhe, tme=phys["tme"])
 
             # F30 PCV validator — runs on the CCI (post-aggregation)
             pcv_detail = f30_pcv(ctxs[tf].P, pack["cci_adjusted"])
@@ -498,6 +592,9 @@ class PredictionEngine:
                 state_aligned=aligned,
                 rtp=em["rtp"],
                 pcv=pcv,
+                wfcp=phys["wfcp"],
+                drpt=phys["drpt"],
+                gspi=phys["gspi"],
             )
 
             # F28 inputs: volatility state vs baseline (same measure as F20)
@@ -562,8 +659,18 @@ class PredictionEngine:
                 "conflicting": fin["conflicting"],
                 "brain": brain_consensus,
                 "emotion": emotion_agg,
-                "physics": {"aggregate": physics_sync[tf]},
-                "news": news_agg,
+                "physics": {
+                    "values": phys["values"],
+                    "ufp": phys["ufp"]["value"],
+                    "tme": phys["tme"],
+                    "wfcp": phys["wfcp"],
+                    "drpt": phys["drpt"],
+                    "gspi": phys["gspi"],
+                    "p1": phys["details"].get("p1"),
+                },
+                "hedge": phys["hedge"],
+                "news_value": news_sync[tf],
+                "qdpc_tau": phys["details"]["p21"]["tau"],
             }
             if record:
                 # reward-rule storage: the 28 weighted components only
@@ -576,6 +683,11 @@ class PredictionEngine:
                 ]
                 self.prev_emotions[(symbol, tf)] = (em["emotions"], em["directions"])
                 self.prev_cci_dir[(symbol, tf)] = pack["direction"]
+                self.prev_physics[(symbol, tf)] = dict(phys["values"])
+                # F21 sparkline: the aggregator's own adjusted output
+                self.hist.ring(
+                    self.hist.tf_key(symbol, tf, "fspark21"), 100
+                ).append(pack["cci_adjusted"])
                 # GRC-lag rings consumed by the emotion system
                 for ring_name, val in em["lag_values"].items():
                     self.hist.ring(
@@ -586,11 +698,83 @@ class PredictionEngine:
                 ).append(em["cerc"])
                 # news polarity series for the E20 correlation seam
                 self.news_polarity.append(news_agg.get("polarity", 0))
+                # --- sparklines (last 100 GRCs) for the formula panels -----
+                for f in FORMULA_FUNCTIONS:
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, f"fspark{f}"), 100
+                    ).append(raws[tf].get(f, 0.0))
+                self.hist.ring(
+                    self.hist.tf_key(symbol, tf, "fspark28"), 100
+                ).append(arc)
+                self.hist.ring(
+                    self.hist.tf_key(symbol, tf, "fspark30"), 100
+                ).append(pcv)
+                # physics sparklines P1..P21 + P22 (UFP) + accuracies
+                pvals = phys["values"]
+                for pid in range(1, 22):
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, f"pspark{pid}"), 100
+                    ).append(pvals[pid])
+                self.hist.ring(
+                    self.hist.tf_key(symbol, tf, "pspark22"), 100
+                ).append(phys["ufp"]["value"])
+                if move != 0:
+                    for pid in range(1, 22):
+                        self.hist.ring(
+                            self.hist.tf_key(symbol, tf, f"pacc{pid}"), 50
+                        ).append(1.0 if _sign(pvals[pid]) == _sign(move)
+                                 else -1.0)
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, "pacc22"), 50
+                    ).append(1.0 if _sign(phys["ufp"]["value"]) == _sign(move)
+                             else -1.0)
+                # emotion sparklines + accuracy (same term as reward_update)
+                ew = self.emotions._weights(symbol, tf)
+                for i, (eid, ev) in enumerate(em["emotions"].items()):
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, f"emospark{eid}"), 100
+                    ).append(ev)
+                    if move != 0 and eid in em["directions"]:
+                        if eid <= 21 and i < len(ew):
+                            term = ew[i] * ev * em["directions"][eid]
+                            if eid == 21:
+                                term *= (1.0 - 0.5 * ev)
+                        else:
+                            term = em["cerc"]
+                        self.hist.ring(
+                            self.hist.tf_key(symbol, tf, f"eacc{eid}"), 50
+                        ).append(1.0 if _sign(term) == _sign(move) else -1.0)
+                # E22 (CERC) sparkline — not part of the emotions dict
+                self.hist.ring(
+                    self.hist.tf_key(symbol, tf, "emospark22"), 100
+                ).append(em["cerc"])
+                if move != 0:
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, "eacc22"), 50
+                    ).append(1.0 if _sign(em["cerc"]) == _sign(move) else -1.0)
+                # --- System Co-relation series (last 50 GRCs) --------------
+                for i, inst in enumerate(br["instances"]):
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, f"corr_db{i}"), 50
+                    ).append(inst["h_signal"])
+                self.hist.ring(
+                    self.hist.tf_key(symbol, tf, "corr_em"), 50
+                ).append(cerc_sync[tf])
+                self.hist.ring(
+                    self.hist.tf_key(symbol, tf, "corr_ph"), 50
+                ).append(physics_sync[tf])
+                self.hist.ring(
+                    self.hist.tf_key(symbol, tf, "corr_cci"), 50
+                ).append(pack["cci_adjusted"])
                 # display snapshot — GRC cadence only (spec)
                 self.display_formulas[(symbol, tf)] = {
-                    "raw": {str(f): round(raws[tf].get(f, 0.0), 5) for f in FORMULA_FUNCTIONS},
-                    "adj": {str(f): round(adj[tf].get(f, 0.0), 5) for f in FORMULA_FUNCTIONS},
+                    "raw": {str(f): round(raws[tf].get(f, 0.0), 5)
+                            for f in FORMULA_FUNCTIONS},
+                    "adj": {str(f): round(adj[tf].get(f, 0.0), 5)
+                            for f in FORMULA_FUNCTIONS},
                     "names": {str(f): FORMULA_NAMES[f] for f in FORMULA_FUNCTIONS},
+                    "extra": {"28": round(arc, 5), "30": round(pcv, 5)},
+                    "extra_names": {"28": "ARC", "29": "DLP", "30": "PCV"},
                 }
                 self.display_systems[(symbol, tf)] = {
                     "brain": brain_consensus,
@@ -601,13 +785,33 @@ class PredictionEngine:
                         "directions": em["directions"],
                         "weights": [round(x, 5) for x in self.emotions._weights(symbol, tf)],
                     },
-                    "physics": {"aggregate": round(physics_sync[tf], 5)},
+                    "physics": {
+                        "values": phys["values"],
+                        "ufp": round(physics_sync[tf], 5),
+                        "alpha": phys["ufp"]["alpha"],
+                        "couplings": phys["ufp"]["couplings"],
+                        "tme": round(phys["tme"], 5),
+                        "wfcp": round(phys["wfcp"], 5),
+                        "drpt": round(phys["drpt"], 5),
+                        "gspi": round(phys["gspi"], 5),
+                        "p1": phys["details"].get("p1"),
+                        "qtpb": phys["details"].get("p4", {}),
+                        "details": {
+                            k: v for k, v in phys["details"].items()
+                            if k in ("p7", "p15", "p18", "p21")
+                        },
+                    },
                     "news": {
+                        "value": news_sync[tf],
                         "bull": news_agg["bull"],
                         "bear": news_agg["bear"],
                         "polarity": news_agg["polarity"],
+                        "count": news_agg["count"],
+                        "impacts": news_agg["impacts"],
+                        "source": news_agg["source"],
                         "items": news_agg["items"],
                     },
+                    "hedge": phys["hedge"],
                     "drhe": round(drhe, 4),
                     "atr": results[tf]["atr"],
                     "pcv": round(pcv, 5),
@@ -618,6 +822,13 @@ class PredictionEngine:
                               "base": round(sigma_base, 8)},
                     "confidence": round(fin["confidence"], 4),
                     "base_confidence": round(pack["confidence"], 4),
+                    "physics_conf": {
+                        "wfcp": round(phys["wfcp"], 5),
+                        "drpt": round(phys["drpt"], 5),
+                        "gspi": round(phys["gspi"], 5),
+                        "qdpc_tau": phys["details"]["p21"]["tau"],
+                    },
+                    "corelation": self._corelation_dict(symbol, tf),
                     "win_ratio": round(self.hist.win_ratio.get(symbol, 0.0), 3),
                 }
         if record:
@@ -625,6 +836,87 @@ class PredictionEngine:
             self.readiness["formulas"] = True
             self.readiness["weights"] = True
         return results
+
+    # ==================================================================
+    # visualization data (Section 9)
+    # ==================================================================
+    def _corelation_dict(self, symbol: str, tf: str) -> dict:
+        """System Co-relation network: pairwise correlation of every major
+        subsystem's output over the last 50 GRCs (green = positive,
+        red = negative; thickness is drawn client-side from |corr|)."""
+        def series(name: str) -> list[float]:
+            return list(self.hist.ring(self.hist.tf_key(symbol, tf, name), 50))
+
+        local = {
+            "DB-1": series("corr_db0"), "DB-2": series("corr_db1"),
+            "DB-3": series("corr_db2"), "DB-4": series("corr_db3"),
+            "EMOTION": series("corr_em"), "PHYSICS": series("corr_ph"),
+            "CORE": series("corr_cci"),
+        }
+        edges: list[dict] = []
+        keys = list(local)
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                a, b = keys[i], keys[j]
+                xs, ys = local[a], local[b]
+                n = min(len(xs), len(ys))
+                if n >= 3:
+                    corr = _pearson(xs[-n:], ys[-n:])
+                    edges.append({"a": a, "b": b, "corr": round(corr, 4)})
+        return {
+            "nodes": [
+                {"id": "DB-1", "kind": "brain"}, {"id": "DB-2", "kind": "brain"},
+                {"id": "DB-3", "kind": "brain"}, {"id": "DB-4", "kind": "brain"},
+                {"id": "EMOTION", "kind": "emotion"},
+                {"id": "PHYSICS", "kind": "physics"},
+                {"id": "CORE", "kind": "core"},
+                {"id": "AGENT-G", "kind": "agent", "ready": False},
+                {"id": "AGENT-L", "kind": "agent", "ready": False},
+            ],
+            "edges": edges,
+        }
+
+    def formula_history(self, symbol: str, tf: str) -> dict:
+        """Sparklines (100 GRCs) + rolling accuracy (50 GRCs) for every
+        core formula, emotion and physics formula of one (asset, timeframe)."""
+        from .config import PHYSICS_NAMES as _P_NAMES
+
+        def r(name: str, n: int) -> list[float]:
+            return [round(x, 5) for x in
+                    self.hist.ring(self.hist.tf_key(symbol, tf, name), n)]
+
+        core_ids = list(range(1, 32))              # F1..F31 panels (31)
+        core = {str(f): r(f"fspark{f}", 100) for f in core_ids}
+        core_acc = {str(f): r(f"facc{f}", 50)
+                    for f in list(FORMULA_FUNCTIONS) + [20, 28, 30]}
+        emotion = {str(e): r(f"emospark{e}", 100) for e in range(1, 23)}
+        emotion_acc = {str(e): r(f"eacc{e}", 50) for e in range(1, 23)}
+        physics = {str(p): r(f"pspark{p}", 100) for p in range(1, 23)}
+        physics_acc = {str(p): r(f"pacc{p}", 50) for p in range(1, 23)}
+        return {
+            "symbol": symbol, "tf": tf,
+            "core": core, "core_accuracy": core_acc,
+            "emotion": emotion, "emotion_accuracy": emotion_acc,
+            "physics": physics, "physics_accuracy": physics_acc,
+            "names": {
+                "core": {str(f): FORMULA_NAMES[f] for f in core_ids},
+                "physics": {str(p): _P_NAMES[p] for p in range(1, 23)},
+            },
+            "weights": {str(fid): round(self.cci.get_weights(symbol, tf)
+                                        .get(fid, 0.0), 5)
+                        for fid in WEIGHT_IDS},
+            "alpha": ({p: round(w, 5) for p, w in
+                       self.physics._weights(symbol, tf).items()}
+                      if self.physics.ready else {}),
+        }
+
+    def brain_geometry(self) -> dict:
+        """Static connectome geometry for the 3D brain visualization."""
+        return self.brains.geometry()
+
+    def brain_activations(self, symbol: str, tf: str) -> dict:
+        """Per-instance unit activations (uint8 base64) for one pair."""
+        return self.brains.activations(symbol, tf)
 
     # ==================================================================
     # cycle helpers
@@ -665,6 +957,7 @@ class PredictionEngine:
         # F29: fractal boundaries (shared with F24 FBPS) + seams
         ctx = self.build_ctx(symbol, tf)
         boundaries = fractal_boundary_levels(ctx)
+        dlp_details: dict = {}
         tp, sl, tp_dist, sl_dist = dynamic_level_placement(
             price=price,
             direction=cyc.direction,
@@ -674,7 +967,15 @@ class PredictionEngine:
             drhe=res.get("drhe", 1.0),
             ofti_value=self._build_market(symbol).get("ofti", 0.0),
             tighten=cyc.sl_tighten,
+            details=dlp_details,
         )
+        # visualization: phi multipliers + F29 sparkline (GRC cadence)
+        dsys = self.display_systems.get((symbol, tf))
+        if dsys is not None and dlp_details:
+            dsys["dlp"] = dict(dlp_details)
+            self.hist.ring(
+                self.hist.tf_key(symbol, tf, "fspark29"), 100
+            ).append(dlp_details.get("phi_tp", 1.0))
         return tp, sl, tp_dist, sl_dist, ratio
 
     def _apply_risk(self, symbol: str, tf: str, cyc: TFCycle, res: dict) -> None:
@@ -741,6 +1042,7 @@ class PredictionEngine:
             active_k=1 if res["issued"] else None,
             warning=warning,
             refreshed_at=now,
+            qdpc_tau=res.get("qdpc_tau"),
         )
         cyc.events.append({"ts": now, "type": "cycle_fresh", "reason": reason})
         self.cycles[(symbol, tf)] = cyc
@@ -788,6 +1090,7 @@ class PredictionEngine:
         self.readiness["brains"] = self.brains.ready
         self.readiness["emotions"] = self.emotions.ready
         self.readiness["news"] = self.news.ready
+        self.readiness["physics"] = self.physics.ready
         if enough_any and not self.readiness["formulas"]:
             # dry-run the entire pipeline so all subsystems report readiness
             try:
@@ -869,6 +1172,7 @@ class PredictionEngine:
                     self.last_result[(symbol, tf)] = res
                     self._apply_grc_lock_rules(symbol, tf, now, res)
             self.cci.save()
+            self.physics.save()
             await self._broadcast_full("grc")
 
     # -- lock rules at GRC --------------------------------------------------
@@ -1250,10 +1554,21 @@ class PredictionEngine:
                 **{str(f): FORMULA_NAMES[f] for f in FORMULA_FUNCTIONS},
                 str(BRAIN_COMPONENT_ID): "BRAIN CONSENSUS",
                 str(EMOTION_COMPONENT_ID): "CERC COMPOSITE",
+                str(PHYSICS_COMPONENT_ID): "PHYSICS UFP",
+                str(NEWS_COMPONENT_ID): "NEWS IMPACT",
+                str(HEDGE_COMPONENT_ID): "HEDGE+DARK",
                 "20": FORMULA_NAMES[20],
                 "28": "ARC (risk)",
                 "29": "DLP (risk)",
                 "30": "PCV (validator)",
+            },
+            "physics": self.physics.status(),
+            "news_meta": {
+                "status": self.news.status(),
+                "categories": {
+                    name: {"weight": c["weight"], "duration": c["duration"]}
+                    for name, c in NEWS_CATEGORIES.items()
+                },
             },
             "brains": self.brains.status(),
             "formula_values": {

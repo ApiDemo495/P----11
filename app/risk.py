@@ -69,12 +69,14 @@ def dynamic_level_placement(
     drhe: float,
     ofti_value: float,
     tighten: float = 1.0,
+    details: dict | None = None,
 ) -> tuple[float, float, float, float]:
     """Formula 29 — returns (tp_price, sl_price, tp_dist, sl_dist).
 
     `boundaries` = (below, above) fractal-boundary level lists from
     fractal_boundary_levels(); the nearest level on each relevant side is
-    used for the FBPS alignment terms.
+    used for the FBPS alignment terms.  When `details` is provided it is
+    filled with the phi/FBPS multipliers (visualization layer).
     """
     if direction == 0 or atr <= 0:
         direction = direction or 1
@@ -123,4 +125,10 @@ def dynamic_level_placement(
     if sl <= 0:                                # never emit a non-positive SL
         sl = price * 0.5 if price else 0.0
         sl_dist = abs(price - sl)
+    if details is not None:
+        details.update({
+            "phi_tp": round(phi_tp, 6), "phi_sl": round(phi_sl, 6),
+            "fbps_tp": fbps_tp, "fbps_sl": fbps_sl,
+            "tighten": tighten, "ratio": ratio,
+        })
     return tp, sl, tp_dist, sl_dist

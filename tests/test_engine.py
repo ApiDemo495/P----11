@@ -330,11 +330,19 @@ def test_extreme_override_needs_all_three_conditions(live_engine):
     # only two conditions true -> no override
     res["confidence"] = 0.10                 # condition 1 (drop below 0.25)
     t4_dir = cyc.target(4).direction or 1
-    # condition 3: fake news opposing via items
-    engine.news.items[sym] = [{
-        "headline": "extreme", "base_impact": 0.99, "direction": -t4_dir,
-        "ts": time.time(),
-    }]
+    # condition 3: fake opposing news — four full-weight regulatory items
+    # (0.25 * 1 * 1 * 1 each) push the clamped aggregate past -/+0.8
+    engine.news.items = []
+    for i in range(4):
+        engine.news._append({
+            "headline": f"extreme regulatory action {i}",
+            "category": "regulatory",
+            "sentiment": -1.0 if t4_dir > 0 else 1.0,
+            "reliability": 1.0,
+            "source": "test",
+            "symbols": [sym],
+            "ts": time.time(),
+        })
     # brain consensus NOT flipped (condition 2 false)
     res["brain"] = dict(res["brain"])
     res["brain"]["polarity"] = t4_dir

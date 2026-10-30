@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .clock import MasterClock, seconds_to_next_grc
+from .config import SYMBOLS, TIMEFRAMES
 from .engine import PredictionEngine
 from .feed import MarketFeed
 
@@ -114,6 +115,63 @@ async def health() -> dict:
 @app.get("/api/snapshot")
 async def snapshot() -> JSONResponse:
     return JSONResponse(engine.build_snapshot())
+
+
+@app.get("/api/formula-history")
+async def formula_history(symbol: str = "BTC", tf: str = "tf1") -> JSONResponse:
+    """Sparklines + accuracy rings for all 31 core / 22 emotion / 22
+    physics formulas of one (asset, timeframe) — Section 9 panels."""
+    if symbol not in SYMBOLS or tf not in TIMEFRAMES:
+        return JSONResponse({"ok": False, "error": "unknown symbol/tf"},
+                            status_code=400)
+    return JSONResponse({"ok": True,
+                         **engine.formula_history(symbol, tf)})
+
+
+@app.get("/api/brain-geometry")
+async def brain_geometry() -> JSONResponse:
+    """Static 3D connectome geometry for the WebGL brain visualization."""
+    return JSONResponse({"ok": True, **engine.brain_geometry()})
+
+
+@app.get("/api/brain-activations")
+async def brain_activations(symbol: str = "BTC", tf: str = "tf1") -> JSONResponse:
+    """Per-instance neuron activations for one (asset, timeframe)."""
+    if symbol not in SYMBOLS or tf not in TIMEFRAMES:
+        return JSONResponse({"ok": False, "error": "unknown symbol/tf"},
+                            status_code=400)
+    return JSONResponse({"ok": True, **engine.brain_activations(symbol, tf)})
+
+
+@app.get("/api/news/{symbol}")
+async def news_feed(symbol: str) -> JSONResponse:
+    """Section-7 news feed: categories, aggregate, per-TF impacts, items."""
+    if symbol not in SYMBOLS:
+        return JSONResponse({"ok": False, "error": "unknown symbol"},
+                            status_code=400)
+    return JSONResponse({"ok": True, **engine.news.aggregate(symbol)})
+
+
+@app.get("/api/candles")
+async def candles(symbol: str = "BTC", n: int = 180) -> JSONResponse:
+    """OHLC bars for the candlestick chart (incl. the live partial minute)."""
+    if symbol not in SYMBOLS:
+        return JSONResponse({"ok": False, "error": "unknown symbol"},
+                            status_code=400)
+    n = max(10, min(500, n))
+    st = engine.feed.state(symbol)
+    count = len(st.times)
+    start = max(0, count - n)
+    bars = [
+        {"t": st.times[i], "o": st.opens[i], "h": st.highs[i],
+         "l": st.lows[i], "c": st.closes[i], "v": st.volumes[i]}
+        for i in range(start, count)
+    ]
+    if st.live_price > 0 and st.live_open > 0:
+        bars.append({"t": (bars[-1]["t"] + 60) if bars else int(time.time() // 60) * 60,
+                     "o": st.live_open, "h": st.live_high, "l": st.live_low,
+                     "c": st.live_price, "v": st.live_volume, "live": True})
+    return JSONResponse({"ok": True, "symbol": symbol, "bars": bars})
 
 
 @app.post("/api/override/{symbol}/{tf}")

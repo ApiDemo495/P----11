@@ -141,8 +141,10 @@ in `f22_f31.py`):
 MSRC · RMET · DIQ · TCI · ARSI · ISA · VAD · CCMDR · PMTL · DRHE · CCI ·
 BAPR · SARD · FBPS · TMDM · IFDS · VCDP · ARC · DLP · PCV · CLRE`
 
-**The 28 weighted CCI components** = F1–F19, F22–F27, F31 (26 signals) +
-brain consensus (id 97) + CERC composite (id 98).  Excluded from the sum:
+**The 31 weighted CCI components** = F1–F19, F22–F27, F31 (26 signals) +
+brain consensus (id 97) + CERC composite (id 98) + physics UFP (id 99) +
+news impact (id 100) + hedge-fund/dark-pool combined (id 101).  Excluded
+from the sum:
 
 * **F20 (DRHE)** — not bounded to [−1, +1], enters as the multiplier
   `min(1, DRHE)` on confidence;
@@ -160,8 +162,16 @@ base = |CCI_adjusted| × min(1, DRHE)
      + 0.1 × P(dominant state)   if sign(CCI) matches the state direction
      − RTP × 0.2                 when RTP > 0.6   (E9 trauma)
      − |PCV| × 0.3               when PCV < 0     (F30 conflict)
+× (0.5 + 0.5 × WFCP)            Part 3: ground-state overlap (P2)
+× (1 − DRPT)                    Part 3: quantum drag (P6)
+× (1 − GSPI)                    Part 3: gauge-projected instability (P19)
 clamp ≥ 0; issue when > 0.35
 ```
+
+Inside component 99 the *effective* UFP weight is `stored_UFP × TME`
+(P9 Carnot factor), and directional physics inputs are likewise multiplied
+by TME before the Σ (non-directional inputs use `2x − 1`, see the
+contradiction log below).
 
 ### Bgn (Brain-Grid-Network) synchronization
 
@@ -242,41 +252,153 @@ DRD · ERI · OFS · IAF · LAI · CDP · HTI · SMDM · NMS · TEDR · CERC`
 app/
   main.py          FastAPI app: static dashboard, WebSocket, REST
   clock.py         World Clock — GRC scheduler (:00 :04 … :56)
-  engine.py        PredictionEngine: phase, locks, SL protocol, pipeline
+  engine.py        PredictionEngine: phase, locks, SL protocol, pipeline,
+                   rings, co-relation / formula-history / brain payloads
   feed.py          Binance WS/REST + simulator fallback (OHLC 1-min)
   history.py       GRC-cadence ring buffers + F27/F18/E2/E9 learning stores
   bgn.py           Synchronization matrix + adjustment
-  cci.py           Formula 21: 28 weighted components, rewards, confidence
+  cci.py           Formula 21: 31 weighted components, rewards, confidence
   risk.py          Formula 28 (exact ARC) + Formula 29 (exact DLP)
-  brain.py         4 Drosophila instances: connectome, Thing 1 + B1–B4
+  brain.py         4 Drosophila instances: connectome, Thing 1 + B1–B4,
+                   news inputs, 3D geometry + activations payloads
   emotion.py       E1–E22 with CERC weighting + η reward learning
-  orderflow.py     Part-3 seams: OFTI / CMP / news-price correlation
-  news.py          News impact aggregates (decay + opposing-direction)
-  physics.py       Physics signal group (part 3 extends)
+  orderflow.py     OFTI / CMP / news-price correlation
+  news.py          News impact engine: categories, decay, per-TF impacts
+  hedgefund.py     IFR · DPAD · SMDI (CCI component 101)
+  physics.py       P1..P22 — PSSA…QDPC + UFP (exact Part-3 physics)
   formulas/
     f01_f10.py     Formulas 1–10
     f11_f20.py     Formulas 11–20
     f22_f31.py     Formulas 22–27, 30, 31 (+ shared F29 boundary helper)
     __init__.py    Registry (27 signal formulas) + GRC recording
-static/            Dashboard (vanilla JS + canvas, zero CDN dependencies)
-tests/             54 tests: part-1 suite + test_part2.py (F22–F31,
-                   exact F28/F29, brains, emotions, confidence pipeline)
+static/
+  index.html       Dashboard shell + 5 tabs
+  app.js           Tabs, candle chart, gauges, 75 panels, co-relation, news
+  brains3d.js      Three.js 2×2 instanced brain visualization
+  vendor/          three.module.js v0.160.1 (MIT, vendored — no CDN)
+tests/             91 tests: parts 1–3 (formulas, brains, emotions,
+                   confidence, news, HF, P1–P22, engine, visualization)
 ```
 
-## Part-3 seams (pending the next specification block)
+## Part 3 — Physics (P1–P22), News, Hedge-Fund, Visualization ✅
 
-| Component | Seam |
-|-----------|------|
-| Physics formulas (22) | `app/physics.py` — neutral group wired into Bgn |
-| News categories + weightages | `app/news.py` — aggregates + opposing-direction API in place |
-| Hedge fund & dark pool formulas | `app/orderflow.py` — OFTI / CMP / news-price correlation provisional proxies |
-| TPDI (E15 IAF direction) | window-displacement fallback in `app/emotion.py` |
-| Full visualization system | `static/` — panels render every snapshot field already |
+Everything below is implemented exactly as specified — no substitution with
+existing indicators anywhere.
+
+### Physics group (app/physics.py)
+
+| # | Name | Exact implemented relations |
+|---|------|-----------------------------|
+| P1 | **PSSA** | N = 21 quantum levels, δP = ATR/21; σ_q = ATR×√(τ/60); κ = 0.5×LVD; h_eff = 2π σ_q v_avg; `Confidence_quantum = max&#124;c&#124;² / (1/N)` (spec-literal — contradiction log). Levels + probs feed the chart overlay. |
+| P2 | **WFCP** | 21×21 `H_market` from cross-asset returns, exact `eigh` ground state; CCI × `(0.5 + 0.5 × WFCP)`. |
+| P3 | **HPVU** | High-percentile volatility utilization: current ATR vs its rolling window. |
+| P4 | **QTPB** | F24 (TMDM) barriers, 20-point Riemann integral of up/down barrier mass; signal = `QTPB_up − QTPB_down` (directional physics only — **F29 TP/SL placement untouched**). |
+| P5 | **MEE** | Market energy envelope over the 4-timeframe momentum stack. |
+| P6 | **DRPT** | Quantum drag → confidence × `(1 − DRPT)`. Formula `DRPT = 1 − exp(−γτ)`, `γ = (1/τ_deco)·(1−msrc)·(1−cthr)/2`; inputs: msrc = coherence level `&#124;F11 MSRC&#124;` (coherent bears are coherent), cthr = 0.35 confidence floor (documented below). |
+| P7 | **BEOFC** | Butterfly / extreme-order-flow structure of the book. |
+| P8 | **FDPD** | Fermi–Dirac pressure distribution; μ_chem = V_eff(P_VWAP) (documented). |
+| P9 | **TME** | Carnot `1 − Tc/Th`, defaults Tc = 2σ, Th = 0.5σ; multiplies every directional physics input **and** the UFP effective weight (`stored × TME`). |
+| P10 | **PIPP** | K = 1000, M = min(20, τ), deterministic seed (symbol/tf/price/minute). |
+| P11 | **RGVF** | Ricci-gain volatility flow over GRC returns. |
+| P12 | **SSBD** | Signed order parameter; **formula-literal `(T − Tc)/Tc` wins** over the prose form (documented). |
+| P13 | **GLPLO** | Newtonian gravity of volume-profile mass nodes → `tanh(net force / Σ&#124;force&#124;)`. |
+| P14 | **CELG** | Log-potential gaps: `h` cancels algebraically → `tanh(−sign(d)/d⁴)` (documented). |
+| P15 | **DSMS** | Drift–spread with β clipped to ±0.999 (documented). |
+| P16 | **RTDMP** | Return-time dispersion, market pull: `tanh((τ_eff/τ − 0.5)·2·direction)`. |
+| P17 | **BBIR** | Log-space tanh of the balance ratio (documented). |
+| P18 | **TPTI** | ripser point cloud at ε = 2σ, β₁ vs 200-GRC baselines; σ_β1 = 0 → z = 0 (documented). |
+| P19 | **GSPI** | 3 simplified gauge transforms (S-whitney, A-milnor, M-metrics), top-5 weighted estimator → confidence × `(1 − GSPI)`. |
+| P20 | **PDOBV** | k_cutoff = W/6 price-oscillation modes of the OBV spectrum. |
+| P21 | **QDPC** | `conf × exp(−age/τ)`, `τ = h_eff / (2 k_B T γ_env)`; per-minute arrival sum (documented). |
+| P22 | **UFP** | `Σ α_p × P_p × coupling_p`; α init 1/21, η-reward (sign-correct grows), renormalized to **exactly 1** at 6-dp storage; `coupling = max(0, corr(P_p, CCI))` over 50 GRCs; directional inputs × TME, non-directional inputs `2x − 1` (documented). |
+
+### News impact engine (app/news.py)
+
+| Category | Weight | Halflife D (min) |
+|----------|-------:|-----------------:|
+| regulatory | 0.25 | 247 |
+| institutional | 0.20 | 130 |
+| protocol | 0.15 | 44 |
+| macro | 0.15 | 130 |
+| structure | 0.10 | 44 |
+| sentiment | 0.08 | 22 |
+| geopolitical | 0.07 | 247 |
+
+* `impact_score = weight × sentiment × exp(−age/D) × reliability`
+  (reliability 1.0 major wires / 0.7 crypto outlets / 0.4 social).
+* TF impact = `score × min(1, TF_minutes / D)`; TF4 factor 1.0 **only** when
+  `D ≥ 247`.
+* Signed aggregate over 247 minutes, clamped [−1, +1] → CCI **component
+  100** (literal aggregate — same value on all timeframes), the Extreme
+  Override input (`> 0.8` against the prediction) and 10 brain GEN input
+  units (news_value × 2.0).
+* NewsAPI client with automatic simulator fallback (key optional).
+
+### Hedge-fund & dark-pool group (app/hedgefund.py) → CCI component 101
+
+* **IFR**: V > 3× avg volume ∧ |move| < 1× avg move; upper/lower 30% of the
+  candle range classifies institutional buy/sell; strength decays
+  `exp(−0.05 × minutes)`.
+* **DPAD**: V > 5× avg ∧ |r| < 0.3σ, confirmed by net buying over the next
+  3 minutes.
+* **SMDI** = `tanh((IFR − retail_flow) / 2)`, `retail_flow = −H_signal`.
+* Combined = equal-weighted mean; component 101 initial weight **exactly
+  0.08** (then η-learned like every component).
+
+### Visualization (Section 9)
+
+* **5 tabs**: Dashboard · Brains 3D · Formulas ×75 · System Co-relation ·
+  News & HF.
+* **Three.js 2×2 brains**: one WebGL context with scissor viewports;
+  4 × 7,700 instanced spheres + 53,304 edges (green excitatory / red
+  inhibitory, brightness = |weight|); activation → colour ramp; **white
+  flash (500 ms ease)** on any unit whose activation jumps ≥ 24; projected
+  region labels (PAM cluster, Mushroom Body, Kenyon Cells, Central Complex,
+  Fan-Shaped Body, Ellipsoid Body, Lateral Horn, Descending Neurons);
+  hormone bars; drag to orbit, wheel to zoom.
+* **75 formula panels** (31 core + 22 emotions + 22 physics): value,
+  100-GRC sparkline, weight %, 50-GRC accuracy, contribution.
+* **Candlestick chart** with TP/SL/locked-target layers for the selected
+  pair plus the **P1 probability overlay** (21-level ladder, bar width ∝
+  normalized max|c|², peak level highlighted).
+* **Prediction gauges**: confidence, base CCI, UFP, TME, WFCP, DRPT, GSPI,
+  signed news, CERC.
+* **System Co-relation tab**: 9-node network (4 brains, EMOTION, PHYSICS,
+  CORE + AGENT-G/AGENT-L slots reserved for Part 4), Pearson r over the
+  last 50 GRCs — green positive / red negative, thickness = |r|, hover for
+  the link table; edges appear once ≥ 3 GRC passes exist.
+* **News & HF tab**: signed aggregate card, per-TF impact bars, category
+  table with live scores, item feed, IFR/DPAD/SMDI/combined readings.
+
+### REST added in Part 3
+
+`GET /api/formula-history?symbol&tf` · `GET /api/candles?symbol&n` ·
+`GET /api/brain-geometry` · `GET /api/brain-activations?symbol&tf` ·
+`GET /api/news/{symbol}`.
+
+### Spec-contradiction log (formula literal wins; documented)
+
+| Item | Resolution |
+|------|-----------|
+| P1 prose vs formula | `max&#124;c&#124;²/(1/N)` literal confidence quantum |
+| P12 | `(T − Tc)/Tc` literal (not the prose signed form) |
+| P15 | β clipped to ±0.999 |
+| P22 non-directional | `2x − 1` mapping |
+| P22 coupling | `max(0, corr)` — disagreement removes coupling |
+| P8 | μ_chem = V_eff(P_VWAP) |
+| P9 / P21 | per-minute arrival sums |
+| P14 | h cancels → `tanh(−sign/d⁴)` |
+| P17 | tanh in log space |
+| P18 | σ_β1 = 0 → z = 0 |
+| P21 τ | τ literal ⇒ boot τ ≈ 3.9e11 min (decay ≈ 1 for any realistic age; spec-literal, documented) |
+| P6 inputs | Formula unchanged; user delegated: msrc = `&#124;F11&#124;` coherence level (signed MSRC would max DRPT on coherent down-trends) and cthr = 0.35 confidence floor (raw signed DVDI made `(1−cthr)` ≈ 1.76 and pinned DRPT ≈ 1, blocking organic issuance entirely — verified by a 240-GRC probe before the fix) |
 
 ## Protocol (WebSocket `/ws`)
 
 `snapshot` (GRC cadence & spec events) → `tick` (1 Hz prices) →
 `phase` (analysis countdown/readiness) → `sl_event` (SAFE / CLOSE banner
 payloads). REST: `GET /api/snapshot`, `GET /api/health`,
+`GET /api/formula-history`, `GET /api/candles`, `GET /api/brain-geometry`,
+`GET /api/brain-activations`, `GET /api/news/{symbol}`,
 `POST /api/override/{symbol}/{tf}`. The dashboard automatically falls back
 to REST polling if the WebSocket is blocked by a proxy.
