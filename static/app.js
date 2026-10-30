@@ -103,12 +103,24 @@ async function loadCandles() {
     const d = await api(`/api/candles?symbol=${dash.symbol}`);
     const bars = d.bars || [];
     if (!bars.length) return;
+    // Section 12: fractal diamonds — 5-bar swing pivots as chart markers
+    const markers = [];
+    for (let i = 2; i < bars.length - 2; i++) {
+      const b = bars[i];
+      const isHigh = b.h > bars[i - 1].h && b.h > bars[i - 2].h &&
+                     b.h > bars[i + 1].h && b.h > bars[i + 2].h;
+      const isLow = b.l < bars[i - 1].l && b.l < bars[i - 2].l &&
+                    b.l < bars[i + 1].l && b.l < bars[i + 2].l;
+      if (isHigh) markers.push({ time: b.t, position: "aboveBar", color: "#ff1744", shape: "circle", size: 1 });
+      if (isLow) markers.push({ time: b.t, position: "belowBar", color: "#00e5ff", shape: "circle", size: 1 });
+    }
     TF.forEach(tf => {
       const c = dash.charts[tf];
       if (!c) return;
       c.candles.setData(bars.map(x => ({
         time: x.t, open: x.o, high: x.h, low: x.l, close: x.c,
       })));
+      try { c.candles.setMarkers(markers.slice(-40)); } catch { /* markers optional */ }
       c.chart.timeScale().fitContent();
     });
   } catch { /* candles endpoint may 404 before first GRC */ }
@@ -156,6 +168,12 @@ function renderQuadrant(tf, cyc, res) {
   if (fg) fg.style.strokeDashoffset = (97.4 * (1 - frac)).toFixed(1);
   const mm = Math.floor(rem / 60), ss = Math.floor(rem % 60);
   $(".q-time", qEl).textContent = `${mm}:${String(ss).padStart(2, "0")}`;
+  // Section 12: last-10-seconds haptic pulses
+  if (rem <= 10 && rem > 0 && dash.lastSec?.[tf] !== Math.ceil(rem)) {
+    dash.lastSec = dash.lastSec || {};
+    dash.lastSec[tf] = Math.ceil(rem);
+    haptic("last10");
+  }
   // GRC cyan flash on reset
   if (cyc.cycle_start && dash.grcFlashAt[tf] !== cyc.cycle_start) {
     if (dash.grcFlashAt[tf]) { qEl.classList.add("cyan-flash"); setTimeout(() => qEl.classList.remove("cyan-flash"), 550); haptic("grc"); }
@@ -1042,6 +1060,28 @@ $("#import-file")?.addEventListener("change", async e => {
     toast("state imported + reloaded");
   } catch (err) { toast(err.message, "err"); }
 });
+/* asset / timeframe checkboxes filter the dashboard live */
+document.addEventListener?.("change", () => {});
+$("#set-assets")?.addEventListener?.("change", () => {});
+document.addEventListener("change", e => {
+  const t = e.target;
+  if (t.classList?.contains("set-asset")) {
+    const show = $$(".set-asset").filter(x => x.checked).map(x => x.value);
+    $$(".asset-btn").forEach(b => { b.style.display = show.includes(b.textContent) ? "" : "none"; });
+    if (!show.includes(dash.symbol) && show.length) {
+      dash.symbol = show[0];
+      loadCandles();
+    }
+  }
+  if (t.classList?.contains("set-tf")) {
+    const show = $$(".set-tf").filter(x => x.checked).map(x => x.value);
+    TF.forEach(tf => {
+      const q = $(`#q-${tf}`);
+      if (q) q.style.display = show.includes(tf) ? "" : "none";
+    });
+  }
+});
+
 /* persist interface toggles */
 async function persistSettings() {
   try {
