@@ -229,10 +229,16 @@ class NewsSystem:
             self._poll_newsapi(now)
         # keep the feed stocked: the UI must never show an empty table
         if self.source != "newsapi":
-            for _ in range(10):
-                if len(self.items) >= 8:
+            by_sym: dict[str, int] = {}
+            for it in self.items:
+                for sym in it.get("symbols", []):
+                    by_sym[sym] = by_sym.get(sym, 0) + 1
+            for _ in range(24):
+                if all(by_sym.get(s, 0) >= 3 for s in SYMBOL_ORDER):
                     break
                 self._sim_tick(now, force=True)
+                for sym in (self.items[-1].get("symbols", []) if self.items else []):
+                    by_sym[sym] = by_sym.get(sym, 0) + 1
 
     # -- live source (optional) --------------------------------------------
     def _poll_newsapi(self, now: float) -> None:

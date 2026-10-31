@@ -538,3 +538,7 @@ def test_news_feed_never_empty():
     n.items = []
     n.refresh()
     assert len(n.items) >= 8
+    from app.config import SYMBOL_ORDER
+    per = {sym: sum(1 for it in n.items if sym in it.get("symbols", []))
+           for sym in SYMBOL_ORDER}
+    assert all(c >= 3 for c in per.values()), per
