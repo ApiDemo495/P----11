@@ -926,6 +926,43 @@ function bindGlobal() {
   });
 }
 
+/* ═══════════ resilience: surface errors + detect engine offline ═══════════ */
+let _errShown = 0, _fetchFails = 0;
+function _netBanner(show, detail) {
+  let b = $("#net-banner");
+  if (!show) { if (b) b.remove(); return; }
+  if (!b) {
+    b = document.createElement("div");
+    b.id = "net-banner";
+    b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:300;background:#2a0d14;" +
+      "color:#f0385a;border-bottom:1px solid #f0385a;padding:8px 16px;font:600 12px monospace;" +
+      "letter-spacing:1px;text-align:center";
+    document.body.appendChild(b);
+  }
+  b.textContent = detail || "ENGINE OFFLINE — retrying every 2s (start it: bash run.sh)";
+}
+const _origFetch = window.fetch;
+window.fetch = async (...args) => {
+  try {
+    const r = await _origFetch(...args);
+    if (r.ok) { _fetchFails = 0; _netBanner(false); }
+    else if (String(args[0]).includes("/api/")) {
+      if (++_fetchFails >= 3) _netBanner(true, `ENGINE ERROR ${r.status} — check server log`);
+    }
+    return r;
+  } catch (e) {
+    if (String(args[0]).includes("/api/") && ++_fetchFails >= 3)
+      _netBanner(true, "ENGINE OFFLINE — retrying (if in Codespaces: bash run.sh)");
+    throw e;
+  }
+};
+window.addEventListener("error", e => {
+  if (_errShown++ < 3) toast("JS: " + (e.message || "error"), "err");
+});
+window.addEventListener("unhandledrejection", e => {
+  if (_errShown++ < 3) toast("async: " + (e.reason?.message || e.reason || "rejected"), "err");
+});
+
 /* ═══════════ boot ═══════════ */
 (function boot() {
   buildRail(); buildTabs(); buildTfBar(); buildQuads(); bindGlobal();

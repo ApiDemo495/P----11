@@ -118,6 +118,13 @@ def parse_agent_reply(text: str) -> dict:
     return out
 
 
+# Quiet huggingface retry spam: agent models are optional; a blocked
+# huggingface.co must never look like app errors in the console.
+import logging as _logging
+for _lg in ("huggingface_hub", "huggingface_hub.utils._http", "httpx"):
+    _logging.getLogger(_lg).setLevel(_logging.ERROR)
+
+
 class LocalModel:
     """llama.cpp wrapper — selected automatically from available RAM."""
 

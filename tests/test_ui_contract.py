@@ -57,3 +57,24 @@ def test_emotion_reasoning_and_formula_logic_present():
     assert "narrative" in APP_JS            # emotion reasoning panel
     assert "FORMULA_LOGIC" in APP_JS        # per-formula logic one-liners
     assert "P_LOGIC" in APP_JS              # per-physics-formula logic
+
+
+def test_docs_route_renders_markdown_without_editor_extensions():
+    """markdown.showPreview missing in the editor must never block docs:
+    the app serves README + API_SETUP itself at /docs."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app)
+    r = c.get("/docs")
+    assert r.status_code == 200
+    body = r.text
+    assert "README.md" in body and "API_SETUP.md" in body
+    assert "<h3" in body or "<h4" in body   # headings actually rendered
+    assert "back to app" in body
+
+
+def test_offline_banner_and_error_trap_in_js():
+    js = open("static/app.js").read()
+    assert "_netBanner" in js                 # engine-offline detection
+    assert 'window.addEventListener("error"' in js
+    assert "unhandledrejection" in js
