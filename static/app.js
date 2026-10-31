@@ -1096,6 +1096,14 @@ $("#set-sound")?.addEventListener("change", persistSettings);
 
 /* ═══════════════════════════ WEBSOCKET + BOOT ═══════════════════════════ */
 let ws, wsRetry = 0;
+let lastMsgAt = 0;
+
+function applySnapshot(snap) {
+  renderDashboard(snap);
+  updateOverlay(null, snap);
+  if (ACTIVE_TAB === "brains") updateBrains(snap);
+}
+
 function connectWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -1105,6 +1113,7 @@ function connectWS() {
     setTimeout(connectWS, Math.min(8000, 1000 * ++wsRetry));
   };
   ws.onmessage = ev => {
+    lastMsgAt = Date.now();
     const msg = JSON.parse(ev.data);
     handleMessage(msg);
   };
@@ -1138,12 +1147,19 @@ function handleMessage(msg) {
   connectWS();
   buildCharts();
   loadCandles();
+  // initial REST fetch — applies phase too, so the 4-minute overlay
+  // updates and lifts even before (or without) the WebSocket
+  api("/api/snapshot").then(applySnapshot).catch(() => {});
+  // REST fallback: if no WS message for ~4 s, poll the snapshot so the
+  // countdown, dashboard and overlay keep working without WebSocket
+  setInterval(async () => {
+    if (Date.now() - lastMsgAt < 4000) return;
+    try { applySnapshot(await api("/api/snapshot")); } catch { /* retry */ }
+  }, 2000);
   // periodic refreshes for lazy tabs
   setInterval(() => {
     if (ACTIVE_TAB === "news") TAB_LOADERS.news?.();
     if (ACTIVE_TAB === "agents") TAB_LOADERS.agents?.();
     if (ACTIVE_TAB === "emotion") TAB_LOADERS.emotion?.();
   }, 20000);
-  // initial snapshot fetch (in case WS is slow)
-  api("/api/snapshot").then(renderDashboard).catch(() => {});
 })();
