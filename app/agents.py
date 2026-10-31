@@ -130,8 +130,8 @@ class LocalModel:
             return
         import time as _t
         now = _t.time()
-        if now - self._last_attempt < 600 and self._last_attempt > 0:
-            return                      # one retry every 10 minutes max
+        if now - self._last_attempt < 180 and self._last_attempt > 0:
+            return                      # one retry every 3 minutes max
         self._last_attempt = now
         self.error = ""                 # clear stale errors (deps may have arrived)
         try:

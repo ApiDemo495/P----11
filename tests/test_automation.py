@@ -36,6 +36,18 @@ def test_setup_sh_covers_all_stages():
                    "download_models.py", "learning_cron.sh", "data/history",
                    "SETUP SUMMARY"):
         assert needle in src, f"setup.sh missing {needle}"
+    # AI/model stages must NOT gate startup: they run in the background
+    assert "background" in src
+    assert "setup_ai.log" in src
+    assert "nohup" in src
+
+
+def test_auto_start_is_fast_when_fresh():
+    src = open(os.path.join(ROOT, "scripts/auto_start.sh")).read()
+    # setup runs ONLY when the environment is stale; fresh boots skip it
+    assert "environment stale — running setup" in src
+    assert "environment fresh — skipping setup" in src
+    assert "app already healthy" in src          # health gate before anything
 
 
 def test_auto_start_supervisor():

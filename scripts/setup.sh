@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # ══════════════════════════════════════════════════════════════════════
 # One-shot, idempotent bootstrap for the whole app.
-#   venv → core deps → agent/AI deps → data dirs → local-model download
-#   → hourly learning cron (best-effort) → stamp for fast re-runs
-# Every stage after the core dependencies is best-effort: the app still
-# runs in formula-only mode when a stage cannot finish (e.g. offline).
-# Usage:  bash scripts/setup.sh          (FORCE=1 to re-run everything)
+#
+#   FOREGROUND (gates startup, seconds):   venv + core requirements +
+#       data dirs + stamp + cron check
+#   BACKGROUND (never gates startup):      agent/AI deps (llama-cpp build)
+#       + RAM-tier model download  ->  data/setup_ai.log
+#
+# Set BLOCKING=1 to wait for the background stages (e.g. CI).
+# Usage:  bash scripts/setup.sh     (FORCE=1 re-runs, fresh ~1s re-run)
 # ══════════════════════════════════════════════════════════════════════
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -13,14 +16,18 @@ cd "$(dirname "$0")/.."
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 STAMP=".setup_stamp"
 FORCE="${FORCE:-0}"
-log()  { printf '[setup] %s\n' "$*"; }
-warn() { printf '[setup] WARN: %s\n' "$*"; }
+BLOCKING="${BLOCKING:-0}"
+T0=$(date +%s)
+log()  { printf '[setup %4ss] %s\n' "$(( $(date +%s) - T0 ))" "$*"; }
+warn() { printf '[setup %4ss] WARN: %s\n' "$(( $(date +%s) - T0 ))" "$*"; }
 
 req_hash() {
+  # raw sha256 of the file contents (must match `sha256sum | cut` in
+  # auto_start.sh / run.sh so the staleness check agrees with the stamp)
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$@" | sha256sum | cut -d' ' -f1
+    sha256sum "$1" | cut -d' ' -f1
   else
-    shasum -a 256 "$@" | shasum -a 256 | cut -d' ' -f1
+    shasum -a 256 "$1" | cut -d' ' -f1
   fi
 }
 
@@ -33,13 +40,17 @@ if [ ! -x .venv/bin/python ]; then
 fi
 VENV_PY=".venv/bin/python"
 [ -x "$VENV_PY" ] || VENV_PY="$PYTHON_BIN"
-log "interpreter: $VENV_PY ($("$VENV_PY" --version 2>&1))"
 
-# ── 2) core requirements (hard requirement) ───────────────────────────
-CUR_HASH="$(req_hash requirements.txt)"
-PREV_HASH=""
-[ -f "$STAMP" ] && PREV_HASH="$(cut -d' ' -f1 "$STAMP" 2>/dev/null || true)"
-if [ "$FORCE" != "1" ] && [ "$CUR_HASH" = "$PREV_HASH" ] && [ -f "$STAMP" ]; then
+# ── 2) core requirements (hard requirement, foreground) ───────────────
+CORE_HASH="$(req_hash requirements.txt)"
+AI_HASH="$(req_hash requirements-agents.txt 2>/dev/null || echo none)"
+PREV_CORE="" PREV_AI=""
+if [ -f "$STAMP" ]; then
+  PREV_CORE="$(awk '{print $1}' "$STAMP")"
+  PREV_AI="$(awk '{print $2}' "$STAMP" 2>/dev/null)"
+fi
+if [ "$FORCE" != "1" ] && [ -x .venv/bin/python ] \
+   && [ "$CORE_HASH" = "$PREV_CORE" ]; then
   log "core requirements up to date — skipping pip"
 else
   log "installing core requirements…"
@@ -50,37 +61,48 @@ else
   log "core requirements installed ✓"
 fi
 
-# ── 3) agent / AI requirements (best-effort: llama-cpp, HF hub) ───────
-AGENTS_STATUS="skipped"
-if [ -f requirements-agents.txt ]; then
-  log "installing agent/AI requirements (llama-cpp-python, huggingface-hub, cmake)…"
-  if "$VENV_PY" -m pip install -q -r requirements-agents.txt \
-       > data/setup_agents.log 2>&1; then
-    AGENTS_STATUS="installed"
-    log "agent/AI requirements installed ✓"
-  else
-    AGENTS_STATUS="failed (see data/setup_agents.log — app runs without local model)"
-    warn "agent/AI requirements failed — core app unaffected"
-  fi
-fi
-
-# ── 4) directories ────────────────────────────────────────────────────
+# ── 3) directories + settings seed (foreground, instant) ──────────────
 mkdir -p data data/history models
 [ -f data/settings.json ] || echo '{"theme":"dark","haptics":true,"sound":true}' > data/settings.json
 
-# ── 5) local AI model download (RAM-tier, best-effort) ────────────────
-MODEL_STATUS="skipped"
-log "downloading the RAM-tier local model (best-effort)…"
-if "$VENV_PY" scripts/download_models.py > data/setup_models.log 2>&1; then
-  MODEL_STATUS="$(grep -oE 'DONE|SKIPPED[^ ]*' data/setup_models.log | tail -1 || echo done)"
-  log "model stage: $MODEL_STATUS"
+# ── 4) agent/AI deps + model download — BACKGROUND by default ─────────
+run_ai_stages() {
+  "$VENV_PY" -m pip install -q -r requirements-agents.txt \
+    && "$VENV_PY" scripts/download_models.py
+}
+ai_state="skipped"
+if [ "$FORCE" = "1" ] || [ "$AI_HASH" != "$PREV_AI" ] \
+   || [ ! -f data/.ai_done ]; then
+  if [ "$BLOCKING" = "1" ]; then
+    log "installing AI/agent requirements + model (BLOCKING=1)…"
+    if run_ai_stages > data/setup_ai.log 2>&1; then
+      ai_state="installed"
+      touch data/.ai_done
+    else
+      ai_state="failed (data/setup_ai.log)"
+      warn "AI stage failed — core app unaffected"
+    fi
+  else
+    # lock so parallel boots don't spawn duplicate builds
+    if [ -f data/setup_ai.pid ] && kill -0 "$(cat data/setup_ai.pid)" 2>/dev/null; then
+      ai_state="already building in background"
+    else
+      log "spawning background AI stage (llama-cpp build + model) → data/setup_ai.log"
+      nohup bash -c "
+        '$VENV_PY' -m pip install -q -r requirements-agents.txt \
+          && '$VENV_PY' scripts/download_models.py \
+          && touch data/.ai_done \
+          || echo 'AI stage failed (non-fatal)' >> data/setup_ai.log
+      " >> data/setup_ai.log 2>&1 &
+      echo $! > data/setup_ai.pid
+      ai_state="running in background (log: data/setup_ai.log)"
+    fi
+  fi
 else
-  MODEL_STATUS="failed (see data/setup_models.log — cloud/formula mode unaffected)"
-  warn "model download did not complete — will retry on first use"
+  ai_state="up to date"
 fi
 
-# ── 6) hourly learning cron (best-effort; the app also has an
-#       in-process hourly safety loop, so this is belt-and-braces) ─────
+# ── 5) hourly learning cron (best-effort; in-process loop also exists) ─
 CRON_STATUS="not-installed"
 CRON_LINE="0 * * * * $(pwd)/scripts/learning_cron.sh >> $(pwd)/data/learning_cron.log 2>&1"
 if command -v crontab >/dev/null 2>&1; then
@@ -91,20 +113,18 @@ if command -v crontab >/dev/null 2>&1; then
       && CRON_STATUS="installed" || CRON_STATUS="failed"
   fi
 fi
-log "learning cron: $CRON_STATUS"
 
-# ── 7) stamp for fast re-runs ─────────────────────────────────────────
-echo "$CUR_HASH $(date -u +%s)" > "$STAMP"
+# ── 6) stamp (core hash + AI hash) ────────────────────────────────────
+echo "$CORE_HASH $AI_HASH $(date -u +%s)" > "$STAMP"
 
-# ── 8) summary ────────────────────────────────────────────────────────
+# ── 7) summary ────────────────────────────────────────────────────────
 cat <<EOF
-[setup] ═══════════ SETUP SUMMARY ═══════════
-[setup] core deps      : ok
-[setup] agent/AI deps  : $AGENTS_STATUS
-[setup] local model    : $MODEL_STATUS
+[setup] ═══════════ SETUP SUMMARY ($(( $(date +%s) - T0 ))s total) ═══════════
+[setup] core deps      : ok (foreground)
+[setup] agent/AI deps  : $ai_state
 [setup] learning cron  : $CRON_STATUS
 [setup] data dirs      : data/, data/history/, models/
 [setup] next step      : ./run.sh   (or auto-started via scripts/auto_start.sh)
-[setup] ═══════════════════════════════════════
+[setup] ══════════════════════════════════════════════════════════════
 EOF
 exit 0

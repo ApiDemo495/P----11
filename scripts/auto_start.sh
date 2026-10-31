@@ -2,9 +2,10 @@
 # ══════════════════════════════════════════════════════════════════════
 # Idempotent auto-start supervisor — used by the devcontainer
 # postStartCommand and safe to run any number of times.
-#   1. runs scripts/setup.sh on first use (fast no-op when fresh)
-#   2. starts uvicorn in the background if the app isn't already healthy
-#   3. waits for /api/health and prints the public URL hint
+#   1. health-check first: if the app is already up, exit in <1 s
+#   2. runs scripts/setup.sh ONLY when the environment is stale
+#      (AI/model stages are backgrounded inside setup.sh, never blocking)
+#   3. starts uvicorn in the background and waits for /api/health
 # Usage:  bash scripts/auto_start.sh [--stop|--restart]
 # ══════════════════════════════════════════════════════════════════════
 set -uo pipefail
@@ -15,8 +16,8 @@ HEALTH_URL="http://127.0.0.1:${PORT}/api/health"
 PIDFILE="data/server.pid"
 LOG="data/server.log"
 ACTION="${1:-start}"
-
-log() { printf '[auto-start] %s\n' "$*"; }
+T0=$(date +%s)
+log() { printf '[auto-start %4ss] %s\n' "$(( $(date +%s) - T0 ))" "$*"; }
 
 stop_app() {
   if [ -f "$PIDFILE" ]; then
@@ -28,7 +29,6 @@ stop_app() {
     fi
     rm -f "$PIDFILE"
   fi
-  # also clear any stray listener on the port (best-effort)
   if command -v fuser >/dev/null 2>&1; then
     fuser -k "${PORT}/tcp" 2>/dev/null && log "cleared port $PORT listener"
   fi
@@ -45,10 +45,22 @@ if curl -sf -m 3 "$HEALTH_URL" >/dev/null 2>&1; then
   exit 0
 fi
 
-# first run → full bootstrap (fast no-op once stamped)
+# ── staleness check: only invoke setup when venv/stamp are missing ────
 if [ "${SKIP_SETUP:-0}" != "1" ]; then
-  log "checking setup…"
-  bash scripts/setup.sh || { log "setup failed — cannot start"; exit 1; }
+  need_setup=0
+  [ -x .venv/bin/python ] || need_setup=1
+  [ -f .setup_stamp ] || need_setup=1
+  if [ "$need_setup" = "0" ] && [ -f .setup_stamp ]; then
+    H=$(sha256sum requirements.txt 2>/dev/null | cut -d' ' -f1 || echo stale)
+    S=$(awk '{print $1}' .setup_stamp)
+    [ "$H" = "$S" ] || need_setup=1
+  fi
+  if [ "$need_setup" = "1" ]; then
+    log "environment stale — running setup…"
+    bash scripts/setup.sh || { log "setup failed — cannot start"; exit 1; }
+  else
+    log "environment fresh — skipping setup"
+  fi
 fi
 
 VENV_PY=".venv/bin/python"
@@ -60,15 +72,15 @@ nohup "$VENV_PY" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" \
   --workers 1 >>"$LOG" 2>&1 &
 echo $! > "$PIDFILE"
 
-# wait for health (up to 90 s — first boot compiles models/caches)
-for i in $(seq 1 90); do
+# wait for health (up to 60 s)
+for i in $(seq 1 60); do
   if curl -sf -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
-    log "✓ app is healthy on http://0.0.0.0:$PORT  (pid $(cat "$PIDFILE"))"
+    log "✓ app healthy on http://0.0.0.0:$PORT (pid $(cat "$PIDFILE")) — total $(( $(date +%s) - T0 ))s"
     exit 0
   fi
   sleep 1
 done
 
-log "✗ app did not become healthy in 90 s — last log lines:"
+log "✗ app did not become healthy in 60 s — last log lines:"
 tail -n 25 "$LOG" 2>/dev/null
 exit 1
