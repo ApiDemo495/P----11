@@ -20,3 +20,4 @@ models/
 
 # bootstrap stamp (runtime)
 .setup_stamp
+data/
