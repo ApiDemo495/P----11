@@ -382,3 +382,33 @@ def test_timeframe_window_constants_match_spec():
     assert TIMEFRAMES["tf2"] == {"minutes": 44, "targets": [11, 22, 33, 44]}
     assert TIMEFRAMES["tf3"] == {"minutes": 130, "targets": [30, 40, 90, 130]}
     assert TIMEFRAMES["tf4"] == {"minutes": 247, "targets": [60, 120, 180, 247]}
+
+
+# ── Part-4 cross-part sync (Part 1–4 wiring) ───────────────────────────
+def test_display_systems_cross_keys_and_agents_readiness(tmp_path, monkeypatch):
+    """display_systems carries every key the dashboard quadrants read, the
+    post-agent mutation (confidence/agent/double_check/…) is patched back
+    into the display, and readiness exposes the agents key (overlay)."""
+    monkeypatch.delenv("PREDICT_SKIP_AUTO_START", raising=False)
+    engine, _feed, _emitted = make_engine()
+    run(_boot(engine))
+    run(engine.on_grc(time.time()))  # full cycle: analysis → agents → snapshot
+    sym = "BTC"
+    res = engine.last_result[(sym, "tf1")]
+    disp = engine.display_systems[(sym, "tf1")]
+    for k in ("cci_adjusted", "direction", "issued", "agent", "double_check", "weight_profile"):
+        assert k in disp, f"display_systems missing {k} (quadrants read it)"
+    # post-agent sync: display matches the final result values
+    assert disp["direction"] == res["direction"]
+    assert disp["confidence"] == round(res["confidence"], 4)
+    assert disp["issued"] == bool(res.get("issued"))
+    assert disp["double_check"]["label"] == res["double_check"]["label"]
+    # physics details now expose every formula (Term Breakdown)
+    det = disp["physics"]["details"]
+    assert "p1" in det or "p2" in det  # at least the base formulas present
+    assert any(k.startswith("p") for k in det)
+    # readiness carries agents so the overlay checklist can turn green
+    assert "agents" in engine.readiness
+    snap = engine.build_snapshot()
+    assert "agents" in snap["analysis"]["readiness"]
+    assert snap["bgn"] and len(snap["bgn"]) == 4  # 4×4 cross-tf coupling matrix

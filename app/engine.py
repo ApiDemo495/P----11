@@ -113,6 +113,7 @@ class PredictionEngine:
             "news": False,
             "physics": False,
             "weights": False,
+            "agents": True,        # optional subsystem — never blocks analysis
         }
 
         # --- cycles --------------------------------------------------------
@@ -838,9 +839,10 @@ class PredictionEngine:
                         "gspi": round(phys["gspi"], 5),
                         "p1": phys["details"].get("p1"),
                         "qtpb": phys["details"].get("p4", {}),
+                        # every physics formula's detail dict (Term Breakdown)
                         "details": {
                             k: v for k, v in phys["details"].items()
-                            if k in ("p7", "p15", "p18", "p21")
+                            if str(k).startswith("p")
                         },
                     },
                     "news": {
@@ -872,6 +874,16 @@ class PredictionEngine:
                     },
                     "corelation": self._corelation_dict(symbol, tf),
                     "win_ratio": round(self.hist.win_ratio.get(symbol, 0.0), 3),
+                    # Part-4 sync: the values the dashboard quadrants read
+                    "cci_adjusted": pack["cci_adjusted"],
+                    "direction": pack["direction"],
+                    "issued": bool(fin["issued"]),
+                    "weight_profile": self._weight_profile(symbol, tf, {
+                        "raw": raws[tf], "drhe": drhe,
+                        "physics": {"ufp": phys["ufp"]["value"]},
+                    }),
+                    "agent": None,          # patched by _apply_agents
+                    "double_check": None,   # patched by _apply_agents
                 }
         if record:
             self.cci.store_price(symbol, price)
@@ -1058,6 +1070,15 @@ class PredictionEngine:
             if dc["label"] == "overridden":
                 res["direction"] = dc["direction"]
             self.last_result[(symbol, tf)] = res
+            # keep the snapshot display in sync with the post-agent values
+            disp = self.display_systems.get((symbol, tf))
+            if disp is not None:
+                disp["agent"] = res.get("agent")
+                disp["double_check"] = dc
+                disp["confidence"] = round(res.get("confidence", 0.0), 4)
+                disp["cci_adjusted"] = res.get("cci_adjusted")
+                disp["direction"] = res.get("direction")
+                disp["issued"] = bool(res.get("issued"))
 
     def _record_learning(self, symbol: str, res_pack: dict[str, dict],
                          now: float) -> None:

@@ -173,6 +173,21 @@
           <div id="brain-influence"></div>
         </div>
       </div>
+      <div class="panel-row">
+        <div class="panel">
+          <div class="panel-h">System Co-relation (50-GRC network) — <span id="corel-meta">—</span></div>
+          <canvas id="corel-canvas" height="300"></canvas>
+          <div class="legend">
+            <span><i style="background:#2ee6a8"></i>positive corr</span>
+            <span><i style="background:#ff1744"></i>negative corr</span>
+            <span>line thickness = |corr|</span>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-h">Cross-subsystem signals (Part 4 wiring)</div>
+          <div id="wiring-panel">—</div>
+        </div>
+      </div>
     </section>
 
     <!-- ════════ TAB: FORMULA LAB ════════ -->
@@ -227,6 +242,10 @@
           <table class="kv" id="quantum-summary"></table>
         </div>
       </div>
+      <div class="panel" style="margin-bottom:12px">
+        <div class="panel-h">Bgn 4×4 synchronization matrix (β=1.2 · cross-timeframe coupling)</div>
+        <div id="bgn-matrix" class="f-breakdown">—</div>
+      </div>
       <div class="panel-row">
         <div class="panel">
           <div class="panel-h">Phase-space scatter (colored by density)</div>
@@ -254,6 +273,10 @@
           </thead>
           <tbody></tbody>
         </table>
+      </div>
+      <div class="panel" style="margin-top:12px">
+        <div class="panel-h">Hedge-Fund &amp; Dark-Pool Flow (HF1–HF3 · Part 3/4 seam)</div>
+        <div id="hedge-panel">—</div>
       </div>
     </section>
 

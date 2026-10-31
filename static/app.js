@@ -121,6 +121,9 @@ async function loadCandles() {
         time: x.t, open: x.o, high: x.h, low: x.l, close: x.c,
       })));
       try { c.candles.setMarkers(markers.slice(-40)); } catch { /* markers optional */ }
+      const lastBar = bars[bars.length - 1];
+      if (lastBar) c.lastBar = { time: lastBar.t, open: lastBar.o, high: lastBar.h,
+                                 low: lastBar.l, close: lastBar.c };
       c.chart.timeScale().fitContent();
     });
   } catch { /* candles endpoint may 404 before first GRC */ }
@@ -206,7 +209,17 @@ function renderQuadrant(tf, cyc, res) {
     sl.innerHTML = `<i style="border-color:var(--red)"></i>SL ${fmt(cyc.sl, 1)}`;
     tl.appendChild(sl);
   }
-  // CCI + agent footers
+  // CCI + agent footers + live price
+  const aset = dash.latest?.assets?.[dash.symbol];
+  let pe = $("#q-price-" + tf, qEl);
+  if (!pe) {
+    pe = document.createElement("span");
+    pe.id = "q-price-" + tf;
+    qEl.querySelector(".q-foot").appendChild(pe);
+  }
+  pe.innerHTML = `<b style="color:var(--gold)">${fmt(aset?.price, 2)}</b>` +
+    (aset ? ` <span style="color:${aset.window_change_pct >= 0 ? "var(--cyan)" : "var(--red)"}">` +
+      `${aset.window_change_pct >= 0 ? "+" : ""}${aset.window_change_pct}%</span>` : "");
   if (res) {
     $("#q-cci-" + tf).textContent = `CCI ${fmt(res.cci_adjusted, 4)} · conf ${fmt(res.confidence, 3)}`;
     const ag = res.agent;
@@ -263,6 +276,7 @@ function updateAlertBar() {
 }
 
 function renderDashboard(snap) {
+  dash.latest = snap;
   for (const s of ASSETS) {
     const a = snap.assets?.[s];
     if (!a) continue;
@@ -358,6 +372,7 @@ TAB_LOADERS.brains = async () => {
       renderBrains2d();
     }
   } catch (e) { toast("brain geometry: " + e.message, "err"); }
+  if (dash.latest) { renderCorel(dash.latest); renderWiring(dash.latest); }
 };
 $("#brain-flip")?.addEventListener("click", () => {
   brainsTab.mode3d = !brainsTab.mode3d;
@@ -705,6 +720,7 @@ TAB_LOADERS.physics = async () => {
     FORMULA_CACHE.systems = sys;
     renderPhysics(sys, candles);
   } catch (e) { toast("physics: " + e.message, "err"); }
+  if (dash.latest) renderBgn(dash.latest);
 };
 
 function renderPhysics(sysWrap, candlesWrap) {
@@ -831,6 +847,7 @@ TAB_LOADERS.news = async () => {
     if (!(d.items || []).length) tb.innerHTML = `<tr><td colspan="7" style="color:var(--dim)">no items</td></tr>`;
     $("#news-meta").textContent = `${d.source || "sim"} · ${d.count ?? (d.items || []).length} items`;
   } catch (e) { toast("news: " + e.message, "err"); }
+  if (dash.latest) renderHedge(dash.latest);
 };
 
 /* ═══════════════════════════ AGENT CONTROL ═══════════════════════════ */
@@ -1118,6 +1135,135 @@ function connectWS() {
     handleMessage(msg);
   };
 }
+// ── Cross-part sync panels (Part 1–4 wiring restored) ───────────────
+function handleTick(msg) {
+  const price = msg.prices && msg.prices[dash.symbol];
+  if (!price) return;
+  dash.prices = msg.prices;
+  const aset = dash.latest?.assets?.[dash.symbol];
+  TF.forEach(tf => {
+    const pe = $("#q-price-" + tf);
+    if (!pe) return;
+    pe.innerHTML = `<b style="color:var(--gold)">${fmt(price, 2)}</b>` +
+      (aset ? ` <span style="color:${aset.window_change_pct >= 0 ? "var(--cyan)" : "var(--red)"}">` +
+        `${aset.window_change_pct >= 0 ? "+" : ""}${aset.window_change_pct}%</span>` : "");
+  });
+  // live candle: merge into the minute's bar (server bars are minute-aligned)
+  const cur = Math.floor(msg.ts / 60) * 60;
+  TF.forEach(tf => {
+    const c = dash.charts[tf];
+    if (!c || !c.lastBar) return;
+    const b = c.lastBar;
+    if (b.time === cur) { b.close = price; b.high = Math.max(b.high, price); b.low = Math.min(b.low, price); }
+    else if (b.time < cur) { c.lastBar = { time: cur, open: b.close, high: Math.max(b.close, price),
+                                           low: Math.min(b.close, price), close: price }; }
+    else return;
+    try { c.candles.update({ ...c.lastBar }); } catch { /* chart not ready */ }
+  });
+}
+
+function renderCorel(snap) {
+  const cv = $("#corel-canvas");
+  const meta = $("#corel-meta");
+  if (!cv || !meta) return;
+  const sys = snap?.systems?.[`${dash.symbol}|tf1`];
+  const corel = sys?.corelation;
+  if (!corel || !corel.edges) { meta.textContent = "warming up…"; return; }
+  const nodes = corel.nodes || [];
+  const edges = corel.edges || [];
+  cv.width = cv.clientWidth * 2 || 720; cv.height = 600;
+  const g = cv.getContext("2d");
+  g.clearRect(0, 0, cv.width, cv.height);
+  const pos = {};
+  nodes.forEach((n, i) => {
+    const a = (i / Math.max(nodes.length, 1)) * 2 * Math.PI;
+    pos[n.id] = { x: cv.width / 2 + Math.cos(a) * (cv.width * 0.38),
+                  y: cv.height / 2 + Math.sin(a) * (cv.height * 0.36) };
+  });
+  const colors = { brain: "#ffb02e", emotion: "#e879f9", physics: "#5b8cff", core: "#00e5ff", agent: "#2ee6a8" };
+  edges.forEach(e => {
+    const a = pos[e.a], b = pos[e.b];
+    if (!a || !b) return;
+    g.strokeStyle = (e.corr ?? 0) >= 0 ? "rgba(46,230,168,.75)" : "rgba(255,23,68,.75)";
+    g.lineWidth = 1 + Math.abs(e.corr ?? 0) * 5;
+    g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
+  });
+  nodes.forEach(n => {
+    const p = pos[n.id]; if (!p) return;
+    g.fillStyle = colors[n.kind] || "#00e5ff";
+    g.beginPath(); g.arc(p.x, p.y, 14, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#fff"; g.font = "bold 18px sans-serif"; g.textAlign = "center";
+    g.fillText(n.short || n.id.slice(0, 2), p.x, p.y + 6);
+  });
+  const mags = edges.map(e => Math.abs(e.corr ?? 0)).filter(v => v > 0);
+  meta.textContent = `${nodes.length} nodes · ${edges.length} edges · avg |corr| ` +
+    (mags.length ? fmt(mags.reduce((a, b) => a + b, 0) / mags.length, 3) : "0") +
+    (corel.window ? ` · ${corel.window}-GRC window` : "");
+}
+
+function renderWiring(snap) {
+  const el = $("#wiring-panel"); if (!el) return;
+  const sys = snap?.systems?.[`${dash.symbol}|tf1`];
+  const br = snap?.brain || {};
+  const em = snap?.emotions || {};
+  const ph = snap?.physics || {};
+  const ls = snap?.learning || {};
+  const hf = sys?.hedge || {};
+  const fvs = (snap?.formula_values || {})[`${dash.symbol}|tf1`] || {};
+  const active = Object.values(fvs).filter(v => Math.abs(v?.raw ?? 0) > 0.7).length;
+  const dc = sys?.double_check;
+  el.innerHTML = `
+    <div class="kv"><span>affinity cells live (|F|&gt;0.7, tf1)</span><span class="val">${active}</span></div>
+    <div class="kv"><span>CIRC → B2 experience</span><span class="val">${fmt(br.circ, 0)} / ${br.experience ?? 0}</span></div>
+    <div class="kv"><span>TEDR → P6</span><span class="val">${fmt(em.tedr, 4)} → ${fmt(ph.drpt, 2)}Ω</span></div>
+    <div class="kv"><span>TME → emotion share</span><span class="val">${fmt(em.tme, 4)} → ${fmt((ls.shares || {}).emotion, 4)}</span></div>
+    <div class="kv"><span>HF flags (IFR/DPAD/SMDI)</span><span class="val">${hf.ifr ? "IFR " : ""}${hf.dpad ? "DPAD " : ""}${hf.smdi ? "SMDI " : ""}${(!hf.ifr && !hf.dpad && !hf.smdi) ? "—" : ""}</span></div>
+    <div class="kv"><span>4-vote double-check</span><span class="val">${dc ? dc.label + (dc.agree ? " ✓" : " ✗") : "—"}</span></div>`;
+}
+
+function renderHedge(snap) {
+  const el = $("#hedge-panel"); if (!el) return;
+  const hf = snap?.systems?.[`${dash.symbol}|tf1`]?.hedge || {};
+  if (!hf.combined) { el.innerHTML = "warming up… (IFR·DPAD·SMDI appear after the first HF1–HF3 evaluation)"; return; }
+  const pc = hf.price_checks || [];
+  const events = hf.events || [];
+  const prints = hf.prints || [];
+  el.innerHTML = `
+    <div class="kv"><span>IFR (order-flow imbalance)</span><span class="val ${hf.ifr ? "flag-on" : ""}">${hf.ifr ? "FIRED" : "off"}</span></div>
+    <div class="kv"><span>DPAD (dark-pool exhaustion)</span><span class="val ${hf.dpad ? "flag-on" : ""}">${hf.dpad ? "FIRED" : "off"}</span></div>
+    <div class="kv"><span>SMDI (smart-money divergence)</span><span class="val ${hf.smdi ? "flag-on" : ""}">${hf.smdi ? "FIRED" : "off"}</span></div>
+    <div class="kv"><span>HF combined</span><span class="val">${hf.combined}</span></div>
+    ${hf.ifr ? `<div class="bar" title="IFR raw"><span style="width:${Math.min(100, Math.abs(hf.raw_ifr || 0) * 200)}%"></span></div>` : ""}
+    ${hf.dpad ? `<div class="bar" title="DPAD raw"><span style="width:${Math.min(100, Math.abs(hf.raw_dpad || 0) * 200)}%"></span></div>` : ""}
+    <div class="kv"><span>price checks / divergence</span><span class="val">${pc.length} / ${fmt(hf.divergence, 4)}</span></div>
+    <div class="kv"><span>events (recent) / prints</span><span class="val">${events.length} / ${prints.length}</span></div>
+    ${pc.slice(-4).reverse().map(p => {
+      const c = p.price_corr || {};
+      return `<div class="insight">· ${p.src}: ${p.verdict}` +
+        (c.strength !== null && c.strength !== undefined ? ` <span class="mono">[${c.strength}]</span>` : "") + `</div>`;
+    }).join("")}
+    ${events.slice(-3).reverse().map(e => `<div class="insight">· ${e.name}</div>`).join("")}`;
+}
+
+function renderBgn(snap) {
+  const el = $("#bgn-matrix"); if (!el) return;
+  const b = snap?.bgn || {};
+  if (!Object.keys(b).length) { el.innerHTML = "warming up…"; return; }
+  el.innerHTML = `<div class="bgn-grid">` +
+    `<div class="f-var">β</div>` + TF.map(t => `<div class="f-var">${t}</div>`).join("") +
+    TF.flatMap(t => [`<div class="f-var">${t}</div>`,
+      ...TF.map(t2 => {
+        const v = b[t]?.[t2] ?? 0;
+        return `<div class="f-var" style="color:${v >= 0 ? "var(--cyan)" : "var(--red)"}">${fmt(v, 3)}</div>`;
+      })]).join("") + `</div>`;
+}
+
+function syncActivePanels(snap) {
+  if (ACTIVE_TAB === "brains") { renderCorel(snap); renderWiring(snap); }
+  else if (ACTIVE_TAB === "news") renderHedge(snap);
+  else if (ACTIVE_TAB === "physics") renderBgn(snap);
+}
+
 function handleMessage(msg) {
   switch (msg.type) {
     case "snapshot":
@@ -1126,8 +1272,11 @@ function handleMessage(msg) {
       if (msg.phase === "analysis") updateOverlay(msg, msg);
       else $("#analysis-overlay").classList.add("gone");
       if (ACTIVE_TAB === "brains") updateBrains(msg);
+      syncActivePanels(msg);
       break;
-    case "tick": break;
+    case "tick":
+      handleTick(msg);
+      break;
     case "phase":
       updateOverlay(msg, null);
       break;

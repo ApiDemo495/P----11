@@ -272,3 +272,9 @@ select.search, select { background: var(--panel); border: 1px solid var(--line);
   .quad-grid, .panel-row, .physics-grid { grid-template-columns: 1fr; }
   .key-form { grid-template-columns: 1fr 1fr; }
 }
+
+.bgn-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+#corel-canvas { width: 100%; display: block; background: #06051a; border-radius: 8px; }
+.legend { display: flex; gap: 16px; margin-top: 8px; font-size: 11px; color: var(--dim); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+.flag-on { color: var(--red) !important; font-weight: 700; }
