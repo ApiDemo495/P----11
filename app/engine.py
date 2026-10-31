@@ -1752,6 +1752,11 @@ class PredictionEngine:
                 "mode": self.feed.mode,
                 "tfs": tfs,
             }
+        # one-shot alert flags are consumed by this snapshot (Section 12)
+        for cyc in self.cycles.values():
+            if cyc is not None:
+                cyc.close_alert = False
+                cyc.safe_alert = False
         return {
             "type": "snapshot",
             "ts": now,

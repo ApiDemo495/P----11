@@ -17,6 +17,8 @@ import sys
 # fail fast when the Hub is unreachable (auto-start must never stall)
 os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "8")
 os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "8")
+import logging as _logging
+_logging.getLogger("huggingface_hub").setLevel(_logging.ERROR)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

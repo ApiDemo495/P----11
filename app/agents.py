@@ -19,6 +19,14 @@ from typing import Any
 
 import httpx
 
+# keep the console clean: HF's per-retry warnings are noisy when the hub
+# is unreachable — our circuit breaker already handles the retry policy
+try:  # pragma: no cover - logging config
+    import logging as _logging
+    _logging.getLogger("huggingface_hub").setLevel(_logging.ERROR)
+except Exception:
+    pass
+
 from .config import (
     AGENT_COMBINED_WEIGHT,
     AGENT_EPS,
@@ -123,15 +131,22 @@ class LocalModel:
         self.last_ms = None
         self.error = ""
         self._last_attempt = 0.0
+        self._net_fails = 0          # consecutive network failures -> circuit breaker
         self._lock = threading.Lock()
 
-    def try_load(self) -> None:
+    def try_load(self, force: bool = False) -> None:
         if self.llm is not None:
             return
         import time as _t
         now = _t.time()
+        if force:
+            self._last_attempt = 0.0
+            self._net_fails = 0
         if now - self._last_attempt < 180 and self._last_attempt > 0:
             return                      # one retry every 3 minutes max
+        if self._net_fails >= 2 and now - self._last_attempt < 3600:
+            return                      # circuit breaker: hub unreachable —
+                                        # don't spam retries/log for an hour
         self._last_attempt = now
         self.error = ""                 # clear stale errors (deps may have arrived)
         try:
@@ -159,6 +174,7 @@ class LocalModel:
                 self.download_progress = 1.0
             except Exception as e:
                 self.error = f"model download failed: {e.__class__.__name__}"
+                self._net_fails += 1    # trip the circuit breaker after 2
                 return
         try:
             self.llm = Llama(model_path=path, n_ctx=2048, n_threads=4,
@@ -446,7 +462,7 @@ class AgentManager:
     async def test(self, slot: str) -> dict:
         key = self.settings.get(f"{slot}_key", "")
         if slot == "local":
-            await _to_thread(self.local.try_load)
+            await _to_thread(self.local.try_load, force=True)   # manual retry
             return {"ok": self.local.available, "detail": self.local.label,
                     "error": self.local.error}
         res = await self._call_provider(

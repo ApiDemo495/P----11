@@ -133,6 +133,8 @@ class TFCycle:
             "ratio": self.ratio,
             "safe_events": self.safe_events,
             "pending_reset": self.pending_reset,
+            "close_alert": self.close_alert,
+            "safe_alert": self.safe_alert,
             "warning": self.warning,
             "refreshed_at": self.refreshed_at,
         }
