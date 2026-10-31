@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Quantum Prediction Engine — BTC · PAXG · ETH · BNB</title>
 <link rel="stylesheet" href="/vendor/katex.min.css" />
-<link rel="stylesheet" href="/style.css?v=20261031c" />
+<link rel="stylesheet" href="/style.css?v=20261031d" />
 </head>
 <body>
 
@@ -39,6 +39,7 @@
         <span class="led" id="led-ws"></span><span>STREAM</span>
         <span class="led" id="led-learn"></span><span>LEARNING</span>
         <span class="led" id="led-agent"></span><span>AGENT</span>
+        <span class="mode-chip" id="mode-chip" title="Agent mode — agents are always optional">…</span>
       </div>
     </div>
   </aside>
@@ -286,6 +287,7 @@
         <span class="tab-title">Agent Control — Gemini · backups · local</span>
         <button class="mini-btn" id="agents-reload">⟳ status</button>
       </div>
+      <div id="agent-mode" class="mode-banner"></div>
       <div id="agent-slots" class="grid-4"></div>
       <div class="panel-row">
         <div class="panel">
@@ -394,6 +396,6 @@
 
 <script src="/vendor/lightweight-charts.standalone.production.js"></script>
 <script src="/vendor/katex.min.js"></script>
-<script type="module" src="/app.js?v=20261031c"></script>
+<script type="module" src="/app.js?v=20261031d"></script>
 </body>
 </html>

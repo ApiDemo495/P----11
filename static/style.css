@@ -278,3 +278,13 @@ select.search, select { background: var(--panel); border: 1px solid var(--line);
 .legend { display: flex; gap: 16px; margin-top: 8px; font-size: 11px; color: var(--dim); }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
 .flag-on { color: var(--red) !important; font-weight: 700; }
+.mode-chip { font-size: 10px; letter-spacing: 1px; padding: 2px 9px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--dim); text-transform: uppercase; }
+.mode-chip.mode-drosophila { color: var(--gold); border-color: var(--gold); }
+.mode-chip.mode-local { color: var(--cyan); border-color: var(--cyan); }
+.mode-chip.mode-cloud { color: var(--green, #2ee6a8); border-color: var(--green, #2ee6a8); }
+.mode-banner { padding: 12px 16px; border-radius: 10px; margin-bottom: 12px; font-size: 13px;
+  border: 1px solid var(--line); background: var(--panel2); }
+.mode-banner.mode-drosophila { border-color: rgba(201,162,39,.6); color: var(--gold); }
+.mode-banner.mode-local { border-color: rgba(0,229,255,.5); color: var(--cyan); }
+.mode-banner.mode-cloud { border-color: rgba(46,230,168,.5); color: var(--green, #2ee6a8); }

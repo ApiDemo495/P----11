@@ -298,6 +298,7 @@ function renderDashboard(snap) {
   // learning LED
   $("#led-learn").className = "led " + (snap.learning?.high_alert ? "warn" : "on");
   $("#led-agent").className = "led " + (snap.agents?.slots?.[0]?.status === "connected" ? "on" : "off");
+  updateModeChip(snap.agents?.mode);
   updateAlertBar();
   // alert-bar cycle flags consumed after render
   Object.values(dash.cycles).forEach(c => { c.safe_alert = false; c.close_alert = false; });
@@ -855,12 +856,50 @@ TAB_LOADERS.news = async () => {
 /* ═══════════════════════════ AGENT CONTROL ═══════════════════════════ */
 TAB_LOADERS.agents = async () => {
   try {
-    const d = await api("/api/agents/status");
+    const [d, st] = await Promise.all([
+      api("/api/agents/status"),
+      api("/api/settings").catch(() => null),
+    ]);
     renderAgents(d);
+    // prefill the key form so the user sees what is already saved
+    const s = st?.settings;
+    if (s) {
+      const map = { "key-gemini": "gemini_key", "key-backup1": "backup1_key",
+                    "key-backup2": "backup2_key", "key-backup3": "backup3_key",
+                    "key-newsapi": "newsapi_key", "key-neuprint": "neuprint_key" };
+      for (const [id, k] of Object.entries(map)) {
+        const el = $("#" + id);
+        if (el && !el.value && s[k]) el.value = s[k];
+      }
+    }
   } catch (e) { toast("agents: " + e.message, "err"); }
 };
+function updateModeChip(mode) {
+  const chip = $("#mode-chip");
+  if (!chip) return;
+  chip.textContent = mode === "drosophila" ? "DROSOPHILA · formula core"
+    : mode === "local" ? "LOCAL MODEL"
+    : mode === "cloud" ? "CLOUD AGENTS" : "…";
+  chip.className = "mode-chip mode-" + (mode || "drosophila");
+}
+
 function renderAgents(d) {
   const slots = d.agents?.slots || [];
+  updateModeChip(d.agents?.mode);
+  // mode banner — agents are OPTIONAL; keyless = full Drosophila/formula core
+  const mode = d.agents?.mode || "drosophila";
+  const bm = $("#agent-mode");
+  if (bm) {
+    bm.className = "mode-banner mode-" + mode;
+    bm.innerHTML = mode === "drosophila"
+      ? `<b>DROSOPHILA MODE</b> — no API keys needed. The app runs fully on the ` +
+        `4-instance Drosophila brain, 31 formulas, math &amp; physics. ` +
+        `Paste any key below to add an <i>optional</i> cloud second opinion.`
+      : mode === "local"
+      ? `<b>LOCAL MODEL</b> — on-device inference active. Cloud keys are optional extras.`
+      : `<b>CLOUD AGENTS</b> — ${slots.filter(s => s.status === "connected").length} slot(s) configured. ` +
+        `The Drosophila brain + formulas still run every GRC regardless.`;
+  }
   const titles = ["Gemini (primary)", "Backup 1 · Gemini", "Backup 2 · GPT-4o", "Backup 3 · Claude"];
   $("#agent-slots").innerHTML = slots.map((s, i) => `
     <div class="agent-slot">
@@ -888,7 +927,8 @@ function renderAgents(d) {
        <div class="f-var"><span>source</span><b>${sig.source}${sig.fallback ? " (fallback)" : ""}</b></div>
        ${sig.insight ? `<div class="hint">“${sig.insight}”</div>` : ""}
        ${sig.warning ? `<div class="hint" style="color:var(--amber)">${sig.warning}</div>` : ""}`
-    : "no agent signal yet (waiting for keys / local model)";
+    : `<div class="hint">No cloud signal — that is fine. The <b>Drosophila brain + formulas + physics</b> ` +
+      `carry every vote (agents are optional, the 4-vote check still runs).</div>`;
   $$(".test-slot").forEach(b => b.addEventListener("click", async () => {
     b.textContent = "testing…";
     try {

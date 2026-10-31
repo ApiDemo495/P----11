@@ -442,6 +442,13 @@ class AgentManager:
 
         keys = ["gemini_key", "backup1_key", "backup2_key", "backup3_key"]
         slots = ["gemini", "backup1", "backup2", "backup3"]
+        has_cloud = any(self.settings.get(k) for k in keys)
+        local_ok = bool(self.local.available)
+        # every agent is OPTIONAL: without keys the app runs fully on the
+        # Drosophila brain + formulas + math + physics
+        mode = ("cloud" if has_cloud and local_ok else
+                "cloud" if has_cloud else
+                "local" if local_ok else "drosophila")
         return {
             "slots": [slot_status(s, self.settings.get(k))
                       for s, k in zip(slots, keys)],
@@ -457,6 +464,8 @@ class AgentManager:
             },
             "active": self.active_slot,
             "warning": self.warning,
+            "mode": mode,
+            "has_cloud_keys": has_cloud,
         }
 
     async def test(self, slot: str) -> dict:

@@ -458,3 +458,26 @@ def test_ui_contract_static_assets():
     assert os.path.exists("static/vendor/katex.min.js")
     js = open("static/app.js").read()
     assert "TAB_LOADERS" in js and "MIXED SIGNALS" not in js  # label comes from backend
+
+
+# ── Part 4: agents are OPTIONAL (Drosophila-mode guarantee) ────────────
+def test_agent_mode_keyless_runs_drosophila(monkeypatch, tmp_path):
+    """Without any API key the app reports 'drosophila' mode and never
+    blocks; adding a key flips it to cloud; local model counts too."""
+    from app import agents as ag
+    monkeypatch.setattr(ag, "SETTINGS_FILE", str(tmp_path / "settings.json"))
+    m = ag.AgentManager()
+    m.local.available = False
+    st = m.status()
+    assert st["mode"] == "drosophila"
+    assert st["has_cloud_keys"] is False
+    # every cloud slot is merely "not configured" — nothing throws
+    assert all(s["status"] in ("not configured", "disabled") for s in st["slots"])
+    # paste a key → cloud mode, persisted, reloaded
+    m.configure(gemini_key="AIzaTESTKEY")
+    assert m.status()["mode"] == "cloud"
+    assert ag.AgentManager().status()["has_cloud_keys"] is True
+    # keyless + local model → local mode
+    m.configure(gemini_key="")
+    m.local.available = True
+    assert m.status()["mode"] == "local"
