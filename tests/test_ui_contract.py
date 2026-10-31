@@ -1,29 +1,46 @@
-"""UI ↔ HTML contract: selector mismatches froze the 4:00 overlay once —
-guard the seam permanently (see commit history: q-agent-tf- vs q-agent-)."""
+"""UI ↔ HTML contract (r2 rewrite): guard the new seams permanently."""
 from pathlib import Path
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 APP_JS = (STATIC / "app.js").read_text()
-INDEX_HTML = (STATIC / "static" if False else STATIC / "index.html").read_text()
+INDEX_HTML = (STATIC / "index.html").read_text()
 
 
-def test_quadrant_agent_selector_matches_html_id():
-    # html: <span id="q-agent-tf1"> … js must query #q-agent- + tf
-    assert 'id="q-agent-tf1"' in INDEX_HTML
-    assert '$("#q-agent-" + tf)' in APP_JS
-    assert '$("#q-agent-tf-" + tf)' not in APP_JS
+def test_no_tradingview_dependency():
+    """Own canvas chart only — the TradingView lib was removed for speed."""
+    assert "LightweightCharts" not in APP_JS
+    assert "lightweight-charts" not in INDEX_HTML
+    assert "class ChartX" in APP_JS
 
 
-def test_overlay_updates_before_dashboard_render():
-    # applySnapshot + WS snapshot path must update the overlay FIRST and
-    # swallow renderDashboard errors — a quadrant bug can never freeze 4:00
-    i_apply = APP_JS.index("function applySnapshot")
-    block = APP_JS[i_apply:i_apply + 400]
-    assert block.index("updateOverlay") < block.index("renderDashboard")
-    assert "try { renderDashboard" in block
-    i_snap = APP_JS.index('case "snapshot":')
-    ws_block = APP_JS[i_snap:i_snap + 500]
-    assert ws_block.index("updateOverlay") < ws_block.index("renderDashboard")
+def test_bottom_tab_bar_and_nine_views():
+    assert 'id="tabs"' in INDEX_HTML
+    for v in ("dashboard", "formulas", "emotion", "physics", "news",
+              "brains", "agents", "history", "settings"):
+        assert f'id="view-{v}"' in INDEX_HTML, v
+        assert f'data-view="{v}"' in INDEX_HTML, v
+
+
+def test_boot_overlay_updated_before_content_render():
+    """applySnapshot must drive the boot overlay first; a render error can
+    never freeze the initial-analysis page again."""
+    i = APP_JS.index("function applySnapshot")
+    block = APP_JS[i:i + 400]
+    assert "renderBoot" in block
+    assert block.index("renderBoot") < block.index("renderQuads")
+    assert "try { renderQuads" in block
+
+
+def test_focus_timeframe_selector_exists():
+    assert 'id="tf-bar"' in INDEX_HTML
+    assert "S.focusTf" in APP_JS
+    assert "TF_META" in APP_JS
+
+
+def test_why_panel_reads_breakdown():
+    assert 'id="why-panel"' in INDEX_HTML
+    assert "breakdown" in APP_JS and "multipliers" in APP_JS
+    assert "SUBSYSTEM VOTES" in APP_JS
 
 
 def test_app_js_cache_busted():
@@ -31,8 +48,12 @@ def test_app_js_cache_busted():
     assert 'href="/style.css?v=' in INDEX_HTML
 
 
-def test_every_dynamic_quadrant_id_exists_in_html_or_is_self_created():
-    # ids the JS builds dynamically must exist in index.html
-    for tf in ("tf1", "tf2", "tf3", "tf4"):
-        for stem in ("q-", "dir-", "ratio-", "tplist-", "gauge-", "q-cci-", "q-agent-"):
-            assert f'id="{stem}{tf}"' in INDEX_HTML, f"missing {stem}{tf}"
+def test_per_tf_candle_endpoints():
+    """Charts load per-timeframe aggregated candles, not one shared series."""
+    assert "/api/candles?symbol=${S.symbol}&tf=${tf}" in APP_JS
+
+
+def test_emotion_reasoning_and_formula_logic_present():
+    assert "narrative" in APP_JS            # emotion reasoning panel
+    assert "FORMULA_LOGIC" in APP_JS        # per-formula logic one-liners
+    assert "P_LOGIC" in APP_JS              # per-physics-formula logic

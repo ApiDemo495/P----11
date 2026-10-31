@@ -447,17 +447,16 @@ def test_main_part4_routes_present():
 def test_ui_contract_static_assets():
     assert os.path.exists("static/index.html")
     html = open("static/index.html").read()
-    for tab in ("dashboard", "brains", "formulas", "emotion", "physics",
-                "news", "agents", "history", "settings"):
-        assert f'tab-{tab}' in html
-    assert "#0a0a0f" in open("static/style.css").read()
-    assert "#00e5ff" in open("static/style.css").read()
-    assert "#ff1744" in open("static/style.css").read()
-    assert "#ffd600" in open("static/style.css").read()
-    assert os.path.exists("static/vendor/lightweight-charts.standalone.production.js")
-    assert os.path.exists("static/vendor/katex.min.js")
+    for v in ("dashboard", "formulas", "emotion", "physics", "news",
+              "brains", "agents", "history", "settings"):
+        assert f'view-{v}' in html and f'data-view="{v}"' in html
+    css = open("static/style.css").read()
+    assert "#07070d" in css          # terminal background
+    assert "var(--cyan)" in css and "var(--red)" in css
     js = open("static/app.js").read()
-    assert "TAB_LOADERS" in js and "MIXED SIGNALS" not in js  # label comes from backend
+    assert "LightweightCharts" not in js       # own ChartX canvas
+    assert "class ChartX" in js
+    assert "MIXED SIGNALS" not in js           # label comes from backend
 
 
 # ── Part 4: agents are OPTIONAL (Drosophila-mode guarantee) ────────────

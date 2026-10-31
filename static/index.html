@@ -1,414 +1,230 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Quantum Prediction Engine — BTC · PAXG · ETH · BNB</title>
-<link rel="stylesheet" href="/vendor/katex.min.css" />
-<link rel="stylesheet" href="/style.css?v=20261031e" />
+<title>PREDICT · BTC PAXG ETH BNB</title>
+<link rel="stylesheet" href="/style.css?v=r2" />
 </head>
 <body>
 
-<div id="app">
-  <!-- ══════════════════ FIXED LEFT SIDEBAR (280px) ══════════════════ -->
-  <aside id="sidebar">
-    <div class="brand">
-      <div class="brand-mark">◈</div>
-      <div class="brand-text">
-        <div class="brand-title">QUANTUM&nbsp;PREDICT</div>
-        <div class="brand-sub">GRC · 4-MIN CYCLES</div>
-      </div>
+<!-- ═════════ LEFT RAIL ═════════ -->
+<aside id="rail">
+  <div id="brand">
+    <div class="brand-mark">◈ PREDICT</div>
+    <div class="brand-sub">4-asset · 4-window engine</div>
+  </div>
+
+  <div id="asset-list"></div>
+
+  <div id="rail-stats">
+    <div class="rs"><span>GRC</span><b id="rs-grc">—</b></div>
+    <div class="rs"><span>NEXT GRC</span><b id="rs-next">—</b></div>
+    <div class="rs"><span>PHASE</span><b id="rs-phase">—</b></div>
+    <div class="rs"><span>WIN/RUN</span><b id="rs-win">—</b></div>
+  </div>
+
+  <div id="rail-leds">
+    <span><i class="led" id="led-stream"></i>stream</span>
+    <span><i class="led" id="led-learn"></i>learning</span>
+    <span><i class="led" id="led-agent"></i>agent</span>
+    <span id="mode-chip" title="Agents are optional — core is Drosophila+formulas">…</span>
+  </div>
+
+  <div id="rail-note">Data: <b id="feed-mode">—</b><br /><span class="dim">Every GRC recomputes 31 formulas × 4 windows × 4 assets.</span></div>
+</aside>
+
+<!-- ═════════ MAIN ═════════ -->
+<main id="main">
+
+  <!-- alert bar -->
+  <div id="alert-bar" class="hidden"><span id="alert-icon">▲</span><span id="alert-text"></span></div>
+
+  <!-- initial analysis overlay -->
+  <div id="boot-overlay">
+    <div class="boot-card">
+      <div class="boot-clock" id="boot-clock">4:00</div>
+      <div class="boot-title">INITIAL ANALYSIS</div>
+      <ul id="boot-checks">
+        <li data-k="price"><i></i>Price feed</li>
+        <li data-k="formulas"><i></i>Formulas</li>
+        <li data-k="brains"><i></i>Drosophila brain</li>
+        <li data-k="emotions"><i></i>Emotions</li>
+        <li data-k="physics"><i></i>Physics</li>
+        <li data-k="news"><i></i>News</li>
+        <li data-k="agents"><i></i>Agents</li>
+        <li data-k="bgn"><i></i>Bgn sync</li>
+        <li data-k="aggregation"><i></i>Aggregation</li>
+      </ul>
+      <div id="boot-warning" class="hidden">PARTIAL INIT — confidence reduced</div>
     </div>
+  </div>
 
-    
-
-    <div class="side-footer">
-      <div class="grc-line"><span>GRC</span><b id="side-grc">—</b></div>
-      <div class="grc-line"><span>NEXT&nbsp;CYCLE</span><b id="side-next">—</b></div>
-      <div class="status-row">
-        <span class="led" id="led-ws"></span><span>STREAM</span>
-        <span class="led" id="led-learn"></span><span>LEARNING</span>
-        <span class="led" id="led-agent"></span><span>AGENT</span>
-        <span class="mode-chip" id="mode-chip" title="Agent mode — agents are always optional">…</span>
-      </div>
+  <!-- ═══ VIEW: DASHBOARD ═══ -->
+  <section class="view active" id="view-dashboard">
+    <div class="tf-bar" id="tf-bar"><span class="lbl">FOCUS</span></div>
+    <div class="quad-grid" id="quad-grid"></div>
+    <div class="panel">
+      <div class="panel-h">WHY this prediction — full calculation trace</div>
+      <div id="why-panel" class="why"><div class="dim pad">warming up…</div></div>
     </div>
-  </aside>
+  </section>
 
-  <!-- ══════════════════ MAIN AREA ══════════════════ -->
-  <main id="main">
-
-    <!-- FULL-WIDTH ALERT BAR (amber SAFE / pulsing-red CLOSE) -->
-    <div id="alert-bar" class="hidden"><span id="alert-icon">▲</span><span id="alert-text"></span></div>
-
-    <!-- initial analysis overlay -->
-    <div id="analysis-overlay">
-      <div class="analysis-card">
-        <div class="analysis-clock" id="analysis-clock">4:00</div>
-        <div class="analysis-title">INITIAL ANALYSIS PHASE</div>
-        <ul id="analysis-checks">
-          <li data-k="price"><i></i>Price Feed</li>
-          <li data-k="formulas"><i></i>Formulas</li>
-          <li data-k="brains"><i></i>Brain</li>
-          <li data-k="emotions"><i></i>Emotion</li>
-          <li data-k="physics"><i></i>Physics</li>
-          <li data-k="news"><i></i>News</li>
-          <li data-k="agents"><i></i>Agent</li>
-          <li data-k="bgn"><i></i>Bgn</li>
-          <li data-k="aggregation"><i></i>Aggregation</li>
-        </ul>
-        <div id="analysis-warning" class="hidden">PARTIAL INITIALIZATION — CONFIDENCE REDUCED</div>
-      </div>
+  <!-- ═══ VIEW: FORMULAS ═══ -->
+  <section class="view" id="view-formulas">
+    <div class="tab-head">
+      <div class="tab-title">FORMULA LAB <span class="dim" id="fl-scope"></span></div>
+      <div class="tf-mini" id="fl-tf"></div>
     </div>
+    <div class="panel">
+      <div class="panel-h">CCI summary (F21 master aggregate)</div>
+      <div id="fl-summary" class="kv-row"></div>
+    </div>
+    <div id="fl-cards" class="card-grid"></div>
+  </section>
 
-    <!-- ════════ TAB: DASHBOARD ════════ -->
-    <section class="tab active" id="tab-dashboard">
-      <div class="tf-bar" id="tf-bar">
-        <span class="tf-bar-label">FOCUS TIMEFRAME</span>
-      </div>
-      <div class="quad-grid">
-        <div class="quadrant" id="q-tf1">
-          <div class="q-head">
-            <span class="q-tf">TF1 · 22m</span>
-            <span class="q-countdown"><svg class="ring" viewBox="0 0 36 36"><circle class="ring-bg" cx="18" cy="18" r="15.5"/><circle class="ring-fg" cx="18" cy="18" r="15.5"/></svg><b class="q-time">—</b></span>
-            <span class="q-assets" data-tf="tf1"></span>
-          </div>
-          <div class="q-chart" id="chart-tf1"></div>
-          <div class="q-quantum" id="quantum-tf1"></div>
-          <div class="q-body">
-            <canvas class="q-gauge" id="gauge-tf1" width="120" height="120"></canvas>
-            <div class="q-side">
-              <div class="q-dir" id="dir-tf1">—</div>
-              <div class="q-ratio"><span>TP:SL</span><b id="ratio-tf1">—</b></div>
-              <div class="q-tplist" id="tplist-tf1"></div>
-            </div>
-          </div>
-          <div class="q-foot"><span id="q-cci-tf1"></span><span id="q-agent-tf1"></span></div>
-        </div>
+  <!-- ═══ VIEW: EMOTION ═══ -->
+  <section class="view" id="view-emotion">
+    <div class="tab-head"><div class="tab-title">EMOTION ENGINE — 22 channels <span class="dim" id="em-scope"></span></div></div>
+    <div class="panel">
+      <div class="panel-h">Reasoning</div>
+      <div id="em-narrative"><div class="dim pad">warming up…</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">E1–E22 live</div>
+      <div id="em-grid" class="em-grid"></div>
+    </div>
+  </section>
 
-        <div class="quadrant" id="q-tf2">
-          <div class="q-head">
-            <span class="q-tf">TF2 · 44m</span>
-            <span class="q-countdown"><svg class="ring" viewBox="0 0 36 36"><circle class="ring-bg" cx="18" cy="18" r="15.5"/><circle class="ring-fg" cx="18" cy="18" r="15.5"/></svg><b class="q-time">—</b></span>
-            <span class="q-assets" data-tf="tf2"></span>
-          </div>
-          <div class="q-chart" id="chart-tf2"></div>
-          <div class="q-quantum" id="quantum-tf2"></div>
-          <div class="q-body">
-            <canvas class="q-gauge" id="gauge-tf2" width="120" height="120"></canvas>
-            <div class="q-side">
-              <div class="q-dir" id="dir-tf2">—</div>
-              <div class="q-ratio"><span>TP:SL</span><b id="ratio-tf2">—</b></div>
-              <div class="q-tplist" id="tplist-tf2"></div>
-            </div>
-          </div>
-          <div class="q-foot"><span id="q-cci-tf2"></span><span id="q-agent-tf2"></span></div>
-        </div>
+  <!-- ═══ VIEW: PHYSICS ═══ -->
+  <section class="view" id="view-physics">
+    <div class="tab-head"><div class="tab-title">PHYSICS ENGINE — P1–P21 + P22 <span class="dim" id="ph-scope"></span></div></div>
+    <div class="panel">
+      <div class="panel-h">Confidence multipliers (feed the 0.35 floor)</div>
+      <div id="ph-mult" class="kv-row"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">Bgn 4×4 coupling matrix (β=1.2)</div>
+      <div id="ph-bgn" class="bgn-grid">—</div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">P1–P21 values</div>
+      <div id="ph-grid" class="card-grid"></div>
+    </div>
+  </section>
 
-        <div class="quadrant" id="q-tf3">
-          <div class="q-head">
-            <span class="q-tf">TF3 · 130m</span>
-            <span class="q-countdown"><svg class="ring" viewBox="0 0 36 36"><circle class="ring-bg" cx="18" cy="18" r="15.5"/><circle class="ring-fg" cx="18" cy="18" r="15.5"/></svg><b class="q-time">—</b></span>
-            <span class="q-assets" data-tf="tf3"></span>
-          </div>
-          <div class="q-chart" id="chart-tf3"></div>
-          <div class="q-quantum" id="quantum-tf3"></div>
-          <div class="q-body">
-            <canvas class="q-gauge" id="gauge-tf3" width="120" height="120"></canvas>
-            <div class="q-side">
-              <div class="q-dir" id="dir-tf3">—</div>
-              <div class="q-ratio"><span>TP:SL</span><b id="ratio-tf3">—</b></div>
-              <div class="q-tplist" id="tplist-tf3"></div>
-            </div>
-          </div>
-          <div class="q-foot"><span id="q-cci-tf3"></span><span id="q-agent-tf3"></span></div>
-        </div>
+  <!-- ═══ VIEW: NEWS ═══ -->
+  <section class="view" id="view-news">
+    <div class="tab-head"><div class="tab-title">NEWS FEED <span class="dim" id="nw-scope"></span></div>
+      <button class="btn" id="nw-refresh">refresh</button></div>
+    <div class="panel">
+      <div class="panel-h">Aggregate impact per window</div>
+      <div id="nw-agg" class="kv-row"></div>
+    </div>
+    <div class="panel">
+      <table class="tbl" id="nw-table">
+        <thead><tr><th>TIME</th><th>HEADLINE</th><th>TIER</th><th>CATEGORY</th><th>SENT</th><th>IMPACT</th><th>DECAY</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
 
-        <div class="quadrant" id="q-tf4">
-          <div class="q-head">
-            <span class="q-tf">TF4 · 247m</span>
-            <span class="q-countdown"><svg class="ring" viewBox="0 0 36 36"><circle class="ring-bg" cx="18" cy="18" r="15.5"/><circle class="ring-fg" cx="18" cy="18" r="15.5"/></svg><b class="q-time">—</b></span>
-            <span class="q-assets" data-tf="tf4"></span>
-          </div>
-          <div class="q-chart" id="chart-tf4"></div>
-          <div class="q-quantum" id="quantum-tf4"></div>
-          <div class="q-body">
-            <canvas class="q-gauge" id="gauge-tf4" width="120" height="120"></canvas>
-            <div class="q-side">
-              <div class="q-dir" id="dir-tf4">—</div>
-              <div class="q-ratio"><span>TP:SL</span><b id="ratio-tf4">—</b></div>
-              <div class="q-tplist" id="tplist-tf4"></div>
-            </div>
-          </div>
-          <div class="q-foot"><span id="q-cci-tf4"></span><span id="q-agent-tf4"></span></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ════════ TAB: BRAIN MONITOR ════════ -->
-    <div class="panel why-panel">
-        <div class="panel-h">WHY this prediction — full calculation trace (Section 21)</div>
-        <div id="why-panel"><div class="hint">warming up…</div></div>
-      </div>
-
-    <section class="tab" id="tab-brains">
-      <div class="tab-toolbar">
-        <span class="tab-title">Brain Monitor — 4 × 7,700 units</span>
-        <span class="badge" id="brain-geom">—</span>
-        <button class="mini-btn" id="brain-flip" title="toggle 2D/3D">2D / 3D</button>
-        <button class="mini-btn" id="brain-refresh">⟳ live</button>
-      </div>
-      <div class="brains-wrap">
-        <canvas id="brains-canvas"></canvas>
-        <div id="brains2d"></div>
-      </div>
-      <div class="grid-4" id="brain-cards"></div>
-      <div class="panel-row">
-        <div class="panel">
-          <div class="panel-h">Brain consensus (Bgn-synced)</div>
-          <canvas id="brain-consensus-chart" height="140"></canvas>
-        </div>
-        <div class="panel">
-          <div class="panel-h">Learned influence weights (Section 10)</div>
-          <div id="brain-influence"></div>
-        </div>
-      </div>
-      <div class="panel-row">
-        <div class="panel">
-          <div class="panel-h">System Co-relation (50-GRC network) — <span id="corel-meta">—</span></div>
-          <canvas id="corel-canvas" height="300"></canvas>
-          <div class="legend">
-            <span><i style="background:#2ee6a8"></i>positive corr</span>
-            <span><i style="background:#ff1744"></i>negative corr</span>
-            <span>line thickness = |corr|</span>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="panel-h">Cross-subsystem signals (Part 4 wiring)</div>
-          <div id="wiring-panel">—</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ════════ TAB: FORMULA LAB ════════ -->
-    <section class="tab" id="tab-formulas">
-      <div class="tab-toolbar">
-        <span class="tab-title">Formula Lab — 75 formulas</span>
-        <input id="formula-search" class="search" placeholder="search formulas…" />
-        <select id="formula-filter">
-          <option value="all">all systems</option>
-          <option value="core">core (31)</option>
-          <option value="emotion">emotion (22)</option>
-          <option value="physics">physics (22)</option>
-        </select>
-      </div>
-      <div id="formula-cards"></div>
-    </section>
-
-    <!-- ════════ TAB: EMOTION GRID ════════ -->
-    <section class="tab" id="tab-emotion">
-      <div class="tab-toolbar">
-        <span class="tab-title">Emotion Grid — 22 channels</span>
-        <span class="badge" id="cerc-regime">—</span>
-        <span class="badge" id="cerc-value">CERC —</span>
-      </div>
-      <div id="emotion-grid"></div>
-      <div class="panel-row">
-        <div class="panel">
-          <div class="panel-h">Emotion weights (21 CERC members, learning)</div>
-          <div id="emotion-weights"></div>
-        </div>
-        <div class="panel">
-          <div class="panel-h">Composite history</div>
-          <canvas id="cerc-chart" height="150"></canvas>
-        </div>
-      </div>
-    <div class="panel" style="margin-top:12px">
-        <div class="panel-h">Reasoning — what the 22 channels are saying</div>
-        <div id="emotion-narrative"><div class="hint">warming up…</div></div>
-      </div>
-    </section>
-
-    <!-- ════════ TAB: PHYSICS ENGINE ════════ -->
-    <section class="tab" id="tab-physics">
-      <div class="tab-toolbar">
-        <span class="tab-title">Physics Engine — P1…P22</span>
-        <span class="badge" id="physics-p1">—</span>
-      </div>
-      <div class="physics-grid">
-        <div class="panel">
-          <div class="panel-h">Probability distribution</div>
-          <canvas id="prob-curve" height="240"></canvas>
-          <div class="legend" id="prob-legend"></div>
-        </div>
-        <div class="panel">
-          <div class="panel-h">Quantum State Summary</div>
-          <table class="kv" id="quantum-summary"></table>
-        </div>
-      </div>
-      <div class="panel" style="margin-bottom:12px">
-        <div class="panel-h">Bgn 4×4 synchronization matrix (β=1.2 · cross-timeframe coupling)</div>
-        <div id="bgn-matrix" class="f-breakdown">—</div>
-      </div>
-      <div class="panel-row">
-        <div class="panel">
-          <div class="panel-h">Phase-space scatter (colored by density)</div>
-          <canvas id="phase-scatter" height="260"></canvas>
-        </div>
-        <div class="panel">
-          <div class="panel-h">P1…P22 values</div>
-          <div id="physics-values"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ════════ TAB: NEWS FEED ════════ -->
-    <section class="tab" id="tab-news">
-      <div class="tab-toolbar">
-        <span class="tab-title">News Feed</span>
-        <select id="news-symbol"></select>
-        <span class="badge" id="news-meta">—</span>
+  <!-- ═══ VIEW: BRAINS ═══ -->
+  <section class="view" id="view-brains">
+    <div class="tab-head"><div class="tab-title">DROSOPHILA BRAIN — 4 instances <span class="dim" id="br-scope"></span></div></div>
+    <div class="panel">
+      <div class="panel-h">Consensus</div>
+      <div id="br-consensus" class="kv-row"></div>
+    </div>
+    <div id="br-instances" class="card-grid"></div>
+    <div class="panel-row">
+      <div class="panel">
+        <div class="panel-h">System co-relation (50-GRC) <span class="dim" id="corel-meta"></span></div>
+        <canvas id="corel-canvas" height="320"></canvas>
       </div>
       <div class="panel">
-        <table class="news-table" id="news-table">
-          <thead>
-            <tr><th>TIME</th><th>HEADLINE</th><th>RELIABILITY</th><th>CATEGORY</th>
-                <th>SENTIMENT</th><th>IMPACT</th><th>DECAY</th></tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+        <div class="panel-h">Cross-subsystem seams</div>
+        <div id="wiring-panel"><div class="dim pad">—</div></div>
       </div>
-      <div class="panel" style="margin-top:12px">
-        <div class="panel-h">Hedge-Fund &amp; Dark-Pool Flow (HF1–HF3 · Part 3/4 seam)</div>
-        <div id="hedge-panel">—</div>
-      </div>
-    </section>
+    </div>
+  </section>
 
-    <!-- ════════ TAB: AGENT CONTROL ════════ -->
-    <section class="tab" id="tab-agents">
-      <div class="tab-toolbar">
-        <span class="tab-title">Agent Control — Gemini · backups · local</span>
-        <button class="mini-btn" id="agents-reload">⟳ status</button>
+  <!-- ═══ VIEW: AGENTS ═══ -->
+  <section class="view" id="view-agents">
+    <div class="tab-head"><div class="tab-title">AGENT CONTROL — all optional</div>
+      <button class="btn" id="ag-reload">⟳</button></div>
+    <div id="ag-mode" class="mode-banner"></div>
+    <div id="ag-slots" class="card-grid"></div>
+    <div class="panel-row">
+      <div class="panel"><div class="panel-h">Local model (RAM tier)</div><div id="ag-local"></div></div>
+      <div class="panel"><div class="panel-h">Last agent signal</div><div id="ag-signal"></div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">API keys — optional, stored locally in data/settings.json</div>
+      <div class="key-grid">
+        <label>Gemini primary<input type="password" id="key-gemini" placeholder="AIza…" /></label>
+        <label>Backup 1 · Gemini<input type="password" id="key-backup1" /></label>
+        <label>Backup 2 · OpenAI<input type="password" id="key-backup2" /></label>
+        <label>Backup 3 · Anthropic<input type="password" id="key-backup3" /></label>
+        <label>NewsAPI<input type="password" id="key-newsapi" /></label>
+        <label>neuPrint<input type="password" id="key-neuprint" /></label>
       </div>
-      <div id="agent-mode" class="mode-banner"></div>
-      <div id="agent-slots" class="grid-4"></div>
-      <div class="panel-row">
-        <div class="panel">
-          <div class="panel-h">Local model (RAM tiers)</div>
-          <div id="local-model-card"></div>
-        </div>
-        <div class="panel">
-          <div class="panel-h">Last agent signal</div>
-          <div id="agent-signal-card">—</div>
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-h">API keys (masked · stored in data/settings.json)</div>
-        <div class="key-form">
-          <label>Gemini primary<input type="password" id="key-gemini" placeholder="AIza…" /></label>
-          <label>Backup 1 · Gemini<input type="password" id="key-backup1" /></label>
-          <label>Backup 2 · OpenAI GPT-4o<input type="password" id="key-backup2" /></label>
-          <label>Backup 3 · Anthropic Claude<input type="password" id="key-backup3" /></label>
-          <label>NewsAPI<input type="password" id="key-newsapi" /></label>
-          <label>neuPrint<input type="password" id="key-neuprint" /></label>
-          <button class="mini-btn" id="save-keys">save keys</button>
-        </div>
-        <div class="hint">Full setup guide: <b>API_SETUP.md</b> in the repository root.</div>
-      </div>
-    </section>
+      <button class="btn" id="ag-save">save keys</button>
+      <div class="hint">No keys → Drosophila mode: brain + 31 formulas + physics run everything. Guide: <b>API_SETUP.md</b>.</div>
+    </div>
+  </section>
 
-    <!-- ════════ TAB: HISTORY ════════ -->
-    <section class="tab" id="tab-history">
-      <div class="tab-toolbar">
-        <span class="tab-title">History — accuracy &amp; replay</span>
-        <span class="badge" id="hist-meta">—</span>
-      </div>
-      <div class="panel-row">
-        <div class="panel">
-          <div class="panel-h">Accuracy calendar (&gt;80 green · 60–80 yellow · &lt;60 red)</div>
-          <div id="history-calendar"></div>
-        </div>
-        <div class="panel">
-          <div class="panel-h">Rolling-100 accuracy (per timeframe)</div>
-          <canvas id="rolling-chart" height="180"></canvas>
-        </div>
-      </div>
-      <div class="panel-row">
-        <div class="panel">
-          <div class="panel-h">Formula leaderboard</div>
-          <table class="news-table" id="leaderboard"><tbody></tbody></table>
-        </div>
-        <div class="panel">
-          <div class="panel-h">Day detail — <span id="day-detail-date">—</span></div>
-          <div class="day-table-wrap"><table class="news-table" id="day-table"><tbody></tbody></table></div>
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-h">GRC-by-GRC Prediction Replay
-          <span class="replay-ctl">
-            <button class="mini-btn" id="replay-prev">◀</button>
-            <b id="replay-pos">0 / 0</b>
-            <button class="mini-btn" id="replay-next">▶</button>
-            <button class="mini-btn" id="replay-play">▶ play</button>
-          </span>
-        </div>
-        <div id="replay-body">pick a day above to replay its GRCs</div>
-      </div>
-    </section>
+  <!-- ═══ VIEW: HISTORY ═══ -->
+  <section class="view" id="view-history">
+    <div class="tab-head"><div class="tab-title">HISTORY — local DB</div>
+      <button class="btn" id="hs-reload">⟳</button></div>
+    <div class="panel-row">
+      <div class="panel"><div class="panel-h">Days</div><div id="hs-days"></div></div>
+      <div class="panel"><div class="panel-h">Leaderboard</div><div id="hs-leader"></div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">Day detail <span class="dim" id="hs-day-label"></span></div>
+      <div id="hs-detail"><div class="dim pad">select a day</div></div>
+    </div>
+  </section>
 
-    <!-- ════════ TAB: SETTINGS ════════ -->
-    <section class="tab" id="tab-settings">
-      <div class="tab-toolbar"><span class="tab-title">Settings</span></div>
-      <div class="panel-row">
-        <div class="panel">
-          <div class="panel-h">Assets &amp; timeframes</div>
-          <div class="set-group" id="set-assets"></div>
-          <div class="set-group" id="set-tfs"></div>
-        </div>
-        <div class="panel">
-          <div class="panel-h">Manual prediction triggers</div>
-          <div id="manual-triggers"></div>
-        </div>
+  <!-- ═══ VIEW: SETTINGS ═══ -->
+  <section class="view" id="view-settings">
+    <div class="tab-head"><div class="tab-title">SETTINGS &amp; STATE</div></div>
+    <div class="panel">
+      <div class="panel-h">Learned state</div>
+      <div class="kv-row">
+        <div class="kv"><span>weight learning rate η</span><b id="st-eta">—</b></div>
+        <div class="kv"><span>high-alert mode</span><b id="st-alert">—</b></div>
+        <div class="kv"><span>formula shares</span><b id="st-shares">—</b></div>
       </div>
-      <div class="panel-row">
-        <div class="panel">
-          <div class="panel-h">Interface</div>
-          <div class="set-group">
-            <label class="switch"><input type="checkbox" id="set-theme" checked><span>dark theme</span></label>
-            <label class="switch"><input type="checkbox" id="set-haptics" checked><span>haptic patterns</span></label>
-            <label class="switch"><input type="checkbox" id="set-sound"><span>sound cues</span></label>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="panel-h">Learning &amp; state</div>
-          <div class="set-group">
-            <button class="mini-btn danger" id="reset-learning">reset learning (confirm)</button>
-            <button class="mini-btn" id="export-state">export state</button>
-            <button class="mini-btn" id="import-state">import state</button>
-            <input type="file" id="import-file" accept="application/json" class="hidden" />
-          </div>
-          <div class="hint" id="learning-summary">—</div>
-        </div>
+      <div style="margin-top:12px">
+        <a class="btn" href="/api/state/export" download="state.json">export state</a>
+        <span class="hint">History DB: <code>data/history.db</code> · settings: <code>data/settings.json</code> · weights persist across restarts.</span>
       </div>
-    </section>
+    </div>
+    <div class="panel">
+      <div class="panel-h">About</div>
+      <div class="hint">Spec parts 1–4: P1–P21 physics · 31 core formulas · 22 emotions · 4-instance Drosophila brain · Bgn 4×4 sync · news · HF/dark-pool · 5-level weightage · 4-vote double-check · auto-learning. Agents optional; core never blocks.</div>
+    </div>
+  </section>
 
-  </main>
-</div>
+</main>
 
-<div id="toast-layer"></div>
+<!-- ═════════ BOTTOM TAB BAR ═════════ -->
+<nav id="tabs">
+  <button class="tab-btn active" data-view="dashboard">DASH<span>board</span></button>
+  <button class="tab-btn" data-view="formulas">∑<span>formulas</span></button>
+  <button class="tab-btn" data-view="emotion">E<span>emotion</span></button>
+  <button class="tab-btn" data-view="physics">P<span>physics</span></button>
+  <button class="tab-btn" data-view="news">N<span>news</span></button>
+  <button class="tab-btn" data-view="brains">DB<span>brain</span></button>
+  <button class="tab-btn" data-view="agents">AI<span>agents</span></button>
+  <button class="tab-btn" data-view="history">HX<span>history</span></button>
+  <button class="tab-btn" data-view="settings">⚙<span>settings</span></button>
+</nav>
 
-<nav id="main-nav">
-      <button class="nav-btn active" data-tab="dashboard"><span class="nav-ico">◫</span>Dashboard</button>
-      <button class="nav-btn" data-tab="brains"><span class="nav-ico">◉</span>Brain Monitor</button>
-      <button class="nav-btn" data-tab="formulas"><span class="nav-ico">∑</span>Formula Lab</button>
-      <button class="nav-btn" data-tab="emotion"><span class="nav-ico">♥</span>Emotion Grid</button>
-      <button class="nav-btn" data-tab="physics"><span class="nav-ico">⚛</span>Physics Engine</button>
-      <button class="nav-btn" data-tab="news"><span class="nav-ico">▤</span>News Feed</button>
-      <button class="nav-btn" data-tab="agents"><span class="nav-ico">⚙</span>Agent Control</button>
-      <button class="nav-btn" data-tab="history"><span class="nav-ico">◷</span>History</button>
-      <button class="nav-btn" data-tab="settings"><span class="nav-ico">☰</span>Settings</button>
-    </nav>
-
-<script src="/vendor/katex.min.js"></script>
-<script type="module" src="/app.js?v=20261031e"></script>
+<div id="toast-wrap"></div>
+<script type="module" src="/app.js?v=r2"></script>
 </body>
 </html>
