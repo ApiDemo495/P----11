@@ -676,6 +676,24 @@ class PredictionEngine:
                 "rtp": em["rtp"],
                 "tedr": em["tedr"],
             }
+            # Section 22: human-readable reasoning, not just numbers
+            _top_e = sorted(em["emotions"].items(),
+                            key=lambda kv: -abs(kv[1]))[:4]
+            _eparts = [
+                f"E{eid} {v:+.2f}{'▲' if em['directions'].get(eid, 0) > 0 else '▼' if em['directions'].get(eid, 0) < 0 else '·'}"
+                for eid, v in _top_e if abs(v) > 0.01
+            ]
+            emotion_agg["narrative"] = (
+                ("Dominant flows: " + "; ".join(_eparts) + ". ") if _eparts else
+                "All 22 emotion channels flat. "
+            ) + (
+                f"Net CERC {em['cerc']:+.4f} — " + (
+                    "bulls in control." if em["cerc"] > 0.02 else
+                    "bears in control." if em["cerc"] < -0.02 else
+                    "balanced tug-of-war (conflict keeps confidence low)."
+                )
+            ) + (f" Trauma index RTP {em['rtp']:.2f} > 0.6 — confidence suppressed."
+                 if em["rtp"] > 0.6 else "")
 
             results[tf] = {
                 "raw": raws[tf],
@@ -819,6 +837,47 @@ class PredictionEngine:
                     "extra": {"28": round(arc, 5), "30": round(pcv, 5)},
                     "extra_names": {"28": "ARC", "29": "DLP", "30": "PCV"},
                 }
+                # --- WHY this prediction: full CCI transparency (Section 21)
+                _comp_names = {
+                    **{str(f): FORMULA_NAMES[f] for f in FORMULA_FUNCTIONS},
+                    str(BRAIN_COMPONENT_ID): "Drosophila brain consensus",
+                    str(EMOTION_COMPONENT_ID): "CERC emotion flow",
+                    str(PHYSICS_COMPONENT_ID): "Physics UFP (P22)",
+                    str(NEWS_COMPONENT_ID): "News impact aggregate",
+                    str(HEDGE_COMPONENT_ID): "HF institutional flow",
+                }
+                _ew = pack.get("weights") or base_w
+                _comps = sorted(
+                    ({
+                        "id": str(fid),
+                        "name": _comp_names.get(str(fid), f"F{fid}"),
+                        "value": round(v, 5),
+                        "weight": round(_ew.get(fid, 0.0), 5),
+                        "contribution": round(_ew.get(fid, 0.0) * v, 5),
+                    } for fid, v in comp.items()),
+                    key=lambda c: -abs(c["contribution"]),
+                )
+                _top3 = _comps[:3]
+                _agree = sum(1 for c in _top3
+                             if _sign(c["value"]) == _sign(pack["cci_adjusted"]))
+                _reason = (
+                    f"CCI {pack['cci_adjusted']:+.4f} from {len(comp)} weighted "
+                    f"components"
+                    + ("; top movers: " + ", ".join(
+                        f"{c['name']} {c['value']:+.2f}" for c in _top3)
+                       if _top3 else "")
+                    + (f". Top signals {'reinforce' if _agree >= 2 else 'conflict'} "
+                       "the net direction. "
+                       if _top3 else ". ")
+                    + (f"Trend decoherence P6 ×{fin['drpt']:.2f} — choppy market. "
+                       if fin.get("drpt", 0) > 0.1 else
+                       "Physics multipliers near neutral. ")
+                    + (f"PCV conflict penalty {pcv:+.2f}. " if pcv < 0 else "")
+                    + ("Confidence cleared the 0.35 issue floor — signal issued."
+                       if fin["issued"] else
+                       f"Confidence {fin['confidence']:.3f} below the 0.35 floor — "
+                       "correct call is NO TRADE until signals align.")
+                )
                 self.display_systems[(symbol, tf)] = {
                     "brain": brain_consensus,
                     "emotion": {
@@ -826,6 +885,9 @@ class PredictionEngine:
                         "cerc": em["cerc"],
                         "emotions": em["emotions"],
                         "directions": em["directions"],
+                        "rtp": round(em["rtp"], 4),
+                        "tedr": round(em["tedr"], 4),
+                        "narrative": emotion_agg["narrative"],
                         "weights": [round(x, 5) for x in self.emotions._weights(symbol, tf)],
                     },
                     "physics": {
@@ -874,6 +936,41 @@ class PredictionEngine:
                     },
                     "corelation": self._corelation_dict(symbol, tf),
                     "win_ratio": round(self.hist.win_ratio.get(symbol, 0.0), 3),
+                    # WHY-panel payload: components, chain, reasoning
+                    "breakdown": {
+                        "components": _comps[:14],
+                        "n_components": len(_comps),
+                        "sum_contributions": round(
+                            sum(c["contribution"] for c in _comps), 5),
+                        "multipliers": {
+                            "drhe": round(drhe, 4),
+                            "eq": round(br["experience"], 4),
+                            "p_dominant": br["p_dominant"],
+                            "dominant": br["dominant"],
+                            "state_aligned": bool(aligned),
+                            "rtp": round(em["rtp"], 4),
+                            "pcv": round(pcv, 4),
+                            "wfcp": round(phys["wfcp"], 4),
+                            "drpt": round(phys["drpt"], 4),
+                            "gspi": round(phys["gspi"], 4),
+                        },
+                        "base_confidence": round(pack["confidence"], 5),
+                        "final_confidence": round(fin["confidence"], 5),
+                        "floor": 0.35,
+                        "votes": {
+                            "pcv": 1 if pcv > 0 else (-1 if pcv < 0 else 0),
+                            "brain": br["polarity"],
+                            "emotion": 1 if em["cerc"] > 0 else (
+                                -1 if em["cerc"] < 0 else 0),
+                            "physics": 1 if physics_sync[tf] > 0 else (
+                                -1 if physics_sync[tf] < 0 else 0),
+                            "news": 1 if news_sync[tf] > 0 else (
+                                -1 if news_sync[tf] < 0 else 0),
+                            "hedge": 1 if hedge_sync[tf] > 0 else (
+                                -1 if hedge_sync[tf] < 0 else 0),
+                        },
+                    },
+                    "reason": _reason,
                     # Part-4 sync: the values the dashboard quadrants read
                     "cci_adjusted": pack["cci_adjusted"],
                     "direction": pack["direction"],

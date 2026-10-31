@@ -113,6 +113,7 @@ class MarketFeed:
         self._sim_rng = random.Random(495)
         # simulator internal price memory for continuity across minute bars
         self._sim_price = dict(SIM_BASE_PRICES)
+        self._sim_regime: dict[str, dict] = {}   # live drift regimes (sim)
 
     # ------------------------------------------------------------------ API
     def state(self, symbol: str) -> SymbolState:
@@ -263,6 +264,14 @@ class MarketFeed:
             self._sim_price[sym] = price
             # day_open for percent display: bar from ~24h ago if available
             st.day_open = st.closes[0] if st.closes else price
+            # live-regime seed: the tick loop CONTINUES these regimes (the old
+            # driftless loop flattened every trend right after backfill, which
+            # collapsed CCI/confidence to ~0 forever)
+            self._sim_regime[sym] = {
+                "drift": drift,
+                "left": rng.randint(600, 2400),   # 10–40 min coherent windows
+                "vol_mult": vol_mult,
+            }
 
         self.ready.set()
         self._tasks.append(asyncio.create_task(self._sim_tick_loop()))
@@ -286,7 +295,20 @@ class MarketFeed:
                 st = self.states[sym]
                 price = self._sim_price[sym]
                 sigma = {"BTC": 7e-5, "PAXG": 2e-5, "ETH": 9e-5, "BNB": 8e-5}[sym]
-                price *= math.exp(rng.gauss(0, sigma))
+                # persistent regime: coherent multi-minute drift windows so the
+                # 22m+ formula windows see real trends (spec: confidence floor
+                # is only organically reachable with trending data)
+                reg = self._sim_regime[sym]
+                reg["left"] -= 1
+                if reg["left"] <= 0:
+                    reg["left"] = rng.randint(600, 2400)
+                    reg["drift"] = rng.choice([-0.00045, -0.0002, 0.0,
+                                               0.0002, 0.00045])
+                    if sym == "PAXG":
+                        reg["drift"] *= 0.25          # gold stays peg-anchored
+                    reg["vol_mult"] = rng.choice([0.7, 1.0, 1.6, 2.4])
+                price *= math.exp(rng.gauss(reg["drift"],
+                                            sigma * reg["vol_mult"]))
                 if sym == "PAXG":
                     price += 0.02 * (SIM_BASE_PRICES[sym] - price)
                 self._sim_price[sym] = price

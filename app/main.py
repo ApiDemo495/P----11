@@ -175,29 +175,64 @@ async def news_feed(symbol: str) -> JSONResponse:
     if symbol not in SYMBOLS:
         return JSONResponse({"ok": False, "error": "unknown symbol"},
                             status_code=400)
+    engine.news.refresh()   # top up the sim stream — never show an empty feed
     return JSONResponse({"ok": True, **engine.news.aggregate(symbol)})
 
 
 @app.get("/api/candles")
-async def candles(symbol: str = "BTC", n: int = 180) -> JSONResponse:
-    """OHLC bars for the candlestick chart (incl. the live partial minute)."""
+async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONResponse:
+    """OHLC bars (incl. the live partial minute). tf=tf1 → raw 1-minute
+    bars; tf2/tf3/tf4 aggregate into 44/130/247-minute windows per config."""
     if symbol not in SYMBOLS:
         return JSONResponse({"ok": False, "error": "unknown symbol"},
                             status_code=400)
     n = max(10, min(500, n))
     st = engine.feed.state(symbol)
     count = len(st.times)
-    start = max(0, count - n)
-    bars = [
-        {"t": st.times[i], "o": st.opens[i], "h": st.highs[i],
-         "l": st.lows[i], "c": st.closes[i], "v": st.volumes[i]}
-        for i in range(start, count)
-    ]
-    if st.live_price > 0 and st.live_open > 0:
-        bars.append({"t": (bars[-1]["t"] + 60) if bars else int(time.time() // 60) * 60,
-                     "o": st.live_open, "h": st.live_high, "l": st.live_low,
-                     "c": st.live_price, "v": st.live_volume, "live": True})
-    return JSONResponse({"ok": True, "symbol": symbol, "bars": bars})
+    W = int(TIMEFRAMES.get(tf, {}).get("minutes", 1) or 1)
+    if tf == "tf1":
+        W = 1        # tf1 keeps raw 1-minute candles (the 22m window is the
+                     # prediction horizon; traders watch 1m bars inside it)
+    if W <= 1:
+        start = max(0, count - n)
+        bars = [
+            {"t": st.times[i], "o": st.opens[i], "h": st.highs[i],
+             "l": st.lows[i], "c": st.closes[i], "v": st.volumes[i]}
+            for i in range(start, count)
+        ]
+        if st.live_price > 0 and st.live_open > 0:
+            bars.append({"t": (bars[-1]["t"] + 60) if bars else int(time.time() // 60) * 60,
+                         "o": st.live_open, "h": st.live_high, "l": st.live_low,
+                         "c": st.live_price, "v": st.live_volume, "live": True})
+    else:
+        # epoch-aligned buckets of W minutes
+        bucket: dict[int, dict] = {}
+        for i in range(count):
+            bkt = st.times[i] // (W * 60) * (W * 60)
+            b = bucket.get(bkt)
+            if b is None:
+                bucket[bkt] = {"t": bkt, "o": st.opens[i], "h": st.highs[i],
+                               "l": st.lows[i], "c": st.closes[i], "v": st.volumes[i]}
+            else:
+                b["h"] = max(b["h"], st.highs[i])
+                b["l"] = min(b["l"], st.lows[i])
+                b["c"] = st.closes[i]
+                b["v"] += st.volumes[i]
+        bars = list(bucket.values())[-n:]
+        if st.live_price > 0 and bars:
+            bkt = int(time.time() // (W * 60)) * (W * 60)
+            if bkt == bars[-1]["t"]:
+                bars[-1]["h"] = max(bars[-1]["h"], st.live_price, st.live_high or 0)
+                bars[-1]["l"] = min(bars[-1]["l"], st.live_price, st.live_low or 1e18)
+                bars[-1]["c"] = st.live_price
+                bars[-1]["live"] = True
+            else:
+                bars.append({"t": bkt, "o": st.live_open or st.live_price,
+                             "h": st.live_high or st.live_price,
+                             "l": st.live_low or st.live_price,
+                             "c": st.live_price, "v": st.live_volume, "live": True})
+    return JSONResponse({"ok": True, "symbol": symbol, "tf": tf,
+                         "bucket_minutes": W, "bars": bars})
 
 
 @app.get("/api/systems")

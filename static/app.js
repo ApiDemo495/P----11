@@ -57,76 +57,162 @@ $$(".nav-btn").forEach(btn => {
 /* ═══════════════════════════ DASHBOARD ═══════════════════════════ */
 const dash = {
   symbol: "BTC",
+  focusTf: "tf1",
   charts: {}, qcharts: {}, priceLines: {}, qseries: {},
   lastGrc: 0, grcFlashAt: {},
   cycles: {}, alertState: "",
 };
 
+/* ── ChartX: our own canvas chart (TradingView lib removed — too slow).
+   Live-line chart fed straight from the tick stream, with TP/SL lines,
+   fractal/hit markers and a last-price tag. ───────────────────────── */
+class ChartX {
+  constructor(el, opts = {}) {
+    this.el = el; this.spark = !!opts.spark;
+    this.cv = document.createElement("canvas");
+    this.cv.style.cssText = "width:100%;height:100%;display:block";
+    el.innerHTML = ""; el.appendChild(this.cv);
+    this.bars = []; this.lines = []; this.markers = [];
+    if (typeof ResizeObserver !== "undefined")
+      new ResizeObserver(() => this.draw()).observe(el);
+  }
+  setData(bars) { this.bars = bars.slice(-260); this.draw(); }
+  setLines(lines) { this.lines = lines || []; this.draw(); }
+  setMarkers(m) { this.markers = m || []; this.draw(); }
+  updateBar(b) {
+    const last = this.bars[this.bars.length - 1];
+    if (last && last.time === b.time) this.bars[this.bars.length - 1] = b;
+    else { this.bars.push(b); if (this.bars.length > 280) this.bars.shift(); }
+    this.draw();
+  }
+  tick(price) {
+    const n = Date.now() / 1000;
+    const t = Math.floor(n / 60) * 60;
+    const b = this.bars[this.bars.length - 1];
+    if (!b) { this.bars.push({ time: t, open: price, high: price, low: price, close: price }); }
+    else if (b.time === t) { b.close = price; b.high = Math.max(b.high, price); b.low = Math.min(b.low, price); }
+    else if (b.time < t) this.bars.push({ time: t, open: b.close, high: Math.max(b.close, price),
+                                          low: Math.min(b.close, price), close: price });
+    else return;
+    if (this.bars.length > 280) this.bars.shift();
+    this.draw();
+  }
+  draw() {
+    const w = this.el.clientWidth || 260, h = this.el.clientHeight || 110;
+    const cv = this.cv; cv.width = w * 2; cv.height = h * 2;
+    const g = cv.getContext("2d"); g.setTransform(2, 0, 0, 2, 0, 0);
+    g.clearRect(0, 0, w, h);
+    if (!this.bars.length) return;
+    let hi = -Infinity, lo = Infinity;
+    for (const b of this.bars) { hi = Math.max(hi, b.high); lo = Math.min(lo, b.low); }
+    if (this.spark) { const p = (hi - lo) * 0.1 || 1; hi += p; lo -= p; }
+    else for (const l of this.lines) { hi = Math.max(hi, l.price); lo = Math.min(lo, l.price); }
+    const pad = (hi - lo) * 0.06 || 1; hi += pad; lo -= pad;
+    const rw = this.spark ? 2 : 46;                      // right price-tag gutter
+    const X = i => (i / Math.max(1, this.bars.length - 1)) * (w - rw) + 2;
+    const Y = p => h - 4 - ((p - lo) / (hi - lo)) * (h - 8);
+    if (this.spark) {
+      g.beginPath();
+      this.bars.forEach((b, i) => { const x = X(i), y = Y(b.close); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+      g.strokeStyle = "rgba(0,229,255,0.5)"; g.lineWidth = 1; g.stroke();
+      return;
+    }
+    // TP / SL lines
+    for (const l of this.lines) {
+      g.strokeStyle = l.color; g.setLineDash(l.dash === false ? [] : [5, 4]);
+      g.lineWidth = l.hit ? 2 : 1;
+      g.beginPath(); g.moveTo(0, Y(l.price)); g.lineTo(w - rw, Y(l.price)); g.stroke();
+      g.setLineDash([]);
+      g.fillStyle = l.color; g.font = "9px monospace"; g.textAlign = "left";
+      g.fillText(`${l.title} ${l.price.toFixed(1)}`, 4, Y(l.price) - 3);
+    }
+    // price line + soft area
+    g.beginPath();
+    this.bars.forEach((b, i) => { const x = X(i), y = Y(b.close); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.strokeStyle = "#00e5ff"; g.lineWidth = 1.3; g.stroke();
+    g.lineTo(X(this.bars.length - 1), h - 4); g.lineTo(X(0), h - 4); g.closePath();
+    g.fillStyle = "rgba(0,229,255,0.07)"; g.fill();
+    // markers (fractals ◆, TP hits ▲)
+    for (const m of this.markers) {
+      let i = this.bars.findIndex(b => b.time === m.time);
+      if (i < 0) continue;
+      g.fillStyle = m.color; g.font = "9px sans-serif"; g.textAlign = "center";
+      g.fillText(m.glyph || "•", X(i), m.above ? Y(this.bars[i].high) - 3 : Y(this.bars[i].low) + 10);
+    }
+    // last-price tag + hi/lo
+    const last = this.bars[this.bars.length - 1], ly = Y(last.close);
+    g.fillStyle = last.close >= last.open ? "#00e5ff" : "#ff1744";
+    g.fillRect(w - rw + 1, ly - 7, rw - 2, 14);
+    g.fillStyle = "#04040c"; g.font = "bold 9px monospace"; g.textAlign = "left";
+    g.fillText(last.close >= 1000 ? last.close.toFixed(0) : last.close.toFixed(2), w - rw + 3, ly + 3);
+    g.fillStyle = "#5a5a78"; g.font = "8px monospace";
+    g.fillText(hi.toFixed(hi >= 1000 ? 0 : 2), w - rw + 2, 10);
+    g.fillText(lo.toFixed(lo >= 1000 ? 0 : 2), w - rw + 2, h - 6);
+  }
+}
+
 function buildCharts() {
-  if (typeof LightweightCharts === "undefined") return;
   TF.forEach(tf => {
     const el = $(`#chart-${tf}`);
-    if (!el || dash.charts[tf]) return;
-    const chart = LightweightCharts.createChart(el, {
-      layout: { background: { color: "#0e0e16" }, textColor: "#8a8aa8", fontFamily: "JetBrains Mono, monospace" },
-      grid: { vertLines: { color: "#181828" }, horzLines: { color: "#181828" } },
-      rightPriceScale: { borderColor: "#23233a" },
-      timeScale: { borderColor: "#23233a", timeVisible: true, secondsVisible: false },
-      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-      autoSize: true,
-    });
-    const candles = chart.addCandlestickSeries({
-      upColor: "#00e5ff", downColor: "#ff1744",
-      wickUpColor: "#00b8ccaa", wickDownColor: "#c91235aa",
-      borderVisible: false,
-    });
-    dash.charts[tf] = { chart, candles };
+    if (el && !dash.charts[tf]) dash.charts[tf] = new ChartX(el);
     const qel = $(`#quantum-${tf}`);
-    const qchart = LightweightCharts.createChart(qel, {
-      layout: { background: { color: "#0a0a0f" } },
-      grid: { visible: false },
-      rightPriceScale: { visible: false },
-      timeScale: { visible: false },
-      autoSize: true,
-    });
-    const hist = qchart.addHistogramSeries({
-      color: "rgba(0,229,255,0.35)", priceFormat: { type: "volume" },
-      base: 0,
-    });
-    dash.qcharts[tf] = qchart;
-    dash.qseries[tf] = hist;
+    if (qel && !dash.qcharts[tf]) dash.qcharts[tf] = new ChartX(qel, { spark: true });
   });
 }
 
 async function loadCandles() {
   try {
-    const d = await api(`/api/candles?symbol=${dash.symbol}`);
-    const bars = d.bars || [];
-    if (!bars.length) return;
-    // Section 12: fractal diamonds — 5-bar swing pivots as chart markers
-    const markers = [];
-    for (let i = 2; i < bars.length - 2; i++) {
-      const b = bars[i];
-      const isHigh = b.h > bars[i - 1].h && b.h > bars[i - 2].h &&
-                     b.h > bars[i + 1].h && b.h > bars[i + 2].h;
-      const isLow = b.l < bars[i - 1].l && b.l < bars[i - 2].l &&
-                    b.l < bars[i + 1].l && b.l < bars[i + 2].l;
-      if (isHigh) markers.push({ time: b.t, position: "aboveBar", color: "#ff1744", shape: "circle", size: 1 });
-      if (isLow) markers.push({ time: b.t, position: "belowBar", color: "#00e5ff", shape: "circle", size: 1 });
-    }
-    TF.forEach(tf => {
+    await Promise.all(TF.map(async tf => {
+      const d = await api(`/api/candles?symbol=${dash.symbol}&tf=${tf}`);
+      const bars = d.bars || [];
       const c = dash.charts[tf];
-      if (!c) return;
-      c.candles.setData(bars.map(x => ({
-        time: x.t, open: x.o, high: x.h, low: x.l, close: x.c,
-      })));
-      try { c.candles.setMarkers(markers.slice(-40)); } catch { /* markers optional */ }
-      const lastBar = bars[bars.length - 1];
-      if (lastBar) c.lastBar = { time: lastBar.t, open: lastBar.o, high: lastBar.h,
-                                 low: lastBar.l, close: lastBar.c };
-      c.chart.timeScale().fitContent();
-    });
+      if (!c || !bars.length) return;
+      // fractal diamonds — 5-bar swing pivots (Section 12)
+      const markers = [];
+      for (let i = 2; i < bars.length - 2; i++) {
+        const b = bars[i];
+        if (b.h > bars[i - 1].h && b.h > bars[i - 2].h &&
+            b.h > bars[i + 1].h && b.h > bars[i + 2].h)
+          markers.push({ time: b.t, above: true, color: "#ff1744", glyph: "◆" });
+        if (b.l < bars[i - 1].l && b.l < bars[i - 2].l &&
+            b.l < bars[i + 1].l && b.l < bars[i + 2].l)
+          markers.push({ time: b.t, above: false, color: "#00e5ff", glyph: "◆" });
+      }
+      // TP-hit markers from locked targets (feeds straight back from engine)
+      const cyc = dash.cycles[`${dash.symbol}|${tf}`];
+      (cyc?.targets || []).forEach(t => {
+        if (t.status === "hit" && t.hit_ts)
+          markers.push({ time: Math.floor(t.hit_ts / 60) * 60, above: true,
+                         color: "#2ee6a8", glyph: "▲" });
+      });
+      c.setData(bars.map(x => ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c })));
+      c.setMarkers(markers.slice(-40));
+      const lb = bars[bars.length - 1];
+      if (lb) c.lastBar = { time: lb.t, open: lb.o, high: lb.h, low: lb.l, close: lb.c };
+      dash.qcharts[tf]?.setData(
+        bars.slice(-80).map(x => ({ time: x.t, open: 0, high: x.v || 0, low: 0, close: x.v || 0 })));
+    }));
   } catch { /* candles endpoint may 404 before first GRC */ }
+}
+
+/* TP/SL overlay lines for every quadrant chart (from the live cycles) */
+function applyTfLines() {
+  TF.forEach(tf => {
+    const c = dash.charts[tf]; if (!c) return;
+    const cyc = dash.cycles[`${dash.symbol}|${tf}`];
+    const lines = [];
+    if (cyc?.sl) lines.push({ price: cyc.sl, color: "#ff1744", title: "SL" });
+    (cyc?.targets || []).forEach((t, i) => {
+      if (t.level) lines.push({
+        price: t.level,
+        color: t.status === "hit" ? "#2ee6a8" : t.status === "locked" ? "#c9a227" : "#00e5ff",
+        title: `TP${i + 1}${t.status === "hit" ? " ✓" : t.status === "locked" ? " 🔒" : ""}`,
+        dash: t.status !== "locked",
+        hit: t.status === "hit",
+      });
+    });
+    c.setLines(lines);
+  });
 }
 
 function drawGauge(tf, conf) {
@@ -228,25 +314,8 @@ function renderQuadrant(tf, cyc, res) {
       ? `AGENT ${ag.direction > 0 ? "+" : ag.direction < 0 ? "−" : "0"} (${ag.source}) ${fmt(ag.confidence, 2)}`
       : "AGENT —";
     drawGauge(tf, res.confidence);
-    // dashed TP/SL price lines → solid when locked
-    const c = dash.charts[tf];
-    if (c) {
-      (dash.priceLines[tf] || []).forEach(l => { try { c.candles.removePriceLine(l); } catch { /* gone */ } });
-      dash.priceLines[tf] = [];
-      if (cyc.sl) dash.priceLines[tf].push(c.candles.createPriceLine({
-        price: cyc.sl, color: "#ff1744", lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: "SL",
-      }));
-      (cyc.targets || []).forEach((t, i) => {
-        if (!t.level) return;
-        dash.priceLines[tf].push(c.candles.createPriceLine({
-          price: t.level, color: t.status === "locked" ? "#2ee6a8" : "#00e5ff",
-          lineWidth: t.status === "locked" ? 2 : 1,
-          lineStyle: t.status === "locked" ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
-          axisLabelVisible: true, title: `Tp${i + 1}`,
-        }));
-      });
-    }
+    // dashed TP/SL lines on our canvas chart (solid when locked, ✓ when hit)
+    applyTfLines();
   }
 }
 
@@ -300,6 +369,7 @@ function renderDashboard(snap) {
   $("#led-agent").className = "led " + (snap.agents?.slots?.[0]?.status === "connected" ? "on" : "off");
   updateModeChip(snap.agents?.mode);
   updateAlertBar();
+  try { renderWhy(snap); } catch (e) { console.error("why", e); }
   // alert-bar cycle flags consumed after render
   Object.values(dash.cycles).forEach(c => { c.safe_alert = false; c.close_alert = false; });
 }
@@ -633,6 +703,7 @@ function fillTermBreakdown(el) {
     const spark = hist?.core?.[f] || [];
     rows.push(["F (raw)", fmt(fv, 5)]);
     rows.push(["weight ω", fmt(w, 5)]);
+    rows.push(["logic", FORMULA_LOGIC[Number(f)] || FORMULA_LOGIC[f] || "—"]);
     if (spark.length) {
       rows.push(["min(100)", fmt(Math.min(...spark), 4)]);
       rows.push(["max(100)", fmt(Math.max(...spark), 4)]);
@@ -698,6 +769,28 @@ function renderEmotionGrid() {
   }
   const cerc = em.cerc ?? 0;
   const disp = cnt ? sum / cnt : 0;
+  const narr = $("#emotion-narrative");
+  if (narr) {
+    const top = Object.entries(em.emotions || {})
+      .map(([k, v]) => ({ k: +k, v, d: em.directions?.[k] ?? 0 }))
+      .sort((a, b) => Math.abs(b.v) - Math.abs(a.v)).slice(0, 5);
+    narr.innerHTML = `
+      <div class="why-reason">${em.narrative || "Waiting for the first emotion pass…"}</div>
+      <div class="contrib-row">${top.map(t => `
+        <div class="contrib"><span class="cname">E${t.k} ${EMO_ALIASES[t.k - 1] || ""}</span>
+          <div class="bar"><i class="${t.v >= 0 ? "pos" : "neg"}"
+            style="width:${clamp(Math.abs(t.v) * 100, 2, 100)}%"></i></div>
+          <span class="mono">${t.v >= 0 ? "+" : ""}${fmt(t.v, 3)}</span>
+          <span class="dim">${t.d > 0 ? "▲ bullish" : t.d < 0 ? "▼ bearish" : "· neutral"}</span>
+        </div>`).join("")}</div>
+      <div class="kv-row">
+        <div class="kv"><span>CERC composite (E22)</span><b>${fmt(cerc, 4)}</b></div>
+        <div class="kv"><span>average intensity</span><b>${fmt(disp, 4)}</b></div>
+        <div class="kv"><span>RTP trauma</span><b>${fmt(em.rtp ?? 0, 3)}${(em.rtp ?? 0) > 0.6 ? " ⚠ suppresses confidence" : ""}</b></div>
+        <div class="kv"><span>TEDR → P6 link</span><b>${fmt(em.tedr ?? 0, 4)}</b></div>
+      </div>
+      <div class="hint">Each circle is one of the 22 spec emotion formulas; the ring shows |value|, colour shows direction. CERC (E22) is the composite that votes inside the CCI.</div>`;
+  }
   let regime = "NEUTRAL";
   if (cerc > 0.4 && disp > 0.5) regime = "EUPHORIC";
   else if (cerc < -0.4 && disp > 0.5) regime = "PANICKED";
@@ -1191,17 +1284,9 @@ function handleTick(msg) {
       (aset ? ` <span style="color:${aset.window_change_pct >= 0 ? "var(--cyan)" : "var(--red)"}">` +
         `${aset.window_change_pct >= 0 ? "+" : ""}${aset.window_change_pct}%</span>` : "");
   });
-  // live candle: merge into the minute's bar (server bars are minute-aligned)
-  const cur = Math.floor(msg.ts / 60) * 60;
+  // live line: every tick redraws the canvas (direct Binance/sim feed link)
   TF.forEach(tf => {
-    const c = dash.charts[tf];
-    if (!c || !c.lastBar) return;
-    const b = c.lastBar;
-    if (b.time === cur) { b.close = price; b.high = Math.max(b.high, price); b.low = Math.min(b.low, price); }
-    else if (b.time < cur) { c.lastBar = { time: cur, open: b.close, high: Math.max(b.close, price),
-                                           low: Math.min(b.close, price), close: price }; }
-    else return;
-    try { c.candles.update({ ...c.lastBar }); } catch { /* chart not ready */ }
+    try { dash.charts[tf]?.tick(price); } catch { /* chart not ready */ }
   });
 }
 
@@ -1357,10 +1442,16 @@ function handleMessage(msg) {
     $("#analysis-clock").textContent =
       `${Math.floor(rem / 60)}:${String(Math.floor(rem % 60)).padStart(2, "0")}`;
   }, 1000);
+  // quadrant rings/clocks tick every second (not per GRC)
+  setInterval(updateCountdowns, 1000);
   // periodic refreshes for lazy tabs
   setInterval(() => {
     if (ACTIVE_TAB === "news") TAB_LOADERS.news?.();
     if (ACTIVE_TAB === "agents") TAB_LOADERS.agents?.();
     if (ACTIVE_TAB === "emotion") TAB_LOADERS.emotion?.();
+    if (ACTIVE_TAB === "physics") TAB_LOADERS.physics?.();
+    if (ACTIVE_TAB === "formulas") TAB_LOADERS.formulas?.();
+    if (ACTIVE_TAB === "history") TAB_LOADERS.history?.();
+    if (ACTIVE_TAB === "brains" && dash.latest) { renderCorel(dash.latest); renderWiring(dash.latest); }
   }, 20000);
 })();

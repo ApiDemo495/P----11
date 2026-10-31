@@ -481,3 +481,60 @@ def test_agent_mode_keyless_runs_drosophila(monkeypatch, tmp_path):
     m.configure(gemini_key="")
     m.local.available = True
     assert m.status()["mode"] == "local"
+
+
+# ── Transparency + feed regimes (user-facing correctness) ─────────────
+def test_breakdown_and_reason_in_display(tmp_path, monkeypatch):
+    """systems[..] carries the WHY payload: contributors, chain, votes, reason."""
+    from tests.test_engine import make_engine, _boot, run
+    import time as _t
+    monkeypatch.delenv("PREDICT_SKIP_AUTO_START", raising=False)
+    engine, _feed, _em = make_engine()
+    run(_boot(engine))
+    run(engine.on_grc(_t.time()))
+    s = engine.display_systems[("BTC", "tf1")]
+    bd = s["breakdown"]
+    assert bd["n_components"] >= 27          # 21+ formulas + 5 subsystems
+    assert bd["components"][0]["name"] and "contribution" in bd["components"][0]
+    assert bd["floor"] == 0.35
+    assert set(bd["votes"]) == {"pcv", "brain", "emotion", "physics", "news", "hedge"}
+    assert "CCI" in s["reason"] and "floor" in s["reason"]
+    assert s["emotion"]["narrative"] and "CERC" in s["emotion"]["narrative"]
+
+
+def test_simulator_live_regimes_persist(monkeypatch):
+    """The live tick loop must CONTINUE directional regimes (this was the
+    confidence-always-zero bug: driftless live ticks flattened all trends)."""
+    from app import feed as F
+    f = F.MarketFeed()
+    assert hasattr(f, "_sim_regime")
+    import asyncio
+    asyncio.get_event_loop().run_until_complete(f._start_sim())
+    assert set(f._sim_regime) == set(F.SYMBOL_ORDER)
+    r = f._sim_regime["BTC"]
+    assert 1 <= r["left"] <= 2400 and isinstance(r["drift"], float)
+    asyncio.get_event_loop().run_until_complete(f.stop())
+
+
+def test_candles_endpoint_aggregates_timeframes():
+    """tf=tf2/3/4 return W-minute buckets, not raw minutes."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app)
+    r1 = c.get("/api/candles?symbol=BTC&tf=tf1").json()
+    r2 = c.get("/api/candles?symbol=BTC&tf=tf2").json()
+    assert r1["bucket_minutes"] == 1 and r2["bucket_minutes"] == 44
+    if len(r2["bars"]) > 1:
+        gaps = {r2["bars"][i + 1]["t"] - r2["bars"][i]["t"] for i in
+                range(len(r2["bars"]) - 1)}
+        assert all(g % (44 * 60) == 0 for g in gaps)
+
+
+def test_news_feed_never_empty():
+    """refresh() tops the simulated feed up to 8 items — no blank News tab."""
+    from app.news import NewsSystem
+    n = NewsSystem(now=1_700_000_000.0)
+    n.initialize()
+    n.items = []
+    n.refresh()
+    assert len(n.items) >= 8

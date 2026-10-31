@@ -216,7 +216,7 @@ class NewsSystem:
         )
         self.items.append(item)
 
-    def refresh(self) -> None:
+    def refresh(self, ) -> None:
         """Drop expired items, poll the live source when configured, and top
         up the simulated stream (backup source) so live demos keep moving."""
         now = time.time()
@@ -227,8 +227,12 @@ class NewsSystem:
         if NEWS_API_KEY and now - self._last_poll >= NEWS_POLL_SECONDS:
             self._last_poll = now
             self._poll_newsapi(now)
-        if self.source != "newsapi" or len(self.items) < 3:
-            self._sim_tick(now)
+        # keep the feed stocked: the UI must never show an empty table
+        if self.source != "newsapi":
+            for _ in range(10):
+                if len(self.items) >= 8:
+                    break
+                self._sim_tick(now, force=True)
 
     # -- live source (optional) --------------------------------------------
     def _poll_newsapi(self, now: float) -> None:
@@ -266,9 +270,10 @@ class NewsSystem:
             self.source = "sim"
 
     # -- backup source: deterministic simulator -----------------------------
-    def _sim_tick(self, now: float) -> None:
-        # roughly one new headline every 1.5 minutes on average
-        if self._rng.random() > 0.12:
+    def _sim_tick(self, now: float, force: bool = False) -> None:
+        # roughly one new headline every 1.5 minutes on average (forced when
+        # the feed runs thin so the News tab is never empty)
+        if not force and self._rng.random() > 0.12:
             return
         cat = self._rng.choice(list(NEWS_CATEGORIES))
         sent = round(self._rng.uniform(-1.0, 1.0), 2)
