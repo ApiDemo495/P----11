@@ -122,11 +122,18 @@ class LocalModel:
         self.download_progress = 0.0
         self.last_ms = None
         self.error = ""
+        self._last_attempt = 0.0
         self._lock = threading.Lock()
 
     def try_load(self) -> None:
         if self.llm is not None:
             return
+        import time as _t
+        now = _t.time()
+        if now - self._last_attempt < 600 and self._last_attempt > 0:
+            return                      # one retry every 10 minutes max
+        self._last_attempt = now
+        self.error = ""                 # clear stale errors (deps may have arrived)
         try:
             from llama_cpp import Llama  # type: ignore
         except Exception as e:  # pragma: no cover - optional dependency

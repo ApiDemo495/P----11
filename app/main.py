@@ -71,17 +71,43 @@ async def _startup() -> None:
     await feed.start()
     await engine.start()
     await clock.start()
+    global _learning_task
+    _learning_task = asyncio.create_task(_hourly_learning_loop())
     log.info("application started (feed=%s)", feed.mode)
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
+    if _learning_task is not None:
+        _learning_task.cancel()
     await clock.stop()
     await engine.stop()
     await feed.stop()
 
 
 _last_tick_broadcast = 0.0
+
+_learning_task: asyncio.Task | None = None
+
+
+async def _hourly_learning_loop() -> None:
+    """Section 10 background safety net: guarantees the macro cycle fires
+    at least once per wall-clock hour even if GRCs stall (the engine
+    itself also triggers it every 15 GRCs).  Mirrors scripts/learning_cron.sh
+    without needing system cron."""
+    while True:
+        await asyncio.sleep(600)          # check every 10 minutes
+        try:
+            now = time.time()
+            lm = engine.learning
+            if now - (lm.last_macro_ts or 0.0) >= 3600.0:
+                lm.macro_cycle(engine)
+                lm.maybe_deep(engine)     # wall-clock deep cycle too
+                lm.save(engine)
+                log.info("hourly learning safety net fired "
+                         "(macro=%d deep=%d)", lm.macro_count, lm.deep_count)
+        except Exception:
+            log.exception("hourly learning loop error")
 
 
 async def _on_feed_tick(symbol: str, price: float, volume: float) -> None:

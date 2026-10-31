@@ -395,6 +395,24 @@ existing indicators anywhere.
 | Part-4 η supersession | Section 10's `η_emotion = η_physics = 0.015` with clamps `[0.01, 0.12]` supersedes Part 2's CERC `η=0.02` / `[0.005, 0.15]` (newer spec section wins; formula rule unchanged) |
 | S10 vs S14 subsystem step | S10 deep says ±5%, S14 L1 says ±2%: implemented **multiplicative ±5%** (deep-cycle-specific) then the S10 clamps `[0.05,0.25]/[0.05,0.25]/[0.03,0.15]/[0.03,0.12]` then S14's renormalize-to-1 — all three constraints satisfied in that order |
 
+## One-command automated setup 🤖
+
+Everything — virtualenv, core + AI dependencies, the RAM-tier local model,
+data directories, hourly learning cron, and the server itself — bootstraps
+automatically:
+
+| Entry point | What it does |
+|-------------|--------------|
+| `./run.sh` | Foreground start: runs `scripts/setup.sh` if the stamp/venv is stale, then serves on `PORT` (default **8000**). `SKIP_SETUP=1` to bypass. |
+| `scripts/setup.sh` | Idempotent bootstrap: `.venv` → `requirements.txt` (hard) → `requirements-agents.txt` incl. **cmake + llama-cpp-python + huggingface-hub** (best-effort) → `data/`, `data/history/`, `models/` → **`scripts/download_models.py`** (auto-picks Phi-3-mini ≥14 GB / TinyLlama ≥7 GB / Qwen2-0.5B, downloads from the HF Hub) → hourly `learning_cron` crontab entry (best-effort). Fast no-op via `.setup_stamp`; `FORCE=1` re-runs everything. |
+| `scripts/auto_start.sh` | Background supervisor (devcontainer `postStartCommand`): health-check → setup → `nohup` uvicorn → waits for `/api/health`. `--stop` / `--restart` supported. |
+| devcontainer | `postCreateCommand` = full setup, `postStartCommand` = auto-start — opening the Codespace brings the app up by itself. |
+| In-process hourly loop | `main.py` runs a wall-clock safety net every 10 min: if the macro learning cycle is >60 min old it fires macro + deep + save directly — learning keeps running even without system cron (mirrors `scripts/learning_cron.sh`). |
+
+Every AI stage is optional-by-design: no keys → formula-only agents, model
+download unreachable → retried on first model use, cron absent → in-process
+loop covers it. The core app never blocks on an unavailable service.
+
 ## Protocol (WebSocket `/ws`)
 
 `snapshot` (GRC cadence & spec events) → `tick` (1 Hz prices) →

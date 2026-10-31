@@ -17,3 +17,6 @@ data/history/
 data/learning_cron.log
 data/learning_cron.log.tmp
 models/
+
+# bootstrap stamp (runtime)
+.setup_stamp

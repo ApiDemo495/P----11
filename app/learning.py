@@ -249,6 +249,7 @@ class LearningSystem:
         self.f_returns: dict[tuple[str, str], deque] = {}
 
         self.grc_count = 0
+        self.last_macro_ts = 0.0
 
     # ==================================================================
     # helpers
@@ -391,6 +392,7 @@ class LearningSystem:
     def macro_cycle(self, engine) -> None:
         self.macro_count += 1
         now = time.time()
+        self.last_macro_ts = now
         for symbol in SYMBOL_ORDER:
             for tf in TF_ORDER:
                 w = engine.cci.get_weights(symbol, tf)
@@ -593,6 +595,7 @@ class LearningSystem:
             "macro_count": self.macro_count,
             "deep_count": self.deep_count,
             "last_macro_grc": self.last_macro_grc,
+            "last_macro_ts": self.last_macro_ts,
             "last_deep_ts": self.last_deep_ts,
             "brain_w": {f"{s}|{tf}": [round(x, 6) for x in w]
                         for (s, tf), w in self.brain_w.items()},
@@ -622,6 +625,7 @@ class LearningSystem:
         self.macro_count = int(d.get("macro_count", 0))
         self.deep_count = int(d.get("deep_count", 0))
         self.last_macro_grc = int(d.get("last_macro_grc", -10 ** 9))
+        self.last_macro_ts = float(d.get("last_macro_ts", 0.0))
         self.last_deep_ts = float(d.get("last_deep_ts", 0.0))
         for key, w in d.get("brain_w", {}).items():
             s, tf = key.split("|", 1)
