@@ -215,7 +215,8 @@ function renderQuadrant(tf, cyc, res) {
   if (!pe) {
     pe = document.createElement("span");
     pe.id = "q-price-" + tf;
-    qEl.querySelector(".q-foot").appendChild(pe);
+    const foot = qEl.querySelector(".q-foot");
+    if (foot) foot.appendChild(pe);
   }
   pe.innerHTML = `<b style="color:var(--gold)">${fmt(aset?.price, 2)}</b>` +
     (aset ? ` <span style="color:${aset.window_change_pct >= 0 ? "var(--cyan)" : "var(--red)"}">` +
@@ -223,7 +224,7 @@ function renderQuadrant(tf, cyc, res) {
   if (res) {
     $("#q-cci-" + tf).textContent = `CCI ${fmt(res.cci_adjusted, 4)} · conf ${fmt(res.confidence, 3)}`;
     const ag = res.agent;
-    $("#q-agent-tf-" + tf).textContent = ag && ag.source !== "none"
+    $("#q-agent-" + tf).textContent = ag && ag.source !== "none"
       ? `AGENT ${ag.direction > 0 ? "+" : ag.direction < 0 ? "−" : "0"} (${ag.source}) ${fmt(ag.confidence, 2)}`
       : "AGENT —";
     drawGauge(tf, res.confidence);
@@ -328,6 +329,7 @@ function updateOverlay(msg, snap) {
   if (phase === "live") { ov.classList.add("gone"); return; }
   ov.classList.remove("gone");
   const rem = snap?.analysis?.remaining_s ?? msg?.remaining_s ?? 0;
+  window.__ovDeadline = Date.now() + rem * 1000;   // local ticker between updates
   $("#analysis-clock").textContent = `${Math.floor(rem / 60)}:${String(Math.floor(rem % 60)).padStart(2, "0")}`;
   const ready = snap?.analysis?.readiness ?? msg?.readiness ?? {};
   $$("#analysis-checks li").forEach(li => {
@@ -1116,9 +1118,10 @@ let ws, wsRetry = 0;
 let lastMsgAt = 0;
 
 function applySnapshot(snap) {
-  renderDashboard(snap);
-  updateOverlay(null, snap);
-  if (ACTIVE_TAB === "brains") updateBrains(snap);
+  // overlay FIRST — a dashboard render error must never freeze the 4:00 page
+  try { updateOverlay(null, snap); } catch { /* overlay ids missing */ }
+  try { renderDashboard(snap); } catch (e) { console.error("renderDashboard", e); }
+  if (ACTIVE_TAB === "brains") { try { updateBrains(snap); } catch { /* tab */ } }
 }
 
 function connectWS() {
@@ -1268,9 +1271,10 @@ function handleMessage(msg) {
   switch (msg.type) {
     case "snapshot":
       dash.lastGrc = msg.grc?.count ?? dash.lastGrc;
-      renderDashboard(msg);
-      if (msg.phase === "analysis") updateOverlay(msg, msg);
+      // overlay first: a quadrant render error cannot freeze the analysis page
+      if (msg.phase === "analysis") { try { updateOverlay(msg, msg); } catch { /* ids */ } }
       else $("#analysis-overlay").classList.add("gone");
+      try { renderDashboard(msg); } catch (e) { console.error("renderDashboard", e); }
       if (ACTIVE_TAB === "brains") updateBrains(msg);
       syncActivePanels(msg);
       break;
@@ -1305,6 +1309,14 @@ function handleMessage(msg) {
     if (Date.now() - lastMsgAt < 4000) return;
     try { applySnapshot(await api("/api/snapshot")); } catch { /* retry */ }
   }, 2000);
+  // local 1 s countdown — the clock always moves, even between REST polls
+  setInterval(() => {
+    const ov = $("#analysis-overlay");
+    if (!ov || ov.classList.contains("gone") || !window.__ovDeadline) return;
+    const rem = Math.max(0, (window.__ovDeadline - Date.now()) / 1000);
+    $("#analysis-clock").textContent =
+      `${Math.floor(rem / 60)}:${String(Math.floor(rem % 60)).padStart(2, "0")}`;
+  }, 1000);
   // periodic refreshes for lazy tabs
   setInterval(() => {
     if (ACTIVE_TAB === "news") TAB_LOADERS.news?.();

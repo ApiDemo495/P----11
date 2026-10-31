@@ -393,4 +393,12 @@ async def ws_endpoint(ws: WebSocket) -> None:
 # ---------------------------------------------------------------------------
 # static dashboard
 # ---------------------------------------------------------------------------
+@app.middleware("http")
+async def _no_store_ui(request, call_next):
+    """Preview proxies must never serve a stale app.js (frozen 4:00 bug)."""
+    resp = await call_next(request)
+    if request.url.path in ("/", "/app.js", "/style.css", "/index.html"):
+        resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
+
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
