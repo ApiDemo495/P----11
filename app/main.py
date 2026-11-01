@@ -357,6 +357,21 @@ async def agents_status() -> JSONResponse:
                          "signal": engine.last_agent_signal or {}})
 
 
+@app.get("/api/auditor/status")
+async def auditor_status() -> JSONResponse:
+    """Local Ollama formula auditor (qwen2.5-coder:3b) status + reports."""
+    return JSONResponse({"ok": True, **engine.auditor.status()})
+
+
+@app.post("/api/agents/triage")
+async def agents_triage(req: dict) -> JSONResponse:
+    """Fast Groq (8B) sentiment triage of one news headline."""
+    text = str(req.get("text", ""))[:500]
+    if not text:
+        return JSONResponse({"ok": False, "error": "empty text"}, status_code=400)
+    return JSONResponse(await engine.agents.triage_headline(text))
+
+
 @app.get("/api/agents/catalog")
 async def agents_catalog() -> JSONResponse:
     """Downloadable agent packs + auto-best scorecard."""

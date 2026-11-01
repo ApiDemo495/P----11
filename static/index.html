@@ -167,6 +167,15 @@
     <div class="tab-head"><div class="tab-title">AGENT CONTROL — all optional</div>
       <button class="btn" id="ag-reload">⟳</button></div>
     <div id="ag-mode" class="mode-banner"></div>
+    <div class="panel">
+      <div class="panel-h">Local formula auditor — Ollama · qwen2.5-coder:3b
+        <span class="dim">fires ONLY on exceptions/NaN or accuracy &lt; 45%/50 GRCs</span></div>
+      <div id="ag-auditor"><div class="dim">checking daemon…</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">Groq committee synthesis — regime · weight adjustments · confidence</div>
+      <div id="ag-groq"><div class="dim">no GROQ_API_KEY configured</div></div>
+    </div>
     <div id="ag-packs"></div>
     <div id="ag-slots" class="card-grid"></div>
     <div class="panel-row">

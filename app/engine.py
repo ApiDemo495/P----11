@@ -140,6 +140,8 @@ class PredictionEngine:
         # --- Part-4 learning / agents / history ---------------------------
         self.learning = LearningSystem()
         self.agents = AgentManager()
+        from .auditor import FormulaAuditor
+        self.auditor = FormulaAuditor()
         self.historydb = HistoryDB()
         self.last_agent_signal: dict[str, Any] = {}
         self.last_grc_signals: dict[tuple[str, str], dict] = {}
@@ -412,7 +414,10 @@ class PredictionEngine:
         for tf in TF_ORDER:
             ctx = self.build_ctx(symbol, tf)
             ctxs[tf] = ctx
-            raws[tf] = compute_all(ctx, record=record)
+            _anoms: list = []
+            raws[tf] = compute_all(ctx, record=record, anomalies=_anoms)
+            if _anoms:
+                self.auditor.report_anomalies(symbol, tf, _anoms, raws[tf])
 
         # 2) Bgn synchronization of every registered formula across timeframes
         adj: dict[str, dict[int, float]] = {tf: {} for tf in TF_ORDER}
@@ -467,9 +472,13 @@ class PredictionEngine:
                     # formula panels — same reward rule as weight learning
                     for fid, r in rewards.items():
                         if fid in FORMULA_FUNCTIONS or fid in (28, 30):
-                            self.hist.ring(
+                            ring = self.hist.ring(
                                 self.hist.tf_key(symbol, tf, f"facc{fid}"), 50
-                            ).append(r)
+                            )
+                            ring.append(r)
+                            # auditor trigger (b): rolling accuracy < 45%
+                            self.auditor.check_accuracy(
+                                symbol, tf, fid, list(ring))
                 # Formula 21 weight learning + Brain-4 secondary adjustment
                 # (Section 10 micro-learning with adaptive eta rates)
                 self.cci.update_weights(symbol, tf, price,
@@ -1201,6 +1210,68 @@ class PredictionEngine:
                 disp["cci_adjusted"] = res.get("cci_adjusted")
                 disp["direction"] = res.get("direction")
                 disp["issued"] = bool(res.get("issued"))
+        # ---- Groq qualitative synthesis (Prompt 2) ----
+        try:
+            await self._apply_groq_synthesis(symbol, res_pack)
+        except Exception:
+            log.exception("groq synthesis failed")
+
+    async def _apply_groq_synthesis(self, symbol: str,
+                                   res_pack: dict[str, dict]) -> None:
+        """Regime classification + bounded weight adjustments via Groq.
+
+        Runs ONLY when a GROQ_API_KEY is configured, and only when the
+        double-check came back mixed OR every 3rd GRC — keeps well under
+        the free-tier 30 RPM cap. Pre-aggregates the formula summary
+        (compact JSON) instead of shipping raw series.
+        """
+        ag = self.agents
+        if not ag.groq_key:
+            return
+        mixed = any((res_pack.get(tf) or {}).get("double_check", {})
+                    .get("label") == "mixed" for tf in TF_ORDER)
+        self._groq_n = getattr(self, "_groq_n", 0) + 1
+        if not mixed and self._groq_n % 3 != 0:
+            return
+        tf1 = res_pack.get("tf1") or {}
+        bd = tf1.get("breakdown") or {}
+        top = sorted((bd.get("components") or []),
+                     key=lambda c: -abs(c.get("contribution", 0)))[:10]
+        compact = {
+            "symbol": symbol,
+            "direction": tf1.get("direction"),
+            "confidence": round(float(tf1.get("confidence") or 0), 3),
+            "cci": round(float(tf1.get("cci_adjusted") or 0), 4),
+            "top_components": [{"id": c.get("id"), "contrib": round(c.get("contribution", 0), 5)}
+                               for c in top],
+            "multipliers": bd.get("multipliers"),
+            "cerc": (tf1.get("emotion") or {}).get("cerc"),
+            "ufp": (tf1.get("physics") or {}).get("ufp"),
+            "brain_polarity": (tf1.get("brain") or {}).get("polarity"),
+            "news": tf1.get("news_value"),
+            "double_check": [(tf, (res_pack.get(tf) or {}).get("double_check", {}).get("label"))
+                             for tf in TF_ORDER],
+        }
+        syn = await ag.synthesize(compact)
+        for tf in TF_ORDER:
+            res = res_pack.get(tf)
+            if res is None:
+                continue
+            res["synthesis"] = syn
+            disp = self.display_systems.get((symbol, tf))
+            if disp is not None:
+                disp["synthesis"] = syn
+            # bounded application: only high-conviction committee calls
+            if (syn.get("ok") and syn.get("confidence_score", 0) >= 0.6
+                    and syn.get("weight_adjustments")):
+                w = self.cci.get_weights(symbol, tf)
+                for k, mult in syn["weight_adjustments"].items():
+                    try:
+                        fid = int(k)
+                    except (TypeError, ValueError):
+                        continue
+                    if fid in w:
+                        w[fid] = max(1e-3, min(0.5, w[fid] * float(mult)))
 
     def _record_learning(self, symbol: str, res_pack: dict[str, dict],
                          now: float) -> None:

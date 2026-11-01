@@ -58,7 +58,8 @@ def test_agents_catalog_import_auto_best():
         try:
             am = ag.AgentManager()
             cat = am.catalog_status()
-            assert len(cat["packs"]) == 4
+            ids = {pk["id"] for pk in cat["packs"]}
+            assert {"gemini", "openai", "anthropic", "groq-70b"} <= ids
             assert cat["auto_best"] is False
             out = am.import_pack("openai", "sk-demo")
             assert out["ok"] and out["slot"] == "backup2"

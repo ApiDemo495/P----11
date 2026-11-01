@@ -80,19 +80,30 @@ _INTERMEDIATE_RINGS: dict[str, tuple[str, int]] = {
 }
 
 
-def compute_all(ctx: FormulaContext, record: bool = False) -> dict[int, float]:
+def compute_all(ctx: FormulaContext, record: bool = False,
+                anomalies: list | None = None) -> dict[int, float]:
     """Run all registered signal formulas for one (asset, timeframe).
 
     `record=True` appends GRC-cadence history entries (used only at GRCs);
     event-driven recomputes pass record=False so baselines keep their cadence.
+
+    `anomalies` (optional collector) receives (fid, kind, err) for every
+    swallowed exception / NaN — feeds the Ollama formula auditor instead
+    of failing silently.
     """
     out: dict[int, float] = {}
     for fid, fn in FORMULA_FUNCTIONS.items():
         try:
             val = float(fn(ctx))
-        except Exception:
+        except Exception as e:
+            if anomalies is not None:
+                import traceback as _tb
+                anomalies.append((fid, "exception",
+                                  _tb.format_exc()[-800:] or repr(e)))
             val = 0.0
-        if val != val:                     # NaN guard
+        if val != val or val in (float("inf"), float("-inf")):   # NaN/inf
+            if anomalies is not None:
+                anomalies.append((fid, "nan", None))
             val = 0.0
         out[fid] = val
 

@@ -10,7 +10,8 @@ data/
 # Editors / OS
 .DS_Store
 .idea/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
 
 # Part 4 runtime data (Section 13 history stays local)
 data/history/

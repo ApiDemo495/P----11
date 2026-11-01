@@ -355,6 +355,14 @@ function renderWhy() {
   const bd = s.breakdown || {}, m = bd.multipliers || {}, votes = bd.votes || {};
   const dir = s.direction ?? 0;
   const comps = (bd.components || []).slice(0, 10);
+  const syn = s.synthesis;
+  const synBlock = syn
+    ? (syn.ok
+      ? `<div class="kv-row"><div class="kv"><span>committee regime</span><b>${syn.regime}</b></div>
+         <div class="kv"><span>confidence</span><b>${fmt(syn.confidence_score, 2)}</b></div></div>
+         <div class="hint">Groq ${syn.model || ""} · ${syn.rationale || ""}</div>`
+      : `<div class="hint">committee: ${syn.reason || "no key"}</div>`)
+    : "";
   el.innerHTML = `
     <div class="why-head">
       <div class="why-dir ${dir > 0 ? "up" : dir < 0 ? "down" : "flat"}">
@@ -390,7 +398,8 @@ function renderWhy() {
           `<span class="vote ${v > 0 ? "pos" : v < 0 ? "neg" : ""}">${k} ${v > 0 ? "▲" : v < 0 ? "▼" : "·"}</span>`).join("")}</div>
         <div class="hint">4-vote double-check: PCV + agent + brain (+ emotion/physics here) must agree to issue.</div>
       </div>
-    </div>`;
+    </div>
+    ${synBlock ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line2)"><h5>GROQ COMMITTEE SYNTHESIS</h5>${synBlock}</div>` : ""}`;
 }
 
 /* ═══════════ CALLS & TARGETS — TP/SL for every timeframe ═══════════ */
@@ -772,6 +781,31 @@ async function loadAgents() {
       ? `<b>DROSOPHILA MODE</b> — no keys needed. The 4-instance brain, 31 formulas, math & physics run everything. Paste any key below for an optional cloud second opinion.`
       : mode === "local" ? `<b>LOCAL MODEL</b> — on-device inference. Cloud keys optional.`
       : `<b>CLOUD AGENTS</b> — ${ (a.slots || []).filter(s => s.status === "connected").length } slot(s) live. Drosophila core still runs every GRC.`;
+    // ── local auditor (Ollama) ──
+    const aud = a.auditor || {};
+    $("#ag-auditor").innerHTML = `
+      <div class="kv-row">
+        <div class="kv"><span>daemon</span><b class="${aud.available ? "acc-up" : "acc-dn"}">${aud.available ? "● online" : "○ offline"}</b></div>
+        <div class="kv"><span>model</span><b>${aud.model || "qwen2.5-coder:3b"}</b></div>
+        <div class="kv"><span>triggers (exc / low-acc)</span><b>${aud.triggers?.exceptions ?? 0} / ${aud.triggers?.accuracy ?? 0}</b></div>
+        <div class="kv"><span>audits run</span><b>${aud.triggers?.audits ?? 0}</b></div>
+      </div>
+      ${aud.available ? "" : `<div class="hint">${aud.hint || "run: bash scripts/setup_local_llm.sh"}</div>`}
+      ${(aud.reports || []).slice(0, 3).map(r => `
+        <div class="logic"><b>${r.formula}</b> · ${r.trigger} · ${r.ok ? "✓" : "✗"} ${r.latency_ms}ms
+          <br/>${String(r.reply || "").slice(0, 240)}</div>`).join("")}`;
+
+    // ── Groq synthesis status ──
+    const gq = a.groq || {};
+    $("#ag-groq").innerHTML = gq.configured
+      ? `<div class="kv-row">
+          <div class="kv"><span>key</span><b class="acc-up">configured</b></div>
+          <div class="kv"><span>primary</span><b>${gq.primary}</b></div>
+          <div class="kv"><span>news triage</span><b>${gq.triage}</b></div>
+        </div>
+        <div class="hint">Synthesis runs on mixed double-checks or every 3rd GRC (under the 30 RPM free cap). JSON: regime · weight_adjustments · confidence_score.</div>`
+      : `<div class="hint">Set <code>GROQ_API_KEY</code> env var (Codespaces → Settings → Secrets → Codespaces) or import the Groq pack below. Free key: console.groq.com</div>`;
+
     // ── downloadable agent packs + auto-best scorecard ──
     const cat = a.catalog || {};
     const packs = cat.packs || [];

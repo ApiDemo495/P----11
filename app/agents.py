@@ -7,6 +7,7 @@ cycles and then forced neutral with a UI warning.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -242,6 +243,13 @@ AGENT_CATALOG = [
      "model": "claude-3-5-sonnet", "setup": "https://console.anthropic.com"},
     {"id": "gemini-free", "name": "Gemini backup", "slot": "backup1",
      "model": "gemini-2.0-flash", "setup": "https://aistudio.google.com/apikey"},
+    {"id": "groq-70b", "name": "Groq Llama 3.3 70B", "slot": "groq",
+     "model": "llama-3.3-70b-versatile",
+     "setup": "https://console.groq.com/keys"},
+    {"id": "groq-8b", "name": "Groq Llama 3.1 8B (fast triage)",
+     "slot": "groq",
+     "model": "llama-3.1-8b-instant",
+     "setup": "https://console.groq.com/keys"},
 ]
 
 
@@ -290,7 +298,8 @@ class AgentManager:
                           ("backup1_key", "GEMINI_BACKUP_KEY"),
                           ("backup2_key", "OPENAI_API_KEY"),
                           ("backup3_key", "ANTHROPIC_API_KEY"),
-                          ("newsapi_key", "NEWSAPI_KEY")):
+                          ("newsapi_key", "NEWSAPI_KEY"),
+                          ("groq_key", "GROQ_API_KEY")):
             if not self.settings.get(slot) and _os.environ.get(env):
                 self.settings[slot] = _os.environ[env]
 
@@ -489,6 +498,10 @@ class AgentManager:
                 "local" if local_ok else "drosophila")
         return {
             "catalog": cat,
+            "groq": {"configured": bool(self.groq_key),
+                     "primary": self.GROQ_PRIMARY,
+                     "triage": self.GROQ_TRIAGE},
+            "auditor": None,   # filled by main.py from engine.auditor
             "slots": [slot_status(s, self.settings.get(k))
                       for s, k in zip(slots, keys)],
             "local": {
@@ -526,10 +539,11 @@ class AgentManager:
         if pack is None:
             return {"ok": False, "error": "unknown pack"}
         slot = slot or pack["slot"]
-        if slot not in ("gemini", "backup1", "backup2", "backup3"):
+        if slot not in ("gemini", "backup1", "backup2", "backup3", "groq"):
             return {"ok": False, "error": "unknown slot"}
         self.settings[f"{slot}_key"] = key.strip()
-        self.settings["gemini_enabled"] = True
+        if slot != "groq":
+            self.settings["gemini_enabled"] = True
         self.save_settings()
         return {"ok": True, "slot": slot, "pack": pack["id"]}
 
@@ -565,6 +579,117 @@ class AgentManager:
         sc["n"] = sc["n"] + 1
         self.settings["agent_scores"] = {k: v for k, v in self.scores.items()}
         self.save_settings()
+
+    # ---------------- Groq synthesis (Prompt 2) ----------------
+    GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+    GROQ_PRIMARY = "llama-3.3-70b-versatile"     # deep judgment / regime
+    GROQ_TRIAGE = "llama-3.1-8b-instant"         # low-latency news scoring
+
+    @property
+    def groq_key(self) -> str:
+        return str(self.settings.get("groq_key") or "")
+
+    async def _groq_call(self, model: str, messages: list,
+                         max_tokens: int = 400,
+                         temperature: float = 0.2) -> dict:
+        """Exponential-backoff Groq call (free tier: 30 RPM caps)."""
+        if not self.groq_key:
+            return {"ok": False, "reason": "no GROQ_API_KEY"}
+        import httpx as _hx
+        delay = 1.5
+        last = "unknown"
+        for attempt in range(4):
+            try:
+                async with _hx.AsyncClient(timeout=20.0) as client:
+                    r = await client.post(
+                        self.GROQ_URL,
+                        headers={"Authorization": f"Bearer {self.groq_key}"},
+                        json={"model": model, "messages": messages,
+                              "temperature": temperature,
+                              "max_tokens": max_tokens,
+                              "response_format": {"type": "json_object"}},
+                    )
+                if r.status_code == 429:
+                    last = "rate limited"
+                elif r.status_code >= 500:
+                    last = f"server {r.status_code}"
+                elif r.status_code >= 400:
+                    return {"ok": False, "reason": f"http {r.status_code}"}
+                else:
+                    data = r.json()
+                    text = data["choices"][0]["message"].get("content", "")
+                    return {"ok": True, "text": text, "model": model}
+            except Exception as e:
+                last = e.__class__.__name__
+            await asyncio.sleep(delay)
+            delay *= 2                       # 1.5 → 3 → 6 s
+        return {"ok": False, "reason": last}
+
+    async def synthesize(self, compact: dict) -> dict:
+        """Qualitative synthesis: regime + weight adjustments + confidence.
+
+        `compact` is the PRE-AGGREGATED formula summary (top components,
+        multipliers, emotion/physics/news/brain votes) — never the raw
+        75+ series, to respect rate limits.
+        """
+        prompt = (
+            "You are the risk committee of a crypto prediction engine. "
+            "Given this pre-aggregated snapshot of 75+ formulas, output "
+            "strict JSON: {\"regime\": \"Trending\" | \"Mean-Reverting\" | "
+            "\"High-Volatility Shock\", \"weight_adjustments\": {formula_id: "
+            "float override 0.5..1.5, ONLY for formulas you would "
+            "up/down-weight}, \"confidence_score\": float 0..1, "
+            "\"rationale\": \"<40 words\"}.\nSnapshot: "
+            + json.dumps(compact, separators=(",", ":"))[:1500]
+        )
+        res = await self._groq_call(
+            self.GROQ_PRIMARY,
+            [{"role": "user", "content": prompt}],
+            max_tokens=400, temperature=0.2)
+        if not res.get("ok"):
+            return {"ok": False, "reason": res.get("reason")}
+        try:
+            out = json.loads(res["text"])
+        except ValueError:
+            return {"ok": False, "reason": "unparseable JSON"}
+        regime = str(out.get("regime", ""))
+        if regime not in ("Trending", "Mean-Reverting", "High-Volatility Shock"):
+            return {"ok": False, "reason": f"bad regime {regime!r}"}
+        try:
+            conf = max(0.0, min(1.0, float(out.get("confidence_score", 0.0))))
+        except (TypeError, ValueError):
+            conf = 0.0
+        raw_adj = out.get("weight_adjustments") or {}
+        adj: dict[str, float] = {}
+        if isinstance(raw_adj, dict):
+            for k, v in list(raw_adj.items())[:12]:
+                try:
+                    adj[str(k)] = max(0.5, min(1.5, float(v)))
+                except (TypeError, ValueError):
+                    continue
+        return {"ok": True, "regime": regime, "weight_adjustments": adj,
+                "confidence_score": conf,
+                "rationale": str(out.get("rationale", ""))[:300],
+                "model": self.GROQ_PRIMARY, "ts": time.time()}
+
+    async def triage_headline(self, text: str) -> dict:
+        """Fast sentiment triage of a live news headline (8B model)."""
+        res = await self._groq_call(
+            self.GROQ_TRIAGE,
+            [{"role": "user", "content":
+              "Score this crypto headline sentiment as JSON {\"sentiment\": "
+              "float -1..1, \"reliability\": float 0..1}:\n" + text[:400]}],
+            max_tokens=120, temperature=0.0)
+        if not res.get("ok"):
+            return {"ok": False, "reason": res.get("reason")}
+        try:
+            d = json.loads(res["text"])
+            return {"ok": True,
+                    "sentiment": max(-1.0, min(1.0, float(d.get("sentiment", 0)))),
+                    "reliability": max(0.0, min(1.0, float(d.get("reliability", 0)))),
+                    "model": self.GROQ_TRIAGE}
+        except (ValueError, TypeError):
+            return {"ok": False, "reason": "unparseable"}
 
     def best_slot(self) -> str | None:
         """Highest realized accuracy with >= 3 samples."""
