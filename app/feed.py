@@ -104,6 +104,13 @@ class SymbolState:
 
 class MarketFeed:
     def __init__(self) -> None:
+        # honesty counters (advice D: never a bare "online")
+        self.source = "boot"
+        self.last_delivery = 0.0
+        self.updates = 0
+        self.rejected = 0
+        self._tick_times: list[float] = []
+        self.switches = 0
         self.mode = "sim"
         self.states: dict[str, SymbolState] = {s: SymbolState(s) for s in SYMBOL_ORDER}
         self.on_tick = None            # async callback(symbol, price, volume)
@@ -118,6 +125,39 @@ class MarketFeed:
     # ------------------------------------------------------------------ API
     def state(self, symbol: str) -> SymbolState:
         return self.states[symbol]
+
+    def note(self, source: str) -> None:
+        """Single-writer honesty: record which source is delivering NOW."""
+        now = time.time()
+        if source != self.source:
+            if self.source not in ("boot",):
+                self.switches += 1
+            self.source = source
+        self.last_delivery = now
+        self.updates += 1
+        self._tick_times.append(now)
+        del self._tick_times[:-200]
+
+    def stats(self) -> dict:
+        """Feed chip payload — source, age, ticks/s, switches (advice D)."""
+        now = time.time()
+        recent = [t for t in self._tick_times if now - t <= 10.0]
+        tps = len(recent) / 10.0
+        age = round(now - self.last_delivery, 1) if self.last_delivery else None
+        stale = (age is None) or age > 30.0
+        return {
+            "source": self.source,
+            "mode": self.mode,
+            "simulated": self.mode != "binance",
+            "last_delivery_age_s": age,
+            "ticks_per_s": round(tps, 2),
+            "updates": self.updates,
+            "switches": self.switches,
+            "rejected": self.rejected,
+            "stale": stale,
+            "label": (f"SIMULATED TAPE" if self.mode != "binance"
+                      else f"live · {self.source} · {tps:.1f} ticks/s"),
+        }
 
     def prices(self) -> dict[str, float]:
         return {s: self.states[s].live_price for s in SYMBOL_ORDER}
@@ -334,6 +374,7 @@ class MarketFeed:
             last_minute = minute
 
     async def _emit_tick(self, symbol: str, price: float, volume: float) -> None:
+        self.note("binance-ws" if self.mode == "binance" else "sim")
         if self.on_tick is not None:
             try:
                 result = self.on_tick(symbol, price, volume)

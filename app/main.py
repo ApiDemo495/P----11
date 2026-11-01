@@ -130,12 +130,21 @@ async def _on_feed_tick(symbol: str, price: float, volume: float) -> None:
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 async def health() -> dict:
+    import time as _t
+    age = round(_t.time() - getattr(engine, "last_window_ts", _t.time()), 1)
     return {
         "ok": True,
         "phase": engine.phase,
         "feed": feed.mode,
+        "feed_stats": feed.stats(),
         "grc_count": engine.grc_count,
         "seconds_to_grc": round(seconds_to_next_grc(), 1),
+        # watchdog (advice 9): a stalled window must be visible
+        "seconds_since_window": age,
+        "stalled": age > (TIMEFRAMES["tf4"]["minutes"] * 60 + 45),
+        "locks": len(engine.locks),
+        "ledger_n": sum(1 for rows in engine.ledger.rows.values()
+                        for r in rows if r.get("result") in ("win", "loss")),
     }
 
 
@@ -355,6 +364,15 @@ async def settings_put(body: dict) -> JSONResponse:
 async def agents_status() -> JSONResponse:
     return JSONResponse({"ok": True, "agents": engine.agents.status(),
                          "signal": engine.last_agent_signal or {}})
+
+
+@app.get("/api/ledger")
+async def ledger_api() -> JSONResponse:
+    """Strict-sign settlement ledger — the ONLY accuracy source (G-1)."""
+    from .config import SYMBOLS, TIMEFRAMES
+    return JSONResponse({"ok": True,
+                         **engine.ledger.api_payload(list(SYMBOLS),
+                                                     list(TIMEFRAMES))})
 
 
 @app.get("/api/auditor/status")

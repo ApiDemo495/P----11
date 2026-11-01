@@ -286,3 +286,14 @@ td b.up { color: var(--green); } td b.down { color: var(--red); } td b.flat { co
 .acc-dn { color: var(--red); }
 .em-w { font: 600 9px/1.2 var(--mono); color: var(--dim); margin-top: 4px; letter-spacing: .5px; }
 .em-w b { color: var(--gold); }
+
+/* ═══════ honesty: feed chip · lock block · ledger ═══════ */
+.feed-chip { margin-left: auto; font: 600 10px/1 var(--mono); letter-spacing: 1px;
+  padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line2); color: var(--dim); }
+.feed-chip.live { color: var(--green); border-color: var(--green); }
+.feed-chip.sim { color: var(--red); border-color: var(--red); }
+.feed-chip.stale { color: var(--gold); border-color: var(--gold); }
+.lock-block { background: #12121f; border: 1px solid var(--gold); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 10px; font: 600 12px/1.5 var(--mono); color: var(--gold); }
+.lock-block.relocked { border-color: var(--red); color: var(--red); }
+.lock-block .dim { font-weight: 400; margin-top: 4px; }

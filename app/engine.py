@@ -16,6 +16,7 @@ Responsibilities
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import time
@@ -142,6 +143,11 @@ class PredictionEngine:
         self.agents = AgentManager()
         from .auditor import FormulaAuditor
         self.auditor = FormulaAuditor()
+        from .ledger import SettlementLedger
+        self.ledger = SettlementLedger()
+        self.locks: dict[tuple[str, str], dict] = {}   # frozen signals
+        self._load_locks()
+        self.last_window_ts = time.time()              # watchdog anchor
         self.historydb = HistoryDB()
         self.last_agent_signal: dict[str, Any] = {}
         self.last_grc_signals: dict[tuple[str, str], dict] = {}
@@ -757,6 +763,7 @@ class PredictionEngine:
                 }),
                 "agent": None,           # filled by _apply_agents at GRC
                 "double_check": None,
+                "lock": dict(self.locks.get((symbol, tf)) or {}),
             }
             if record:
                 # reward-rule storage: the 28 weighted components only
@@ -904,6 +911,7 @@ class PredictionEngine:
                        "correct call is NO TRADE until signals align.")
                 )
                 self.display_systems[(symbol, tf)] = {
+                    "lock": dict(self.locks.get((symbol, tf)) or {}),
                     "brain": brain_consensus,
                     "emotion": {
                         "aggregate": round(cerc_sync[tf], 5),
@@ -1205,6 +1213,7 @@ class PredictionEngine:
             disp = self.display_systems.get((symbol, tf))
             if disp is not None:
                 disp["agent"] = res.get("agent")
+                disp["lock"] = dict(self.locks.get((symbol, tf)) or {})
                 disp["double_check"] = dc
                 disp["confidence"] = round(res.get("confidence", 0.0), 4)
                 disp["cci_adjusted"] = res.get("cci_adjusted")
@@ -1215,6 +1224,70 @@ class PredictionEngine:
             await self._apply_groq_synthesis(symbol, res_pack)
         except Exception:
             log.exception("groq synthesis failed")
+        # ---- tape veto + lock sync (advice 8.1) ----
+        self._apply_tape_veto(symbol, res_pack)
+        lock = self.locks.get((symbol, "tf1"))
+        if lock is not None:
+            lock["side"] = int((res_pack.get("tf1") or {}).get("direction") or 0)
+            lock["confidence"] = round(float((res_pack.get("tf1") or {}).get("confidence") or 0), 4)
+            lock["reason"] = str((res_pack.get("tf1") or {}).get("reason") or "")[:500]
+            self._save_locks()
+
+    def _apply_tape_veto(self, symbol: str, res_pack: dict[str, dict]) -> None:
+        """Last 2-3 bars contradicting the side flatten a low-conviction
+        call (advice 8.1). Printed as tape_veto in the reason."""
+        price = self.feed.prices().get(symbol, 0.0)
+        if price <= 0:
+            return
+        for tf in TF_ORDER:
+            res = res_pack.get(tf)
+            if not res or not res.get("issued") or not res.get("direction"):
+                continue
+            closes = self.feed.state(symbol).closes[-3:]
+            if len(closes) < 3:
+                continue
+            move = closes[-1] - closes[0]
+            threshold = price * 0.0004          # ~4 bps over 3 bars
+            opposes = (move > threshold and res["direction"] < 0) or \
+                      (move < -threshold and res["direction"] > 0)
+            if opposes and float(res.get("confidence") or 0) < 0.62:
+                res["direction"] = 0
+                res["issued"] = False
+                res["tape_veto"] = True
+                res["reason"] = (f"TAPE VETO: last 3 bars moved "
+                                 f"{move / price * 1e4:+.1f} bps against the call "
+                                 f"and confidence < 0.62 — flattened. " +
+                                 str(res.get("reason") or ""))[:400]
+                disp = self.display_systems.get((symbol, tf))
+                if disp is not None:
+                    disp["direction"] = 0
+                    disp["issued"] = False
+                    disp["reason"] = res["reason"]
+
+    def hindsight(self) -> dict:
+        """Daily/4-hourly re-grade view (advice 8.3): per core formula the
+        recent strict-sign edge from the facc rings + derived multiplier."""
+        out: dict[str, dict] = {}
+        for symbol in SYMBOL_ORDER:
+            for tf in TF_ORDER:
+                for fid in list(WEIGHT_IDS)[:31]:
+                    key = self.hist.tf_key(symbol, tf, f"facc{fid}")
+                    ring = list(self.hist.ring(key, 50))
+                    if len(ring) < 8:
+                        continue
+                    mean = sum(ring) / len(ring)
+                    mult = max(0.25, min(1.5, 1.0 + 0.25 * (mean / 0.25)))
+                    k = str(fid)
+                    prev = out.get(k)
+                    out[k] = {"fid": fid,
+                              "acc": round((mean + 1) / 2, 3),
+                              "n": len(ring),
+                              "multiplier": round(mult, 3)}
+                    if prev and prev.get("n", 0) > out[k]["n"]:
+                        out[k] = prev
+        top = sorted(out.values(), key=lambda d: d["multiplier"])[:6]
+        return {"per_formula": out, "most_damped": top,
+                "rule": "mult = clip(1 + z, 0.25, 1.5) on last-50 strict-sign edge"}
 
     async def _apply_groq_synthesis(self, symbol: str,
                                    res_pack: dict[str, dict]) -> None:
@@ -1422,6 +1495,61 @@ class PredictionEngine:
         cyc.tp_dist, cyc.sl_dist = tp_dist, sl_dist
         cyc.ratio = ratio
 
+    # ---------------- Signal Lock Protocol + settlement (advice 0.3/0.4)
+    def _load_locks(self) -> None:
+        try:
+            with open("data/locks.json", encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.locks = {(d["symbol"], d["tf"]): d for d in data.get("locks", [])}
+        except (OSError, ValueError, KeyError):
+            self.locks = {}
+
+    def _save_locks(self) -> None:
+        try:
+            import os as _os
+            _os.makedirs("data", exist_ok=True)
+            with open("data/locks.json", "w", encoding="utf-8") as fh:
+                json.dump({"locks": list(self.locks.values())}, fh)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _grid_window(tf: str, now: float) -> tuple[float, float]:
+        """Epoch-aligned window (advice 0.1): start = floor(now/W)*W."""
+        ws = TIMEFRAMES[tf]["minutes"] * 60
+        start = math.floor(now / ws) * ws
+        return float(start), float(start + ws)
+
+    def _settle_and_lock(self, symbol: str, tf: str, now: float,
+                         res: dict) -> None:
+        """Settle the previous window in the ledger, then freeze the new
+        signal. Mid-window refashes (same grid window) keep the lock."""
+        prev = self.locks.get((symbol, tf))
+        start, end = self._grid_window(tf, now)
+        if prev is not None:
+            same_window = abs(float(prev.get("window_end", 0)) - end) < 1e-6
+            if same_window:
+                return                      # lock holds for the whole window
+            price = self.feed.prices().get(symbol, 0.0)
+            self.ledger.settle(symbol, tf,
+                               float(prev.get("price") or 0.0),
+                               price, int(prev.get("side") or 0),
+                               window_end=float(prev.get("window_end") or 0))
+        dom = ((res.get("emotion") or {}).get("dominant")
+               or (res.get("brain") or {}).get("dominant"))
+        self.locks[(symbol, tf)] = {
+            "symbol": symbol, "tf": tf,
+            "side": int(res.get("direction") or 0),
+            "confidence": round(float(res.get("confidence") or 0.0), 4),
+            "price": round(self.feed.prices().get(symbol, 0.0), 6),
+            "reason": str(res.get("reason") or "")[:500],
+            "emotion": str(dom or ""),
+            "locked_at": now, "computed_at": now,
+            "window_start": start, "window_end": end,
+            "relocks": 0, "relock_at": None,
+        }
+        self._save_locks()
+
     def fresh_cycle(
         self,
         symbol: str,
@@ -1463,6 +1591,8 @@ class PredictionEngine:
                 targets.append(
                     TargetState(k=k, minutes=minutes, level=None, status="pending")
                 )
+        self._settle_and_lock(symbol, tf, now, res)
+        _g_start, _g_end = self._grid_window(tf, now)
         cyc = TFCycle(
             symbol=symbol,
             tf=tf,
@@ -1472,8 +1602,8 @@ class PredictionEngine:
             cci=res["cci_adjusted"],
             drhe=res["drhe"],
             issued=res["issued"],
-            cycle_start=now,
-            cycle_end=now + W * 60,
+            cycle_start=_g_start,
+            cycle_end=_g_end,
             targets=targets,
             active_k=1 if res["issued"] else None,
             warning=warning,
@@ -1907,6 +2037,7 @@ class PredictionEngine:
                                 cyc.tp = None      # one-shot marker
                     # countdown reached zero -> immediate fresh cycle
                     if cyc.cycle_end and now >= cyc.cycle_end and not cyc.pending_reset:
+                        self.last_window_ts = time.time()
                         res = self._event_result(symbol, tf)
                         self.last_result[(symbol, tf)] = res
                         self.fresh_cycle(symbol, tf, now, res, reason="rollover")
@@ -2068,6 +2199,15 @@ class PredictionEngine:
                 "probation_count": len(self.learning.probation),
             },
             "agents": self.agents.status(),
+            "feed": self.feed.stats(),
+            "ledger": self.ledger.api_payload(SYMBOL_ORDER, TF_ORDER),
+            "locks": [dict(v) for v in self.locks.values()],
+            "hindsight": self.hindsight(),
+            "watchdog": {
+                "seconds_since_window": round(time.time() - self.last_window_ts, 1),
+                "stalled": (time.time() - self.last_window_ts) >
+                            (TIMEFRAMES["tf4"]["minutes"] * 60 + 45),
+            },
             "agent_signal": self.last_agent_signal or {},
         }
 

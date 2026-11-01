@@ -182,6 +182,8 @@ class NewsSystem:
         self._rng = random.Random(49507)
         self._last_poll = 0.0
         self.source = "seed"
+        self._fingerprints: dict[str, float] = {}   # fp -> first ts
+        self.source_stats: dict[str, dict] = {}     # heartbeat per source
 
     # -- lifecycle ----------------------------------------------------------
     def initialize(self) -> None:
@@ -208,13 +210,36 @@ class NewsSystem:
                 "ts": now - age * 60.0,
             })
 
-    def _append(self, item: dict[str, Any]) -> None:
+    @staticmethod
+    def _fingerprint(headline: str) -> str:
+        """Normalised title (advice C-5): repeats keep first timestamp."""
+        return " ".join(headline.lower().split())[:120]
+
+    def _append(self, item: dict[str, Any]) -> bool:
+        """False when the fingerprint was already seen (dedupe)."""
+        now = time.time()
+        fp = self._fingerprint(str(item.get("headline") or ""))
+        first = self._fingerprints.get(fp)
+        if first is not None and now - first < 600.0:
+            # heartbeat: counted as a duplicate drop, not hidden
+            st = self.source_stats.setdefault(item.get("source", "?"),
+                                              {"ok": 0, "dupes": 0, "errors": 0,
+                                               "last_ok": 0.0})
+            st["dupes"] += 1
+            return False
+        self._fingerprints[fp] = now
         dur = NEWS_CATEGORIES[item["category"]]["duration"]
         item["duration"] = dur
         item["arrival_impact"] = impact_score(
             item["category"], item["sentiment"], 0.0, item["reliability"]
         )
+        st = self.source_stats.setdefault(item.get("source", "?"),
+                                          {"ok": 0, "dupes": 0, "errors": 0,
+                                           "last_ok": 0.0})
+        st["ok"] += 1
+        st["last_ok"] = now
         self.items.append(item)
+        return True
 
     def refresh(self, ) -> None:
         """Drop expired items, poll the live source when configured, and top
@@ -314,6 +339,15 @@ class NewsSystem:
             if 0.0 <= (now - it["ts"]) / 60.0 < NEWS_AGGREGATE_WINDOW
         ]
 
+    def stats(self) -> Dict:
+        """Honesty stats for the news pipe (advice item 6): per-source
+        heartbeats + dupe counter. Used by NIV + the UI source table."""
+        return {
+            "sources": {k: dict(v) for k, v in self.source_stats.items()},
+            "dupes": sum(v.get("dupes", 0) for v in self.source_stats.values()),
+            "items": len(self.items),
+        }
+
     def aggregate(self, symbol: str) -> dict:
         """Signed News Impact Aggregate + per-TF impacts for one asset."""
         now = time.time()
@@ -346,6 +380,12 @@ class NewsSystem:
                 "source": it["source"],
                 "reliability": it["reliability"],
             })
+        # NIV with resting evidence (advice C-3): divide by (sum|w| + W0)
+        # so a single stale headline can never pin the aggregate.
+        wsum = sum(abs(impact_score(it["category"], it["sentiment"],
+                                    (now - it["ts"]) / 60.0,
+                                    it["reliability"])) for it in mine) or 0.0
+        niv = max(-1.0, min(1.0, total / (wsum + 0.5))) if mine else 0.0
         total = max(-1.0, min(1.0, total))
         agg = {
             # signed Section-7 aggregate (component 100 / override / brains)
@@ -358,6 +398,11 @@ class NewsSystem:
             "impacts": {tf: round(max(-1.0, min(1.0, impacts[tf])), 4)
                         for tf in TF_ORDER},
             "source": self.source,
+            "niv": round(niv, 4),
+            "resting_evidence": 0.5,
+            "heartbeats": {k: {kk: (round(vv, 1) if isinstance(vv, float) else vv)
+                               for kk, vv in v.items()}
+                           for k, v in self.source_stats.items()},
             "items": rows,
             "_opposing": {"bull": max(0.0, min(1.0, bull)),
                           "bear": max(0.0, min(1.0, -bear))},

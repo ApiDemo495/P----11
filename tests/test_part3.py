@@ -137,13 +137,19 @@ def test_aggregate_clamped_and_signed():
     ns.initialize()
     ns.items = []
     now = time.time()
-    for _ in range(10):                       # 10 * +0.25 -> clamp to +1
-        ns._append({"headline": "SEC approves everything", "category":
+    for i in range(10):                        # 10 * +0.25 -> clamp to +1
+        ns._append({"headline": f"SEC approves item {i}", "category":
                     "regulatory", "sentiment": 1.0, "reliability": 1.0,
                     "source": "t", "symbols": ["BTC"], "ts": now})
     agg = ns.aggregate("BTC")
     assert agg["value"] == pytest.approx(1.0)
     assert agg["count"] == 10
+    # honesty: a verbatim re-send must NOT inflate the count (10-min dedupe)
+    ns._append({"headline": "SEC approves item 3", "category":
+                "regulatory", "sentiment": 1.0, "reliability": 1.0,
+                "source": "t", "symbols": ["BTC"], "ts": now})
+    assert ns.aggregate("BTC")["count"] == 10
+    assert ns.stats()["dupes"] == 1
     assert agg["impacts"]["tf4"] == pytest.approx(1.0)
     # opposing-magnitude helper
     assert ns.impact_against("BTC", +1) == 0.0

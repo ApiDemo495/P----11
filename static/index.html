@@ -41,6 +41,7 @@
   <div id="toolbar">
     <div class="seg" id="seg-assets"><span class="seg-lbl">ASSET</span></div>
     <div class="seg" id="seg-tf"><span class="seg-lbl">TIMEFRAME</span></div>
+    <div id="feed-chip" class="feed-chip">…</div>
   </div>
 
   <!-- alert bar -->
@@ -201,6 +202,10 @@
   <section class="view" id="view-history">
     <div class="tab-head"><div class="tab-title">HISTORY — local DB</div>
       <button class="btn" id="hs-reload">⟳</button></div>
+    <div class="panel">
+      <div class="panel-h">SETTLEMENT LEDGER — strict sign · tie = loss · the only accuracy source</div>
+      <div id="ledger-panel"><div class="dim">loading…</div></div>
+    </div>
     <div class="panel-row">
       <div class="panel"><div class="panel-h">Days</div><div id="hs-days"></div></div>
       <div class="panel"><div class="panel-h">Leaderboard</div><div id="hs-leader"></div></div>

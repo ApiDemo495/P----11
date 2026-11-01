@@ -666,8 +666,28 @@ class BrainSystem:
 
     def status(self) -> dict:
         real = getattr(self.connectome, "real", {}) or {}
+        stats = real.get("stats") or {}
+        hubs = real.get("hubs") or []
+        # 5-step startup verification (advice 3.4): every step prints a
+        # reason — never a bare ❌ or a default green.
+        verify = [
+            {"step": "real data present", "ok": bool(real),
+             "detail": (real.get("source") or "structural fallback")},
+            {"step": "neuron/synapse counts", "ok": bool(stats.get("neurons")),
+             "detail": f'{stats.get("neurons", 0)} neurons · '
+                       f'{stats.get("synapses", 0)} synapses'},
+            {"step": "hub neurons wired", "ok": len(hubs) >= 5,
+             "detail": ", ".join(h["type"] for h in hubs[:6]) or "none"},
+            {"step": "graph loads (units/edges)",
+             "ok": self.connectome.edge_count > 0,
+             "detail": f'{self.connectome.unit_count} units · '
+                       f'{self.connectome.edge_count} edges'},
+            {"step": "instances ready", "ok": all(b.ready for b in self.instances),
+             "detail": f'{sum(1 for b in self.instances if b.ready)}/4 brains'},
+        ]
         return {
             "ready": self.ready,
+            "verify": verify,
             "connectome": {
                 "source": self.neuprint_status,
                 "units_per_brain": self.connectome.unit_count,

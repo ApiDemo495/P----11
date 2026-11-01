@@ -314,6 +314,7 @@ function renderQuads() {
   });
   renderRail();
   try { renderCalls(); } catch (e) { console.error("calls", e); }
+  try { renderLedger(); } catch (e) { console.error("ledger", e); }
 }
 function renderRail() {
   const a = S.snap?.assets || {};
@@ -363,7 +364,19 @@ function renderWhy() {
          <div class="hint">Groq ${syn.model || ""} · ${syn.rationale || ""}</div>`
       : `<div class="hint">committee: ${syn.reason || "no key"}</div>`)
     : "";
-  el.innerHTML = `
+  const lk = s.lock || {};
+  const lockAge = lk.locked_at ? Math.max(0, Math.round((Date.now() + (S.serverOffset || 0)) / 1000 - lk.locked_at)) : null;
+  const lockBlock = lk.locked_at ? `
+    <div class="lock-block ${lk.relocks ? "relocked" : ""}">
+      <b>🔒 LOCKED ${new Date(lk.locked_at * 1000).toISOString().slice(11, 19)}Z</b>
+      ${lk.side > 0 ? "▲ BUY" : lk.side < 0 ? "▼ SELL" : "● NO SIDE"}
+      · entry ${px(lk.price)} · conf ${fmt(lk.confidence, 3)}
+      ${lk.emotion ? `· emotion <i>${lk.emotion}</i>` : ""}
+      ${lk.relocks ? `· ⚡ emergency re-lock ${new Date((lk.relock_at || 0) * 1000).toISOString().slice(11, 19)}Z` : ""}
+      <div class="dim">locked reasoning (immutable until next window): ${String(lk.reason || "").slice(0, 220)}</div>
+      <div class="dim">live values below refresh continuously — they do NOT change the lock.</div>
+    </div>` : "";
+  el.innerHTML = lockBlock + `
     <div class="why-head">
       <div class="why-dir ${dir > 0 ? "up" : dir < 0 ? "down" : "flat"}">
         ${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO TRADE"}<span class="sym">${S.symbol} · ${tf.toUpperCase()} · ${TF_META[tf].mins}m</span></div>
@@ -400,6 +413,33 @@ function renderWhy() {
       </div>
     </div>
     ${synBlock ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line2)"><h5>GROQ COMMITTEE SYNTHESIS</h5>${synBlock}</div>` : ""}`;
+}
+
+/* ═══════════ SETTLEMENT LEDGER (advice G-1: one accuracy source) ═══════ */
+function renderLedger() {
+  const el = $("#ledger-panel"); if (!el) return;
+  const led = S.snap?.ledger; if (!led) return;
+  const rows = Object.entries(led.per || {}).map(([key, st]) => {
+    const [sym, tf] = key.split("|");
+    const rateTxt = st.rate == null ? "—"
+      : (st.enough ? `${Math.round(st.rate * 100)}%` : `${Math.round(st.rate * 100)}% <span class="dim">(n&lt;${led.min_n}: not enough windows)</span>`);
+    return `<tr class="${sym === S.symbol ? "focus-row" : ""}">
+      <td class="mono">${sym}</td><td class="mono">${tf.toUpperCase()}</td>
+      <td class="mono">${st.n}</td>
+      <td class="mono acc-up">${st.wins}</td><td class="mono acc-dn">${st.losses}</td>
+      <td class="mono">${st.skipped}</td>
+      <td class="mono">${rateTxt}</td>
+      <td class="mono">${st.streak} / ${st.best_streak}</td>
+      <td class="mono">${(st.last20 || []).map(r => r === "win" ? "W" : "L").join("") || "·"}</td>
+    </tr>`;
+  }).join("");
+  const pooled = Object.entries(led.pooled || {}).map(([tf, st]) =>
+    `<div class="kv"><span>${tf.toUpperCase()} pooled (all assets)</span><b>${st.n} settled · ${st.rate != null ? Math.round(st.rate * 100) + "%" : "—"}${st.enough ? "" : " · n&lt;" + led.min_n}</b></div>`).join("");
+  el.innerHTML = `<table class="tbl">
+    <thead><tr><th>ASSET</th><th>TF</th><th>n</th><th>W</th><th>L</th><th>SKIP</th><th>STRICT-SIGN</th><th>STREAK/BEST</th><th>LAST 20</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <div class="kv-row" style="margin-top:8px">${pooled}</div>
+    <div class="hint">${led.rule} — every accuracy number in the app is read from this ledger, nowhere else.</div>`;
 }
 
 /* ═══════════ CALLS & TARGETS — TP/SL for every timeframe ═══════════ */
@@ -981,22 +1021,36 @@ function renderBoot(snap) {
   });
   $("#boot-warning").classList.toggle("hidden", !an.warning);
 }
+/* ═══════ THE one setInterval (advice H-2): boot clock + quad countdown +
+   REST safety net. Multiple timers were the "glitchy countdown" bug. ═══ */
+let _tickN = 0;
 setInterval(() => {
+  _tickN++;
+  // 1) boot countdown
   const ov = $("#boot-overlay");
-  if (ov.classList.contains("gone") || !bootDeadline) return;
-  const rem = Math.max(0, (bootDeadline - Date.now()) / 1000);
-  $("#boot-clock").textContent = `${Math.floor(rem / 60)}:${String(Math.floor(rem % 60)).padStart(2, "0")}`;
+  if (ov && !ov.classList.contains("gone") && bootDeadline) {
+    const rem = Math.max(0, (bootDeadline - Date.now()) / 1000);
+    const bc = $("#boot-clock");
+    if (bc) bc.textContent = `${Math.floor(rem / 60)}:${String(Math.floor(rem % 60)).padStart(2, "0")}`;
+  }
+  // 2) REST safety net every other tick (~2s) — keeps header honest
+  if (_tickN % 2 === 0 && Date.now() - S.lastMsgAt >= 4000) {
+    api("/api/snapshot").then(applySnapshot).catch(() => {});
+  }
+  // 3) quadrant countdown rings (server-anchored)
+  _quadTick();
 }, 1000);
 
-/* quadrant countdown rings — tick every second, independent of GRC */
-setInterval(() => {
+function _quadTick() {
   const now = Date.now() / 1000;
   const a = S.snap?.assets?.[S.symbol] || {};
   TF.forEach(tf => {
     const cyc = a.tfs?.[tf]; if (!cyc) return;
     const q = $("#q-" + tf); if (!q) return;
     const total = Math.max(1, (cyc.cycle_end || 0) - (cyc.cycle_start || 0));
-    const rem = clamp((cyc.cycle_end || 0) - now, 0, total);
+    // server-anchored remaining time (advice H-2): re-anchored each snapshot
+    const serverNow = (Date.now() + (S.serverOffset || 0)) / 1000;
+    const rem = clamp((cyc.cycle_end || 0) - serverNow, 0, total);
     const fg = $(".ring-fg", q);
     if (fg) fg.style.strokeDashoffset = (97.4 * (1 - rem / total)).toFixed(1);
     const t = $(".q-time", q);
@@ -1009,7 +1063,8 @@ setInterval(() => {
       S.grcFlash[tf] = cyc.cycle_start;
     }
   });
-}, 1000);
+}
+
 
 function haptic(kind) {
   try {
@@ -1037,12 +1092,23 @@ function renderAlert(snap) {
 }
 
 /* ═══════════ snapshot / tick plumbing ═══════════ */
+// s.serverOffset re-anchors on EVERY message (advice H-2): the countdown
+// never drifts with the client's wall clock.
 function applySnapshot(snap) {
   if (!snap || snap.type !== "snapshot") return;
   S.snap = snap;
-  renderBoot(snap);
+  S.serverOffset = (snap.ts ? snap.ts * 1000 : Date.now()) - Date.now();
+  renderBoot(snap);               // overlay FIRST — contract test guard
   renderAlert(snap);
   try { renderQuads(); renderWhy(); renderRail(); } catch (e) { console.error("render", e); }
+  // honesty: tape chip AFTER content render (feed stats carry source/label)
+  const fchip = $("#feed-chip");
+  if (fchip && snap.feed) {
+    const f = snap.feed;
+    fchip.textContent = f.simulated ? "⚠ SIMULATED TAPE" : f.label;
+    fchip.className = "feed-chip " + (f.simulated ? "sim" : f.stale ? "stale" : "live");
+    fchip.title = `source ${f.source} · last delivery ${f.last_delivery_age_s ?? "?"}s ago · ${f.updates} updates · ${f.switches} switches`;
+  }
   refreshActiveView();
 }
 function onTick(msg) {
@@ -1127,9 +1193,5 @@ window.addEventListener("unhandledrejection", e => {
   buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal();
   connectWS();
   api("/api/snapshot").then(applySnapshot).catch(() => {});
-  // REST fallback: keeps everything alive when WS is blocked by a proxy
-  setInterval(async () => {
-    if (Date.now() - S.lastMsgAt < 4000) return;
-    try { applySnapshot(await api("/api/snapshot")); } catch { /* retry */ }
-  }, 2000);
+  // REST safety net lives in the single master setInterval below (H-2)
 })();
