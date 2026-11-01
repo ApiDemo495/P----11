@@ -104,3 +104,25 @@ def test_real_drosophila_brain_dataset():
     assert "APL" in hubs and "DPM" in hubs
     assert (root / "scripts" / "fetch_real_brain.py").exists()
     assert "hemibrain" in APP_JS or "hemibrain" in (root / "app" / "brain.py").read_text()
+
+
+def test_markdown_preview_fixed_all_paths():
+    """Editor shows 'markdown.showPreview not found' (no built-in markdown).
+    Fix: recommend + auto-install Markdown Preview Enhanced, which bundles
+    its OWN preview engine, and keep the zero-install /docs viewer."""
+    import json as _json
+    from pathlib import Path as _P
+    root = _P(__file__).resolve().parent.parent
+    recs = _json.load(open(root / ".vscode" / "extensions.json"))["recommendations"]
+    assert "shd101wyy.markdown-preview-enhanced" in recs
+    dc = _json.load(open(root / ".devcontainer" / "devcontainer.json"))
+    dc_exts = dc["customizations"]["vscode"]["extensions"]
+    assert "shd101wyy.markdown-preview-enhanced" in dc_exts
+    setup = (root / "scripts" / "setup.sh").read_text()
+    auto = (root / "scripts" / "auto_start.sh").read_text()
+    assert "markdown-preview-enhanced" in setup and "--install-extension" in setup
+    assert "markdown-preview-enhanced" in auto and "--install-extension" in auto
+    # in-app viewer still the zero-dependency path
+    from fastapi.testclient import TestClient
+    from app.main import app
+    assert TestClient(app).get("/docs").status_code == 200

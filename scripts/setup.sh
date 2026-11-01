@@ -18,6 +18,18 @@ STAMP=".setup_stamp"
 FORCE="${FORCE:-0}"
 BLOCKING="${BLOCKING:-0}"
 T0=$(date +%s)
+# ── VS Code / Codespaces markdown preview ──────────────────────────────
+# The editor error "markdown.showPreview not found" means the editor has
+# NO built-in markdown. Markdown Preview Enhanced ships its OWN preview
+# engine — install it whenever the code CLI is available (idempotent).
+if command -v code >/dev/null 2>&1; then
+  for ext in shd101wyy.markdown-preview-enhanced yzhang.markdown-all-in-one; do
+    code --install-extension "$ext" --force >/dev/null 2>&1 \
+      && log "editor extension installed: $ext" \
+      || warn "could not install $ext (install from the Extensions panel)"
+  done
+fi
+
 log()  { printf '[setup %4ss] %s\n' "$(( $(date +%s) - T0 ))" "$*"; }
 warn() { printf '[setup %4ss] WARN: %s\n' "$(( $(date +%s) - T0 ))" "$*"; }
 

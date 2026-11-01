@@ -8,6 +8,13 @@
 #   3. starts uvicorn in the background and waits for /api/health
 # Usage:  bash scripts/auto_start.sh [--stop|--restart]
 # ══════════════════════════════════════════════════════════════════════
+# markdown preview fix (idempotent, silent): the editor's built-in
+# markdown.showPreview may be absent — Markdown Preview Enhanced bundles
+# its own preview engine.
+if command -v code >/dev/null 2>&1; then
+  code --install-extension shd101wyy.markdown-preview-enhanced --force >/dev/null 2>&1 || true
+  code --install-extension yzhang.markdown-all-in-one --force >/dev/null 2>&1 || true
+fi
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
