@@ -70,6 +70,14 @@ if [ "${SKIP_SETUP:-0}" != "1" ]; then
   fi
 fi
 
+# fast self-heal: missing real-brain data or docs.html (background, ~2s)
+if [ ! -f data/brain_real.json ] && [ -x .venv/bin/python ]; then
+  nohup .venv/bin/python scripts/fetch_real_brain.py >> data/setup.log 2>&1 &
+fi
+if [ -x .venv/bin/python ]; then
+  .venv/bin/python scripts/make_docs_html.py >> data/setup.log 2>&1 || true
+fi
+
 VENV_PY=".venv/bin/python"
 [ -x "$VENV_PY" ] || VENV_PY="python3"
 mkdir -p data

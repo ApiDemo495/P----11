@@ -1,0 +1,585 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PREDICT · docs</title><style>
+body{background:#07070d;color:#d8d8e8;font:14px/1.6 -apple-system,"Segoe UI",sans-serif;
+     max-width:900px;margin:0 auto;padding:40px 24px}
+h1,h2,h3,h4,h5,h6{color:#c9a227;font-family:ui-monospace,monospace;letter-spacing:.5px;margin:1.4em 0 .5em}
+h1.doc-title{border-bottom:1px solid #1d1d2e;padding-bottom:8px;font-size:20px}
+pre{background:#0e0e18;border:1px solid #1d1d2e;border-radius:8px;padding:14px;overflow-x:auto}
+code{font-family:ui-monospace,monospace;background:#12121f;padding:1px 5px;border-radius:3px;font-size:12.5px}
+a{color:#00d4f0} table{border-collapse:collapse;margin:12px 0;width:100%}
+th,td{border:1px solid #1d1d2e;padding:6px 12px;font-size:12.5px} th{color:#6e6e8c}
+ul{padding-left:22px} li{margin:4px 0} i{color:#9aa}
+a.back{display:inline-block;margin-bottom:20px;color:#c9a227}
+.banner{background:#14120a;border:1px solid #c9a227;border-radius:8px;padding:10px 14px;
+  margin-bottom:20px;font-size:12.5px;color:#c9a227}
+</style></head><body>
+<div class="banner">📄 Static docs viewer — works with ZERO editor extensions.
+Live version: <a href="/docs">http://localhost:8000/docs</a> · refresh this file
+after doc changes with <code>python3 scripts/make_docs_html.py</code></div>
+<a class="back" href="/">← back to app</a><article><h1 class="doc-title">README.md</h1><p>&gt; <b>Can&#x27;t open markdown preview?</b> Some editors ship without built-in</p>
+<p>&gt; markdown (<code>markdown.showPreview not found</code> — no extension can add that</p>
+<p>&gt; command). <b>Open <a href="docs.html"><code>docs.html</code></a> instead</b> — a double-click in</p>
+<p>&gt; any browser renders this file and API_SETUP.md with zero extensions —</p>
+<p>&gt; or visit <b>http://localhost:8000/docs</b> while the app runs.</p>
+<h3>Crypto Prediction 4</h3>
+<p>Production-grade real-time cryptocurrency prediction web application targeting</p>
+<p><b>BTC, PAXG, ETH and BNB</b>. Built for GitHub Codespaces (4-core) as a</p>
+<p>single-process web service with a live streaming dashboard.</p>
+<p>&gt; <b>Parts 1 and 2 of the specification implemented:</b> master clock &amp;</p>
+<p>&gt; prediction architecture, <b>Formulas 1–31</b>, Bgn synchronization, the</p>
+<p>&gt; four-instance Drosophila Brain system (Thing 1 + B1–B4, reduced</p>
+<p>&gt; 7,700-unit compute), the 22 emotion channels with CERC learning, and the</p>
+<p>&gt; exact F28/F29 risk layer.  Part 3 (physics formulas, news categories,</p>
+<p>&gt; hedge-fund/dark-pool formulas, visualization) arrives next.</p>
+<p>---</p>
+<h4>Quick start</h4>
+<pre><code>
+pip install -r requirements.txt
+./run.sh                       # serves on http://localhost:8000
+</code></pre>
+<p>GitHub Codespaces: open the repo in a Codespace (<code>.devcontainer/</code> is</p>
+<p>provided), then run <code>./run.sh</code> and forward port <b>8000</b>.</p>
+<p>Run the test suite:</p>
+<pre><code>
+python -m pytest -q    # 54 tests (32 part-1 + 22 part-2)
+</code></pre>
+<p>Environment:</p>
+<table>
+<tr><td>Variable</td><td>Values</td><td>Default</td><td>Purpose</td></tr>
+<tr><td>`FEED_MODE`</td><td>`auto` / `binance` / `sim`</td><td>`auto`</td><td>Binance WS+REST, auto-fallback simulator</td></tr>
+<tr><td>`PORT`</td><td>any port number</td><td>`8000`</td><td>HTTP port</td></tr>
+<tr><td>`NEUPRINT_URL`</td><td>neuPrint HTTP endpoint</td><td>*(none)*</td><td>Optional live connectome source (Part 4)</td></tr>
+<tr><td>`NEUPRINT_TOKEN`</td><td>bearer token</td><td>*(none)*</td><td>neuPrint auth</td></tr>
+</table>
+<p>With <code>NEUPRINT_URL</code> unset the brains use the deterministic structural</p>
+<p>connectome fallback (identical populations, sizes, gain rules and reduced</p>
+<p>compute layout) so the app is fully self-contained.</p>
+<p>---</p>
+<h4>Architecture</h4>
+<h5>World Clock Alignment (master clock)</h5>
+<ul>
+<li>The global clock is divided into <b>4-minute intervals</b> → **15 Global</li>
+</ul>
+<p>  Recheck Cycles (GRC) per hour**, firing at <code>:00 :04 :08 … :56</code>.</p>
+<ul>
+<li>At every GRC the entire system performs a complete recalculation: all</li>
+</ul>
+<p>  formulas, brain states, emotion calculations, news impact scores,</p>
+<p>  weightages and predictions — across **all four timeframes and all four</p>
+<p>  assets simultaneously**.</p>
+<ul>
+<li>Between GRCs the 1-second price stream continues and the UI animates, but</li>
+</ul>
+<p>  <b>no prediction values change</b> until the next GRC (event-driven exceptions</p>
+<p>  defined by the spec: sub-target hit locks, SL protocol, countdown rollover,</p>
+<p>  manual override).</p>
+<ul>
+<li>Every GRC-cadence statistic (Γ_max over 500 GRCs, SS baseline over 100,</li>
+</ul>
+<p>  τ_half over 300, σ_CWP over 200, …) is kept in ring buffers that are</p>
+<p>  appended <b>exactly once per GRC</b>, never between GRCs.</p>
+<h5>Initial Analysis Phase</h5>
+<ul>
+<li>Maximum <b>4 minutes</b> with a prominent live countdown and a readiness</li>
+</ul>
+<p>  checklist (rolling windows, Formulas 1–31, four brain instances, emotion</p>
+<p>  states, news, weightages).</p>
+<ul>
+<li>Prediction locks <b>early</b> the moment every subsystem reports ready;</li>
+</ul>
+<p>  remaining countdown is skipped.</p>
+<ul>
+<li>If 4 minutes expire first, the best available prediction locks and a</li>
+</ul>
+<p>  visible <b>confidence warning flag</b> attaches to every timeframe panel.</p>
+<h5>Timeframes &amp; prediction lock rules</h5>
+<table>
+<tr><td>TF</td><td>Window</td><td>Sub-targets</td></tr>
+<tr><td>TF1</td><td>22 min</td><td>5 · 10 · 15 · 22</td></tr>
+<tr><td>TF2</td><td>44 min</td><td>11 · 22 · 33 · 44</td></tr>
+<tr><td>TF3</td><td>130 min</td><td>30 · 40 · 90 · 130</td></tr>
+<tr><td>TF4</td><td>247 min</td><td>60 · 120 · 180 · 247</td></tr>
+</table>
+<ul>
+<li><b>Tp4</b> locks at prediction and never changes during the cycle — except</li>
+</ul>
+<p>  under <b>Extreme Override Conditions</b> (all three simultaneously:</p>
+<p>  Confidence_final &lt; 0.25 <b>AND</b> four-brain consensus flips polarity</p>
+<p>  <b>AND</b> opposing News Impact Aggregate &gt; 0.8).</p>
+<ul>
+<li><b>Tp1</b> locks at prediction and may adjust at every GRC before being hit</li>
+</ul>
+<p>  (lowest lock strength).</p>
+<ul>
+<li><b>Tp2</b> is <i>not calculated</i> until Tp1 is hit; once locked it only adjusts</li>
+</ul>
+<p>  when the CCI shifts by <b>more than 0.3</b>.</p>
+<ul>
+<li><b>Tp3</b> is <i>not calculated</i> until Tp2 is hit; once locked it only adjusts</li>
+</ul>
+<p>  when the CCI shifts by <b>more than 0.5</b>.</p>
+<ul>
+<li>Each timeframe has an independent countdown; on zero it immediately resets</li>
+</ul>
+<p>  into a fresh cycle. A <b>↻ FRESH</b> manual override button per timeframe</p>
+<p>  forces an immediate fresh cycle at any moment.</p>
+<h5>TP/SL and the SL Hit Protocol</h5>
+<ul>
+<li><b>Formula 28 (Adaptive Risk Calibration — exact):</b></li>
+</ul>
+<pre><code>
+  ARC = clamp( 1.5 × (1 + |CCI|)
+                 × 1/(1 + σ_current/σ_baseline)
+                 × (0.8 + 0.4 × |brain_consensus|),  1, 3 )
+  ARC &lt; 1.3 → 1:1 · 1.3 ≤ ARC &lt; 2.0 → 3:2 · ARC ≥ 2.0 → 3:1
+  Confidence &lt; 0.35 → NO TRADE (ratio withheld)
+</code></pre>
+<ul>
+<li><b>Formula 29 (Dynamic Level Placement — exact):</b></li>
+</ul>
+<pre><code>
+  TP = price + dir × ATR × R_ratio × Φ_tp
+  Φ_tp = 1 + 0.3 × FBPS_alignment_tp + 0.2 × min(1, DRHE)
+  SL = price − dir × ATR × 1 × Φ_sl            (SL base distance = 1 ATR)
+  Φ_sl = 1 + 0.3 × FBPS_alignment_sl − 0.2 × OFTI
+</code></pre>
+<p>  FBPS alignment thresholds (the spec leaves quantification open): TP side</p>
+<p>  — boundary farther than 1.05× raw → <code>+1</code>, 0.5–1.05× → <code>0</code>, closer than</p>
+<p>  0.5× → <code>−0.5</code> (pulls TP inward); SL side — boundary in <code>[1.0, 1.5]×</code></p>
+<p>  beyond SL → <code>+1</code>, boundary between price and SL → <code>−0.3</code>, else <code>0</code>.</p>
+<p>  The SAFE protocol&#x27;s ×0.85 tighten factor stacks on top of Φ_sl.  Fractal</p>
+<p>  boundaries are shared with F24; OFTI is a labelled Part-3 seam</p>
+<p>  (<code>app/orderflow.py</code>).</p>
+<ul>
+<li><b>SL hit → Full Recalculation Event</b>, then:</li>
+<li>new direction <b>matches</b> → amber <code>SAFE — BE CAUTIOUS</code>, SL tightened</li>
+</ul>
+<p>    <b>15%</b>, next sub-target recalculated, confidence <b>−0.15</b>;</p>
+<ul>
+<li>new direction <b>contradicts</b> → red <code>CLOSE POSITION IMMEDIATELY</code> with</li>
+</ul>
+<p>    haptic vibration + alert sound, all remaining sub-targets and Tp4 are</p>
+<p>    invalidated, and the cycle resets with a new prediction **after the next</p>
+<p>    GRC**.</p>
+<h5>Formulas 1–31</h5>
+<p>All formulas are exact transcriptions of the specification, registered in</p>
+<p><code>app/formulas/</code> (F1–F20 in <code>f01_f10.py</code> / <code>f11_f20.py</code>, F22–F27, F30, F31</p>
+<p>in <code>f22_f31.py</code>):</p>
+<p>`RPIC · CDIF · PEM · SATD · IRKG · SSBD · WRPP · RTDI · CLDF · DVDI ·</p>
+<p>MSRC · RMET · DIQ · TCI · ARSI · ISA · VAD · CCMDR · PMTL · DRHE · CCI ·</p>
+<p>BAPR · SARD · FBPS · TMDM · IFDS · VCDP · ARC · DLP · PCV · CLRE`</p>
+<p><b>The 31 weighted CCI components</b> = F1–F19, F22–F27, F31 (26 signals) +</p>
+<p>brain consensus (id 97) + CERC composite (id 98) + physics UFP (id 99) +</p>
+<p>news impact (id 100) + hedge-fund/dark-pool combined (id 101).  Excluded</p>
+<p>from the sum:</p>
+<ul>
+<li><b>F20 (DRHE)</b> — not bounded to [−1, +1], enters as the multiplier</li>
+</ul>
+<p>  <code>min(1, DRHE)</code> on confidence;</p>
+<ul>
+<li><b>F28 (ARC)</b> — a risk formula (ratio bands, not a signal);</li>
+<li><b>F29 (DLP)</b> — outputs price levels;</li>
+<li><b>F30 (PCV)</b> — validator that needs the CCI as its input (runs after</li>
+</ul>
+<p>  aggregation);</p>
+<ul>
+<li><b>F21 (CCI)</b> — the aggregator itself.</li>
+</ul>
+<p><b>Confidence pipeline (spec order):</b></p>
+<pre><code>
+base = |CCI_adjusted| × min(1, DRHE)
+     × (0.7 + 0.3 × EQ_B2)                       Brain-2 experience quality
+     + 0.1 × P(dominant state)   if sign(CCI) matches the state direction
+     − RTP × 0.2                 when RTP &gt; 0.6   (E9 trauma)
+     − |PCV| × 0.3               when PCV &lt; 0     (F30 conflict)
+× (0.5 + 0.5 × WFCP)            Part 3: ground-state overlap (P2)
+× (1 − DRPT)                    Part 3: quantum drag (P6)
+× (1 − GSPI)                    Part 3: gauge-projected instability (P19)
+clamp ≥ 0; issue when &gt; 0.35
+</code></pre>
+<p>Inside component 99 the <i>effective</i> UFP weight is <code>stored_UFP × TME</code></p>
+<p>(P9 Carnot factor), and directional physics inputs are likewise multiplied</p>
+<p>by TME before the Σ (non-directional inputs use <code>2x − 1</code>, see the</p>
+<p>contradiction log below).</p>
+<h5>Bgn (Brain-Grid-Network) synchronization</h5>
+<ul>
+<li>4×4 matrix <code>s_ij = exp(−|ln(τ_i/τ_j)|² / (2β²)) × coherence_ij</code>, <code>β = 1.2</code>,</li>
+</ul>
+<p>  verified against the spec constants (0.846 / 0.334 / 0.131 / 0.664 / 0.354 /</p>
+<p>  0.867; diagonal always 1.0).</p>
+<ul>
+<li><code>coherence_ij</code> = |Pearson correlation| of the two timeframes&#x27; RPIC outputs</li>
+</ul>
+<p>  over the last <b>50 GRC cycles</b>; recomputed at every GRC.</p>
+<ul>
+<li><b>Every</b> formula output, brain consensus, CERC composite, physics signal</li>
+</ul>
+<p>  and news signal passes through the same matrix before aggregation.</p>
+<h5>Drosophila Brain System (4 instances)</h5>
+<ul>
+<li>Weighted directed graph per brain; activations <code>A_n(t) ∈ (0,1)</code> updated</li>
+</ul>
+<p>  <b>once per GRC</b>: <code>A_n(t+1) = σ(Σ w_mn·A_m(t)·g_mn + I_n(t))</code>, weights</p>
+<p>  <code>w = count/max_count ∈ (0,1]</code>, gains <code>g = ±1</code> (inhibitory predominantly</p>
+<p>  on mushroom-body → MBON synapses, per spec).</p>
+<ul>
+<li><b>Reduced compute</b> (spec optimization): top 5,000 neurons individually +</li>
+</ul>
+<p>  region clusters of 50 → <b>7,700 units/brain</b>; one sparse sweep (out-degree</p>
+<p>  4) per GRC — the whole 4×4×4 brain pass costs well under a second.</p>
+<ul>
+<li>Connectome source: live neuPrint API when <code>NEUPRINT_URL</code>/<code>NEUPRINT_TOKEN</code></li>
+</ul>
+<p>  are configured, otherwise the deterministic structural fallback</p>
+<p>  (populations: PAM 130 · SE 80 · OA 40 · TA 30 · MBON 34 · KC 2000 ·</p>
+<p>  LH 1500 · CC 250 · FSB 150 · EB 100 · DN 500, plus generic/cluster units).</p>
+<ul>
+<li><b>Thing 1 (shared):</b> hormone inputs <code>I_dopamine = max(0, r30)·V_ratio</code>,</li>
+</ul>
+<p>  <code>I_serotonin = σ(5×(streak/60 − 0.5))</code>, <code>I_octopamine = min(1, |r1|/3σ)</code>,</p>
+<p>  <code>I_tyramine = σ10/σ60</code> → PAM/SE/OA/TA populations; MBON-weighted readout</p>
+<p>  <code>H</code>, <code>H_signal = −(H − 0.5)/0.5</code> (&gt;0.6 euphoria/bearish, &lt;0.3</p>
+<p>  fear/bullish).</p>
+<ul>
+<li><b>Thing 2 (per instance):</b> DB-1 <code>B1</code> Market Pattern Analyzer (KC 2000 ←</li>
+</ul>
+<p>  last 20 normalized returns, pattern-MBON valence auto-learn ±0.01),</p>
+<p>  DB-2 <code>B2</code> UX Predictor (LH 1500, <code>I+ = TP/(TP+SL)</code>, <code>I− = SL/(TP+SL)</code>,</p>
+<p>  experience quality enters the confidence pipeline), DB-3 <code>B3</code> State</p>
+<p>  Observer (CC 250 ← 5 stats → 5-state distribution, <code>+0.1·P(dom)</code> boost),</p>
+<p>  DB-4 <code>B4</code> Auto-Learning Controller (FSB/EB → DN, secondary</p>
+<p>  <code>ω × (1 + 0.01×(A_DN − 0.5))</code> on top of the reward rule).</p>
+<ul>
+<li><b>Consensus</b> = mean of the four H_signals → CCI component 97, ARC&#x27;s</li>
+</ul>
+<p>  brain-agreement term, and Extreme Override&#x27;s polarity-flip condition.</p>
+<ul>
+<li><b>Affinity clusters:</b> 10 neurons per formula (31 formulas); <code>|F| &gt; 0.7</code></li>
+</ul>
+<p>  feeds <code>I = |F|</code> into the cluster, coupling brain and formula systems.</p>
+<h5>Emotional Flow (E1–E22)</h5>
+<p>Twenty-two dimensions with exact coefficient sets; every E1..E21 output is a</p>
+<p>sigmoid/fraction in [0,1]:</p>
+<p>`FII · GSL · FPR · PCP · CD · ESI · DPI · ATR_emotion · RTP · ABS · HMC ·</p>
+<p>DRD · ERI · OFS · IAF · LAI · CDP · HTI · SMDM · NMS · TEDR · CERC`</p>
+<ul>
+<li><b>E22 CERC</b> = <code>Σ w_e · E_e · direction_e</code> over the 21 channels (TEDR</li>
+</ul>
+<p>  term carries the <code>(1 − 0.5·TEDR)</code> participation multiplier); weights start</p>
+<p>  at <code>1/21</code>, learn with the <b>same multiplicative η = 0.02 rule</b> as the CCI</p>
+<p>  weights (clamp <code>[0.005, 0.15]</code>, renormalize), and CERC feeds the CCI as</p>
+<p>  component 98 after Bgn adjustment.</p>
+<ul>
+<li>GRC-lagged rings (DPI, octopamine, price index, news polarity — 10 GRCs)</li>
+</ul>
+<p>  and the 10-GRC composite-emotion ring are appended exactly once per GRC.</p>
+<ul>
+<li>E9 <code>RTP &gt; 0.6</code> also applies the explicit <code>−RTP × 0.2</code> confidence</li>
+</ul>
+<p>  reduction; brain→emotion hormone averaging modulates E6 (serotonergic)</p>
+<p>  and E7 (dopaminergic) from the four-brain average.</p>
+<ul>
+<li>Brain-to-agent slot stays <code>0.5</code> (neutral) until an agent layer exists.</li>
+</ul>
+<p>---</p>
+<h4>Data feed</h4>
+<p>1. <b>Binance</b> (production): 1-minute kline REST backfill (1000 bars → the</p>
+<p>   247-minute TF4 window is ready instantly) + <code>kline_1m</code> WebSocket streams</p>
+<p>   for BTCUSDT, PAXGUSDT, ETHUSDT, BNBUSDT, with automatic reconnection.</p>
+<p>2. <b>Simulator</b> (fallback / offline): regime-switching GBM with directional</p>
+<p>   drift regimes, aligned 1-minute bars, 1-second ticks — used automatically</p>
+<p>   when the exchange is unreachable, so the app always comes up.</p>
+<p>---</p>
+<h4>Project layout</h4>
+<pre><code>
+app/
+  main.py          FastAPI app: static dashboard, WebSocket, REST
+  clock.py         World Clock — GRC scheduler (:00 :04 … :56)
+  engine.py        PredictionEngine: phase, locks, SL protocol, pipeline,
+                   rings, co-relation / formula-history / brain payloads
+  feed.py          Binance WS/REST + simulator fallback (OHLC 1-min)
+  history.py       GRC-cadence ring buffers + F27/F18/E2/E9 learning stores
+  bgn.py           Synchronization matrix + adjustment
+  cci.py           Formula 21: 31 weighted components, rewards, confidence
+  risk.py          Formula 28 (exact ARC) + Formula 29 (exact DLP)
+  brain.py         4 Drosophila instances: connectome, Thing 1 + B1–B4,
+                   news inputs, 3D geometry + activations payloads
+  emotion.py       E1–E22 with CERC weighting + η reward learning
+  orderflow.py     OFTI / CMP / news-price correlation
+  news.py          News impact engine: categories, decay, per-TF impacts
+  hedgefund.py     IFR · DPAD · SMDI (CCI component 101)
+  physics.py       P1..P22 — PSSA…QDPC + UFP (exact Part-3 physics)
+  formulas/
+    f01_f10.py     Formulas 1–10
+    f11_f20.py     Formulas 11–20
+    f22_f31.py     Formulas 22–27, 30, 31 (+ shared F29 boundary helper)
+    __init__.py    Registry (27 signal formulas) + GRC recording
+static/
+  index.html       Dashboard shell + 5 tabs
+  app.js           Tabs, candle chart, gauges, 75 panels, co-relation, news
+  brains3d.js      Three.js 2×2 instanced brain visualization
+  vendor/          three.module.js v0.160.1 (MIT, vendored — no CDN)
+tests/             91 tests: parts 1–3 (formulas, brains, emotions,
+                   confidence, news, HF, P1–P22, engine, visualization)
+</code></pre>
+<h4>Part 3 — Physics (P1–P22), News, Hedge-Fund, Visualization ✅</h4>
+<p>Everything below is implemented exactly as specified — no substitution with</p>
+<p>existing indicators anywhere.</p>
+<h5>Physics group (app/physics.py)</h5>
+<table>
+<tr><td>#</td><td>Name</td><td>Exact implemented relations</td></tr>
+<tr><td>P1</td><td>**PSSA**</td><td>N = 21 quantum levels, δP = ATR/21; σ_q = ATR×√(τ/60); κ = 0.5×LVD; h_eff = 2π σ_q v_avg; `Confidence_quantum = max&#124;c&#124;² / (1/N)` (spec-literal — contradiction log). Levels + probs feed the chart overlay.</td></tr>
+<tr><td>P2</td><td>**WFCP**</td><td>21×21 `H_market` from cross-asset returns, exact `eigh` ground state; CCI × `(0.5 + 0.5 × WFCP)`.</td></tr>
+<tr><td>P3</td><td>**HPVU**</td><td>High-percentile volatility utilization: current ATR vs its rolling window.</td></tr>
+<tr><td>P4</td><td>**QTPB**</td><td>F24 (TMDM) barriers, 20-point Riemann integral of up/down barrier mass; signal = `QTPB_up − QTPB_down` (directional physics only — **F29 TP/SL placement untouched**).</td></tr>
+<tr><td>P5</td><td>**MEE**</td><td>Market energy envelope over the 4-timeframe momentum stack.</td></tr>
+<tr><td>P6</td><td>**DRPT**</td><td>Quantum drag → confidence × `(1 − DRPT)`. Formula `DRPT = 1 − exp(−γτ)`, `γ = (1/τ_deco)·(1−msrc)·(1−cthr)/2`; inputs: msrc = coherence level `&#124;F11 MSRC&#124;` (coherent bears are coherent), cthr = 0.35 confidence floor (documented below).</td></tr>
+<tr><td>P7</td><td>**BEOFC**</td><td>Butterfly / extreme-order-flow structure of the book.</td></tr>
+<tr><td>P8</td><td>**FDPD**</td><td>Fermi–Dirac pressure distribution; μ_chem = V_eff(P_VWAP) (documented).</td></tr>
+<tr><td>P9</td><td>**TME**</td><td>Carnot `1 − Tc/Th`, defaults Tc = 2σ, Th = 0.5σ; multiplies every directional physics input **and** the UFP effective weight (`stored × TME`).</td></tr>
+<tr><td>P10</td><td>**PIPP**</td><td>K = 1000, M = min(20, τ), deterministic seed (symbol/tf/price/minute).</td></tr>
+<tr><td>P11</td><td>**RGVF**</td><td>Ricci-gain volatility flow over GRC returns.</td></tr>
+<tr><td>P12</td><td>**SSBD**</td><td>Signed order parameter; **formula-literal `(T − Tc)/Tc` wins** over the prose form (documented).</td></tr>
+<tr><td>P13</td><td>**GLPLO**</td><td>Newtonian gravity of volume-profile mass nodes → `tanh(net force / Σ&#124;force&#124;)`.</td></tr>
+<tr><td>P14</td><td>**CELG**</td><td>Log-potential gaps: `h` cancels algebraically → `tanh(−sign(d)/d⁴)` (documented).</td></tr>
+<tr><td>P15</td><td>**DSMS**</td><td>Drift–spread with β clipped to ±0.999 (documented).</td></tr>
+<tr><td>P16</td><td>**RTDMP**</td><td>Return-time dispersion, market pull: `tanh((τ_eff/τ − 0.5)·2·direction)`.</td></tr>
+<tr><td>P17</td><td>**BBIR**</td><td>Log-space tanh of the balance ratio (documented).</td></tr>
+<tr><td>P18</td><td>**TPTI**</td><td>ripser point cloud at ε = 2σ, β₁ vs 200-GRC baselines; σ_β1 = 0 → z = 0 (documented).</td></tr>
+<tr><td>P19</td><td>**GSPI**</td><td>3 simplified gauge transforms (S-whitney, A-milnor, M-metrics), top-5 weighted estimator → confidence × `(1 − GSPI)`.</td></tr>
+<tr><td>P20</td><td>**PDOBV**</td><td>k_cutoff = W/6 price-oscillation modes of the OBV spectrum.</td></tr>
+<tr><td>P21</td><td>**QDPC**</td><td>`conf × exp(−age/τ)`, `τ = h_eff / (2 k_B T γ_env)`; per-minute arrival sum (documented).</td></tr>
+<tr><td>P22</td><td>**UFP**</td><td>`Σ α_p × P_p × coupling_p`; α init 1/21, η-reward (sign-correct grows), renormalized to **exactly 1** at 6-dp storage; `coupling = max(0, corr(P_p, CCI))` over 50 GRCs; directional inputs × TME, non-directional inputs `2x − 1` (documented).</td></tr>
+</table>
+<h5>News impact engine (app/news.py)</h5>
+<table>
+<tr><td>Category</td><td>Weight</td><td>Halflife D (min)</td></tr>
+<tr><td>regulatory</td><td>0.25</td><td>247</td></tr>
+<tr><td>institutional</td><td>0.20</td><td>130</td></tr>
+<tr><td>protocol</td><td>0.15</td><td>44</td></tr>
+<tr><td>macro</td><td>0.15</td><td>130</td></tr>
+<tr><td>structure</td><td>0.10</td><td>44</td></tr>
+<tr><td>sentiment</td><td>0.08</td><td>22</td></tr>
+<tr><td>geopolitical</td><td>0.07</td><td>247</td></tr>
+</table>
+<ul>
+<li><code>impact_score = weight × sentiment × exp(−age/D) × reliability</code></li>
+</ul>
+<p>  (reliability 1.0 major wires / 0.7 crypto outlets / 0.4 social).</p>
+<ul>
+<li>TF impact = <code>score × min(1, TF_minutes / D)</code>; TF4 factor 1.0 <b>only</b> when</li>
+</ul>
+<p>  <code>D ≥ 247</code>.</p>
+<ul>
+<li>Signed aggregate over 247 minutes, clamped [−1, +1] → CCI **component</li>
+</ul>
+<p>  100** (literal aggregate — same value on all timeframes), the Extreme</p>
+<p>  Override input (<code>&gt; 0.8</code> against the prediction) and 10 brain GEN input</p>
+<p>  units (news_value × 2.0).</p>
+<ul>
+<li>NewsAPI client with automatic simulator fallback (key optional).</li>
+</ul>
+<h5>Hedge-fund &amp; dark-pool group (app/hedgefund.py) → CCI component 101</h5>
+<ul>
+<li><b>IFR</b>: V &gt; 3× avg volume ∧ |move| &lt; 1× avg move; upper/lower 30% of the</li>
+</ul>
+<p>  candle range classifies institutional buy/sell; strength decays</p>
+<p>  <code>exp(−0.05 × minutes)</code>.</p>
+<ul>
+<li><b>DPAD</b>: V &gt; 5× avg ∧ |r| &lt; 0.3σ, confirmed by net buying over the next</li>
+</ul>
+<p>  3 minutes.</p>
+<ul>
+<li><b>SMDI</b> = <code>tanh((IFR − retail_flow) / 2)</code>, <code>retail_flow = −H_signal</code>.</li>
+<li>Combined = equal-weighted mean; component 101 initial weight **exactly</li>
+</ul>
+<p>  0.08** (then η-learned like every component).</p>
+<h5>Visualization (Section 9)</h5>
+<ul>
+<li><b>5 tabs</b>: Dashboard · Brains 3D · Formulas ×75 · System Co-relation ·</li>
+</ul>
+<p>  News &amp; HF.</p>
+<ul>
+<li><b>Three.js 2×2 brains</b>: one WebGL context with scissor viewports;</li>
+</ul>
+<p>  4 × 7,700 instanced spheres + 53,304 edges (green excitatory / red</p>
+<p>  inhibitory, brightness = |weight|); activation → colour ramp; **white</p>
+<p>  flash (500 ms ease)** on any unit whose activation jumps ≥ 24; projected</p>
+<p>  region labels (PAM cluster, Mushroom Body, Kenyon Cells, Central Complex,</p>
+<p>  Fan-Shaped Body, Ellipsoid Body, Lateral Horn, Descending Neurons);</p>
+<p>  hormone bars; drag to orbit, wheel to zoom.</p>
+<ul>
+<li><b>75 formula panels</b> (31 core + 22 emotions + 22 physics): value,</li>
+</ul>
+<p>  100-GRC sparkline, weight %, 50-GRC accuracy, contribution.</p>
+<ul>
+<li><b>Candlestick chart</b> with TP/SL/locked-target layers for the selected</li>
+</ul>
+<p>  pair plus the <b>P1 probability overlay</b> (21-level ladder, bar width ∝</p>
+<p>  normalized max|c|², peak level highlighted).</p>
+<ul>
+<li><b>Prediction gauges</b>: confidence, base CCI, UFP, TME, WFCP, DRPT, GSPI,</li>
+</ul>
+<p>  signed news, CERC.</p>
+<ul>
+<li><b>System Co-relation tab</b>: 9-node network (4 brains, EMOTION, PHYSICS,</li>
+</ul>
+<p>  CORE + AGENT-G/AGENT-L slots reserved for Part 4), Pearson r over the</p>
+<p>  last 50 GRCs — green positive / red negative, thickness = |r|, hover for</p>
+<p>  the link table; edges appear once ≥ 3 GRC passes exist.</p>
+<ul>
+<li><b>News &amp; HF tab</b>: signed aggregate card, per-TF impact bars, category</li>
+</ul>
+<p>  table with live scores, item feed, IFR/DPAD/SMDI/combined readings.</p>
+<h5>REST added in Part 3</h5>
+<p><code>GET /api/formula-history?symbol&amp;tf</code> · <code>GET /api/candles?symbol&amp;n</code> ·</p>
+<p><code>GET /api/brain-geometry</code> · <code>GET /api/brain-activations?symbol&amp;tf</code> ·</p>
+<p><code>GET /api/news/{symbol}</code>.</p>
+<h5>Spec-contradiction log (formula literal wins; documented)</h5>
+<table>
+<tr><td>Item</td><td>Resolution</td></tr>
+<tr><td>P1 prose vs formula</td><td>`max&#124;c&#124;²/(1/N)` literal confidence quantum</td></tr>
+<tr><td>P12</td><td>`(T − Tc)/Tc` literal (not the prose signed form)</td></tr>
+<tr><td>P15</td><td>β clipped to ±0.999</td></tr>
+<tr><td>P22 non-directional</td><td>`2x − 1` mapping</td></tr>
+<tr><td>P22 coupling</td><td>`max(0, corr)` — disagreement removes coupling</td></tr>
+<tr><td>P8</td><td>μ_chem = V_eff(P_VWAP)</td></tr>
+<tr><td>P9 / P21</td><td>per-minute arrival sums</td></tr>
+<tr><td>P14</td><td>h cancels → `tanh(−sign/d⁴)`</td></tr>
+<tr><td>P17</td><td>tanh in log space</td></tr>
+<tr><td>P18</td><td>σ_β1 = 0 → z = 0</td></tr>
+<tr><td>P21 τ</td><td>τ literal ⇒ boot τ ≈ 3.9e11 min (decay ≈ 1 for any realistic age; spec-literal, documented)</td></tr>
+<tr><td>P6 inputs</td><td>Formula unchanged; user delegated: msrc = `&#124;F11&#124;` coherence level (signed MSRC would max DRPT on coherent down-trends) and cthr = 0.35 confidence floor (raw signed DVDI made `(1−cthr)` ≈ 1.76 and pinned DRPT ≈ 1, blocking organic issuance entirely — verified by a 240-GRC probe before the fix)</td></tr>
+<tr><td>Part-4 η supersession</td><td>Section 10's `η_emotion = η_physics = 0.015` with clamps `[0.01, 0.12]` supersedes Part 2's CERC `η=0.02` / `[0.005, 0.15]` (newer spec section wins; formula rule unchanged)</td></tr>
+<tr><td>S10 vs S14 subsystem step</td><td>S10 deep says ±5%, S14 L1 says ±2%: implemented **multiplicative ±5%** (deep-cycle-specific) then the S10 clamps `[0.05,0.25]/[0.05,0.25]/[0.03,0.15]/[0.03,0.12]` then S14's renormalize-to-1 — all three constraints satisfied in that order</td></tr>
+</table>
+<h4>One-command automated setup 🤖</h4>
+<p>Everything — virtualenv, core + AI dependencies, the RAM-tier local model,</p>
+<p>data directories, hourly learning cron, and the server itself — bootstraps</p>
+<p>automatically:</p>
+<table>
+<tr><td>Entry point</td><td>What it does</td></tr>
+<tr><td>`./run.sh`</td><td>Foreground start: runs `scripts/setup.sh` if the stamp/venv is stale, then serves on `PORT` (default **8000**). `SKIP_SETUP=1` to bypass.</td></tr>
+<tr><td>`scripts/setup.sh`</td><td>Idempotent bootstrap: `.venv` → `requirements.txt` (hard) → `requirements-agents.txt` incl. **cmake + llama-cpp-python + huggingface-hub** (best-effort) → `data/`, `data/history/`, `models/` → **`scripts/download_models.py`** (auto-picks Phi-3-mini ≥14 GB / TinyLlama ≥7 GB / Qwen2-0.5B, downloads from the HF Hub) → hourly `learning_cron` crontab entry (best-effort). Fast no-op via `.setup_stamp`; `FORCE=1` re-runs everything.</td></tr>
+<tr><td>`scripts/auto_start.sh`</td><td>Background supervisor (devcontainer `postStartCommand`): health-check → setup → `nohup` uvicorn → waits for `/api/health`. `--stop` / `--restart` supported.</td></tr>
+<tr><td>devcontainer</td><td>`postCreateCommand` = full setup, `postStartCommand` = auto-start — opening the Codespace brings the app up by itself.</td></tr>
+<tr><td>In-process hourly loop</td><td>`main.py` runs a wall-clock safety net every 10 min: if the macro learning cycle is >60 min old it fires macro + deep + save directly — learning keeps running even without system cron (mirrors `scripts/learning_cron.sh`).</td></tr>
+</table>
+<p>Every AI stage is optional-by-design: no keys → formula-only agents, model</p>
+<p>download unreachable → retried on first model use, cron absent → in-process</p>
+<p>loop covers it. The core app never blocks on an unavailable service.</p>
+<h4>Protocol (WebSocket <code>/ws</code>)</h4>
+<p><code>snapshot</code> (GRC cadence &amp; spec events) → <code>tick</code> (1 Hz prices) →</p>
+<p><code>phase</code> (analysis countdown/readiness) → <code>sl_event</code> (SAFE / CLOSE banner</p>
+<p>payloads). REST: <code>GET /api/snapshot</code>, <code>GET /api/health</code>,</p>
+<p><code>GET /api/formula-history</code>, <code>GET /api/candles</code>, <code>GET /api/brain-geometry</code>,</p>
+<p><code>GET /api/brain-activations</code>, <code>GET /api/news/{symbol}</code>,</p>
+<p><code>POST /api/override/{symbol}/{tf}</code>. The dashboard automatically falls back</p>
+<p>to REST polling if the WebSocket is blocked by a proxy.</p>
+<p>---</p>
+<h4>Part 4 — Auto-Learning, Agents, UI Redesign, History, Weightage ✅</h4>
+<h5>Section 10 — the permanently active auto-learning system (<code>app/learning.py</code>)</h5>
+<table>
+<tr><td>Cycle</td><td>Cadence</td><td>What happens (spec-exact)</td></tr>
+<tr><td>**Micro**</td><td>every GRC</td><td>Core formula weights `ω ← ω·(1 + η_micro·reward)` η=0.02 clamp `[0.005,0.15]` renormalized (engine). Per-brain influence `w_b ← w_b·(1 + 0.01·reward)` clamp `[0.1,0.4]` renormalized across the 4 brains (weighted consensus). CERC 21-member weights η_emotion=0.015 clamp `[0.01,0.12]`. Physics P-group α η_physics=0.015 clamp `[0.01,0.12]`.</td></tr>
+<tr><td>**Macro**</td><td>every 15 GRCs (~60 min)</td><td>Rolling-15 accuracy: `<0.4` → halve weight + probation flag until next review; `>0.7` → ×1.2 bonus (scaled by the Brain-4 DN tone). Cross-formula output correlation `>0.85` → the lower-accuracy twin loses 30%. Brain 4 receives the full macro metrics on its FSB drive; DN outputs modulate those weights. Weibull `(k,λ)` snapshots for regime durations; λ_critical streaks keep streaming into F18 every GRC.</td></tr>
+<tr><td>**Deep**</td><td>every 247 min (one TF4 cycle)</td><td>Per-timeframe hit-rate check: `HR<0.5` → diagnostic mode — top-3 wrong formulas ×0.6 (`−40%`) and 247-min brain-affinity inhibitory input, top-3 right-despite-wrong ×1.5 (`+50%`). Bgn coherence re-anchored from the full 247-min RPIC history (blended 50/50 with the rolling-50 while fresh). Baum-Welch HMM retrain per (asset, timeframe) — the MSRC **formula is unchanged**; the HMM is its regime-context module. Weibull refit for all five regime types. CERC/physics/news/HF subsystem shares re-evaluated from agreement-vs-outcome contributions with the Section-10 clamps and Section-14 renormalization.</td></tr>
+</table>
+<p>Adaptive rates: rolling-100 per-timeframe accuracy <code>&lt;85%</code> → <b>high-alert mode</b> (η_micro=0.04, η_emotion/physics=0.03, probation 0.5); all timeframes <code>&gt;92%</code> → normal rates. Target: <b>90%</b> Tp-before-SL accuracy per timeframe over the rolling 100.</p>
+<p>State persists to <b><code>data/auto_learning_state.json</code></b> (committed; survives restarts — weights, brain influence, HMMs, Weibull, shares, probation). Hourly safety net: <code>scripts/learning_cron.sh</code> → <code>POST /api/learning/macro</code>.</p>
+<h5>Section 11 — agent integration (<code>app/agents.py</code>)</h5>
+<ul>
+<li><b>Gemini</b> — one call per GRC. Prompt = prices + 10-min returns + CCI direction/confidence + top-5 formula signals + brain consensus + latest news + CERC composite → JSON <code>{direction, confidence, insight}</code>.</li>
+<li>Multipliers: cloud-only <code>CCI × (1 + 0.10·gd·gc)</code>; local-only <code>× (1 + 0.08·ld·lc)</code>; both <code>× (1 + 0.12·ad·ac)</code>.</li>
+<li>Failover after 3 consecutive failures: Gemini → Backup1 (Gemini) → Backup2 (OpenAI GPT-4o) → Backup3 (Anthropic Claude); rate-limited slots skip forward; last-good signal reused for 3 GRCs, then neutral + warning.</li>
+<li><b>Local model</b> via llama-cpp-python, auto-selected by RAM: ≥14 GB Phi-3-mini-4k Q4_K_M · ≥7 GB TinyLlama-1.1B Q4_K_M · else Qwen2-0.5B. Doubles as the news sentiment analyzer. Optional deps in <code>requirements-agents.txt</code>; keys in <code>data/settings.json</code> or env (<code>GEMINI_API_KEY</code>, …) — see <b>API_SETUP.md</b>.</li>
+</ul>
+<h5>Section 12 — UI redesign (<code>static/</code>)</h5>
+<p>Fixed <b>280px sidebar</b>, <b>9 tabs</b> (Dashboard · Brain Monitor · Formula Lab · Emotion Grid · Physics Engine · News Feed · Agent Control · History · Settings), palette <code>#0a0a0f / #00e5ff / #ff1744 / #ffd600</code>, Inter + JetBrains Mono. Dashboard: four TF quadrants, circular countdown rings (cyan flash on GRC reset), vendored <b>lightweight-charts</b> candlesticks with dashed→solid TP/SL price lines, translucent quantum-probability strip, Tp1–4 lock dots (Tp4 always filled), circular confidence gauge (red→yellow→green, 0.5 s ease), TP:SL ratio, per-quadrant asset buttons, full-width alert bar (amber SAFE / pulsing-red CLOSE). Formula Lab: searchable/filterable <b>75 cards</b> with KaTeX LaTeX + live Term Breakdown. Emotion Grid: 22 alias cells (FOMO…Complacency) with intensity circles, ELEVATED/NEUTRAL/EXTREME/DECAYING tags, pulse <code>&gt;0.7</code>, CERC regime labels (EUPHORIC/PANICKED/COMPLACENT/CONFLICTED/EXHAUSTED). Physics: P1 quantum-level probability curve with price/TP/SL markers, Quantum State Summary, density-colored phase-space scatter. News: timestamp / headline / gold-silver-bronze reliability / category+weight / sentiment / impact bar / decay countdown. Agent Control: masked keys, status LEDs, hourly rate bars, local-model stats, <b>Test Connection</b> buttons. History + Settings below. Haptics: lock 50 ms · Tp double · SL 200 ms · CLOSE triple-strong · GRC 20 ms.</p>
+<h5>Section 13 — history (<code>app/historydb.py</code>)</h5>
+<p>Every GRC writes <code>data/history_YYYY-MM-DD.json</code>: timestamp, prices, per-tf/asset predictions (tp/sl + lock_status), outcomes (<code>target_hit</code> / <code>sl_hit</code> / pnl%), 31 formula outputs, brain states, CERC, physics UFP, news impact, agent signals, weight snapshot. Retention <b>90 days → weekly summaries</b> (daily accuracy + GRC counts only). History tab: accuracy calendar (green &gt;80 / yellow 60–80 / red &lt;60), day-detail table, rolling-100 hit-rate chart, formula leaderboard, GRC-by-GRC <b>Prediction Replay</b> (prev/next/play).</p>
+<h5>Section 14 — weightage (five levels)</h5>
+<ul>
+<li><b>L1</b> subsystem shares of the CCI: core 0.45 · brain 0.10 · emotion 0.15 · physics 0.15 · news 0.07 · HF 0.08 — components 97–101 take their share directly; the 26 core signals share <code>core</code> ∝ their learned ω. Deep cycle adjusts with the contribution rule + clamps + renormalize.</li>
+<li><b>L2</b> within-core ω per formula (micro η rule).</li>
+<li><b>L3</b> timeframe multiplier: <code>ω_f × perf_f_TF / avg_perf_f</code> (rolling 100).</li>
+<li><b>L4</b> asset multiplier: same rule per symbol.</li>
+<li><b>L5</b> sub-target relevance profiles — Tp1 fast: SATD/VAD/WRPP · Tp3: MSRC/DIQ · Tp4 slow: CLRE/DRHE/UFP (exposed per GRC in <code>weight_profile</code>).</li>
+</ul>
+<h5>Section 15 — API setup</h5>
+<p><b>API_SETUP.md</b> (repo root): Gemini keys, neuPrint + 3 backups, NewsAPI + 3 backups, Binance + 3 backups, local-model dependencies.</p>
+<h5>Section 16 — integration</h5>
+<ul>
+<li><code>&amp;#124;F_f&amp;#124; &gt; 0.7</code> → brain affinity clusters (existing coupling, now with deep-cycle inhibitory modulation).</li>
+<li>CERC → Brain-2 LH experience input; brain-3 dominant state → emotion weights (existing); TEDR → P6 DRPT modulation; TME → emotion weight share.</li>
+<li>IFR×OFTI / DPAD×LVD / SMDI×SMDM confirmation flags (hedge panel).</li>
+<li><b>Mandatory 4-vote double-check</b> every GRC: CCI · PCV · agents · brain consensus — ≥3 agree → <code>confidence × 1.05</code>; 2 agree → stands with <code>× 0.85</code> + <b>MIXED SIGNALS</b>; ≤1 agrees → majority direction wins (issued=False — decision requires human confirmation) or <b>NO TRADE</b> on a 2–2 tie.</li>
+<li>Optimization priority honored: correctness → data quality → parameter optimization (macro) → execution speed (threaded local model, cached geometry) → redundancy pruning (macro step 4).</li>
+</ul>
+<h5>New endpoints</h5>
+<p><code>GET /api/learning</code> · <code>POST /api/learning/macro</code> · <code>POST /api/learning/deep</code> · <code>POST /api/learning/reset</code> ·</p>
+<p><code>GET /api/history/days|day|replay|leaderboard</code> · <code>GET|PUT /api/settings</code> · <code>GET /api/agents/status</code> ·</p>
+<p><code>POST /api/agents/test/{slot}</code> · <code>GET /api/state/export</code> · <code>POST /api/state/import</code> · <code>GET /api/systems</code>.</p>
+<p><b>Tests: 119 passed</b> (test_part1/2/3 + <code>tests/test_part4.py</code> — learning cycles, HMM, persistence round-trip, two-tier CCI, double-check matrix, agents failover, history retention, UI contract).</p></article><article><h1 class="doc-title">API_SETUP.md</h1><h3>API Setup Guide</h3>
+<h4>1. Gemini API (Primary Agent)</h4>
+<p>1. Go to https://aistudio.google.com/app/apikey</p>
+<p>2. Click &quot;Create API Key&quot;</p>
+<p>3. Select your Google Cloud project (or create a new one)</p>
+<p>4. Copy the generated API key</p>
+<p>5. Paste it into the Settings tab → Gemini API Key field</p>
+<p>6. Free tier: 15 requests per minute, 1 million tokens per day</p>
+<p>7. The app uses approximately 15 requests per hour (one per GRC), well within free tier limits</p>
+<h4>2. neuPrint API (Drosophila Brain Data)</h4>
+<p>1. Go to https://neuprint.janelia.org</p>
+<p>2. Click &quot;Sign In&quot; and create an account (free)</p>
+<p>3. After signing in, go to your profile and copy your API token</p>
+<p>4. Paste it into the Settings tab → neuPrint API Key field</p>
+<p>5. The app uses neuPrint to download the Drosophila hemibrain connectome data on first launch</p>
+<p>6. The connectome data is approximately 500MB and is cached locally after the first download</p>
+<p>7. Subsequent launches use the cached data and do not make API calls to neuPrint</p>
+<p>8. Rate limit: 100 requests per hour (only relevant during initial download)</p>
+<p>Backup options for brain data if neuPrint is unavailable:</p>
+<ul>
+<li>Backup 1: FlyWire connectome API (https://flywire.ai) — requires free account</li>
+<li>Backup 2: Pre-downloaded connectome file from GitHub release (the app provides a direct download link)</li>
+<li>Backup 3: Minimal synthetic brain (the app generates a random graph with 10,000 nodes and scale-free topology that approximates Drosophila connectivity patterns — less accurate but functional)</li>
+</ul>
+<h4>3. NewsAPI (Live News Feed)</h4>
+<p>1. Go to https://newsapi.org</p>
+<p>2. Click &quot;Get API Key&quot; and register for a free account</p>
+<p>3. Copy the API key from your dashboard</p>
+<p>4. Paste it into the Settings tab → NewsAPI Key field</p>
+<p>5. Free tier: 100 requests per day, 1000 articles per request</p>
+<p>6. The app makes one request every 4 minutes (360 per day), which exceeds the free tier. To stay within limits, the app caches news for 20 minutes and only fetches new articles every 20 minutes (3 requests per hour, 72 per day).</p>
+<p>7. For full real-time news (every 4 minutes), upgrade to the Developer plan ($449/month) which allows unlimited requests.</p>
+<p>Backup options for news:</p>
+<ul>
+<li>Backup 1: CryptoPanic API (https://cryptopanic.com/developers/api/) — free tier allows 50 requests per hour, crypto-specific news</li>
+<li>Backup 2: CoinGecko News API (https://www.coingecko.com/en/api) — free, no key required, limited to crypto news</li>
+<li>Backup 3: RSS feed aggregation (the app parses RSS feeds from CoinDesk, CoinTelegraph, and The Block directly, no API key needed, but less structured data)</li>
+</ul>
+<h4>4. Price Data API (Live Market Data)</h4>
+<p>The app uses the Binance public API for real-time price and volume data. No API key is required for public market data endpoints.</p>
+<p>Endpoints used:</p>
+<ul>
+<li>WebSocket: wss://stream.binance.com:9443/ws/btcusdt@kline_1m (1-minute candlestick stream)</li>
+<li>REST: https://api.binance.com/api/v3/ticker/24hr (24-hour statistics)</li>
+</ul>
+<p>For PAXG: use PAXGUSDT pair</p>
+<p>For ETH: use ETHUSDT pair</p>
+<p>For BNB: use BNBUSDT pair</p>
+<p>Backup price data sources:</p>
+<ul>
+<li>Backup 1: CoinGecko API (https://api.coingecko.com/api/v3/simple/price)</li>
+<li>Backup 2: Kraken WebSocket (wss://ws.kraken.com)</li>
+<li>Backup 3: Coinbase WebSocket (wss://ws-feed.exchange.coinbase.com)</li>
+</ul>
+<p>The app automatically detects which price source has the lowest latency and uses it as primary, with the others as failover.</p>
+<h4>5. Local Model Dependencies</h4>
+<p>No API key required. The app automatically downloads the model on first launch. Required packages are installed via pip:</p>
+<ul>
+<li>llama-cpp-python</li>
+<li>huggingface-hub (for model download)</li>
+</ul>
+<p>The model download requires approximately 2.5GB of disk space and 5-10 minutes on a typical Codespaces connection.</p></article></body></html>

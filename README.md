@@ -1,3 +1,9 @@
+> **Can't open markdown preview?** Some editors ship without built-in
+> markdown (`markdown.showPreview not found` — no extension can add that
+> command). **Open [`docs.html`](docs.html) instead** — a double-click in
+> any browser renders this file and API_SETUP.md with zero extensions —
+> or visit **http://localhost:8000/docs** while the app runs.
+
 # Crypto Prediction 4
 
 Production-grade real-time cryptocurrency prediction web application targeting

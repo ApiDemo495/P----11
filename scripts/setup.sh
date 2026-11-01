@@ -4,10 +4,12 @@
 #
 #   FOREGROUND (gates startup, seconds):   venv + core requirements +
 #       data dirs + stamp + cron check
-#   BACKGROUND (never gates startup):      agent/AI deps (llama-cpp build)
-#       + RAM-tier model download  ->  data/setup_ai.log
+#   OPTIONAL (OFF by default — SPEED):      agent/AI deps (llama-cpp builds
+#       from source for 10-20 min on 4 cores!) + RAM-tier model download.
+#       Enable with INSTALL_AGENTS=1. The app runs FULLY without them
+#       (keyless Drosophila brain + formulas + cloud API keys).
 #
-# Set BLOCKING=1 to wait for the background stages (e.g. CI).
+# Set BLOCKING=1 to wait for the optional stages (e.g. CI).
 # Usage:  bash scripts/setup.sh     (FORCE=1 re-runs, fresh ~1s re-run)
 # ══════════════════════════════════════════════════════════════════════
 set -uo pipefail
@@ -73,6 +75,14 @@ else
   log "core requirements installed ✓"
 fi
 
+# ── 2b) REAL Drosophila brain data + docs.html (foreground, ~2s) ──────
+if [ ! -f data/brain_real.json ]; then
+  log "fetching real hemibrain connectome data…"
+  "$VENV_PY" scripts/fetch_real_brain.py >> data/setup.log 2>&1 \
+    || warn "brain fetch failed (app uses structural fallback)"
+fi
+"$VENV_PY" scripts/make_docs_html.py >> data/setup.log 2>&1 || true
+
 # ── 3) directories + settings seed (foreground, instant) ──────────────
 mkdir -p data data/history models
 [ -f data/settings.json ] || echo '{"theme":"dark","haptics":true,"sound":true}' > data/settings.json
@@ -82,9 +92,10 @@ run_ai_stages() {
   "$VENV_PY" -m pip install -q -r requirements-agents.txt \
     && "$VENV_PY" scripts/download_models.py
 }
-ai_state="skipped"
-if [ "$FORCE" = "1" ] || [ "$AI_HASH" != "$PREV_AI" ] \
-   || [ ! -f data/.ai_done ]; then
+ai_state="skipped (opt-in: INSTALL_AGENTS=1)"
+if [ "${INSTALL_AGENTS:-0}" = "1" ] && \
+   { [ "$FORCE" = "1" ] || [ "$AI_HASH" != "$PREV_AI" ] \
+     || [ ! -f data/.ai_done ]; }; then
   if [ "$BLOCKING" = "1" ]; then
     log "installing AI/agent requirements + model (BLOCKING=1)…"
     if run_ai_stages > data/setup_ai.log 2>&1; then

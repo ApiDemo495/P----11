@@ -126,3 +126,29 @@ def test_markdown_preview_fixed_all_paths():
     from fastapi.testclient import TestClient
     from app.main import app
     assert TestClient(app).get("/docs").status_code == 200
+
+
+def test_docs_html_zero_extension_viewer():
+    """docs.html must exist, be self-contained, and render the docs —
+    the fix for editors with NO built-in markdown."""
+    from pathlib import Path as _P
+    root = _P(__file__).resolve().parent.parent
+    h = (root / "docs.html").read_text(encoding="utf-8")
+    assert "PREDICT · docs" in h
+    assert "README.md" in h and "API_SETUP.md" in h
+    assert "<h3" in h or "<h2" in h          # headings really rendered
+    assert "markdown.showPreview" in h       # banner explains the fix
+    assert (root / "scripts" / "make_docs_html.py").exists()
+
+
+def test_setup_is_fast_by_default_ai_opt_in():
+    """The 10-20 min llama-cpp source build + model downloads must be
+    OFF by default (INSTALL_AGENTS=1 to enable) so Codespaces boots in
+    ~1 min; core app + real-brain fetch + docs run in foreground."""
+    from pathlib import Path as _P
+    root = _P(__file__).resolve().parent.parent
+    setup = (root / "scripts" / "setup.sh").read_text()
+    assert 'INSTALL_AGENTS' in setup and 'ai_state="skipped (opt-in' in setup
+    assert "fetch_real_brain" in setup and "make_docs_html" in setup
+    auto = (root / "scripts" / "auto_start.sh").read_text()
+    assert "fetch_real_brain" in auto
