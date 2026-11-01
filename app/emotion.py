@@ -28,9 +28,12 @@ from .config import HIST_EMOTION_LAG
 from .models import FormulaContext
 from .formulas._helpers import pearson, sign, std_pop
 
-ETA = 0.015               # Section 10: η_emotion
-W_CLAMP_LO = 0.01
-W_CLAMP_HI = 0.12
+ETA = 0.015               # Section 10: η_emotion — floor (see COLD rate below)
+W_CLAMP_LO = 0.005        # widened: predictive channels can dominate
+W_CLAMP_HI = 0.30
+ETA_COLD = 0.08           # cold-start rate — a fresh brain learns FAST
+COLD_HALFLIFE = 150
+ACC_SMOOTH = 0.90
 EMO_IDS = list(range(1, 22))          # CERC is E22 = the composite itself
 CERC_WEIGHT_ID = 22
 
@@ -87,6 +90,8 @@ class EmotionSystem:
 
     def __init__(self) -> None:
         self.weights: dict[tuple[str, str], list[float]] = {}
+        self.acc: dict = {}        # (sym, tf) -> 21 EWMA accuracies
+        self.n_updates: dict = {}  # (sym, tf) -> reward-call count
 
     @property
     def ready(self) -> bool:
@@ -107,6 +112,15 @@ class EmotionSystem:
             w = [1.0 / 21.0] * 21
             self.weights[key] = w
         return w
+
+    def _accuracy(self, symbol: str, tf: str) -> list[float]:
+        """EWMA predictive accuracy per CERC channel (0.5 = uninformative)."""
+        key = (symbol, tf)
+        a = self.acc.get(key)
+        if a is None:
+            a = [0.5] * 21
+            self.acc[key] = a
+        return a
 
     # ------------------------------------------------------------------
     def compute(
@@ -399,11 +413,30 @@ class EmotionSystem:
     # ------------------------------------------------------------------
     def reward_update(self, symbol: str, tf: str, emos: dict[int, float],
                       dirs: dict[int, int], cerc_before: float,
-                      move: float, eta: float | None = None) -> None:
-        """GRC-cadence auto-learning for the 21 CERC weights (eta rule)."""
-        rate = ETA if eta is None else eta
+                      move: float, eta: float | None = None,
+                      scale: float | None = None) -> None:
+        """GRC-cadence auto-learning for the 21 CERC weights (eta rule).
+
+        Accuracy-driven upgrades (user directive: weightage follows
+        predictive accuracy):
+          * COLD-START eta — rate decays from ETA_COLD to the floor with a
+            150-update half-life, so the first few hundred cycles actually
+            differentiate channels instead of freezing at uniform.
+          * MAGNITUDE reward — a big verified move teaches more than noise:
+            reward = ±clip(|move|/scale, 0.3, 1.5).
+          * per-channel EWMA ACCURACY exposed to the UI/API.
+        """
+        base = ETA if eta is None else eta
+        key = (symbol, tf)
+        n = self.n_updates.get(key, 0)
+        rate = max(base, ETA_COLD * 0.5 ** (n / COLD_HALFLIFE))
+        self.n_updates[key] = n + 1
         w = self._weights(symbol, tf)
+        acc = self._accuracy(symbol, tf)
         move_dir = sign(move)
+        mag = 1.0
+        if scale and move != 0.0:
+            mag = _clamp(abs(move) / scale, 0.3, 1.5)
         for i, eid in enumerate(EMO_IDS):
             term = w[i] * emos.get(eid, 0.0) * dirs.get(eid, 0)
             if eid == 21:
@@ -411,7 +444,9 @@ class EmotionSystem:
             if move_dir == 0:
                 reward = 0.0
             else:
-                reward = 1.0 if sign(term) == move_dir else -1.0
+                correct = sign(term) == move_dir
+                reward = mag if correct else -mag
+                acc[i] = ACC_SMOOTH * acc[i] + (1 - ACC_SMOOTH) * (1.0 if correct else 0.0)
             # same multiplicative eta rule as the CCI weight learning:
             # omega(t) = omega(t-1) * (1 + eta * reward), then clamp
             w[i] = _clamp(w[i] * (1.0 + rate * reward), W_CLAMP_LO, W_CLAMP_HI)
@@ -426,4 +461,10 @@ class EmotionSystem:
         out: dict[str, list] = {}
         for (sym, tf), w in self.weights.items():
             out[f"{sym}:{tf}"] = [round(x, 4) for x in w]
+        return out
+
+    def accuracy(self) -> dict:
+        out: dict[str, list] = {}
+        for (sym, tf), a in self.acc.items():
+            out[f"{sym}:{tf}"] = [round(x, 4) for x in a]
         return out

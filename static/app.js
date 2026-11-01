@@ -569,6 +569,14 @@ async function loadEmotion() {
       let label = "NEUTRAL";
       if (Math.abs(v) > 0.7) label = "EXTREME"; else if (Math.abs(v) > 0.45) label = "ELEVATED";
       tag.textContent = label; tag.className = "em-tag " + label;
+      // live weight + predictive accuracy (accuracy-driven auto-learning)
+      const wv = (em.weights || [])[i - 1];
+      const av = (em.accuracy || [])[i - 1];
+      let wl = $(".em-w", cell);
+      if (!wl) { wl = document.createElement("div"); wl.className = "em-w"; cell.appendChild(wl); }
+      if (wv != null) wl.innerHTML = `W ${fmt(wv, 3)}` +
+        (av != null ? ` · <b class="${av >= 0.55 ? "acc-up" : av <= 0.45 ? "acc-dn" : ""}">${Math.round(av * 100)}%</b>` : "") +
+        (em.n_updates != null ? ` <span class="dim">n${em.n_updates}</span>` : "");
     }
   } catch (e) { toast("emotion: " + e.message, "err"); }
 }
@@ -603,8 +611,16 @@ async function loadPhysics() {
       let extra = "";
       if (p === 1 && det.p1) extra = `<div class="logic">predicted ${px(det.p1.p_predicted)} · σ ${fmt(det.p1.sigma_q, 1)} · Q ${fmt(det.p1.confidence_q, 2)}</div>`;
       if (p === 15 && det.p15) extra = `<div class="logic">details: ${JSON.stringify(det.p15).slice(0, 110)}…</div>`;
+      const aW = (ph.alpha || {})[String(p)];
+      const aA = (ph.accuracy || ph.alpha_accuracy || {})[String(p)];
+      const accLine = aW != null
+        ? `<div class="kv-row"><div class="kv"><span>α weight</span><b>${fmt(aW, 4)}</b></div>` +
+          (aA != null ? `<div class="kv"><span>accuracy</span><b class="${aA >= 0.55 ? "acc-up" : aA <= 0.45 ? "acc-dn" : ""}">${Math.round(aA * 100)}%</b></div>` : "") +
+          `</div>`
+        : "";
       card.innerHTML = `<h4><span>P${p} · ${P_NAMES[p] || ""}</span><span>${v >= 0 ? "+" : ""}${fmt(v, 4)}</span></h4>
         <div class="kv-row"><div class="kv"><span>value</span><b style="color:${v >= 0 ? "var(--green)" : "var(--red)"}">${v >= 0 ? "▲" : "▼"} ${fmt(v, 4)}</b></div></div>
+        ${accLine}
         ${extra}<div class="logic">${P_LOGIC[p] || ""}</div>`;
       grid.appendChild(card);
     }
@@ -756,6 +772,59 @@ async function loadAgents() {
       ? `<b>DROSOPHILA MODE</b> — no keys needed. The 4-instance brain, 31 formulas, math & physics run everything. Paste any key below for an optional cloud second opinion.`
       : mode === "local" ? `<b>LOCAL MODEL</b> — on-device inference. Cloud keys optional.`
       : `<b>CLOUD AGENTS</b> — ${ (a.slots || []).filter(s => s.status === "connected").length } slot(s) live. Drosophila core still runs every GRC.`;
+    // ── downloadable agent packs + auto-best scorecard ──
+    const cat = a.catalog || {};
+    const packs = cat.packs || [];
+    $("#ag-packs").innerHTML = `
+      <div class="mode-banner ${cat.auto_best ? "local" : ""}">
+        ${cat.auto_best
+          ? `AUTO-BEST ON — routing to <b>${cat.best || "first available"}</b> (highest realized accuracy)`
+          : "AUTO-BEST OFF — fixed slot order (gemini → backup1 → backup2 → backup3)"}
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn ${cat.auto_best ? "active" : ""}" id="ag-auto-btn">${cat.auto_best ? "disable" : "enable"} auto-best routing</button>
+        <span class="dim">auto-best: every agent scores on REAL outcomes; the best one answers first</span>
+      </div>
+      <div class="key-grid" style="margin-top:12px">
+        ${packs.map(pk => `<div class="key-card">
+          <b>${pk.name}</b>
+          <span>${pk.model} · slot ${pk.slot}</span>
+          <div class="dim" style="font-size:10px;margin-top:4px">score ${pk.score != null
+            ? `${Math.round(pk.score * 100)}% over ${pk.samples} outcomes`
+            : (pk.samples ? `${pk.samples} samples` : "no outcomes yet")}${pk.imported ? " · IMPORTED" : ""}</div>
+          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+            <button class="btn" data-dl="${pk.id}">download pack</button>
+          </div>
+          <div class="dim" style="font-size:9.5px;margin-top:6px"><a href="${pk.setup}" target="_blank" rel="noopener">get API key ↗</a></div>
+        </div>`).join("")}
+      </div>`;
+    const autoBtn = $("#ag-auto-btn");
+    if (autoBtn) autoBtn.addEventListener("click", async () => {
+      try {
+        const r = await fetch("/api/agents/auto", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: !cat.auto_best }) });
+        const d = await r.json();
+        toast(d.auto_best ? `auto-best ON → ${d.best || "drosophila fallback"}` : "auto-best OFF");
+        loadAgents();
+      } catch (e) { toast("auto toggle failed: " + e.message, "err"); }
+    });
+    $$("#ag-packs [data-dl]").forEach(b => b.addEventListener("click", async () => {
+      try {
+        const r = await fetch("/api/agents/pack/" + b.dataset.dl);
+        const d = await r.json();
+        if (!d.ok) throw new Error("pack");
+        const blob = new Blob([JSON.stringify(d.pack, null, 2)],
+                              { type: "application/json" });
+        const a2 = document.createElement("a");
+        a2.href = URL.createObjectURL(blob);
+        a2.download = `agent-pack-${b.dataset.dl}.json`;
+        a2.click();
+        URL.revokeObjectURL(a2.href);
+        toast("pack downloaded — import with your key below");
+      } catch (e) { toast("download failed", "err"); }
+    }));
+
     const slots = a.slots || [];
     const titles = ["Gemini primary", "Backup 1 · Gemini", "Backup 2 · GPT-4o", "Backup 3 · Claude"];
     $("#ag-slots").innerHTML = slots.map((s, i) => `

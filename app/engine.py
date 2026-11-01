@@ -475,18 +475,29 @@ class PredictionEngine:
                 self.cci.update_weights(symbol, tf, price,
                                         eta=self.learning.rates["micro"])
                 self._apply_brain4(symbol, tf)
-                # P22 physics alpha learning (same eta reward rule)
+                # P22 physics alpha learning (same eta reward rule).
+                # scale = 5 bps of price: a move >= 5 bps teaches at full
+                # magnitude; smaller moves get a scaled-down lesson.
+                _scale = max(price * 0.0005, 1e-9)
                 prev_ph = self.prev_physics.get((symbol, tf))
                 if prev_ph and move != 0:
                     self.physics.reward_update(symbol, tf, prev_ph, move,
-                                               eta=self.learning.rates["physics"])
+                                               eta=self.learning.rates["physics"],
+                                               scale=_scale)
                 # CERC emotion-weight rewards (21 channels, eta rule)
                 prev_em = self.prev_emotions.get((symbol, tf))
                 if prev_em and move != 0:
                     self.emotions.reward_update(
                         symbol, tf, prev_em[0], prev_em[1], 0.0, move,
                         eta=self.learning.rates["emotion"],
+                        scale=_scale,
                     )
+                # agent scorecard: each cloud agent's realized accuracy
+                # ("best of best" auto-routing ranks on this)
+                if self.last_agent_signal and self.agents.active_slot:
+                    _adir = int(self.last_agent_signal.get("direction") or 0)
+                    if _adir != 0:
+                        self.agents.record_outcome(_adir == _sign(move))
                 # consecutive-correct running ratio (0..1, last 10)
                 pdir = self.prev_cci_dir.get((symbol, tf), 0)
                 if move != 0 and pdir != 0:
@@ -722,6 +733,11 @@ class PredictionEngine:
                     "drpt": phys["drpt"],
                     "gspi": phys["gspi"],
                     "p1": phys["details"].get("p1"),
+                    "alpha": {str(k): round(v, 5) for k, v in
+                              self.physics._weights(symbol, tf).items()},
+                    "accuracy": {str(k): round(v, 4) for k, v in
+                                 self.physics._accuracy(symbol, tf).items()},
+                    "n_updates": self.physics.n_updates.get((symbol, tf), 0),
                 },
                 "hedge": phys["hedge"],
                 "news_value": news_sync[tf],
@@ -889,11 +905,17 @@ class PredictionEngine:
                         "tedr": round(em["tedr"], 4),
                         "narrative": emotion_agg["narrative"],
                         "weights": [round(x, 5) for x in self.emotions._weights(symbol, tf)],
+                        "accuracy": [round(x, 4) for x in
+                                     self.emotions._accuracy(symbol, tf)],
+                        "n_updates": self.emotions.n_updates.get((symbol, tf), 0),
                     },
                     "physics": {
                         "values": phys["values"],
                         "ufp": round(physics_sync[tf], 5),
                         "alpha": phys["ufp"]["alpha"],
+                        "alpha_accuracy": {str(k): round(v, 4) for k, v in
+                                           self.physics._accuracy(symbol, tf).items()},
+                        "n_updates": self.physics.n_updates.get((symbol, tf), 0),
                         "couplings": phys["ufp"]["couplings"],
                         "tme": round(phys["tme"], 5),
                         "wfcp": round(phys["wfcp"], 5),
@@ -1059,6 +1081,9 @@ class PredictionEngine:
             "alpha": ({p: round(w, 5) for p, w in
                        self.physics._weights(symbol, tf).items()}
                       if self.physics.ready else {}),
+            "alpha_accuracy": ({str(p): round(v, 4) for p, v in
+                                self.physics._accuracy(symbol, tf).items()}
+                               if self.physics.ready else {}),
         }
 
     def brain_geometry(self) -> dict:

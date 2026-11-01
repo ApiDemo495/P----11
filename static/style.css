@@ -280,3 +280,9 @@ td b.up { color: var(--green); } td b.down { color: var(--red); } td b.flat { co
 .hub { font: 500 10px/1 var(--mono); background: var(--panel2); border: 1px solid var(--line2);
   padding: 5px 9px; border-radius: 4px; color: #b8b8d0; }
 .hub i { color: var(--gold); font-style: normal; margin-left: 5px; }
+
+/* ═══════ r2c: accuracy badges · agent packs ═══════ */
+.acc-up { color: var(--green); }
+.acc-dn { color: var(--red); }
+.em-w { font: 600 9px/1.2 var(--mono); color: var(--dim); margin-top: 4px; letter-spacing: .5px; }
+.em-w b { color: var(--gold); }

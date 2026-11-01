@@ -99,6 +99,12 @@ except Exception:                       # pragma: no cover - guarded fallback
 # ===========================================================================
 # shared scene quantities
 # ===========================================================================
+ETA_COLD_PHYS = 0.08       # cold-start alpha-learning rate (decays to floor)
+COLD_HALFLIFE = 150        # updates until cold rate halves
+ACC_SMOOTH = 0.90          # EWMA for per-term predictive accuracy
+W_LO, W_HI = 0.005, 0.30   # widened alpha clamps (was 0.01..0.12)
+
+
 def _tanh(x: float) -> float:
     if x > 20.0:
         return 1.0
@@ -1074,6 +1080,8 @@ class PhysicsSystem:
         self.ready = False
         # alpha[(symbol, tf)][p] -> weight, init 1/21
         self.alpha: dict[tuple[str, str], dict[int, float]] = {}
+        self.acc: dict = {}         # (sym, tf) -> {p: EWMA accuracy}
+        self.n_updates: dict = {}   # (sym, tf) -> reward-call count
         self._loaded = False
 
     # -- lifecycle ----------------------------------------------------------
@@ -1094,20 +1102,50 @@ class PhysicsSystem:
             self.alpha[key] = w
         return w
 
+    def accuracy(self) -> dict:
+        out: dict[str, dict] = {}
+        for (sym, tf), a in self.acc.items():
+            out[f"{sym}:{tf}"] = {str(k): round(v, 4) for k, v in a.items()}
+        return out
+
+    def _accuracy(self, symbol: str, tf: str) -> dict[int, float]:
+        """EWMA predictive accuracy per physics term (0.5 = uninformative)."""
+        key = (symbol, tf)
+        a = self.acc.get(key)
+        if a is None:
+            a = {p: 0.5 for p in UFP_ALPHA_IDS}
+            self.acc[key] = a
+        return a
+
     def reward_update(self, symbol: str, tf: str,
                       prev_values: dict[int, float], move: float,
-                      eta: float | None = None) -> None:
+                      eta: float | None = None,
+                      scale: float | None = None) -> None:
         """Section 10 micro-learning (physics): alpha *= (1 + η·reward),
-        clamp [0.01, 0.12], renormalize across the P-group."""
+        clamp [0.005, 0.30], renormalize across the P-group.
+
+        Accuracy-driven upgrades: cold-start eta (decays to the floor),
+        magnitude-scaled reward, per-term EWMA accuracy — so the alphas
+        actually converge toward the terms that predicted the move."""
         if move == 0.0 or not prev_values:
             return
-        rate = ETA_PHYSICS if eta is None else eta
+        base = ETA_PHYSICS if eta is None else eta
+        key = (symbol, tf)
+        n = self.n_updates.get(key, 0)
+        rate = max(base, ETA_COLD_PHYS * 0.5 ** (n / COLD_HALFLIFE))
+        self.n_updates[key] = n + 1
         w = self._weights(symbol, tf)
+        acc = self._accuracy(symbol, tf)
+        mag = 1.0
+        if scale:
+            mag = max(0.3, min(1.5, abs(move) / scale))
         for p in list(w.keys()):
             v_prev = prev_values.get(p, 0.0)
-            reward = 1.0 if _sign(v_prev) == _sign(move) else -1.0
+            correct = _sign(v_prev) == _sign(move)
+            reward = mag if correct else -mag
+            acc[p] = ACC_SMOOTH * acc[p] + (1 - ACC_SMOOTH) * (1.0 if correct else 0.0)
             w[p] = w[p] * (1.0 + rate * reward)
-            w[p] = max(PHYSICS_W_MIN, min(PHYSICS_W_MAX, w[p]))
+            w[p] = max(W_LO, min(W_HI, w[p]))
         total = sum(w.values())
         if total > 0:
             for p in w:

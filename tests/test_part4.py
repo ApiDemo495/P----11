@@ -22,8 +22,10 @@ def test_config_part4_constants():
     assert config.ETA_EMOTION == 0.015
     assert config.ETA_PHYSICS == 0.015
     assert config.BRAIN_W_MIN == 0.1 and config.BRAIN_W_MAX == 0.4
-    assert config.EMOTION_W_MIN == 0.01 and config.EMOTION_W_MAX == 0.12
-    assert config.PHYSICS_W_MIN == 0.01 and config.PHYSICS_W_MAX == 0.12
+    assert config.EMOTION_W_MIN == 0.005 and config.EMOTION_W_MAX == 0.30
+    assert config.PHYSICS_W_MIN == 0.005 and config.PHYSICS_W_MAX == 0.30
+    assert config.ETA_EMOTION_COLD == 0.08 and config.ETA_PHYSICS_COLD == 0.08
+    assert config.COLD_HALFLIFE == 150
     assert config.MACRO_PERIOD_GRC == 15
     assert config.DEEP_PERIOD_MINUTES == 247
     assert config.ACCURACY_TARGET == 0.90
@@ -424,12 +426,17 @@ def test_bgn_deep_anchor():
 
 
 def test_emotion_and_physics_eta_clamps():
-    from app.emotion import ETA as E_ETA, W_CLAMP_LO, W_CLAMP_HI
-    from app.physics import ETA_PHYSICS, PHYSICS_W_MIN, PHYSICS_W_MAX
+    """Accuracy-driven recalibration: floor eta kept, cold-start rates
+    added, clamps widened so informative channels can dominate."""
+    from app.emotion import ETA as E_ETA, W_CLAMP_LO, W_CLAMP_HI, ETA_COLD
+    from app.physics import (ETA_PHYSICS, PHYSICS_W_MIN, PHYSICS_W_MAX,
+                             ETA_COLD_PHYS)
     assert E_ETA == 0.015
-    assert W_CLAMP_LO == 0.01 and W_CLAMP_HI == 0.12
+    assert ETA_COLD == 0.08
+    assert W_CLAMP_LO == 0.005 and W_CLAMP_HI == 0.30
     assert ETA_PHYSICS == 0.015
-    assert PHYSICS_W_MIN == 0.01 and PHYSICS_W_MAX == 0.12
+    assert ETA_COLD_PHYS == 0.08
+    assert PHYSICS_W_MIN == 0.005 and PHYSICS_W_MAX == 0.30
 
 
 def test_main_part4_routes_present():

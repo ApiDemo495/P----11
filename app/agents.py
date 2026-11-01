@@ -231,8 +231,27 @@ def _ram_gb() -> float:
     return 4.0
 
 
+# Downloadable agent packs — import one with your key and the app routes
+# cycles to the best-performing agent automatically (auto-best).
+AGENT_CATALOG = [
+    {"id": "gemini", "name": "Google Gemini", "slot": "gemini",
+     "model": "gemini-2.0-flash", "setup": "https://aistudio.google.com/apikey"},
+    {"id": "openai", "name": "OpenAI GPT", "slot": "backup2",
+     "model": "gpt-4o", "setup": "https://platform.openai.com/api-keys"},
+    {"id": "anthropic", "name": "Anthropic Claude", "slot": "backup3",
+     "model": "claude-3-5-sonnet", "setup": "https://console.anthropic.com"},
+    {"id": "gemini-free", "name": "Gemini backup", "slot": "backup1",
+     "model": "gemini-2.0-flash", "setup": "https://aistudio.google.com/apikey"},
+]
+
+
 class AgentManager:
-    """Owns keys, rate limits, failover and the two agent signals."""
+    """Owns keys, rate limits, failover and the two agent signals.
+
+    Auto-best ("best of best"): every cloud slot keeps a rolling score of
+    realized accuracy. With auto_best on and >= 3 samples, query() tries
+    the best-scored slot first. Keyless Drosophila still runs.
+    """
 
     def __init__(self) -> None:
         self.settings: dict[str, Any] = {
@@ -249,6 +268,9 @@ class AgentManager:
         self.fail_streak = {"gemini": 0, "local": 0}
         self.warning = ""
         self.last_replies: dict[str, dict] = {}
+        self.scores: dict[str, dict] = {}   # slot -> {"acc": ewma, "n": samples}
+        self.auto_best: bool = False
+        self.catalog = [dict(p) for p in AGENT_CATALOG]
         self.active_slot = "gemini"
         self.load_settings()
 
@@ -259,6 +281,9 @@ class AgentManager:
                 self.settings.update(json.load(fh))
         except (OSError, ValueError):
             pass
+        self.scores = {k: dict(v) for k, v in
+                       (self.settings.get("agent_scores") or {}).items()}
+        self.auto_best = bool(self.settings.get("auto_best"))
         import os as _os
         # environment mirrors (spec: stored in a local environment variable)
         for slot, env in (("gemini_key", "GEMINI_API_KEY"),
@@ -356,6 +381,11 @@ class AgentManager:
                  ("backup1", self.settings.get("backup1_key")),
                  ("backup2", self.settings.get("backup2_key")),
                  ("backup3", self.settings.get("backup3_key"))]
+        # auto-best: route to the best-realized-accuracy agent first
+        if self.auto_best:
+            best = self.best_slot()
+            if best:
+                slots.sort(key=lambda kv: 0 if kv[0] == best else 1)
         cloud = None
         for slot, key in slots:
             if not key or not self.settings.get("gemini_enabled", True):
@@ -434,6 +464,7 @@ class AgentManager:
 
     # ---------------- UI helpers ----------------
     def status(self) -> dict:
+        cat = self.catalog_status()
         def slot_status(slot: str, key: str) -> dict:
             used, limit = self.usage(key) if key else (0, AGENT_FREE_RPH)
             reply = self.last_replies.get(slot) or {}
@@ -457,6 +488,7 @@ class AgentManager:
                 "cloud" if has_cloud else
                 "local" if local_ok else "drosophila")
         return {
+            "catalog": cat,
             "slots": [slot_status(s, self.settings.get(k))
                       for s, k in zip(slots, keys)],
             "local": {
@@ -474,6 +506,74 @@ class AgentManager:
             "mode": mode,
             "has_cloud_keys": has_cloud,
         }
+
+    # ---------------- catalog / import / auto-best ----------------
+    def catalog_status(self) -> dict:
+        packs = []
+        for pack in self.catalog:
+            slot = pack["slot"]
+            p2 = dict(pack)
+            p2["imported"] = bool(self.settings.get(f"{slot}_key"))
+            sc = self.scores.get(slot) or {}
+            p2["score"] = round(sc.get("acc", 0.5), 4) if sc.get("n", 0) else None
+            p2["samples"] = sc.get("n", 0)
+            packs.append(p2)
+        return {"packs": packs, "auto_best": self.auto_best,
+                "best": self.best_slot(), "scores": self.scoreboard()}
+
+    def import_pack(self, pack_id: str, key: str, slot: str | None = None) -> dict:
+        pack = next((p for p in self.catalog if p["id"] == pack_id), None)
+        if pack is None:
+            return {"ok": False, "error": "unknown pack"}
+        slot = slot or pack["slot"]
+        if slot not in ("gemini", "backup1", "backup2", "backup3"):
+            return {"ok": False, "error": "unknown slot"}
+        self.settings[f"{slot}_key"] = key.strip()
+        self.settings["gemini_enabled"] = True
+        self.save_settings()
+        return {"ok": True, "slot": slot, "pack": pack["id"]}
+
+    def export_pack(self, pack_id: str) -> dict | None:
+        pack = next((p for p in self.catalog if p["id"] == pack_id), None)
+        if pack is None:
+            return None
+        out = dict(pack)
+        out["format"] = "predict-agent-pack-v1"
+        out["import"] = ('POST /api/agents/import {"pack_id": "%s", "key": "…"}'
+                         % pack_id)
+        out["key"] = ""     # never embedded — download then import with your key
+        return out
+
+    def set_auto(self, enabled: bool) -> dict:
+        self.auto_best = bool(enabled)
+        self.settings["auto_best"] = self.auto_best
+        self.save_settings()
+        return {"ok": True, "auto_best": self.auto_best,
+                "best": self.best_slot()}
+
+    def scoreboard(self) -> dict:
+        return {slot: {"acc": round(sc.get("acc", 0.5), 4), "n": sc.get("n", 0)}
+                for slot, sc in self.scores.items() if sc.get("n", 0)}
+
+    def record_outcome(self, correct: bool) -> None:
+        """Rolling realized-accuracy score for the slot that answered."""
+        slot = self.active_slot
+        if not slot:
+            return
+        sc = self.scores.setdefault(slot, {"acc": 0.5, "n": 0})
+        sc["acc"] = 0.90 * sc["acc"] + 0.10 * (1.0 if correct else 0.0)
+        sc["n"] = sc["n"] + 1
+        self.settings["agent_scores"] = {k: v for k, v in self.scores.items()}
+        self.save_settings()
+
+    def best_slot(self) -> str | None:
+        """Highest realized accuracy with >= 3 samples."""
+        cands = [(sc.get("acc", 0.0), slot) for slot, sc in self.scores.items()
+                 if sc.get("n", 0) >= 3 and self.settings.get(f"{slot}_key")]
+        if not cands:
+            return None
+        cands.sort(reverse=True)
+        return cands[0][1]
 
     async def test(self, slot: str) -> dict:
         key = self.settings.get(f"{slot}_key", "")

@@ -357,6 +357,37 @@ async def agents_status() -> JSONResponse:
                          "signal": engine.last_agent_signal or {}})
 
 
+@app.get("/api/agents/catalog")
+async def agents_catalog() -> JSONResponse:
+    """Downloadable agent packs + auto-best scorecard."""
+    return JSONResponse({"ok": True, **engine.agents.catalog_status()})
+
+
+@app.post("/api/agents/import")
+async def agents_import(req: dict) -> JSONResponse:
+    """Import a downloadable agent pack (paste the key once)."""
+    out = engine.agents.import_pack(str(req.get("pack_id", "")),
+                                    str(req.get("key", "")),
+                                    req.get("slot"))
+    return JSONResponse(out, status_code=200 if out.get("ok") else 400)
+
+
+@app.get("/api/agents/pack/{pack_id}")
+async def agents_pack(pack_id: str) -> JSONResponse:
+    """Download an agent pack definition (JSON, key never included)."""
+    pack = engine.agents.export_pack(pack_id)
+    if pack is None:
+        return JSONResponse({"ok": False, "error": "unknown pack"},
+                            status_code=404)
+    return JSONResponse({"ok": True, "pack": pack})
+
+
+@app.post("/api/agents/auto")
+async def agents_auto(req: dict) -> JSONResponse:
+    """Enable/disable best-of-best auto-routing."""
+    return JSONResponse(engine.agents.set_auto(bool(req.get("enabled"))))
+
+
 @app.post("/api/agents/test/{slot}")
 async def agents_test(slot: str) -> JSONResponse:
     if slot not in ("gemini", "backup1", "backup2", "backup3", "local"):

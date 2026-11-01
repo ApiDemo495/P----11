@@ -63,11 +63,21 @@ DOUBLE_CHECK_PENALTY = 0.5
 # ---------------------------------------------------------------------------
 ETA_MICRO = 0.02                  # core formula weights (every GRC)
 ETA_BRAIN = 0.01                  # per-brain influence weights (every GRC)
-ETA_EMOTION = 0.015               # CERC member weights (every GRC)
-ETA_PHYSICS = 0.015               # physics alpha weights (every GRC)
+ETA_EMOTION = 0.015               # CERC member weights — FLOOR rate (every GRC)
+ETA_PHYSICS = 0.015               # physics alpha weights — FLOOR rate (every GRC)
+# Cold-start rates: a young system must learn FAST from its first few
+# hundred cycles, then decay to the floor. Without this the 21 emotion
+# / 21 physics weights stay frozen at uniform and nothing predicts.
+ETA_EMOTION_COLD = 0.08
+ETA_PHYSICS_COLD = 0.08
+COLD_HALFLIFE = 150               # half-life in GRC updates for the cold rate
+ACC_SMOOTH = 0.90                 # EWMA for per-channel predictive accuracy
 BRAIN_W_MIN, BRAIN_W_MAX = 0.1, 0.4           # per-brain influence clamp
-EMOTION_W_MIN, EMOTION_W_MAX = 0.01, 0.12     # CERC member clamp
-PHYSICS_W_MIN, PHYSICS_W_MAX = 0.01, 0.12     # physics alpha clamp
+# Wide clamps: informative channels MUST be able to dominate. The old
+# [0.01, 0.12] band made uniformity a fixed point — a perfect channel
+# could never rise above ~2.5x a useless one.
+EMOTION_W_MIN, EMOTION_W_MAX = 0.005, 0.30    # CERC member clamp
+PHYSICS_W_MIN, PHYSICS_W_MAX = 0.005, 0.30    # physics alpha clamp
 MACRO_PERIOD_GRC = 15             # every 60 minutes
 MACRO_ACC_WINDOW = 15             # rolling accuracy window (GRCs)
 MACRO_PROBATION = 0.4             # below -> halve weight + flag
