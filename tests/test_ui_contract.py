@@ -31,10 +31,22 @@ def test_boot_overlay_updated_before_content_render():
     assert "try { renderQuads" in block
 
 
-def test_focus_timeframe_selector_exists():
-    assert 'id="tf-bar"' in INDEX_HTML
-    assert "S.focusTf" in APP_JS
-    assert "TF_META" in APP_JS
+def test_toolbar_toggles_assets_and_main_timeframes():
+    """Global toolbar: asset segment × 4 main timeframes. Sub-windows are
+    TP ladders of those4 — no separate sub-timeframe toggles anywhere."""
+    assert 'id="toolbar"' in INDEX_HTML
+    assert 'id="seg-assets"' in INDEX_HTML and 'id="seg-tf"' in INDEX_HTML
+    assert "buildToolbar" in APP_JS and "setFocusTf" in APP_JS
+    assert "tf-bar" not in INDEX_HTML and "fl-tf" not in INDEX_HTML
+    # sub-timeframe toggles must not exist in any view
+    assert "tf-mini" not in INDEX_HTML
+
+
+def test_calls_and_targets_table():
+    """TP/SL ladder for every timeframe, shown below the dashboard."""
+    assert 'id="calls-panel"' in INDEX_HTML
+    assert "renderCalls" in APP_JS and "TP1" in APP_JS
+    assert "SL" in APP_JS
 
 
 def test_why_panel_reads_breakdown():
@@ -78,3 +90,17 @@ def test_offline_banner_and_error_trap_in_js():
     assert "_netBanner" in js                 # engine-offline detection
     assert 'window.addEventListener("error"' in js
     assert "unhandledrejection" in js
+
+
+def test_real_drosophila_brain_dataset():
+    """The brain system must load the real Janelia hemibrain v1.2 data."""
+    from pathlib import Path as _P
+    root = _P(__file__).resolve().parent.parent
+    import json as _json
+    br = _json.load(open(root / "data" / "brain_real.json"))
+    assert br["stats"]["neurons"] == 21739
+    assert br["stats"]["synapses"] == 14329229
+    hubs = [h["type"] for h in br["hubs"]]
+    assert "APL" in hubs and "DPM" in hubs
+    assert (root / "scripts" / "fetch_real_brain.py").exists()
+    assert "hemibrain" in APP_JS or "hemibrain" in (root / "app" / "brain.py").read_text()

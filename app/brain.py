@@ -81,6 +81,20 @@ class Connectome:
         sits near H=0.5 (h_signal ~ 0) with +/-0.1..0.2 hormone modulation
         range — a mean-0.5 weight graph saturates the readout at the ceiling."""
         self.neuprint_status = "structural-fallback"
+        self.real: dict = {}
+        self.top_degrees: list[int] = []
+        try:
+            import json as _json
+            import os as _os
+            _rp = _os.path.join(_os.path.dirname(_os.path.dirname(
+                _os.path.abspath(__file__))), "data", "brain_real.json")
+            with open(_rp, encoding="utf-8") as _fh:
+                self.real = _json.load(_fh)
+            self.top_degrees = [int(d) for d in (self.real.get("top_degrees") or [])]
+            # REAL Drosophila brain: Janelia hemibrain v1.2 structural data
+            self.neuprint_status = "hemibrain-v1.2-real"
+        except (OSError, ValueError):
+            self.real = {}
         self.unit_count = BRAIN_TOTAL_UNITS
         self.pop: dict[str, range] = {}
         cursor = 0
@@ -135,10 +149,19 @@ class Connectome:
                 g = -1.0 if (is_mb_out and rng.random() < 0.7) else 1.0
             edges.append((src, dst, w, g))
 
-        # sparse random backbone (out-degree budget)
+        # sparse backbone (out-degree budget). When the REAL hemibrain data
+        # is present, each individual unit's edge weights follow its measured
+        # degree rank — hub neurons (APL, DPM, MBONs…) stay hubs, exactly as
+        # in the Janelia reconstruction, within the 4-core perf budget.
+        _mean_deg = (sum(self.top_degrees) / len(self.top_degrees)
+                     if self.top_degrees else None)
         for src in range(n):
+            rf = 1.0
+            if _mean_deg and src < len(self.top_degrees):
+                rf = max(0.3, min(3.0, self.top_degrees[src] / _mean_deg))
             for _ in range(BRAIN_OUT_DEGREE):
-                add_edge(src, rng.randrange(n))
+                add_edge(src, rng.randrange(n), w=rng.uniform(*backbone) * rf
+                         if _mean_deg else None)
         # hormone populations -> MBON decision layer (guaranteed pathway,
         # strongest tract in the network — reward/panic drives dominate MBON)
         for pop_name in ("PAM", "SE", "OA", "TA"):
@@ -642,6 +665,7 @@ class BrainSystem:
             self.reward_windows[int(key)] = [float(x) for x in v[-50:]]
 
     def status(self) -> dict:
+        real = getattr(self.connectome, "real", {}) or {}
         return {
             "ready": self.ready,
             "connectome": {
@@ -649,6 +673,10 @@ class BrainSystem:
                 "units_per_brain": self.connectome.unit_count,
                 "edges": self.connectome.edge_count,
                 "layout": "5000 individual + 2700 cluster units",
+                "real": real.get("stats"),
+                "hubs": (real.get("hubs") or [])[:10],
+                "neurotransmitters": real.get("neurotransmitters"),
+                "dataset": f'{real.get("source", "")} · {real.get("via", "")}',
             },
             "instances": [
                 {"id": b.id, "role": b.role, "ready": b.ready}
@@ -663,6 +691,7 @@ class BrainSystem:
         """Static WebGL payload: unit positions, edges and region labels for
         the 2x2 four-instance network graph (computed once, cached)."""
         conn = self.connectome
+        real = getattr(conn, "real", {}) or {}
         cached = getattr(self, "_geometry_cache", None)
         if cached is not None:
             return cached
@@ -758,6 +787,13 @@ class BrainSystem:
             "edge_weights": base64.b64encode(w_arr.tobytes()).decode(),
             "regions": regions,
             "news_units": list(conn.news_units),
+            # REAL Drosophila brain provenance (Janelia hemibrain v1.2)
+            "connectome_source": conn.neuprint_status,
+            "connectome_dataset": real.get("source", ""),
+            "connectome_via": real.get("via", ""),
+            "connectome_stats": real.get("stats"),
+            "connectome_hubs": (real.get("hubs") or [])[:12],
+            "neurotransmitter_census": real.get("neurotransmitters"),
         }
         self._geometry_cache = geom
         return geom

@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PREDICT · BTC PAXG ETH BNB</title>
-<link rel="stylesheet" href="/style.css?v=r2" />
+<link rel="stylesheet" href="/style.css?v=r3" />
 </head>
 <body>
 
@@ -37,6 +37,12 @@
 <!-- ═════════ MAIN ═════════ -->
 <main id="main">
 
+  <!-- global toggle toolbar: assets × 4 main timeframes -->
+  <div id="toolbar">
+    <div class="seg" id="seg-assets"><span class="seg-lbl">ASSET</span></div>
+    <div class="seg" id="seg-tf"><span class="seg-lbl">TIMEFRAME</span></div>
+  </div>
+
   <!-- alert bar -->
   <div id="alert-bar" class="hidden"><span id="alert-icon">▲</span><span id="alert-text"></span></div>
 
@@ -62,8 +68,11 @@
 
   <!-- ═══ VIEW: DASHBOARD ═══ -->
   <section class="view active" id="view-dashboard">
-    <div class="tf-bar" id="tf-bar"><span class="lbl">FOCUS</span></div>
     <div class="quad-grid" id="quad-grid"></div>
+    <div class="panel">
+      <div class="panel-h">CALLS &amp; TARGETS — every timeframe, TP/SL per call <span class="dim" id="calls-scope"></span></div>
+      <div id="calls-panel"><div class="dim pad">warming up…</div></div>
+    </div>
     <div class="panel">
       <div class="panel-h">WHY this prediction — full calculation trace</div>
       <div id="why-panel" class="why"><div class="dim pad">warming up…</div></div>
@@ -74,7 +83,6 @@
   <section class="view" id="view-formulas">
     <div class="tab-head">
       <div class="tab-title">FORMULA LAB <span class="dim" id="fl-scope"></span></div>
-      <div class="tf-mini" id="fl-tf"></div>
     </div>
     <div class="panel">
       <div class="panel-h">CCI summary (F21 master aggregate)</div>
@@ -131,7 +139,12 @@
 
   <!-- ═══ VIEW: BRAINS ═══ -->
   <section class="view" id="view-brains">
-    <div class="tab-head"><div class="tab-title">DROSOPHILA BRAIN — 4 instances <span class="dim" id="br-scope"></span></div></div>
+    <div class="tab-head"><div class="tab-title">DROSOPHILA BRAIN — 4 instances
+      <span class="br-source" id="br-source">…</span></div></div>
+    <div class="panel">
+      <div class="panel-h">Connectome dataset — real Janelia hemibrain v1.2</div>
+      <div id="br-real" class="kv-row"><div class="dim">loading…</div></div>
+    </div>
     <div class="panel">
       <div class="panel-h">Consensus</div>
       <div id="br-consensus" class="kv-row"></div>
@@ -226,6 +239,6 @@
 </nav>
 
 <div id="toast-wrap"></div>
-<script type="module" src="/app.js?v=r2"></script>
+<script type="module" src="/app.js?v=r3"></script>
 </body>
 </html>

@@ -192,6 +192,7 @@ function buildRail() {
 function setSymbol(sym) {
   S.symbol = sym;
   $$(".asset-btn").forEach(b => b.classList.toggle("active", b.dataset.sym === sym));
+  syncToolbar();
   refreshActiveView(true);
   buildQuads(); loadCandles();
 }
@@ -203,22 +204,35 @@ function buildTabs() {
     refreshActiveView(true);
   }));
 }
-function buildTfBar() {
-  const bar = $("#tf-bar");
+function buildToolbar() {
+  const sa = $("#seg-assets"), st = $("#seg-tf");
+  if (!sa || !st) return;
+  ASSETS.forEach(sym => {
+    const b = document.createElement("button");
+    b.className = "seg-btn" + (sym === S.symbol ? " active" : "");
+    b.dataset.sym = sym; b.textContent = sym;
+    b.addEventListener("click", () => setSymbol(sym));
+    sa.appendChild(b);
+  });
   TF.forEach(tf => {
     const m = TF_META[tf];
     const b = document.createElement("button");
-    b.className = "tf-btn" + (tf === S.focusTf ? " active" : "");
+    b.className = "seg-btn" + (tf === S.focusTf ? " active" : "");
     b.dataset.tf = tf;
-    b.innerHTML = `<b>${tf.toUpperCase()} · ${m.mins}m</b><span>TP ${m.tps.join("/")}m</span>`;
-    b.addEventListener("click", () => {
-      S.focusTf = tf;
-      $$("#tf-bar .tf-btn").forEach(x => x.classList.toggle("active", x.dataset.tf === tf));
-      renderWhy(); renderQuads();
-    });
-    bar.appendChild(b);
+    b.innerHTML = `${tf.toUpperCase()}<small>${m.mins}m</small>`;
+    b.addEventListener("click", () => setFocusTf(tf));
+    st.appendChild(b);
   });
 }
+function syncToolbar() {
+  $$("#seg-assets .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.sym === S.symbol));
+  $$("#seg-tf .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.tf === S.focusTf));
+}
+function setFocusTf(tf) {
+  S.focusTf = tf; syncToolbar(); renderWhy(); renderQuads();
+  refreshActiveView(true);
+}
+
 function refreshActiveView(force) {
   if (S.view === "dashboard") { renderWhy(); renderQuads(); }
   else if (S.view === "formulas") loadFormulas();
@@ -299,6 +313,7 @@ function renderQuads() {
     S.charts[tf]?.setLines(lines);
   });
   renderRail();
+  try { renderCalls(); } catch (e) { console.error("calls", e); }
 }
 function renderRail() {
   const a = S.snap?.assets || {};
@@ -378,6 +393,43 @@ function renderWhy() {
     </div>`;
 }
 
+/* ═══════════ CALLS & TARGETS — TP/SL for every timeframe ═══════════ */
+function renderCalls() {
+  const el = $("#calls-panel"); if (!el) return;
+  const a = S.snap?.assets?.[S.symbol] || {};
+  $("#calls-scope").textContent = `${S.symbol} · every main timeframe (sub-windows are TF targets, no separate toggle)`;
+  const rows = TF.map(tf => {
+    const cyc = a.tfs?.[tf];
+    const res = S.snap?.systems?.[`${S.symbol}|${tf}`];
+    const m = TF_META[tf];
+    const dir = cyc?.direction ?? res?.direction ?? 0;
+    const dirTxt = dir > 0 ? '<b class="up">▲ BULL</b>' : dir < 0 ? '<b class="down">▼ BEAR</b>' : '<b class="flat">● FLAT</b>';
+    const tps = (cyc?.targets || []).map((t, i) => {
+      const st = t.status === "hit" ? '<i class="st hit">HIT</i>'
+        : t.status === "locked" ? '<i class="st lock">LOCK</i>' : '<i class="st open">open</i>';
+      return `<td class="tp-cell">${t.level ? px(t.level) : "—"}<br/><span class="tp-min">TP${i + 1} · ${m.tps[i]}m</span> ${st}</td>`;
+    }).join("");
+    const sl = cyc?.sl ? `${px(cyc.sl)}` : "—";
+    return `<tr class="${tf === S.focusTf ? "focus-row" : ""}">
+      <td class="mono">${tf.toUpperCase()}</td>
+      <td class="mono">${m.mins}m</td>
+      <td>${dirTxt} <span class="dim">${cyc?.issued ? "· issued" : "· no trade"}</span></td>
+      <td class="mono">${fmt(res?.confidence, 3)}</td>
+      ${tps}
+      <td class="mono sl-cell">${sl}</td>
+      <td class="mono">${cyc?.ratio ? "1:" + cyc.ratio : "—"}</td>
+    </tr>`;
+  }).join("");
+  el.innerHTML = `<table class="tbl calls-tbl">
+    <thead><tr><th>TF</th><th>WINDOW</th><th>CALL</th><th>CONF</th>
+      <th>TP1 ${px(0)}</th><th>TP2</th><th>TP3</th><th>TP4</th><th>SL</th><th>RATIO</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <div class="hint">Each main timeframe issues its own call with 4 sub-targets (the "sub timeframes" — TP minutes per window) and one stop-loss. Levels come from the engine's ATR projection at every GRC; status updates live.</div>`;
+  // fix header TP labels with real first-target context (keep simple labels)
+  const ths = $$(".calls-tbl th");
+  if (ths.length >= 8) { ths[4].textContent = "TP1"; ths[5].textContent = "TP2"; ths[6].textContent = "TP3"; ths[7].textContent = "TP4"; }
+}
+
 /* ═══════════ candles (per symbol, per TF) ═══════════ */
 async function loadCandles() {
   try {
@@ -416,14 +468,6 @@ async function loadFormulas() {
     const fv = S.snap?.formula_values?.[`${S.symbol}|${S.focusTf}`] || {};
     const bd = s.breakdown || {};
     $("#fl-scope").textContent = `${S.symbol} · ${S.focusTf.toUpperCase()} · ${TF_META[S.focusTf].mins}m`;
-    const tfl = $("#fl-tf"); tfl.innerHTML = "";
-    TF.forEach(tf => {
-      const b = document.createElement("button");
-      b.className = "btn" + (tf === S.focusTf ? " active" : "");
-      b.textContent = tf.toUpperCase();
-      b.addEventListener("click", () => { S.focusTf = tf; syncTfBtns(); loadFormulas(); });
-      tfl.appendChild(b);
-    });
     $("#fl-summary").innerHTML = `
       <div class="kv"><span>CCI raw</span><b>${fmt(s.cci, 4)}</b></div>
       <div class="kv"><span>CCI adjusted</span><b>${fmt(s.cci_adjusted, 4)}</b></div>
@@ -470,9 +514,6 @@ async function loadFormulas() {
     }
     drawSparks(fh.core || {});
   } catch (e) { toast("formulas: " + e.message, "err"); }
-}
-function syncTfBtns() {
-  $$("#tf-bar .tf-btn").forEach(x => x.classList.toggle("active", x.dataset.tf === S.focusTf));
 }
 function drawSparks(core) {
   $$("#fl-cards canvas.spark").forEach(cv => {
@@ -611,7 +652,22 @@ async function loadBrains() {
     ]);
     const s = sys.systems?.[`${S.symbol}|${S.focusTf}`] || {};
     const br = s.brain || {};
-    $("#br-scope").textContent = `${S.symbol} · ${geo.units || "?"} neurons · ${geo.edges || "?"} synapses`;
+    const isReal = String(geo.connectome_source || "").includes("real");
+    $("#br-source").textContent = isReal
+      ? "REAL · Janelia hemibrain v1.2" : "structural fallback";
+    $("#br-source").className = "br-source " + (isReal ? "real" : "sim");
+    const cs = geo.connectome_stats || {};
+    $("#br-real").innerHTML = `<div class="kv-row">
+      <div class="kv"><span>dataset</span><b>${geo.connectome_dataset || "synthetic"}</b></div>
+      <div class="kv"><span>neurons (traced)</span><b>${cs.neurons != null ? Number(cs.neurons).toLocaleString() : "—"}</b></div>
+      <div class="kv"><span>connections</span><b>${cs.edges != null ? Number(cs.edges).toLocaleString() : "—"}</b></div>
+      <div class="kv"><span>synapses</span><b>${cs.synapses != null ? Number(cs.synapses).toLocaleString() : "—"}</b></div>
+      <div class="kv"><span>reciprocity</span><b>${cs.reciprocity ?? "—"}</b></div>
+      <div class="kv"><span>graph units (this app)</span><b>${geo.units || "—"} · ${geo.edges || "—"} edges</b></div>
+    </div>
+    <div class="hub-list">${(geo.connectome_hubs || []).slice(0, 8).map(h =>
+      `<span class="hub" title="type ${h.type} · degree ${h.total_degree}">${h.type} <i>${h.total_degree}</i></span>`).join("")}</div>
+    <div class="hint">Real hemibrain v1.2 (Janelia FlyEM, CC BY 4.0) — hub ordering (APL, DPM, MBON…) and per-unit edge weights follow the measured degree distribution; the four market-brain instances run the spec's activation math on this structure.</div>`;
     $("#br-consensus").innerHTML = `
       <div class="kv"><span>polarity</span><b>${br.polarity > 0 ? "▲ BULL" : br.polarity < 0 ? "▼ BEAR" : "● FLAT"}</b></div>
       <div class="kv"><span>consensus</span><b>${fmt(br.consensus, 4)}</b></div>
@@ -965,7 +1021,7 @@ window.addEventListener("unhandledrejection", e => {
 
 /* ═══════════ boot ═══════════ */
 (function boot() {
-  buildRail(); buildTabs(); buildTfBar(); buildQuads(); bindGlobal();
+  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal();
   connectWS();
   api("/api/snapshot").then(applySnapshot).catch(() => {});
   // REST fallback: keeps everything alive when WS is blocked by a proxy
