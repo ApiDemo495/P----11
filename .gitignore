@@ -22,3 +22,4 @@ models/
 # bootstrap stamp (runtime)
 .setup_stamp
 data/
+data.pre-r2-1347/
