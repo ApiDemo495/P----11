@@ -772,6 +772,31 @@ async function loadPhysics() {
     const grid = $("#ph-grid"); grid.innerHTML = "";
     const vals = ph.values || {};
     const det = ph.details || {};
+    // §6.2: active/inactive table WITH reasons (F-7: never a silent 0.00)
+    const mech = ph.mechanisms || [];
+    const mechEl = $("#ph-mech");
+    if (mechEl && mech.length) {
+      mechEl.innerHTML = `<div class="kv-row">` + mech.map(m =>
+        `<span class="chip ${m.active ? "chip-ok" : "chip-warn"}"
+          title="${esc((m.logic || []).join(" · "))}"
+          >P${m.id} ${m.active ? "●" : "○"} ${fmt(m.score, 3)}</span>`).join("") +
+        `</div><div class="hint">${mech.filter(m => !m.active).slice(0, 4).map(m =>
+          `P${m.id}: ${esc(m.why)}`).join(" · ") || "all mechanisms active"}</div>`;
+    }
+    // §6.1 estimators print their derivation
+    const est = ph.estimators || {};
+    const estEl = $("#ph-est");
+    if (estEl && est.ready) {
+      const blocks = ["kramers_moyal", "ising", "fdt", "maxent"].filter(k => est[k]).map(k => {
+        const e = est[k];
+        const nums = Object.entries(e).filter(([kk, vv]) => kk !== "derivation")
+          .map(([kk, vv]) => `${kk} ${Array.isArray(vv) ? vv.map(x => fmt(x, 5)).join(",") : fmt(vv, 5)}`)
+          .join(" · ");
+        return `<div class="logic"><b>${k.replace("_", " ").toUpperCase()}</b> — ${nums}
+          <div class="dim">${esc(e.derivation || "")}</div></div>`;
+      }).join("");
+      estEl.innerHTML = blocks || `<div class="dim">${esc(est.note || "estimators not ready")}</div>`;
+    }
     for (let p = 1; p <= 22; p++) {
       const v = p === 22 ? ph.ufp : vals[String(p)];
       if (v == null) continue;

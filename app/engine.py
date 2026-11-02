@@ -790,6 +790,8 @@ class PredictionEngine:
                 "brain": brain_consensus,
                 "emotion": emotion_agg,
                 "physics": {
+                    "mechanisms": phys.get("mechanisms") or [],
+                    "estimators": phys.get("estimators") or {},
                     "values": phys["values"],
                     "ufp": phys["ufp"]["value"],
                     "tme": phys["tme"],
@@ -999,6 +1001,8 @@ class PredictionEngine:
                         "n_updates": self.emotions.n_updates.get((symbol, tf), 0),
                     },
                     "physics": {
+                        "mechanisms": phys.get("mechanisms") or [],
+                        "estimators": phys.get("estimators") or {},
                         "values": phys["values"],
                         "ufp": round(physics_sync[tf], 5),
                         "alpha": phys["ufp"]["alpha"],

@@ -187,6 +187,171 @@ def lvd_contribution(profile: dict[str, Any], price: float,
     return max(-1.0, min(1.0, 1.0 - 2.0 * ratio))
 
 
+P_NAMES: dict[int, str] = {
+    1: "PSSA price-state superposition", 2: "WFCP wave-function collapse",
+    3: "HPVU price-volatility uncertainty", 4: "QTPB barrier tunnelling",
+    5: "MEE entanglement entropy", 6: "DRPT trend decoherence",
+    7: "BEOFC order-flow condensation", 8: "FDPD participant distribution",
+    9: "TME thermodynamic efficiency", 10: "PIPP path-integral probability",
+    11: "RGVF renormalisation flow", 12: "SSBD symmetry breaking",
+    13: "GLPLO gravitational lensing", 14: "CELG liquidity-gap Casimir",
+    15: "DSMS Doppler momentum shift", 16: "RTDMP time dilation",
+    17: "BBIR black-body radiation", 18: "TPTI topological transition",
+    19: "GSPI gauge invariance", 20: "PDOBV phonon dispersion",
+    21: "QDPC confidence decoherence", 22: "UFP unified field prediction",
+}
+
+
+def _inactive_reason(sc: "Scene", detail: dict) -> str:
+    """Why is this mechanism at 0.0? Never a silent zero (error F-7:
+    'Physics 0.00' with no reason was the most-reported complaint)."""
+    n = len(sc.P)
+    if n < int(getattr(sc.ctx, "W", 0)):
+        return f"tape too thin ({n} bars < window {sc.ctx.W} min)"
+    if not detail:
+        return ("baseline rings cold — first windows abstain "
+                "(floors are code constants, never restored)")
+    keys = ", ".join(f"{k}={v}" for k, v in list(detail.items())[:3])
+    return f"inputs present but signal below materiality ({keys})"
+
+
+def mechanism_table(values: dict[int, float], details: dict,
+                    sc: "Scene") -> list[dict]:
+    """§6.2 every mechanism returns {covered, score, logic[], why} — the
+    panel lists active AND inactive with the reason."""
+    rows: list[dict] = []
+    for pid in range(1, 22):
+        v = float(values.get(pid, 0.0))
+        d = details.get(f"p{pid}") or {}
+        logic = [f"{k} = {v2}" for k, v2 in list(d.items())[:6]]
+        active = abs(v) > 1e-9
+        rows.append({
+            "id": pid, "name": P_NAMES.get(pid, f"P{pid}"),
+            "covered": bool(active), "active": active,
+            "score": round(v, 6),
+            "why": ("active — mechanism sees coverage on this tape"
+                    if active else _inactive_reason(sc, d)),
+            "logic": logic,
+        })
+    return rows
+
+
+def estimators(sc: "Scene") -> dict:
+    """Round-BU style estimators that PRINT their derivation (§6.1):
+    Kramers-Moyal, Ising chain, fluctuation-dissipation, maximum entropy.
+    NumPy only. Minute bars, per the horizon guidance in §6.3."""
+    import numpy as np
+    P = np.asarray(sc.P, dtype=float)
+    out: dict = {}
+    if len(P) < 8:
+        return {"ready": False, "note": "needs ≥8 bars"}
+
+    # 1) Kramers-Moyal: D1/D2 as conditional moments of 1-minute log-price
+    #    increments in five state bins (state = deviation from the W-mean)
+    r = np.diff(np.log(P))
+    dev = P - P.mean()
+    bins = np.quantile(dev, [0.2, 0.4, 0.6, 0.8]) if len(P) > 10 else None
+    state = np.digitize(dev[1:], bins) if bins is not None else np.zeros(len(r), dtype=int)
+    D1, D2 = [], []
+    for b in range(5):
+        m = state == b
+        rr = r[m] if m.any() else np.array([0.0])
+        D1.append(float(rr.mean()))
+        D2.append(float(rr.var()))
+    T = float(sc.tau)
+    d2 = max(float(np.mean(D2)), 1e-18)
+    d1 = float(np.mean(D1))
+    peclet = d1 * T / (2.0 * d2 * T) ** 0.5
+    slope = float(np.polyfit(range(5), D1, 1)[0]) if len(set(D1)) > 1 else 0.0
+    out["kramers_moyal"] = {
+        "D1": [round(x, 8) for x in D1], "D2": [round(x, 10) for x in D2],
+        "peclet": round(peclet, 4), "d1_slope": round(slope, 8),
+        "derivation": ("D1(x)=E[Δp|x], D2(x)=Var[Δp|x] over 5 state bins "
+                       "(state = deviation from the W-min mean); "
+                       "Péclet = D1·T / √(2·D2·T); slope(D1) > 0 → "
+                       "self-reinforcing, < 0 → restoring"),
+        "regime": ("self-reinforcing" if slope > 0 else "restoring"),
+    }
+
+    # 2) Ising chain on bar-level signs: K = atanh(ρ1),
+    #    susceptibility χ = (1+ρ1)/(1−ρ1), E[next sign] = tanh(K·s̄)
+    signs = np.sign(np.diff(P))
+    signs = signs[signs != 0]
+    if len(signs) > 6:
+        s0, s1 = signs[:-1], signs[1:]
+        rho1 = float(np.corrcoef(s0, s1)[0, 1]) if s0.std() > 0 and s1.std() > 0 else 0.0
+        rho1 = float(np.clip(rho1, -0.999, 0.999))
+        K = float(np.arctanh(rho1))
+        chi = (1 + rho1) / (1 - rho1)
+        s_bar = float(signs.mean())
+        out["ising"] = {
+            "rho1": round(rho1, 5), "K": round(K, 5),
+            "susceptibility": round(chi, 4),
+            "expected_next_sign": round(float(np.tanh(K * s_bar)), 4),
+            "derivation": ("ρ1 = corr(sign_n, sign_{n+1}); K = atanh(ρ1); "
+                           "χ = (1+ρ1)/(1−ρ1); E[sign] = tanh(K·s̄)"),
+        }
+
+    # 3) Fluctuation-dissipation: Kyle λ = cov(Δp, f)/var(f), Θ = R²,
+    #    gated by 0.05 + 0.95·Θ (never exactly zero)
+    if len(r) > 6:
+        f = np.diff(P) * np.sign(r)        # signed flow proxy (len = len(r))
+        var_f = float(f.var())
+        if var_f > 1e-18:
+            lam = float(np.cov(r, f)[0, 1] / var_f)
+            # R² of the linear fit
+            b = np.cov(f, r)[0, 1] / var_f
+            resid = r - b * f
+            theta = 1.0 - float(resid.var()) / max(float(r.var()), 1e-18)
+            theta = max(0.0, min(1.0, theta))
+            gate = 0.05 + 0.95 * theta
+            out["fdt"] = {
+                "kyle_lambda": round(lam, 8), "theta": round(theta, 4),
+                "gate": round(gate, 4),
+                "expected_move": round(lam * float(f[-1]), 10),
+                "derivation": ("λ = cov(Δp, f)/var(f); Θ = R² of Δp~f; "
+                               "flow-driven move = λ·f; diffusion width "
+                               "σ√W; gated by 0.05 + 0.95·Θ"),
+            }
+
+    # 4) Maximum entropy (Jaynes): p(r) ∝ exp(λ1·r + λ2·r²) on the observed
+    #    support, Newton-solved to the sample mean/variance; P(up)=Σ p[r>0]
+    if len(r) > 5:
+        mu, var = float(r.mean()), max(float(r.var()), 1e-18)
+        l1, l2 = 0.0, 0.0
+        for _ in range(25):
+            w = np.exp(np.clip(l1 * r + l2 * r * r, -50, 50))
+            Z = float(w.sum())
+            if Z <= 0:
+                break
+            p = w / Z
+            m1 = float(p @ r)
+            m2 = float(p @ (r * r))
+            e1, e2 = m1 - mu, m2 - (var + mu * mu)
+            # Jacobian via covariances of (r, r²)
+            c11 = float(p @ ((r - m1) ** 2))
+            c22 = float(p @ ((r * r - m2) ** 2))
+            c12 = float(p @ ((r - m1) * (r * r - m2)))
+            det = c11 * c22 - c12 * c12
+            if abs(det) < 1e-30:
+                break
+            l1 -= (e1 * c22 - e2 * c12) / det
+            l2 -= (c11 * e2 - c12 * e1) / det
+            if abs(e1) < 1e-12 and abs(e2) < 1e-12:
+                break
+        w = np.exp(np.clip(l1 * r + l2 * r * r, -50, 50))
+        p = w / max(float(w.sum()), 1e-30)
+        out["maxent"] = {
+            "lambda1": round(float(l1), 5), "lambda2": round(float(l2), 5),
+            "p_up": round(float(p[r > 0].sum()), 4),
+            "derivation": ("Jaynes p(r) ∝ exp(λ1·r + λ2·r²) on the observed "
+                           "return support, Newton-matched to the sample "
+                           "mean/variance; P(up) = Σ p[r>0]"),
+        }
+    out["ready"] = True
+    return out
+
+
 class Scene:
     """Everything the 21 formulas share for one (symbol, timeframe)."""
 
@@ -1214,6 +1379,10 @@ class PhysicsSystem:
 
         out: dict[str, Any] = {
             "values": {p: round(values[p], 6) for p in values},
+            # §6.1/§6.2: mechanism table (active+inactive WITH reason) and
+            # the four derivation-printing estimators (§6.1 Round BU)
+            "mechanisms": mechanism_table(values, details, sc),
+            "estimators": estimators(sc),
             "ufp": ufp,
             "tme": round(tme, 6),
             "wfcp": round(wfcp, 6),
