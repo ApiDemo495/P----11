@@ -679,6 +679,35 @@ async function loadFormulas() {
           <div class="hint">Forward P(up) is settled strict-sign from this ledger — n≥30 per bucket before it speaks (advice §2.7). Current value beside it: superposition (§2.8).</div>`;
       }
     } catch (e) { console.warn("forward/flat:", e); }
+    // §7 genesis: pool counts, next generation, top formula + 7 metrics
+    try {
+      const [gs, gf] = await Promise.all([
+        api("/api/genesis/status"), api("/api/genesis/formulas"),
+      ]);
+      const ge = $("#fl-genesis");
+      if (ge) {
+        const st = gs.states || {};
+        const rows = (gf.formulas || []).slice(0, 6);
+        ge.innerHTML = `<div class="kv-row">
+          <div class="kv"><span>pool</span><b>${gs.pool}</b></div>
+          <div class="kv"><span>states</span><b>${Object.entries(st).map(([k, v]) => `${k} ${v}`).join(" · ") || "empty"}</b></div>
+          <div class="kv"><span>next generation</span><b>in ${gs.next_generation_in_s}s</b></div>
+          <div class="kv"><span>passes</span><b>${gs.generation_count}</b></div>
+        </div>
+        <table class="tbl" style="margin-top:6px">
+          <thead><tr><th>ID</th><th>DOMAIN</th><th>STATE</th><th>HIT</th><th>IC</th><th>STAB</th><th>TURN</th><th>max|ρ|</th><th>µs</th><th>n</th></tr></thead>
+          <tbody>${rows.map(f => `<tr class="${f.state === "retired" ? "acc-dn" : ""}">
+            <td title="${esc(f.definition)}">${esc(f.id.split(":")[1] || f.id)}</td>
+            <td>${esc(f.domain_name)}</td><td>${f.state}</td>
+            <td>${f.metrics.hit_rate ?? "—"}</td><td>${f.metrics.ic ?? "—"}</td>
+            <td>${f.metrics.stability ?? "—"}</td><td>${f.metrics.turnover ?? "—"}</td>
+            <td>${f.metrics.max_corr ?? "—"}</td><td>${f.metrics.latency_us ?? "—"}</td>
+            <td>${f.metrics.n ?? 0}</td></tr>
+            ${f.autopsy ? `<tr><td colspan="10" class="dim">🩺 ${esc(f.autopsy)}</td></tr>` : ""}`).join("")}</tbody>
+        </table>
+        <div class="hint">${esc(gs.rules || "")}</div>`;
+      }
+    } catch (e) { console.warn("genesis:", e); }
     drawSparks(fh.core || {});
   } catch (e) { toast("formulas: " + e.message, "err"); }
 }

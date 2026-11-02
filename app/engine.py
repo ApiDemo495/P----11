@@ -60,11 +60,37 @@ from .formulas import FORMULA_FUNCTIONS, FORMULA_NAMES, compute_all
 from .formulas.trace import traced_compute
 from .forward import ForwardTables
 from .meta import MetaCombiner
+from . import genesis as genesis_mod
 
 # §2.10 non-directional components: never a direction vote (confidence /
 # regime routing only). 97-101 are the brain/emotion/physics/news/hedge
 # subsystem inputs to the CCI; 20 is DRHE the regime gauge.
 NON_VOTING_IDS = frozenset({20, 97, 98, 99, 100, 101})
+
+
+def _mean(xs):
+    return sum(xs) / len(xs) if xs else 0.0
+
+
+def np_var(xs):
+    if not xs:
+        return 0.0
+    m = _mean(xs)
+    return sum((x - m) ** 2 for x in xs) / len(xs)
+
+
+def _pearson(a, b):
+    n = min(len(a), len(b))
+    if n < 3:
+        return 0.0
+    a, b = a[:n], b[:n]
+    ma, mb = _mean(a), _mean(b)
+    num = sum((x - ma) * (y - mb) for x, y in zip(a, b))
+    da = sum((x - ma) ** 2 for x in a) ** 0.5
+    db = sum((y - mb) ** 2 for y in b) ** 0.5
+    if da < 1e-12 or db < 1e-12:
+        return 0.0
+    return max(-1.0, min(1.0, num / (da * db)))
 AGENT_DEADLINE_S = 20.0        # §0.1 agent timeout at the 22-min horizon
 from .formulas.f01_f10 import abs_changes as _abs_changes
 from .formulas._helpers import mean as _mean, pearson as _pearson, sign as _sign, std_pop as _std_pop
@@ -120,6 +146,9 @@ class PredictionEngine:
         # forward expectancy tables + flat watch (advice §2.7 / §2.9)
         self.forward = ForwardTables()
         self.meta = MetaCombiner()          # §8.4 meta-combiner + §8.5 ledger
+        # §7 genesis: generated formulas under a hard fitness regime
+        self.genesis = genesis_mod.GenesisLayer()
+        self._genesis_values: dict[tuple[str, str], dict[str, float]] = {}
         # §11.2 agent call discipline: one call per window + hard deadline
         # (lead ≈ agent_timeout + 1.5s + formula pass, ≤2% of W → 20s at 22m)
         self._agent_cache: dict = {}
@@ -187,6 +216,7 @@ class PredictionEngine:
     # lifecycle
     # ==================================================================
     async def start(self) -> None:
+        self.genesis.start_worker()
         self.cci.load()
         # Section 10: learned weights/brain state resume from the JSON file
         self.learning.load_state(engine=self, brains=self.brains)
@@ -199,6 +229,7 @@ class PredictionEngine:
         self._tasks.append(asyncio.create_task(self._tick_loop()))
 
     async def stop(self) -> None:
+        self.genesis.stop()
         self._stop.set()
         for t in self._tasks:
             t.cancel()
@@ -453,6 +484,13 @@ class PredictionEngine:
             self.last_traces[(symbol, tf)] = _traces
             if _anoms:
                 self.auditor.report_anomalies(symbol, tf, _anoms, raws[tf])
+            # §7 genesis: evaluate admitted candidates on this window
+            # (features from the same tape — one shared feature build)
+            _gfeat = genesis_mod.build_features(ctx.P, ctx.V)
+            _gact = [e["id"] for e in self.genesis.formulas.values()
+                     if e["state"] == "active"]
+            self._genesis_values[(symbol, tf)] = \
+                genesis_mod.evaluate_active(_gfeat, _gact)
 
         # 2) Bgn synchronization of every registered formula across timeframes
         adj: dict[str, dict[int, float]] = {tf: {} for tf in TF_ORDER}
@@ -984,11 +1022,24 @@ class PredictionEngine:
                     "rung": (_lad_src.split("→")[0][:40] or "fused score"),
                 }
                 results[tf]["mass"] = self._mass_for_against(_comps, _lad)
+                # §8.6 learners: edge guard, temporal twin, BOCPD clock,
+                # Hawkes boundary intensity — printed features, never
+                # silently absorbed into the score
+                results[tf]["learners"] = self._learners(symbol, tf, ctxs[tf])
+                try:
+                    _gv = self.genesis.live_score(
+                        self._genesis_values.get((symbol, tf)) or {})
+                    results[tf]["genesis"] = _gv
+                except Exception:
+                    results[tf]["genesis"] = {"score": 0.0, "weight": 0.0,
+                                              "n_active": 0}
                 self.prev_cci_dir[(symbol, tf)] = _lad
                 self.display_systems[(symbol, tf)] = {
                     "lock": dict(self.locks.get((symbol, tf)) or {}),
                     "ladder": dict(results[tf]["ladder"]),
                     "mass": results[tf]["mass"],
+                    "genesis": dict(results[tf].get("genesis") or {}),
+                    "learners": dict(results[tf].get("learners") or {}),
                     "brain": brain_consensus,
                     "emotion": {
                         "aggregate": round(cerc_sync[tf], 5),
@@ -1208,6 +1259,19 @@ class PredictionEngine:
             lean += float(c.get("contribution") or 0.0)
             if abs(float(c.get("contribution") or 0.0)) > 1e-9:
                 lean_top.append(f"{c.get('name', fid)} {float(c['contribution']):+.4f}")
+        # §7: genesis is ONE fusion vote whose weight is earned by the
+        # active set's record — it joins the lean, printed with it
+        try:
+            gv = self.genesis.vote()
+            g_vals = self._genesis_values.get((symbol, tf)) or {}
+            gscore = self.genesis.live_score(g_vals)
+            g_term = float(gscore.get("score") or 0.0) * float(gscore.get("weight") or 0.0)
+            if g_term:
+                lean += g_term
+                lean_top.append(f"genesis {g_term:+.4f} (w={gscore['weight']}, "
+                                f"n_active={gscore['n_active']})")
+        except Exception:
+            pass
         if abs(lean) > 1e-6:
             d = 1 if lean > 0 else -1
             return (d,
@@ -1313,6 +1377,76 @@ class PredictionEngine:
                     "watchdog": "/api/watchdog",
                     "secrets": "/api/secrets/status (no secrets in files)",
                 }}
+
+    def _learners(self, symbol: str, tf: str, ctx) -> dict:
+        """§8.6: edge guard (flat windows), temporal twin (segmented vs
+        single-leg variance), BOCPD run-length clock (hazard 1/14), Hawkes
+        boundary intensity of lock flips/vetoes."""
+        P = list(ctx.P)
+        out: dict[str, Any] = {}
+        # edge guard: price sitting at one point
+        if len(P) >= 10:
+            rng = (max(P[-10:]) - min(P[-10:])) / (abs(P[-1]) + 1e-12)
+            out["edge_guard"] = {
+                "flat": bool(rng < 0.0004),
+                "range_bps": round(rng * 1e4, 2),
+                "reason": ("flat window — price sitting at one point; "
+                           "the contest is a coin flip with costs"
+                           if rng < 0.0004 else
+                           f"range {rng * 1e4:.1f} bps over last 10 bars"),
+            }
+        # temporal twin: one W-leg vs split A+B with the covariance term
+        if len(P) >= 12:
+            r = [(P[i] - P[i - 1]) / P[i - 1] for i in range(1, len(P))]
+            half = max(3, len(r) // 2)
+            ra, rb = r[:half], r[half:]
+            var_a = float(np_var(ra))
+            var_b = float(np_var(rb))
+            sa, sb = var_a ** 0.5, var_b ** 0.5
+            rho = _pearson(ra, rb) if len(ra) == len(rb) and len(ra) > 2 else 0.0
+            var_seg = var_a + var_b + 2 * rho * sa * sb
+            var_whole = float(np_var(r))
+            out["temporal_twin"] = {
+                "var_single_leg": round(var_whole, 10),
+                "var_segmented": round(var_seg, 10),
+                "rho": round(rho, 4),
+                "decay_spread": round(var_whole - var_seg, 10),
+                "note": ("var_W = var_A + var_B + 2ρσ_Aσ_B — the spread is "
+                         "the volatility-decay signal; only the real "
+                         "contest leg ever settles"),
+            }
+        # BOCPD run-length clock, hazard 1/14 windows
+        ring = list(self.hist.ring(self.hist.tf_key(symbol, tf, "bocpd_r"), 64))
+        last_move = (P[-1] - P[-2]) / P[-2] if len(P) >= 2 and P[-2] else 0.0
+        # hazard h = 1/14: posterior run length updates on surprise
+        h = 1.0 / 14.0
+        surprise = abs(last_move) / (float(np_var([ (P[i]-P[i-1])/P[i-1] for i in range(1, len(P)) ])) ** 0.5 + 1e-12) if len(P) > 3 else 0.0
+        rl = (ring[-1] if ring else 0.0)
+        if surprise > 2.5:
+            rl = 0.0                      # change point
+        else:
+            rl = min(64.0, rl + 1.0)
+        r2 = self.hist.ring(self.hist.tf_key(symbol, tf, "bocpd_r"), 64)
+        r2.append(rl)
+        out["bocpd"] = {"run_length_windows": int(rl),
+                        "hazard": round(h, 4),
+                        "surprise_z": round(surprise, 3),
+                        "note": "hazard 1/14 — a jump > 2.5σ resets the clock"}
+        # Hawkes boundary intensity of recent lock flips/vetoes
+        # (in-memory event list — the hist Ring only appends)
+        evs = getattr(self, "_hawkes_events", None)
+        if evs is None:
+            evs = self._hawkes_events = {}
+        key = (symbol, tf)
+        now = time.time()
+        evs.setdefault(key, []).append(now)
+        evs[key] = [t for t in evs[key] if now - t < 3600][-32:]
+        tau = 600.0
+        lam = sum(math.exp(-(now - t) / tau) for t in evs[key]) / tau
+        out["hawkes"] = {"intensity": round(lam, 6),
+                         "events_1h": len(evs[key]),
+                         "note": "Σ exp(−Δt/τ)/τ over boundary events, τ=600s"}
+        return out
 
     def _flat_payload(self, cap: int = 8) -> dict:
         """§2.9 flat watch: share of the last 50 locks each formula spent
@@ -1944,6 +2078,15 @@ class PredictionEngine:
                                         price)
                 except Exception:
                     pass
+            # §7 genesis: score the admitted set walk-forward on the
+            # settled move (never in-sample)
+            if prev.get("genesis_values"):
+                try:
+                    self.genesis.score_walk_forward(
+                        prev["genesis_values"],
+                        price - float(prev.get("price") or 0.0))
+                except Exception:
+                    pass
             # meta-combiner + evidence ledger: settle the previous lock's
             # frozen subsystem inputs (advice §8.4/§8.5)
             if prev.get("inputs"):
@@ -1991,6 +2134,7 @@ class PredictionEngine:
             "relocks": 0, "relock_at": None,
             "fv": fv,
             "inputs": inputs,
+            "genesis_values": dict(self._genesis_values.get((symbol, tf)) or {}),
         }
         self._maybe_review_hindsight(symbol, tf, now)   # cadence-gated §8.3
         self._save_locks()

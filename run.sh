@@ -58,6 +58,26 @@ if [ "${1:-}" = "--supervise" ]; then
     exit 75
   fi
   echo "run.sh --supervise: ready (child pid $child), holding lock"
+  # §9 supervisor: health-check every 10s; six consecutive failures ->
+  # TERM, KILL, relaunch (lock stays held by this parent on fd 9)
+  fails=0
+  while kill -0 "$child" 2>/dev/null; do
+    sleep 10
+    if curl -sf "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+      fails=0
+    else
+      fails=$((fails + 1))
+      if [ "$fails" -ge 6 ]; then
+        echo "run.sh --supervise: 6 failed health checks — TERM/KILL/relaunch" >&2
+        kill -TERM "$child" 2>/dev/null || true
+        sleep 3
+        kill -KILL "$child" 2>/dev/null || true
+        "$0" --run 9>&- &
+        child=$!
+        fails=0
+      fi
+    fi
+  done
   wait "$child"; exit $?
 fi
 if [ "${1:-}" = "--run" ]; then

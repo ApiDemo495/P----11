@@ -66,6 +66,23 @@ app = FastAPI(title="Crypto Prediction 4", version="1.0.0",
               docs_url="/api-docs", redoc_url="/api-redoc")
 
 
+async def _vault_loop() -> None:
+    """§9 state vault (E-7): persist learned state every 30s — formula
+    states, hindsight rows, meta/forward fits, outcomes, brain weights —
+    so a restart never forgets the streak."""
+    while True:
+        try:
+            await asyncio.sleep(30.0)
+            engine.learning.save_state(engine=engine, brains=engine.brains)
+            engine.forward.save()
+            engine.genesis.save()
+            engine.hindsight()          # reads rings; keeps payload warm
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("vault save failed")
+
+
 async def _startup_watchdog() -> None:
     """§9/J-5: under --supervise, exit 75 if readiness never lands within
     30s — supervisors see a real failure instead of a hung boot."""
@@ -89,11 +106,15 @@ async def _startup() -> None:
     global _learning_task
     _learning_task = asyncio.create_task(_hourly_learning_loop())
     asyncio.create_task(_startup_watchdog())
+    app.state._vault_task = asyncio.create_task(_vault_loop())
     log.info("application started (feed=%s)", feed.mode)
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
+    vt = getattr(app.state, "_vault_task", None)
+    if vt is not None:
+        vt.cancel()
     if _learning_task is not None:
         _learning_task.cancel()
     await clock.stop()
@@ -466,6 +487,34 @@ async def feeds_diagnose() -> JSONResponse:
                              "real history, chip goes SIMULATED TAPE",
         },
     })
+
+
+@app.get("/api/genesis/status")
+async def genesis_status() -> JSONResponse:
+    """§7 pool counts, next generation time, rules (NumPy only)."""
+    return JSONResponse({"ok": True, **engine.genesis.status(),
+                         "vote": engine.genesis.live_score({})})
+
+
+@app.get("/api/genesis/formulas")
+async def genesis_formulas() -> JSONResponse:
+    """§7 every candidate with its seven metrics + lifecycle state."""
+    return JSONResponse({"ok": True, "formulas": engine.genesis.formulas_payload()})
+
+
+@app.get("/api/genesis/formulas/{fid:path}")
+async def genesis_formula(fid: str) -> JSONResponse:
+    d = engine.genesis.formula_detail(fid)
+    if not d:
+        return JSONResponse({"ok": False, "error": "unknown formula"},
+                            status_code=404)
+    return JSONResponse({"ok": True, "formula": d})
+
+
+@app.get("/api/genesis/domains")
+async def genesis_domains() -> JSONResponse:
+    """§7 the ten domains with the maths of each."""
+    return JSONResponse({"ok": True, "domains": engine.genesis.domains_payload()})
 
 
 @app.get("/api/degrade")
