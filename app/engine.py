@@ -59,6 +59,11 @@ from .feed import MarketFeed
 from .formulas import FORMULA_FUNCTIONS, FORMULA_NAMES, compute_all
 from .formulas.trace import traced_compute
 from .forward import ForwardTables
+
+# §2.10 non-directional components: never a direction vote (confidence /
+# regime routing only). 97-101 are the brain/emotion/physics/news/hedge
+# subsystem inputs to the CCI; 20 is DRHE the regime gauge.
+NON_VOTING_IDS = frozenset({20, 97, 98, 99, 100, 101})
 from .formulas.f01_f10 import abs_changes as _abs_changes
 from .formulas._helpers import mean as _mean, pearson as _pearson, sign as _sign, std_pop as _std_pop
 from .formulas.f22_f31 import f30_pcv, fractal_boundary_levels
@@ -112,6 +117,9 @@ class PredictionEngine:
         self.last_traces: dict[tuple[str, str], dict] = {}
         # forward expectancy tables + flat watch (advice §2.7 / §2.9)
         self.forward = ForwardTables()
+        # fused-score history for the noise floor (advice §8.2 step 1)
+        from collections import deque as _dq2
+        self.score_hist: dict[tuple[str, str], _dq2] = {}
         from collections import deque as _dq
         self.flat: dict[tuple[str, str, int], _dq] = {}
         self.readiness: dict[str, bool] = {
@@ -920,8 +928,30 @@ class PredictionEngine:
                        f"Confidence {fin['confidence']:.3f} below the 0.35 floor — "
                        "correct call is NO TRADE until signals align.")
                 )
+                # advice §8.2 direction ladder + §8.1 weighted mass —
+                # printed with the pick so the WHY panel shows WHICH rung
+                # decided the side (never a bare arrow).
+                _prev_lock = self.locks.get((symbol, tf)) or {}
+                _now_l = time.time()
+                _prev_side = (int(_prev_lock.get("side") or 0)
+                              if float(_prev_lock.get("window_end") or 0) < _now_l
+                              else self.prev_cci_dir.get((symbol, tf), 0))
+                _lad, _lad_src, _floor = self._direction_ladder(
+                    symbol, tf, float(pack["cci_adjusted"]), _comps,
+                    brain_consensus, _prev_side)
+                pack["direction"] = _lad
+                results[tf]["direction"] = _lad
+                results[tf]["ladder"] = {
+                    "source": _lad_src, "noise_floor": round(_floor, 5),
+                    "score": round(float(pack["cci_adjusted"]), 5),
+                    "rung": (_lad_src.split("→")[0][:40] or "fused score"),
+                }
+                results[tf]["mass"] = self._mass_for_against(_comps, _lad)
+                self.prev_cci_dir[(symbol, tf)] = _lad
                 self.display_systems[(symbol, tf)] = {
                     "lock": dict(self.locks.get((symbol, tf)) or {}),
+                    "ladder": dict(results[tf]["ladder"]),
+                    "mass": results[tf]["mass"],
                     "brain": brain_consensus,
                     "emotion": {
                         "aggregate": round(cerc_sync[tf], 5),
@@ -1076,6 +1106,113 @@ class PredictionEngine:
             "edges": edges,
         }
 
+    def _direction_ladder(self, symbol: str, tf: str, score: float,
+                          comps: list, brain: dict, prev_side: int) -> tuple[int, str, float]:
+        """§8.2 direction ladder — always returns a side, and PRINTS which
+        rung decided it.  1) fused score beyond the measured noise floor
+        max(0.02, 0.5·median|score| of the last 60 windows)
+        2) the horizon-matched window formulas' lean (magnitude-weighted,
+           tie-risk/non-directional excluded)
+        3) the brain's vote if confidence ≥ 25%
+        4) the previous window's side
+        5) BUY.   HOLD does not exist — the contest forces a side."""
+        hist = self.score_hist.setdefault((symbol, tf), __import__("collections").deque(maxlen=60))
+        hist.append(abs(score))
+        if len(hist) >= 10:
+            ordered = sorted(hist)
+            med = ordered[len(ordered) // 2]
+        else:
+            med = 0.0
+        floor = max(0.02, 0.5 * med)
+
+        # rung 1: the fused score itself
+        if abs(score) > floor:
+            d = 1 if score > 0 else -1
+            return (d,
+                    f"fused score {score:+.4f} leans {'up' if d > 0 else 'down'} — "
+                    f"|score| {abs(score):.4f} > noise floor {floor:.4f}",
+                    floor)
+
+        # rung 2: window-formula lean (directional formula components only)
+        lean = 0.0
+        lean_top = []
+        for c in comps or []:
+            try:
+                fid = int(c.get("id"))
+            except (TypeError, ValueError):
+                continue
+            # §2.10: non-directional indicators NEVER vote — DRHE (20) and
+            # the subsystem components (brain/emotion/physics/news/hedge)
+            # modulate confidence and route regimes only.
+            if fid in NON_VOTING_IDS:
+                continue
+            lean += float(c.get("contribution") or 0.0)
+            if abs(float(c.get("contribution") or 0.0)) > 1e-9:
+                lean_top.append(f"{c.get('name', fid)} {float(c['contribution']):+.4f}")
+        if abs(lean) > 1e-6:
+            d = 1 if lean > 0 else -1
+            return (d,
+                    f"score {score:+.4f} inside noise floor {floor:.4f} → "
+                    f"formula lean {lean:+.4f} ({'; '.join(lean_top[:3])})",
+                    floor)
+
+        # rung 3: brain vote at ≥ 25 % confidence
+        b_dir = int((brain or {}).get("polarity") or 0)
+        b_str = float((brain or {}).get("strength") or 0.0)
+        if b_dir != 0 and b_str >= 0.25:
+            return (b_dir,
+                    f"score and lean both flat (floor {floor:.4f}) → brain "
+                    f"vote {'UP' if b_dir > 0 else 'DOWN'} "
+                    f"(strength {b_str:.2f} ≥ 0.25)",
+                    floor)
+
+        # rung 4: previous window's side
+        if prev_side in (1, -1):
+            return (prev_side,
+                    f"no decisive input (floor {floor:.4f}) → previous "
+                    f"window's side {'UP' if prev_side > 0 else 'DOWN'}",
+                    floor)
+
+        # rung 5: BUY
+        return (1,
+                f"all rungs flat (noise floor {floor:.4f}) → BUY "
+                f"(contest forces a side — HOLD does not exist)",
+                floor)
+
+    @staticmethod
+    def _mass_for_against(comps: list, side: int) -> dict:
+        """§8.1: print the consensus as weighted mass for and against, plus
+        the strongest supporters and opponents (4–6), and the non-directional
+        subsystem votes separately (they modulate, never vote)."""
+        for_mass = against = 0.0
+        supporters: list[dict] = []
+        opponents: list[dict] = []
+        subsystems: dict[str, float] = {}
+        for c in comps or []:
+            contribution = float(c.get("contribution") or 0.0)
+            try:
+                fid = int(c.get("id"))
+            except (TypeError, ValueError):
+                fid = None
+            if fid is None or fid in NON_VOTING_IDS:
+                subsystems[c.get("name", "?")] = round(contribution, 5)
+                continue
+            sgn = 1 if contribution > 0 else -1
+            if side == 0 or sgn == side:
+                for_mass += abs(contribution)
+                supporters.append(c)
+            else:
+                against += abs(contribution)
+                opponents.append(c)
+        supporters.sort(key=lambda c: -abs(float(c.get("contribution") or 0)))
+        opponents.sort(key=lambda c: -abs(float(c.get("contribution") or 0)))
+        pick = lambda lst: [{"name": c.get("name"), "value": c.get("value"),
+                             "contribution": c.get("contribution")}
+                            for c in lst[:6]]
+        return {"for": round(for_mass, 5), "against": round(against, 5),
+                "supporters": pick(supporters), "opponents": pick(opponents),
+                "subsystem_votes": subsystems}
+
     def _flat_payload(self, cap: int = 8) -> dict:
         """§2.9 flat watch: share of the last 50 locks each formula spent
         inside ±0.02, with the zero reason when it had one. Offenders only."""
@@ -1215,7 +1352,14 @@ class PredictionEngine:
             if gw > 0 and gd > 0:
                 factor = 1.0 + gw * gd * res.get("base_confidence", 0.0)
                 res["cci_adjusted"] = res["cci_adjusted"] * factor
-                res["direction"] = _sign(res["cci_adjusted"])
+                _lad2, _src2, _fl2 = self._direction_ladder(
+                    symbol, tf, float(res["cci_adjusted"]),
+                    (res.get("breakdown") or {}).get("components") or [],
+                    res.get("brain") or {},
+                    self.prev_cci_dir.get((symbol, tf), 0))
+                res["direction"] = _lad2
+                res["ladder"] = {"source": _src2, "noise_floor": round(_fl2, 5),
+                                 "score": round(float(res["cci_adjusted"]), 5)}
             res["agent"] = {
                 "direction": g_dir, "confidence": round(gd, 4),
                 "weight": round(gw, 5), "source": sig.get("source", "none"),
@@ -1243,6 +1387,8 @@ class PredictionEngine:
             disp = self.display_systems.get((symbol, tf))
             if disp is not None:
                 disp["agent"] = res.get("agent")
+                if res.get("ladder"):
+                    disp["ladder"] = dict(res["ladder"])
                 disp["lock"] = dict(self.locks.get((symbol, tf)) or {})
                 disp["double_check"] = dc
                 disp["confidence"] = round(res.get("confidence", 0.0), 4)

@@ -381,7 +381,21 @@ function renderWhy() {
       <div class="dim">locked reasoning (immutable until next window): ${String(lk.reason || "").slice(0, 220)}</div>
       <div class="dim">live values below refresh continuously — they do NOT change the lock.</div>
     </div>` : "";
-  el.innerHTML = lockBlock + `
+  // advice §8.1/8.2: WHICH ladder rung decided the side + weighted mass
+  const lad = s.ladder || null;
+  const mass = s.mass || null;
+  const ladderBlock = lad ? `
+    <div class="lock-block">
+      <b>🧭 DIRECTION LADDER</b> ${esc(lad.source || "")}
+      <div class="dim">noise floor ${fmt(lad.noise_floor, 4)} · fused score ${fmt(lad.score, 5)}</div>
+      ${mass ? `<div class="dim">weighted mass for <b class="up">${fmt(mass.for, 4)}</b>
+        vs against <b class="down">${fmt(mass.against, 4)}</b>
+        · top for: ${(mass.supporters || []).map(x => `${esc(x.name)} ${fmt(x.value, 2)}`).join(", ") || "—"}
+        · top against: ${(mass.opponents || []).map(x => `${esc(x.name)} ${fmt(x.value, 2)}`).join(", ") || "—"}</div>
+      <div class="dim">subsystem votes (never vote — modulate only):
+        ${Object.entries(mass.subsystem_votes || {}).map(([k, v]) => `${esc(k)} ${fmt(v, 4)}`).join(" · ") || "—"}</div>` : ""}
+    </div>` : "";
+  el.innerHTML = lockBlock + ladderBlock + `
     <div class="why-head">
       <div class="why-dir ${dir > 0 ? "up" : dir < 0 ? "down" : "flat"}">
         ${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO TRADE"}<span class="sym">${S.symbol} · ${tf.toUpperCase()} · ${TF_META[tf].mins}m</span></div>
