@@ -903,6 +903,18 @@ async function loadBrains() {
       wrap.appendChild(card);
     });
     renderCorel(s.corelation);
+    // §3.3 wiring + A-2/A-3 probes (cached server-side after first run)
+    try {
+      const w = await api(`/api/brain/wiring?symbol=${S.symbol}&tf=${S.focusTf}`);
+      const pp = w.push_pull || {};
+      $("#br-wiring").innerHTML = `<div class="kv-row">
+        <div class="kv"><span>channels oriented</span><b class="${w.all_oriented ? "acc-up" : "acc-dn"}">${(w.channels || []).length - (w.misoriented || 0)}/${(w.channels || []).length}${(w.calibrated || []).length ? ` · calibrated ${w.calibrated.length}` : ""}</b></div>
+        <div class="kv"><span>push-pull odd-sum</span><b class="${pp.odd_ok ? "acc-up" : "acc-dn"}">${fmt(pp.odd_sum, 4)}</b></div>
+        <div class="kv"><span>DC offset removed</span><b>${fmt(pp.dc_offset, 4)}</b></div>
+        <div class="kv"><span>+1 probe reads</span><b>${pp.oriented ? "approach ✓" : "WRONG VALENCE ✗"}</b></div>
+      </div>
+      <div class="hint">${esc(pp.note || "")} · raw odd-sum ${fmt(pp.raw_odd_sum, 4)} · ${esc(w.rule || "")}</div>`;
+    } catch (e) { console.warn("wiring:", e); }
     const hf = s.hedge || {};
     const em = s.emotion || {};
     const ph = s.physics || {};

@@ -1325,6 +1325,13 @@ class PredictionEngine:
                                if self.physics.ready else {}),
         }
 
+    def brain_wiring(self, symbol: str = "BTC", tf: str = "tf1") -> dict:
+        """§3.3 wiring table + polarity/odd-symmetry probes on live inputs."""
+        ctx = self.build_ctx(symbol, tf)
+        market = self._build_market(symbol)
+        thing2 = self._thing2(symbol, tf, ctx, self._atr(ctx), market)
+        return self.brains.wiring(symbol, tf, market, thing2)
+
     def brain_geometry(self) -> dict:
         """Static connectome geometry for the 3D brain visualization."""
         return self.brains.geometry()

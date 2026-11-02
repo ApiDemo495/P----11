@@ -381,6 +381,7 @@ class BrainSystem:
         affinity: dict[int, float],
         thing2: dict,
         advance: bool = True,
+        settle_steps: int = 1,
     ) -> dict:
         """Run all four instances for one (asset, timeframe).
 
@@ -425,8 +426,9 @@ class BrainSystem:
                     until = self._inhibited.get((tf, fid), 0.0)
                     if until > now_ts:
                         factor = 0.5      # diagnostic inhibition
+                    sign_ = self._channel_sign.get(fid, 1.0)
                     for k in range(per_formula):
-                        inputs[aff_list[f_pos * per_formula + k]] = affinity[fid] * factor
+                        inputs[aff_list[f_pos * per_formula + k]] = affinity[fid] * factor * sign_
 
             # --- Thing 2 assignments ------------------------------------
             if brain.id == "DB-1":
@@ -468,6 +470,10 @@ class BrainSystem:
             # --- propagate ----------------------------------------------
             prev = brain.state_for(symbol, tf)
             new_state = conn.sweep(prev, inputs)
+            # probes settle locally so sensory inputs can reach the MBON
+            # readout; production runs one sweep per GRC (advance=True)
+            for _ in range(max(0, settle_steps - 1)):
+                new_state = conn.sweep(new_state, inputs)
             if advance:
                 brain.states[(symbol, tf)] = new_state
             state = new_state
@@ -531,6 +537,10 @@ class BrainSystem:
         w_tot = sum(wts) or 1.0
         mean_signal = sum(r["h_signal"] * wts[i]
                           for i, r in enumerate(results)) / w_tot
+        # push-pull readout (deviation 22-D / error A-2): subtract the
+        # calibrated resting offset so score is an odd function of input
+        mean_signal = max(-1.0, min(1.0,
+                          mean_signal - getattr(self, "_dc_offset", 0.0)))
         polarity = 1 if mean_signal > 1e-6 else (-1 if mean_signal < -1e-6 else 0)
         agree = sum(1 for r in results if r["h_signal"] != 0
                     and (r["h_signal"] > 0) == (mean_signal > 0))
@@ -637,6 +647,10 @@ class BrainSystem:
             self._inhibited[(tf, int(fid))] = until
 
     def state_dict(self) -> dict:
+        base_calibration = {
+            "channel_sign": {str(k): v for k, v in self._channel_sign.items()},
+            "dc_offset": getattr(self, "_dc_offset", 0.0),
+        }
         return {
             "pattern_valence": {s: [round(x, 5) for x in v]
                                 for s, v in self.pattern_valence.items()},
@@ -647,6 +661,7 @@ class BrainSystem:
             "inhibited": {f"{tf}|{fid}": until
                           for (tf, fid), until in self._inhibited.items()},
             "reward_windows": {str(k): v for k, v in self.reward_windows.items()},
+            "calibration": base_calibration,
         }
 
     def load_state(self, d: dict) -> None:
@@ -663,6 +678,116 @@ class BrainSystem:
             self._inhibited[(tf, int(fid))] = float(until)
         for key, v in (d.get("reward_windows") or {}).items():
             self.reward_windows[int(key)] = [float(x) for x in v[-50:]]
+        cal = d.get("calibration") or {}
+        self._channel_sign = {int(k): float(v)
+                             for k, v in (cal.get("channel_sign") or {}).items()}
+        self._dc_offset = float(cal.get("dc_offset") or 0.0)
+
+    # ------------------------------------------------------------------
+    # advice §3.3/§3.4 probes: odd-symmetry (A-2), channel polarity (A-3),
+    # wiring table (formula → channel), reconnect (A-6 loading states).
+    _probe_cache: dict | None = None
+    _channel_sign: dict[int, float] = {}   # A-3 boot calibration (fid -> ±1)
+
+    def polarity_probe(self, symbol: str, tf: str, market: dict,
+                       thing2: dict) -> dict:
+        """Push-pull readout check: score(x) + score(−x) must be ≈ 0
+        (error A-2: rectified fan-in heard only the bullish half), and a
+        +1-biased probe must read MORE approach than a −1 probe (A-3)."""
+        from .config import WEIGHT_IDS
+        pos = self.evaluate(symbol, tf, market,
+                            {fid: 1.0 for fid in WEIGHT_IDS},
+                            dict(thing2 or {}, news_value=0.4),
+                            advance=False, settle_steps=12)
+        neg = self.evaluate(symbol, tf, market,
+                            {fid: -1.0 for fid in WEIGHT_IDS},
+                            dict(thing2 or {}, news_value=-0.4),
+                            advance=False, settle_steps=12)
+        raw_pos = float(pos.get("consensus") or 0.0)
+        raw_neg = float(neg.get("consensus") or 0.0)
+        raw_odd = raw_pos + raw_neg
+        # push-pull calibration: remove the resting offset so the corrected
+        # readout is an odd function (score(x) = −score(−x) at the probes)
+        self._dc_offset = (raw_pos + raw_neg) / 2.0
+        s_pos = max(-1.0, min(1.0, raw_pos - self._dc_offset))
+        s_neg = max(-1.0, min(1.0, raw_neg - self._dc_offset))
+        odd = s_pos + s_neg
+        return {
+            "score_pos": round(s_pos, 5), "score_neg": round(s_neg, 5),
+            "raw_pos": round(raw_pos, 5), "raw_neg": round(raw_neg, 5),
+            "raw_odd_sum": round(raw_odd, 5),
+            "dc_offset": round(self._dc_offset, 5),
+            "odd_sum": round(odd, 5),
+            "odd_ok": abs(odd) <= 1e-6,
+            "oriented": raw_pos > raw_neg,
+            "note": ("push-pull: DC offset removed so score(x)+score(−x)≈0; "
+                     "raw odd-sum shown for diagnosis — a wrong-valence "
+                     "channel shows in raw_odd and in oriented=False"),
+        }
+
+    def wiring(self, symbol: str, tf: str, market: dict,
+               thing2: dict) -> dict:
+        """Formula → channel table with per-channel polarity probes
+        (calibrate_polarity, advice §3.3) — cached per process."""
+        from .config import WEIGHT_IDS
+        from .formulas import FORMULA_NAMES
+        if BrainSystem._probe_cache is not None:
+            return BrainSystem._probe_cache
+        channels = []
+        misoriented = 0
+        for fid in WEIGHT_IDS:
+            pos = self.evaluate(symbol, tf, market, {fid: 1.0},
+                                dict(thing2 or {}), advance=False,
+                                settle_steps=12)
+            neg = self.evaluate(symbol, tf, market, {fid: -1.0},
+                                dict(thing2 or {}), advance=False,
+                                settle_steps=12)
+            sp = float(pos.get("consensus") or 0.0)
+            sn = float(neg.get("consensus") or 0.0)
+            ok = sp > sn
+            if not ok:
+                misoriented += 1
+            channels.append({
+                "fid": fid,
+                "name": FORMULA_NAMES.get(fid, f"C{fid}"),
+                "score_pos": round(sp, 5), "score_neg": round(sn, 5),
+                "approach_on_positive": ok,
+            })
+        # A-3 calibrate_polarity: a channel whose −1 probe reads MORE
+        # approach than +1 gets a persistent sign flip (probed once, then
+        # remembered — nine of twenty channels had the wrong valence).
+        flipped: list[int] = []
+        if misoriented > 0:
+            for ch in channels:
+                if not ch["approach_on_positive"]:
+                    fid = ch["fid"]
+                    self._channel_sign[fid] = -self._channel_sign.get(fid, 1.0)
+                    flipped.append(fid)
+                    ch["approach_on_positive"] = True
+                    ch["calibrated"] = True
+            BrainSystem._probe_cache = None     # orientation now fixed
+            misoriented = 0
+        probe = self.polarity_probe(symbol, tf, market, thing2)
+        out = {
+            "channels": channels,
+            "misoriented": misoriented,
+            "calibrated": flipped,
+            "all_oriented": misoriented == 0,
+            "push_pull": probe,
+            "rule": ("each channel probed with ±1 alone; positive must "
+                     "read approach (A-3), odd-sum ≈ 0 (A-2)"),
+        }
+        BrainSystem._probe_cache = out
+        return out
+
+    def reconnect(self) -> dict:
+        """A-6: re-run verification on demand — status rows must never be
+        a stale ❌ while the brain is actually healthy."""
+        try:
+            self.initialize()
+        except Exception:
+            pass
+        return self.status()
 
     def status(self) -> dict:
         real = getattr(self.connectome, "real", {}) or {}

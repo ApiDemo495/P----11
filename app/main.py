@@ -164,6 +164,32 @@ async def formula_history(symbol: str = "BTC", tf: str = "tf1") -> JSONResponse:
                          **engine.formula_history(symbol, tf)})
 
 
+@app.get("/api/brain/status")
+async def brain_status() -> JSONResponse:
+    """§3.4 five-step startup verification with reasons."""
+    return JSONResponse({"ok": True, **engine.brains.status()})
+
+
+@app.get("/api/brain/wiring")
+async def brain_wiring(symbol: str = "BTC", tf: str = "tf1") -> JSONResponse:
+    """§3.3 formula → channel wiring + polarity/odd-symmetry probes."""
+    return JSONResponse({"ok": True, **engine.brain_wiring(symbol, tf)})
+
+
+@app.post("/api/brain/reconnect")
+async def brain_reconnect() -> JSONResponse:
+    """A-6: re-run verification on demand (never a stale ❌)."""
+    return JSONResponse({"ok": True, **engine.brains.reconnect()})
+
+
+@app.get("/api/brain/explain")
+async def brain_explain(symbol: str = "BTC", tf: str = "tf1") -> JSONResponse:
+    """§3.5 show the wiring: activations, hormones, dominant state."""
+    return JSONResponse({"ok": True,
+                         "activations": engine.brain_activations(symbol, tf),
+                         "status": engine.brains.status()})
+
+
 @app.get("/api/brain-geometry")
 async def brain_geometry() -> JSONResponse:
     """Static 3D connectome geometry for the WebGL brain visualization."""
