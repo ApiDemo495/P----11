@@ -217,6 +217,15 @@ class EmotionSystem:
         serotonin_brain = brain_res.get("hormones_avg", {}).get("serotonin", 0.5)
         emos[6] = sig(10.0 * (pdi_sess - 0.5) + 3.0 * (serotonin_brain - 0.5))
         dirs[6] = -sign(live - open_) if live != open_ else 0
+        # G-4: complacency (E6 session calm) is GATED by 1 − panic — it
+        # cannot show in a violent market: volume climax + vol expansion
+        # scale it down, so a crash never reads "calm session".
+        climax = (v5 / v30) if v30 > 0 else 1.0
+        vol_expand = (s1 / s30) if s30 > 0 else 1.0
+        violence = max(0.0, min(1.0,
+                               0.5 * max(0.0, climax - 1.0)
+                               + 0.5 * max(0.0, vol_expand - 1.0)))
+        emos[6] *= (1.0 - 0.85 * violence)          # gated by 1 − PANIC
 
         # ---- E7 DPI: dopamine / smart money buying -----------------------
         dopamine_brain = brain_res.get("hormones_avg", {}).get("dopamine", 0.0)
@@ -408,6 +417,19 @@ class EmotionSystem:
             "tedr": emos[21],
             "prev_cerc": prev_cerc,
             "lag_values": lag_rings,
+            # advice §5.1 feature trace — every emotion is measured from
+            # these tape features, never derived from the signal (G-3)
+            "features": {
+                "samples": len(mc),
+                "vol_z": round((v10 - v30) / v30, 4) if v30 else 0.0,
+                "climax_ratio": round(climax, 4),
+                "violence_gate": round(violence, 4),
+                "vol_expansion": round(vol_expand, 4),
+                "window_streak": int(streak),
+                "r30": round(r30, 6),
+                "pdi_session": round(pdi_sess, 4),
+                "serotonin": round(serotonin_brain, 4),
+            },
         }
 
     # ------------------------------------------------------------------

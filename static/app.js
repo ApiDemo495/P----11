@@ -713,7 +713,9 @@ async function loadEmotion() {
         <div class="kv"><span>RTP trauma</span><b>${fmt(em.rtp, 3)}${(em.rtp || 0) > 0.6 ? " ⚠" : ""}</b></div>
         <div class="kv"><span>TEDR → P6</span><b>${fmt(em.tedr, 4)}</b></div>
       </div>
-      <div class="hint">22 spec emotion formulas feed E22 CERC, which votes inside the CCI. Circles: conic ring = |value|, border = direction.</div>`;
+      ${em.features ? `<div class="kv-row"><div class="kv"><span>measured features (tape only — never the signal, G-3)</span>
+        <b>samples ${em.features.samples ?? "—"} · vol-z ${fmt(em.features.vol_z, 3)} · climax ×${fmt(em.features.climax_ratio, 2)} · violence gate ${fmt(em.features.violence_gate, 2)} · streak ${em.features.window_streak ?? "—"}</b></div></div>` : ""}
+      <div class="hint">22 spec emotion formulas feed E22 CERC → confidence modulator ±15 % (never the direction, advice §5.1). Circles: conic ring = |value|, border = direction.</div>`;
     const grid = $("#em-grid");
     if (!grid.children.length) {
       for (let i = 1; i <= 22; i++) {

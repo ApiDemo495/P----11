@@ -123,7 +123,8 @@ _ASSET_KEYS: dict[str, tuple[str, ...]] = {
 }
 _MACRO_KEYS = (
     "fed", "rate", "inflation", "cpi", "war", "sanction", "tariff",
-    "recession", "etf", "exchange", "regulation", "sec", "central bank",
+    "recession", "etf", "exchange", "regulat", "sec", "central bank",
+    "enforcement", "monetary",
 )
 
 

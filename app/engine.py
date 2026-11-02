@@ -691,6 +691,19 @@ class PredictionEngine:
                 drpt=phys["drpt"],
                 gspi=phys["gspi"],
             )
+            # advice §5.1: the emotion fusion weight is a CONFIDENCE
+            # MODULATOR of ±15 %, never the direction ("formulas over
+            # emotions" — after emotions out-voted the tape). Agreement
+            # with the pick lifts conf up to +15 %, disagreement cuts it
+            # up to −15 %; the direction itself never moves here.
+            _dir0 = _sign(pack["cci_adjusted"])
+            _band = 0.15 * float(cerc_sync[tf]) * _dir0
+            if _band:
+                fin = dict(fin)
+                fin["confidence"] = max(0.0, min(
+                    1.0, float(fin["confidence"]) * (1.0 + _band)))
+                fin["issued"] = fin["confidence"] > CONFIDENCE_FLOOR
+                fin["emotion_band"] = round(_band, 4)
 
             # F28 inputs: volatility state vs baseline (same measure as F20)
             window_rets = [
@@ -733,6 +746,10 @@ class PredictionEngine:
                 "directions": em["directions"],
                 "rtp": em["rtp"],
                 "tedr": em["tedr"],
+                # advice §5: measured features + print accounting (D-7)
+                "features": em.get("features") or {},
+                "prints": {"quote_prints": self.feed.quote_prints,
+                           "note": "quote prints excluded from volume/side stats"},
             }
             # Section 22: human-readable reasoning, not just numbers
             _top_e = sorted(em["emotions"].items(),
@@ -970,6 +987,7 @@ class PredictionEngine:
                     "emotion": {
                         "aggregate": round(cerc_sync[tf], 5),
                         "cerc": em["cerc"],
+                        "features": em.get("features") or {},
                         "emotions": em["emotions"],
                         "directions": em["directions"],
                         "rtp": round(em["rtp"], 4),
