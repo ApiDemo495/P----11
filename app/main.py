@@ -366,6 +366,28 @@ async def agents_status() -> JSONResponse:
                          "signal": engine.last_agent_signal or {}})
 
 
+@app.get("/api/feeds/diagnose")
+async def feeds_diagnose() -> JSONResponse:
+    """§1.1: per-source honesty — delivery ages, rejected writes, tape mix."""
+    st = engine.feed.stats()
+    return JSONResponse({
+        "ok": True,
+        "feed": st,
+        "sources": {
+            "binance-ws": {"family": "binance",
+                           "last_real_delivery_age_s": st.get("real_age_s")},
+            "sim": {"family": "sim"},
+        },
+        "rules": {
+            "single_writer": "only the active family may write; foreign "
+                             "writes are rejected and counted",
+            "grace_s": 120.0,
+            "switch_policy": "adopt flushes synthetic bars; demote keeps "
+                             "real history, chip goes SIMULATED TAPE",
+        },
+    })
+
+
 @app.get("/api/ledger")
 async def ledger_api() -> JSONResponse:
     """Strict-sign settlement ledger — the ONLY accuracy source (G-1)."""

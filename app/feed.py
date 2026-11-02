@@ -34,14 +34,28 @@ from .config import (
 
 log = logging.getLogger("feed")
 
+# D-3: Binance refuses some Codespaces regions -> data-stream.binance.vision
+# mirrors (same API shape) are the documented rotation target.
+BINANCE_REST_VISION = "https://data-stream.binance.vision"
+BINANCE_WS_VISION = "wss://data-stream.binance.vision"
+# §0.1: a real feed gets a grace period before the simulator may start
+# (advice: 2–3 min at 22–247 min horizons), and the simulator is cancelled
+# the instant a real feed is healthy again (D-1).
+FEED_GRACE_S = 120.0
+REAL_STALE_S = 120.0          # binance silent this long -> demote to sim
 SIM_BASE_PRICES = {"BTC": 68000.0, "PAXG": 2650.0, "ETH": 3500.0, "BNB": 600.0}
 SIM_PER_MIN_VOL = {"BTC": 120.0, "PAXG": 18.0, "ETH": 1500.0, "BNB": 4200.0}
+
+
+def _family(source: str) -> str:
+    """Writer family: every binance path is one family, the simulator another."""
+    return "binance" if str(source).startswith("binance") else "sim"
 
 
 class SymbolState:
     __slots__ = (
         "symbol", "times", "closes", "volumes",
-        "opens", "highs", "lows",
+        "opens", "highs", "lows", "sources",
         "live_price", "live_volume", "live_open", "live_high", "live_low",
         "day_open",
     )
@@ -54,6 +68,7 @@ class SymbolState:
         self.opens: list[float] = []
         self.highs: list[float] = []
         self.lows: list[float] = []
+        self.sources: list[str] = []   # which source wrote each bar (D-1)
         self.live_price: float = 0.0
         self.live_volume: float = 0.0     # current partial minute volume
         self.live_open: float = 0.0       # current partial minute OHLC
@@ -73,6 +88,7 @@ class SymbolState:
         open_: float | None = None,
         high: float | None = None,
         low: float | None = None,
+        source: str = "unknown",
     ) -> None:
         # derive missing OHLC from the close and the previous bar
         if open_ is None:
@@ -88,6 +104,8 @@ class SymbolState:
             self.opens[-1] = open_
             self.highs[-1] = high
             self.lows[-1] = low
+            if self.sources:
+                self.sources[-1] = source
         elif self.times and ts < self.times[-1]:
             return
         else:
@@ -97,6 +115,23 @@ class SymbolState:
             self.opens.append(open_)
             self.highs.append(high)
             self.lows.append(low)
+            self.sources.append(source)
+
+    def flush_foreign(self, family: str) -> int:
+        """Drop every bar whose writer is not in `family` (D-1: any source
+        change flushes the tape so two feeds can never alternate in one)."""
+        keep = [i for i, src in enumerate(self.sources)
+                if _family(src) == family]
+        dropped = len(self.times) - len(keep)
+        if dropped > 0:
+            self.times = [self.times[i] for i in keep]
+            self.closes = [self.closes[i] for i in keep]
+            self.volumes = [self.volumes[i] for i in keep]
+            self.opens = [self.opens[i] for i in keep]
+            self.highs = [self.highs[i] for i in keep]
+            self.lows = [self.lows[i] for i in keep]
+            self.sources = [self.sources[i] for i in keep]
+        return dropped
 
     def aligned(self) -> dict[int, tuple[float, float]]:
         return dict(zip(self.times, zip(self.closes, self.volumes)))
@@ -109,6 +144,11 @@ class MarketFeed:
         self.last_delivery = 0.0
         self.updates = 0
         self.rejected = 0
+        self.quote_prints = 0            # volume<=0 prints (excluded from vol stats)
+        self.last_real_delivery = 0.0    # last binance-path write (adopt/demote)
+        self._reconcile_task: asyncio.Task | None = None
+        self._sim_tasks: list[asyncio.Task] = []
+        self._next_revive = 0.0
         self._tick_times: list[float] = []
         self.switches = 0
         self.mode = "sim"
@@ -154,6 +194,12 @@ class MarketFeed:
             "updates": self.updates,
             "switches": self.switches,
             "rejected": self.rejected,
+            "quote_prints": self.quote_prints,
+            "real_age_s": (round(now - self.last_real_delivery, 1)
+                           if self.last_real_delivery else None),
+            "bars": sum(len(st.times) for st in self.states.values()),
+            "bars_sim": sum(1 for st in self.states.values()
+                            for src in st.sources if _family(src) == "sim"),
             "stale": stale,
             "label": (f"SIMULATED TAPE" if self.mode != "binance"
                       else f"live · {self.source} · {tps:.1f} ticks/s"),
@@ -170,20 +216,98 @@ class MarketFeed:
                 out[s] = (list(st.times), list(st.closes))
         return out
 
+    def _ingest_ok(self, source: str) -> bool:
+        """D-1 single writer: only the active family may write the tape;
+        foreign writes are rejected and COUNTED (shown in /api/feeds/diagnose)."""
+        if _family(source) == _family(self.mode):
+            return True
+        self.rejected += 1
+        return False
+
+    def _switch_tape(self, new_mode: str, source: str) -> None:
+        """Mode change. On ADOPT (sim -> real) every synthetic bar is flushed
+        (D-1). On DEMOTE the real history is KEPT — bars are time-ordered and
+        never alternate between writers, so dropping them would only starve
+        the formula windows; the chip turns SIMULATED TAPE instead."""
+        if new_mode == self.mode:
+            return
+        if new_mode == "binance":
+            for st in self.states.values():
+                st.flush_foreign("binance")
+        self.mode = new_mode
+        self.note(source)               # counts switches in stats()
+
+    async def _reconcile_loop(self) -> None:
+        """§1.1 source order: adopt a delivering real feed (D-2) even when
+        the state machine says sim; demote to the simulator when the real
+        feed goes silent; revive attempts run under the same loop."""
+        while not self._stop.is_set():
+            await asyncio.sleep(10.0)
+            now = time.time()
+            if FEED_MODE == "sim":
+                continue
+            delivering = (self.last_real_delivery > 0
+                          and now - self.last_real_delivery < 30.0)
+            if self.mode == "sim" and delivering:
+                log.info("feed: real feed delivering -> adopt (D-2)")
+                for t in list(self._sim_tasks):
+                    t.cancel()
+                self._sim_tasks.clear()
+                self._switch_tape("binance", "binance-ws")
+            elif self.mode == "binance" and FEED_MODE == "auto" \
+                    and now - self.last_real_delivery > REAL_STALE_S:
+                log.warning("feed: real feed silent %.0fs -> simulator",
+                            now - self.last_real_delivery)
+                if not self._sim_tasks:
+                    for sym, st in self.states.items():
+                        if st.live_price:
+                            self._sim_price[sym] = st.live_price
+                    await self._start_sim()
+                self._switch_tape("sim", "sim")
+            # revive: while in sim under auto, keep probing Binance
+            if (self.mode == "sim" and FEED_MODE == "auto"
+                    and now >= self._next_revive):
+                self._next_revive = now + 30.0
+                try:
+                    async with httpx.AsyncClient(base_url=BINANCE_REST,
+                                                 timeout=5.0) as c:
+                        r = await c.get("/api/v3/ping")
+                        r.raise_for_status()
+                    await self._start_binance()   # backfill + ws task
+                    self.last_real_delivery = time.time()
+                    for t in list(self._sim_tasks):
+                        t.cancel()
+                    self._sim_tasks.clear()
+                    self._switch_tape("binance", "binance-rest")
+                except Exception:
+                    pass
+
     async def start(self) -> None:
         mode = FEED_MODE
         if mode in ("auto", "binance"):
-            try:
-                await self._start_binance()
-                self.mode = "binance"
-                log.info("feed: Binance mode active")
-                return
-            except Exception as exc:      # pragma: no cover - network dependent
-                if mode == "binance":
-                    raise
-                log.warning("feed: Binance unavailable (%s); using simulator", exc)
-        await self._start_sim()
-        self.mode = "sim"
+            # real-feed grace (advice §1.1): retry the real feed for up to
+            # FEED_GRACE_S before the simulator is allowed to start
+            deadline = time.time() + (FEED_GRACE_S if mode == "auto" else 0.0)
+            while True:
+                try:
+                    await self._start_binance()
+                    self.mode = "binance"
+                    log.info("feed: Binance mode active")
+                    break
+                except Exception as exc:  # pragma: no cover - network dependent
+                    if mode == "binance":
+                        raise
+                    if time.time() >= deadline:
+                        log.warning("feed: Binance unavailable after %.0fs "
+                                    "grace (%s); simulator may start",
+                                    FEED_GRACE_S, exc)
+                        break
+                    await asyncio.sleep(5.0)
+        if self.mode != "binance":
+            await self._start_sim()
+            self.mode = "sim"
+        self._reconcile_task = asyncio.create_task(self._reconcile_loop())
+        self._tasks.append(self._reconcile_task)
 
     async def stop(self) -> None:
         self._stop.set()
@@ -193,15 +317,30 @@ class MarketFeed:
 
     # ------------------------------------------------------------- Binance
     async def _start_binance(self) -> None:
-        # 1m kline backfill so all four TF windows (248 bars) are ready instantly
-        async with httpx.AsyncClient(base_url=BINANCE_REST, timeout=15.0) as client:
-            for sym, ex_symbol in SYMBOLS.items():
-                resp = await client.get(
-                    "/api/v3/klines",
-                    params={"symbol": ex_symbol, "interval": "1m", "limit": BACKFILL_BARS},
-                )
-                resp.raise_for_status()
-                rows = resp.json()
+        # 1m kline backfill so all four TF windows (248 bars) are ready instantly.
+        # D-3: rotate to data-stream.binance.vision when the main host refuses
+        # (geo-block on some Codespaces regions).
+        bases = [BINANCE_REST, BINANCE_REST_VISION]
+        last_exc: Exception | None = None
+        rows_by_sym: dict[str, list] = {}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for base in bases:
+                try:
+                    for sym, ex_symbol in SYMBOLS.items():
+                        resp = await client.get(
+                            f"{base}/api/v3/klines",
+                            params={"symbol": ex_symbol, "interval": "1m",
+                                    "limit": BACKFILL_BARS},
+                        )
+                        resp.raise_for_status()
+                        rows_by_sym[sym] = resp.json()
+                    last_exc = None
+                    break
+                except Exception as exc:        # try the mirror host
+                    last_exc = exc
+            if last_exc is not None:
+                raise last_exc
+            for sym, rows in rows_by_sym.items():
                 st = self.states[sym]
                 prev_close = None
                 for row in rows:
@@ -210,7 +349,7 @@ class MarketFeed:
                         float(row[1]), float(row[2]), float(row[3]),
                         float(row[4]), float(row[5]),
                     )
-                    st.push_bar(ts, c, v, o, h, l)
+                    st.push_bar(ts, c, v, o, h, l, source="binance-rest")
                     prev_close = c
                 if st.closes:
                     st.live_price = st.closes[-1]
@@ -218,6 +357,7 @@ class MarketFeed:
                     st.live_high = st.highs[-1]
                     st.live_low = st.lows[-1]
                 st.day_open = st.closes[0] if st.closes else 0.0
+        self.last_real_delivery = time.time()
         if all(len(self.states[s].closes) >= 30 for s in SYMBOL_ORDER):
             self.ready.set()
 
@@ -225,13 +365,15 @@ class MarketFeed:
 
     async def _binance_ws_loop(self) -> None:  # pragma: no cover - network
         streams = "/".join(f"{ex.lower()}@kline_1m" for ex in SYMBOLS.values())
-        url = f"{BINANCE_WS}?streams={streams}"
+        urls = [f"{BINANCE_WS}?streams={streams}",
+                f"{BINANCE_WS_VISION}?streams={streams}"]   # D-3 rotation
         import websockets
 
         reverse = {v.lower(): k for k, v in SYMBOLS.items()}
+        url_i = 0
         while not self._stop.is_set():
             try:
-                async with websockets.connect(url, ping_interval=20) as ws:
+                async with websockets.connect(urls[url_i], ping_interval=20) as ws:
                     async for raw in ws:
                         msg = json.loads(raw)
                         data = msg.get("data", msg)
@@ -242,6 +384,9 @@ class MarketFeed:
                         sym = reverse.get(ex)
                         if not sym:
                             continue
+                        self.last_real_delivery = time.time()
+                        if not self._ingest_ok("binance-ws"):
+                            continue          # D-1: foreign writer rejected
                         st = self.states[sym]
                         price = float(k["c"])
                         st.live_price = price
@@ -253,12 +398,14 @@ class MarketFeed:
                         st.push_bar(
                             ts, price, float(k["v"]),
                             float(k["o"]), float(k["h"]), float(k["l"]),
+                            source="binance-ws",
                         )
                         await self._emit_tick(sym, price, float(k["v"]))
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:                        # reconnect
+            except Exception as exc:                        # reconnect + rotate
                 log.warning("feed: ws reconnect (%s)", exc)
+                url_i = (url_i + 1) % len(urls) if FEED_MODE == "auto" else url_i
                 await asyncio.sleep(2.0)
 
     # ---------------------------------------------------------- Simulator
@@ -296,7 +443,9 @@ class MarketFeed:
                 h = max(o, price) * (1.0 + wick)
                 l = min(o, price) * (1.0 - wick)
                 ts = start_ts + i * 60
-                st.push_bar(ts, price, volume, o, h, l)
+                # never overwrite bars a real feed already wrote (D-1)
+                if not (st.times and ts <= st.times[-1]):
+                    st.push_bar(ts, price, volume, o, h, l, source="sim")
             st.live_price = price
             st.live_open = st.opens[-1]
             st.live_high = st.highs[-1]
@@ -314,7 +463,9 @@ class MarketFeed:
             }
 
         self.ready.set()
-        self._tasks.append(asyncio.create_task(self._sim_tick_loop()))
+        t = asyncio.create_task(self._sim_tick_loop())
+        self._sim_tasks.append(t)
+        self._tasks.append(t)
 
     async def _sim_tick_loop(self) -> None:
         rng = self._sim_rng
@@ -328,6 +479,8 @@ class MarketFeed:
             st.live_low = st.live_open
         while not self._stop.is_set():
             await asyncio.sleep(1.0)
+            if self.mode != "sim":
+                continue               # real family owns the tape now (D-1)
             now = time.time()
             minute = int(now // 60)
             rolled = minute != last_minute
@@ -361,6 +514,7 @@ class MarketFeed:
                         st.live_open or price,
                         max(st.live_high or price, price),
                         min(st.live_low or price, price),
+                        source="sim",
                     )
                     st.live_volume = 0.0
                     st.live_open = price
@@ -374,6 +528,8 @@ class MarketFeed:
             last_minute = minute
 
     async def _emit_tick(self, symbol: str, price: float, volume: float) -> None:
+        if volume <= 0:
+            self.quote_prints += 1      # D-7: quote print, excluded from vol stats
         self.note("binance-ws" if self.mode == "binance" else "sim")
         if self.on_tick is not None:
             try:
