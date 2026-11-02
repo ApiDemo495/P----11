@@ -98,6 +98,45 @@ _BEAR = (
     "downgrade", "depeg", "liquidat", "fraud", "scam", " plunge", "drop",
     "selloff", "fear", "reject", "suspend", "probe", "risk",
 )
+# Macro risk-on / risk-off phrasings wires ACTUALLY use (error C-2) — the
+# crypto-desk word list alone scored a real world wire at exactly 0.0.
+_MACRO_BULL = (
+    "ceasefire", "de-escalat", "rate cut", "stimulus", "etf inflow",
+    "inflows", "dovish", "cooling inflation", "jobs beat", "rally",
+    "easing", "bailout", "rescue", "agreement", "truce",
+)
+_MACRO_BEAR = (
+    "tariff", "tariffs", "strike", "strikes", "drone attack", "missile",
+    "invasion", "war ", "sanction", "sanctions", "yields climb",
+    "rate hike", "hawkish", "hot inflation", "cpi", "recession",
+    "default", "halt", "halted", "outage", "bankruptcy", "collapse",
+    "escalat",
+)
+
+# Per-asset relevance keywords + the macro set that hits everything
+# (advice §4.1 relevance.py; error C-4: "News irrelevant" -> count drops).
+_ASSET_KEYS: dict[str, tuple[str, ...]] = {
+    "BTC": ("bitcoin", "btc", "crypto", "etf", "halving"),
+    "PAXG": ("gold", "paxg", "bullion", "xau"),
+    "ETH": ("ethereum", "eth", "ether", "layer 2", "staking"),
+    "BNB": ("bnb", "binance", "chain", "token"),
+}
+_MACRO_KEYS = (
+    "fed", "rate", "inflation", "cpi", "war", "sanction", "tariff",
+    "recession", "etf", "exchange", "regulation", "sec", "central bank",
+)
+
+
+def relevance(symbol: str, headline: str) -> float:
+    """0..1 per-asset relevance: asset keywords first, macro set hits all.
+    score == 0 items are COUNTED and shown as 'relevance gate dropped n'
+    (error C-4), never silently hidden."""
+    h = (headline or "").lower()
+    if any(k in h for k in _ASSET_KEYS.get(symbol, ())):
+        return 1.0
+    if any(k in h for k in _MACRO_KEYS):
+        return 0.6
+    return 0.0
 
 # Seed headlines (pre-launch content so the pipeline is never empty at boot).
 _SEED: list[tuple[str, str, float, int, tuple[str, ...]]] = [
@@ -138,10 +177,10 @@ def classify_category(headline: str) -> str:
 
 def sentiment_score(headline: str, body: str = "") -> float:
     """Local lexicon sentiment in [-1, +1]: (bull_hits - bear_hits) / total,
-    0.0 when the lexicon sees nothing."""
+    0.0 when the lexicon sees nothing. Macro wire phrasings count too (C-2)."""
     low = (headline + " " + body).lower()
-    bull = sum(1 for k in _BULL if k in low)
-    bear = sum(1 for k in _BEAR if k in low)
+    bull = sum(1 for k in _BULL if k in low) + sum(1 for k in _MACRO_BULL if k in low)
+    bear = sum(1 for k in _BEAR if k in low) + sum(1 for k in _MACRO_BEAR if k in low)
     total = bull + bear
     if total == 0:
         return 0.0
@@ -342,16 +381,78 @@ class NewsSystem:
     def stats(self) -> Dict:
         """Honesty stats for the news pipe (advice item 6): per-source
         heartbeats + dupe counter. Used by NIV + the UI source table."""
+        now = time.time()
+        per_hour: dict[str, float] = {}
+        for it in self.items:
+            src = str(it.get("source") or "?")
+            if now - float(it.get("ts") or 0) <= 3600:
+                per_hour[src] = per_hour.get(src, 0.0) + 1.0
         return {
             "sources": {k: dict(v) for k, v in self.source_stats.items()},
+            "items_per_hour": {k: round(v, 1) for k, v in per_hour.items()},
             "dupes": sum(v.get("dupes", 0) for v in self.source_stats.values()),
             "items": len(self.items),
+            "critical_fired": len(getattr(self, "_critical_fired", {}) or {}),
         }
+
+    # critical-event vocabulary: WHOLE-WORD match + the headline must also
+    # name a market term + ≤10 min old + fire once per fingerprint (B-2:
+    # substring "war" fired on "warning"/"forward" and broke locks hourly)
+    _CRITICAL_WORDS = ("war", "hack", "ban", "halt", "attack", "sanctions",
+                       "collapse", "depeg", "exploit", "invasion", "outage",
+                       "default")
+    _MARKET_TERMS = ("bitcoin", "btc", "eth", "bnb", "gold", "paxg",
+                     "exchange", "etf", "fed", "rate", "sec", "binance",
+                     "coinbase", "market", "price")
+
+    def _critical_check(self, items: list, now: float) -> dict:
+        import re
+        fired = getattr(self, "_critical_fired", None)
+        if fired is None:
+            fired = self._critical_fired = {}
+        for it in items:
+            head = str(it.get("headline") or "")
+            low = head.lower()
+            age_min = (now - float(it.get("ts") or 0)) / 60.0
+            if age_min > 10.0:
+                continue
+            words = set(re.findall(r"[a-z]+", low))
+            hit = [w for w in self._CRITICAL_WORDS
+                   if w in words or any(m.startswith(w) for m in words)]
+            has_market = any(t in low for t in self._MARKET_TERMS)
+            if not hit or not has_market:
+                continue
+            fp = self._fingerprint(head)
+            if fp in fired:
+                continue                    # fires once per fingerprint
+            fired[fp] = now
+            self._critical_fired = {k: v for k, v in fired.items()
+                                    if now - v < 3600}
+            return {"active": True, "headline": head,
+                    "word": hit[0], "age_min": round(age_min, 1),
+                    "fired_at": now, "source": it.get("source")}
+        # NIV-swing trigger (separate from headline trigger, advice §4.1)
+        return {"active": False}
 
     def aggregate(self, symbol: str) -> dict:
         """Signed News Impact Aggregate + per-TF impacts for one asset."""
         now = time.time()
-        mine = [it for it in self._live_items() if symbol in it["symbols"]]
+        live = self._live_items()
+        # relevance gate (C-4): candidates carry this symbol; score == 0
+        # candidates are DROPPED AND COUNTED. Macro-scored items (≥0.6)
+        # reach EVERY asset even when the tag list omits it — that is what
+        # the macro set is for; a macro item never silently vanishes.
+        candidates = [it for it in live if symbol in (it.get("symbols") or ())]
+        dropped = sum(1 for it in candidates
+                      if relevance(symbol, str(it.get("headline") or "")) == 0.0)
+        mine = [it for it in candidates
+                if relevance(symbol, str(it.get("headline") or "")) > 0.0]
+        seen = {id(it) for it in mine}
+        for it in live:
+            if id(it) in seen:
+                continue
+            if relevance(symbol, str(it.get("headline") or "")) >= 0.6:
+                mine.append(it)
         total = 0.0
         bull = 0.0
         bear = 0.0
@@ -400,6 +501,8 @@ class NewsSystem:
             "source": self.source,
             "niv": round(niv, 4),
             "resting_evidence": 0.5,
+            "relevance_dropped": dropped,
+            "critical": self._critical_check(live, now),
             "heartbeats": {k: {kk: (round(vv, 1) if isinstance(vv, float) else vv)
                                for kk, vv in v.items()}
                            for k, v in self.source_stats.items()},

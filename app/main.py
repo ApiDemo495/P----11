@@ -179,6 +179,21 @@ async def brain_activations(symbol: str = "BTC", tf: str = "tf1") -> JSONRespons
     return JSONResponse({"ok": True, **engine.brain_activations(symbol, tf)})
 
 
+@app.get("/api/news/status")
+async def news_status() -> JSONResponse:
+    """§4.2 per-source heartbeat: items/hour, last success, dropped, dupes."""
+    engine.news.refresh()
+    return JSONResponse({"ok": True, **engine.news.stats()})
+
+
+@app.post("/api/news/poll")
+async def news_poll() -> JSONResponse:
+    """§4.2 manual kick — one refresh pass, honest result."""
+    engine.news.refresh()
+    return JSONResponse({"ok": True, "items": len(engine.news.items),
+                         "stats": engine.news.stats()})
+
+
 @app.get("/api/news/{symbol}")
 async def news_feed(symbol: str) -> JSONResponse:
     """Section-7 news feed: categories, aggregate, per-TF impacts, items."""
