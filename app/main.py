@@ -66,6 +66,20 @@ app = FastAPI(title="Crypto Prediction 4", version="1.0.0",
               docs_url="/api-docs", redoc_url="/api-redoc")
 
 
+async def _startup_watchdog() -> None:
+    """§9/J-5: under --supervise, exit 75 if readiness never lands within
+    30s — supervisors see a real failure instead of a hung boot."""
+    import asyncio as _a
+    import os as _os
+    if _os.environ.get("SUPERVISE") != "1":
+        return
+    await _a.sleep(30.0)
+    if engine.phase != "live" or not all(engine.readiness.values()):
+        print("startup watchdog: not ready after 30s — exiting 75",
+              flush=True)
+        _os._exit(75)
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     feed.on_tick = _on_feed_tick
@@ -74,6 +88,7 @@ async def _startup() -> None:
     await clock.start()
     global _learning_task
     _learning_task = asyncio.create_task(_hourly_learning_loop())
+    asyncio.create_task(_startup_watchdog())
     log.info("application started (feed=%s)", feed.mode)
 
 
@@ -146,6 +161,30 @@ async def health() -> dict:
         "ledger_n": sum(1 for rows in engine.ledger.rows.values()
                         for r in rows if r.get("result") in ("win", "loss")),
     }
+
+
+@app.get("/api/watchdog")
+async def watchdog() -> JSONResponse:
+    """§9/J-5 watchdog: stalled window detection with an explicit alert
+    state (feeds /api/degrade L4)."""
+    now = time.time()
+    age = now - engine.last_window_ts
+    stalled = age > (TIMEFRAMES["tf4"]["minutes"] * 60 + 45)
+    engine._watchdog = {
+        "alert": stalled,
+        "seconds_since_window": round(age, 1),
+        "threshold_s": TIMEFRAMES["tf4"]["minutes"] * 60 + 45,
+        "last_window_ts": engine.last_window_ts,
+        "checked_at": now,
+    }
+    return JSONResponse({
+        "ok": True, "stalled": stalled,
+        "seconds_since_window": round(age, 1),
+        "threshold_s": engine._watchdog["threshold_s"],
+        "alert": stalled,
+        "action": ("window advance missed — L4 shown on the panel"
+                   if stalled else "healthy"),
+    })
 
 
 @app.get("/api/snapshot")
@@ -427,6 +466,61 @@ async def feeds_diagnose() -> JSONResponse:
                              "real history, chip goes SIMULATED TAPE",
         },
     })
+
+
+@app.get("/api/degrade")
+async def degrade() -> JSONResponse:
+    """§9.4 honest degradation levels with reasons + what still serves."""
+    return JSONResponse({"ok": True, **engine.degrade_status()})
+
+
+@app.get("/api/secrets/status")
+async def secrets_status() -> JSONResponse:
+    """§9.1 vault view: which secret SOURCES exist — values never shown,
+    never written to any file in the repo (I-5)."""
+    import os as _os
+    from .agents import KEY_FIELDS, SETTINGS_FILE
+    env_present = {k: bool(_os.environ.get(k)) for k in
+                   ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY",
+                    "ANTHROPIC_API_KEY", "NEWS_API_KEY", "NEUPRINT_TOKEN")}
+    on_disk = False
+    try:
+        txt = open(SETTINGS_FILE, encoding="utf-8").read()
+        on_disk = any(f'"{k}"' in txt for k in KEY_FIELDS)
+    except OSError:
+        on_disk = False
+    return JSONResponse({
+        "ok": True,
+        "env": env_present,
+        "settings_file_exists": True,
+        "keys_on_disk": on_disk,
+        "keyring": engine.agents.status().get("keyring") or {},
+        "rule": ("keys live in platform secrets/env only — save_settings "
+                 "strips KEY_FIELDS; on_disk=True is a leak and a bug"),
+    })
+
+
+@app.get("/placeholder")
+async def placeholder() -> HTMLResponse:
+    """§9/J-2: a real page (never an empty body) when the app is not
+    ready — explains readiness level and links health/watchdog."""
+    d = engine.degrade_status()
+    rows = "".join(f"<li><b>L{k}</b> — {v}</li>"
+                   for k, v in d["all_levels"].items())
+    reasons = "".join(f"<li>{r}</li>" for r in d["reasons"]) or "<li>none</li>"
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
+<title>app not ready</title>
+<style>body{{font:15px/1.6 system-ui;background:#0b0e14;color:#dfe6f0;
+padding:40px;max-width:760px;margin:auto}} .chip{{display:inline-block;
+border:1px solid #2c3542;border-radius:999px;padding:3px 10px;
+font-size:12px}} a{{color:#5ad1ff}}</style></head><body>
+<h1>System warming up — L{d['level']}: {d['name']}</h1>
+<p class="chip">{engine.phase}</p>
+<p>Reasons:</p><ul>{reasons}</ul>
+<p>Never-ready page (advice J-2): health is always served at
+<a href="/api/health">/api/health</a>, watchdog at <a href="/api/watchdog">/api/watchdog</a>,
+degradation at <a href="/api/degrade">/api/degrade</a>.</p>
+<p>Levels:</p><ul>{rows}</ul></body></html>""")
 
 
 @app.get("/api/forward")

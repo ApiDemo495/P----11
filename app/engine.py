@@ -1272,6 +1272,48 @@ class PredictionEngine:
                 "supporters": pick(supporters), "opponents": pick(opponents),
                 "subsystem_votes": subsystems}
 
+    def degrade_status(self) -> dict:
+        """§9.4 honest degradation levels: every level with its reasons and
+        which endpoint still serves what. L5 is explicit shutdown only."""
+        reasons: list[str] = []
+        level = 0
+        if self.phase != "live":
+            level = max(level, 3)
+            reasons.append(f"analysis warmup (phase={self.phase}) — "
+                           "formulas/physics/weights still warming")
+        feed = self.feed.stats()
+        if feed.get("simulated") or feed.get("label") == "SIMULATED TAPE":
+            level = max(level, 1)
+            reasons.append("live feed unavailable — simulated tape, "
+                           "predictions are NOT market-real")
+        if getattr(self, "_watchdog", {}).get("alert"):
+            level = max(level, 4)
+            reasons.append("watchdog: stalled window detected")
+        subs = [k for k, v in self.readiness.items() if not v]
+        if subs:
+            level = max(level, 2)
+            reasons.append(f"subsystems not ready: {', '.join(subs)}")
+        if getattr(self, "_manual_stop", False):
+            level = 5
+            reasons.append("explicit manual shutdown (P0-P21 frozen)")
+        levels = {
+            0: "full — live feed, all subsystems warm",
+            1: "feed degraded — simulated tape, UI flagged",
+            2: "subsystem degraded — that path idle, core keeps running",
+            3: "analysis warmup — no locks claimed from frozen values",
+            4: "watchdog alert — stalled window shown on panel",
+            5: "manual shutdown — P0-P21 frozen until restart",
+        }
+        return {"level": level, "name": levels[level], "reasons": reasons,
+                "all_levels": levels,
+                "endpoints": {
+                    "health": "/api/health (always served, never an "
+                              "empty body)",
+                    "placeholder": "/placeholder (never-ready page)",
+                    "watchdog": "/api/watchdog",
+                    "secrets": "/api/secrets/status (no secrets in files)",
+                }}
+
     def _flat_payload(self, cap: int = 8) -> dict:
         """§2.9 flat watch: share of the last 50 locks each formula spent
         inside ±0.02, with the zero reason when it had one. Offenders only."""
