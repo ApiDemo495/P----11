@@ -59,6 +59,7 @@ from .feed import MarketFeed
 from .formulas import FORMULA_FUNCTIONS, FORMULA_NAMES, compute_all
 from .formulas.trace import traced_compute
 from .forward import ForwardTables
+from .meta import MetaCombiner
 
 # §2.10 non-directional components: never a direction vote (confidence /
 # regime routing only). 97-101 are the brain/emotion/physics/news/hedge
@@ -117,6 +118,7 @@ class PredictionEngine:
         self.last_traces: dict[tuple[str, str], dict] = {}
         # forward expectancy tables + flat watch (advice §2.7 / §2.9)
         self.forward = ForwardTables()
+        self.meta = MetaCombiner()          # §8.4 meta-combiner + §8.5 ledger
         # hourly/daily hindsight reviews (advice §8.3)
         self.hindsight_mult: dict[tuple[str, str, int], float] = {}
         self.hindsight_changes: list[dict] = []
@@ -1137,6 +1139,25 @@ class PredictionEngine:
             med = 0.0
         floor = max(0.02, 0.5 * med)
 
+        # rung 0 (advice §8.4): the meta-combiner takes the side ONLY with
+        # a 40-window strict-sign record ≥ 53 % and ≥ the recipe
+        try:
+            take, take_msg = self.meta.takeover(tf)
+        except Exception:
+            take, take_msg = False, "meta unavailable"
+        if take:
+            def _comp_val(cid: int) -> float:
+                for c in comps or []:
+                    if str(c.get("id")) == str(cid):
+                        return float(c.get("value") or 0.0)
+                return 0.0
+            mp = self.meta.meta_pick({
+                "score": score, "brain": _comp_val(97), "physics": _comp_val(99),
+                "emotion": _comp_val(98), "news": _comp_val(100),
+                "agent": _comp_val(101)})
+            if mp in (1, -1):
+                return (mp, f"{take_msg} → side {'UP' if mp > 0 else 'DOWN'}", floor)
+
         # rung 1: the fused score itself
         if abs(score) > floor:
             d = 1 if score > 0 else -1
@@ -1824,6 +1845,15 @@ class PredictionEngine:
                                         price)
                 except Exception:
                     pass
+            # meta-combiner + evidence ledger: settle the previous lock's
+            # frozen subsystem inputs (advice §8.4/§8.5)
+            if prev.get("inputs"):
+                try:
+                    up = price > float(prev.get("price") or 0.0)
+                    self.meta.note_pick(prev["inputs"], up)
+                    self.meta.record(symbol, tf, prev["inputs"], up)
+                except Exception:
+                    pass
         dom = ((res.get("emotion") or {}).get("dominant")
                or (res.get("brain") or {}).get("dominant"))
         # freeze the formula readings with the lock (forward tables +
@@ -1831,6 +1861,19 @@ class PredictionEngine:
         tr = self.last_traces.get((symbol, tf)) or {}
         fv = {str(fid): round(float(t["value"]), 5)
               for fid, t in tr.items() if isinstance(fid, int)}
+        inputs = {
+            "score": round(float(res.get("cci_adjusted") or 0.0), 5),
+            "brain": int(((res.get("brain") or {}).get("polarity")) or 0),
+            "physics": round(float(((res.get("physics") or {}).get("ufp"))
+                                   if isinstance(res.get("physics"), dict) else 0.0) or 0.0, 5),
+            "emotion": round(float((res.get("emotion") or {}).get("aggregate")
+                                   if isinstance(res.get("emotion"), dict) else 0.0) or 0.0, 5),
+            "news": round(float(res.get("news_value")
+                               if "news_value" in res else
+                               ((res.get("market") or {}).get("news_value")
+                                if isinstance(res.get("market"), dict) else 0.0)) or 0.0, 5),
+            "agent": int(((res.get("agent") or {}).get("direction")) or 0),
+        }
         for fid, t in tr.items():
             if not isinstance(fid, int) or fid == 20:
                 continue                    # 20 is a confidence gauge, not a vote
@@ -1848,6 +1891,7 @@ class PredictionEngine:
             "window_start": start, "window_end": end,
             "relocks": 0, "relock_at": None,
             "fv": fv,
+            "inputs": inputs,
         }
         self._maybe_review_hindsight(symbol, tf, now)   # cadence-gated §8.3
         self._save_locks()
@@ -2466,6 +2510,7 @@ class PredictionEngine:
                 f"{sym}|{tf}": t for (sym, tf), t in self.last_traces.items()
             },
             "flat_watch": self._flat_payload(),
+            "meta": self.meta.payload(),
             "formula_values": {
                 f"{s}|{tf}": data
                 for (s, tf), data in self.display_formulas.items()

@@ -319,7 +319,7 @@ function renderQuads() {
   });
   renderRail();
   try { renderCalls(); } catch (e) { console.error("calls", e); }
-  try { renderLedger(); renderHindsight(); } catch (e) { console.error("ledger", e); }
+  try { renderLedger(); renderHindsight(); renderMeta(); } catch (e) { console.error("ledger", e); }
 }
 function renderRail() {
   const a = S.snap?.assets || {};
@@ -489,6 +489,32 @@ function renderHindsight() {
     <div class="hint">Changes applied at the window boundary: ${changes.map(c =>
       `<span class="chip chip-warn">${esc(c.formula)} ${c.from}→${c.to} (${esc(c.reason)})</span>`).join(" ") || "none yet"}</div>
     <div class="hint">${esc(h.rule || "")}</div>`;
+}
+
+/* ═════ META (§8.4) + PREDICTABILITY GAUGE (§8.5) — honest answers ═════ */
+function renderMeta() {
+  const el = $("#meta-panel"); if (!el) return;
+  const m = S.snap?.meta; if (!m) { el.innerHTML = `<div class="dim">no meta data yet</div>`; return; }
+  const ev = m.evidence || {};
+  const rec = m.record || {};
+  const gauge = m.predictability || null;
+  const bits = gauge && gauge.ready ? gauge.bits : null;
+  el.innerHTML = `
+    <div class="kv-row">
+      <div class="kv"><span>settled rows</span><b>${m.n}</b></div>
+      <div class="kv"><span>40-window record</span><b>${rec.rate != null ? Math.round(rec.rate * 100) + "%" : "—"}${rec.takeover ? " · ✓ TAKEOVER" : ""}</b></div>
+      <div class="kv"><span>predictability</span><b>${bits != null ? bits.toFixed(3) + " bit" : (gauge?.note || "needs 40 windows")}</b></div>
+      <div class="kv"><span>calib a · b</span><b>${ev.calib_a ?? "—"} · ${ev.b ?? "—"}</b></div>
+    </div>
+    <div class="hint">${esc(rec.message || "")} · ${esc(m.expert?.message || "")}</div>
+    ${gauge && gauge.ready ? `<div class="hint ${gauge.bits < 0.02 ? "chip-warn" : "chip-ok"}">P(up)=${gauge.p_up} · H₂=${gauge.h2_bits} bit — ${esc(gauge.note)}</div>` : ""}
+    <table class="tbl" style="margin-top:6px">
+      <thead><tr><th>SOURCE</th><th>slope aᵢ</th><th>MI (bits)</th><th>coefficient</th></tr></thead>
+      <tbody>${Object.entries(ev.slopes || {}).map(([k, v]) => `<tr>
+        <td>${esc(k)}</td><td>${v}</td><td>${(ev.mi_bits || {})[k] ?? "—"}</td>
+        <td>${(m.coefficients || {})[k] ?? "—"}</td></tr>`).join("")}</tbody>
+    </table>
+    <div class="hint">${esc(m.rule || "")}</div>`;
 }
 
 /* ═══════════ CALLS & TARGETS — TP/SL for every timeframe ═══════════ */
