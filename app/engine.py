@@ -2609,6 +2609,21 @@ class PredictionEngine:
                 f"{sym}|{tf}": t for (sym, tf), t in self.last_traces.items()
             },
             "flat_watch": self._flat_payload(),
+            # §10.3 status chips: every subsystem's honesty state on top
+            "chips": {
+                "feed": "simulated" if self.feed.stats().get("simulated")
+                        else "live",
+                "local_model": "on" if getattr(self.agents.local, "available", False)
+                               else "off",
+                "agents": (self.agents.status().get("mode")
+                           if hasattr(self.agents, "status") else "unknown"),
+                "news": "live" if getattr(self.news, "source", "") not in ("", "seed")
+                        else "seed",
+                "keyless": not any(self.agents.settings.get(k) for k in
+                                   ("gemini_key", "backup1_key", "backup2_key",
+                                    "backup3_key")),
+                "degrade": self.degrade_status()["level"],
+            },
             "meta": self.meta.payload(),
             "formula_values": {
                 f"{s}|{tf}": data

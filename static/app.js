@@ -841,7 +841,7 @@ async function loadNews() {
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${new Date((it.ts || 0) * 1000).toLocaleTimeString()}</td>
-        <td style="font-family:inherit">${it.headline}</td>
+        <td style="font-family:inherit">${esc(it.headline)}</td>
         <td class="tier-${tier}">${tier} ${fmt(it.reliability, 2)}</td>
         <td>${it.category} <span class="dim">×${fmt(cat.weight, 2)}</span></td>
         <td style="color:${it.sentiment >= 0 ? "var(--green)" : "var(--red)"}">${it.sentiment >= 0 ? "+" : ""}${fmt(it.sentiment, 2)}</td>
@@ -1065,7 +1065,7 @@ async function loadAgents() {
           <div class="kv"><span>key</span><b>${s.key || "(none)"}</b></div>
           <div class="kv"><span>calls / h</span><b>${s.usage ?? 0} / ${s.limit ?? "—"}</b></div>
         </div>
-        ${s.last?.insight ? `<div class="logic">“${s.last.insight}”</div>` : ""}
+        ${s.last?.insight ? `<div class="logic">“${esc(s.last.insight)}”</div>` : ""}
         <button class="btn test-slot" data-slot="${["gemini", "backup1", "backup2", "backup3"][i]}" style="margin-top:10px">test</button>
       </div>`).join("");
     const lo = a.local || {};
@@ -1086,7 +1086,7 @@ async function loadAgents() {
           <div class="kv"><span>weight</span><b>${fmt(sig.weight, 4)}</b></div>
           <div class="kv"><span>source</span><b>${sig.source}${sig.fallback ? " (fb)" : ""}</b></div>
         </div>
-        ${sig.insight ? `<div class="logic">“${sig.insight}”</div>` : ""}`
+        ${sig.insight ? `<div class="logic">“${esc(sig.insight)}”</div>` : ""}`
       : `<div class="hint">No cloud signal — fine. Drosophila brain + formulas carry every vote; the 4-vote check still runs.</div>`;
     const map = { "key-gemini": "gemini_key", "key-backup1": "backup1_key", "key-backup2": "backup2_key",
                   "key-backup3": "backup3_key", "key-newsapi": "newsapi_key", "key-neuprint": "neuprint_key" };
@@ -1194,6 +1194,14 @@ setInterval(() => {
   if (_tickN % 2 === 0 && Date.now() - S.lastMsgAt >= 4000) {
     api("/api/snapshot").then(applySnapshot).catch(() => {});
   }
+  // 3) §10.4 silent-socket guard (inside THE one interval, H-2): a socket
+  // with no message for 15s is closed — onclose reconnects immediately
+  // instead of waiting the browser's 30-minute timeout (error J-7)
+  if (ws && ws.readyState === 1 && S.wsLast &&
+      Date.now() - S.wsLast > 15000) {
+    S.wsLast = 0;
+    try { ws.close(); } catch {}
+  }
   // 3) quadrant countdown rings (server-anchored)
   _quadTick();
 }, 1000);
@@ -1266,6 +1274,26 @@ function applySnapshot(snap) {
     fchip.className = "feed-chip " + (f.simulated ? "sim" : f.stale ? "stale" : "live");
     fchip.title = `source ${f.source} · last delivery ${f.last_delivery_age_s ?? "?"}s ago · ${f.updates} updates · ${f.switches} switches`;
   }
+  // §10.3 status chips — every subsystem's honesty state, one glance
+  const sc = $("#status-chips");
+  if (sc && snap.chips) {
+    const c = snap.chips;
+    const chip = (label, cls, tip) =>
+      `<span class="chip ${cls}" title="${esc(tip || "")}">${label}</span>`;
+    sc.innerHTML =
+      chip(c.feed === "live" ? "● LIVE FEED" : "⚠ SIM FEED",
+           c.feed === "live" ? "chip-ok" : "chip-warn",
+           "tape source from /api/feeds/diagnose") +
+      chip("local " + (c.local_model === "on" ? "ON" : "off"),
+           c.local_model === "on" ? "chip-ok" : "",
+           "local model availability") +
+      chip("agents " + c.agents, c.keyless ? "" : "chip-ok",
+           "cloud/ local/ drosophila mode — keyless runs brain+formulas") +
+      chip("news " + c.news, c.news === "live" ? "chip-ok" : "chip-warn",
+           "news source state") +
+      (c.degrade > 0 ? chip("L" + c.degrade + " DEGRADED", "chip-warn",
+                            "see /api/degrade") : "");
+  }
   refreshActiveView();
 }
 function onTick(msg) {
@@ -1281,12 +1309,23 @@ function handleMessage(msg) {
   else if (msg.type === "phase") renderBoot({ phase: msg.phase, analysis: msg });
   else if (msg.type === "sl_event") toast(msg.message || msg.kind, msg.kind === "close" ? "err" : "warn");
 }
+let ws;                       // module scope: master tick guards silence
 function connectWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  let ws;
   try { ws = new WebSocket(`${proto}://${location.host}/ws`); } catch { return; }
-  ws.onopen = () => { S.wsRetry = 0; };
-  ws.onclose = () => { S.wsRetry++; setTimeout(connectWS, Math.min(8000, 1000 * S.wsRetry)); };
+  ws.onopen = () => {
+    S.wsRetry = 0;
+    S.wsLast = Date.now();
+    try { ws.send(JSON.stringify({ type: "HELLO", view: S.view })); } catch {}
+    // §10.4 silence is checked by the SINGLE master tick (H-2): a socket
+    // silent for 15s is closed there — never wait the browser's 30-minute
+    // timeout (error J-7)
+  };
+  ws.onmessage = () => { S.wsLast = Date.now(); };
+  ws.onclose = () => {
+    S.wsRetry++;
+    setTimeout(connectWS, Math.min(8000, 1000 * S.wsRetry));
+  };
   ws.onmessage = ev => { try { handleMessage(JSON.parse(ev.data)); } catch { /* partial */ } };
 }
 
@@ -1304,6 +1343,13 @@ function bindGlobal() {
     try {
       await api("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       toast("keys saved"); loadAgents();
+      // §10.5 (D-5): data-affecting settings force a refetch — the UI
+      // never keeps showing pre-change data
+      const dataKeys = ["feed_mode", "symbol", "tf", "focus_tf", "news_enabled"];
+      if (Object.keys(body).some(k => dataKeys.includes(k))) {
+        try { refreshActiveView(true); toast("data setting applied — view refetched", "ok"); }
+        catch (e) { console.warn("refetch:", e); }
+      }
     } catch (e) { toast(e.message, "err"); }
   });
 }

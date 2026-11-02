@@ -523,6 +523,22 @@ degradation at <a href="/api/degrade">/api/degrade</a>.</p>
 <p>Levels:</p><ul>{rows}</ul></body></html>""")
 
 
+@app.get("/api/settings/effects")
+async def settings_effects() -> JSONResponse:
+    """§10.5 (D-5): which settings change data behaviour — the UI refetches
+    when one of these changes instead of showing stale data."""
+    return JSONResponse({
+        "ok": True,
+        "data_settings": ["feed_mode", "symbol", "tf", "focus_tf",
+                          "news_enabled"],
+        "cosmetic_settings": ["haptics", "chart_style"],
+        "rule": ("data-affecting changes force a full refetch before the "
+                 "next render; cosmetic changes apply immediately"),
+        "feed_note": ("FEED_MODE=binance is strict (refuses sim); auto "
+                      "graces 120s then falls back with the chip flagged"),
+    })
+
+
 @app.get("/api/forward")
 async def forward_tables(symbol: str | None = None) -> JSONResponse:
     """§2.7 forward expectancy: P(up | reading bucket) per formula × horizon."""
