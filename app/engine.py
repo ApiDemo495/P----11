@@ -65,6 +65,7 @@ from .meta import MetaCombiner
 # regime routing only). 97-101 are the brain/emotion/physics/news/hedge
 # subsystem inputs to the CCI; 20 is DRHE the regime gauge.
 NON_VOTING_IDS = frozenset({20, 97, 98, 99, 100, 101})
+AGENT_DEADLINE_S = 20.0        # §0.1 agent timeout at the 22-min horizon
 from .formulas.f01_f10 import abs_changes as _abs_changes
 from .formulas._helpers import mean as _mean, pearson as _pearson, sign as _sign, std_pop as _std_pop
 from .formulas.f22_f31 import f30_pcv, fractal_boundary_levels
@@ -119,6 +120,9 @@ class PredictionEngine:
         # forward expectancy tables + flat watch (advice §2.7 / §2.9)
         self.forward = ForwardTables()
         self.meta = MetaCombiner()          # §8.4 meta-combiner + §8.5 ledger
+        # §11.2 agent call discipline: one call per window + hard deadline
+        # (lead ≈ agent_timeout + 1.5s + formula pass, ≤2% of W → 20s at 22m)
+        self._agent_cache: dict = {}
         # hourly/daily hindsight reviews (advice §8.3)
         self.hindsight_mult: dict[tuple[str, str, int], float] = {}
         self.hindsight_changes: list[dict] = []
@@ -1396,12 +1400,36 @@ class PredictionEngine:
                 "news_sentiment": round(self.news.aggregate(symbol).get("polarity", 0.0), 4),
                 "cerc": tf1.get("emotion", {}).get("cerc"),
             }
-            try:
-                sig = await self.agents.query(ctx)
-            except Exception:
-                log.exception("agent query failed")
-                sig = {"direction": 0, "confidence": 0.0, "weight": 0.0,
-                       "source": "error", "insight": ""}
+            # §11.2: one call per (asset, window) — never two calls for
+            # one lock — and a hard deadline BEFORE the boundary; a late
+            # answer is discarded and logged, never applied mid-window (I-3)
+            _start_w, _end_w = self._grid_window("tf1", time.time())
+            _cache_key = (symbol, _end_w)
+            cached = self._agent_cache.get("sig") if \
+                self._agent_cache.get("key") == _cache_key else None
+            if cached is not None:
+                sig = dict(cached)
+                sig["cached"] = True
+            else:
+                t_call = time.monotonic()
+                try:
+                    sig = await asyncio.wait_for(
+                        self.agents.query(ctx), timeout=AGENT_DEADLINE_S)
+                except asyncio.TimeoutError:
+                    late_by = round(time.monotonic() - t_call, 1)
+                    log.warning("agent late by %.1fs — discarded (deadline %ss)",
+                                late_by, AGENT_DEADLINE_S)
+                    sig = {"direction": 0, "confidence": 0.0, "weight": 0.0,
+                           "source": "none",
+                           "insight": "",
+                           "warning": f"late by {late_by}s — discarded, "
+                                      f"deadline {AGENT_DEADLINE_S}s"}
+                except Exception:
+                    log.exception("agent query failed")
+                    sig = {"direction": 0, "confidence": 0.0, "weight": 0.0,
+                           "source": "error", "insight": ""}
+                if sig.get("source") not in ("error", "none"):
+                    self._agent_cache = {"key": _cache_key, "sig": dict(sig)}
             self.last_agent_signal = sig
         gd = float(sig.get("confidence") or 0.0)
         g_dir = int(sig.get("direction") or 0)

@@ -41,6 +41,10 @@ from .config import (
 )
 
 SETTINGS_FILE = "data/settings.json"
+# I-5: these never touch disk (memory + platform secrets only)
+KEY_FIELDS = frozenset({"gemini_key", "backup1_key", "backup2_key",
+                        "backup3_key", "groq_key", "openai_key",
+                        "anthropic_key"})
 MODELS_DIR = "models"
 
 GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
@@ -280,6 +284,16 @@ class AgentManager:
         self.auto_best: bool = False
         self.catalog = [dict(p) for p in AGENT_CATALOG]
         self.active_slot = "gemini"
+        # §11.1 key ring: one record per slot — test = a REAL API call
+        # (never a prefix check, I-1); states untested/ok/rate-limited/
+        # invalid/error with last error, cooldown, calls, failures.
+        self.keyring: dict[str, dict] = {
+            slot: {"state": "untested", "last_error": "", "cooldown_until": 0.0,
+                   "calls": 0, "failures": 0, "model": "", "last_ok": 0.0,
+                   "latency_ms": None}
+            for slot in ("gemini", "backup1", "backup2", "backup3", "local",
+                         "groq")
+        }
         self.load_settings()
 
     # ---------------- settings ----------------
@@ -292,6 +306,10 @@ class AgentManager:
         self.scores = {k: dict(v) for k, v in
                        (self.settings.get("agent_scores") or {}).items()}
         self.auto_best = bool(self.settings.get("auto_best"))
+        for slot, st in (self.settings.get("keyring") or {}).items():
+            if slot in self.keyring:
+                self.keyring[slot].update(
+                    {k: v for k, v in st.items() if k in self.keyring[slot]})
         import os as _os
         # environment mirrors (spec: stored in a local environment variable)
         for slot, env in (("gemini_key", "GEMINI_API_KEY"),
@@ -304,10 +322,18 @@ class AgentManager:
                 self.settings[slot] = _os.environ[env]
 
     def save_settings(self) -> None:
+        """I-5: NEVER write a user key to any file in the repo — only
+        non-secret preferences are persisted; keys live in memory and the
+        platform's environment/secrets."""
         try:
+            safe = {k: v for k, v in self.settings.items()
+                    if k not in KEY_FIELDS and k != "keyring"}
+            safe["keyring"] = {slot: {kk: vv for kk, vv in st.items()
+                                      if kk != "key"}
+                               for slot, st in self.keyring.items()}
             os.makedirs(os.path.dirname(SETTINGS_FILE) or ".", exist_ok=True)
             with open(SETTINGS_FILE, "w") as fh:
-                json.dump(self.settings, fh)
+                json.dump(safe, fh)
         except OSError:
             pass
 
@@ -341,7 +367,13 @@ class AgentManager:
     async def _call_provider(self, slot: str, key: str, prompt: str) -> dict:
         if not key:
             return {"ok": False, "reason": "no key"}
+        kr = self.keyring.get(slot) or {}
+        import time as _t
+        if kr.get("cooldown_until", 0.0) > _t.time():
+            return {"ok": False, "reason": "rate limited"}   # slot cooling down
+        kr["calls"] = int(kr.get("calls", 0)) + 1
         if not self._under_limit(key):
+            kr.update(state="rate-limited", cooldown_until=_t.time() + 60)
             return {"ok": False, "reason": "rate limited"}
         headers: dict[str, str] = {}
         if slot in ("backup2",):          # OpenAI
@@ -357,7 +389,10 @@ class AgentManager:
             body = {"model": "claude-3-5-sonnet-latest", "max_tokens": 200,
                     "messages": [{"role": "user", "content": prompt}]}
         else:                             # Gemini (primary + backup1)
-            url = GEMINI_URL.format(key=key)
+            # I-2: model id comes from ListModels when known; the hard-coded
+            # id is only the pre-test fallback (hard-coding broke on renames)
+            model = (self.keyring.get(slot) or {}).get("model") or "gemini-1.5-flash"
+            url = GEMINI_URL.replace("gemini-1.5-flash", model).format(key=key)
             headers = {"Content-Type": "application/json"}
             body = {"contents": [{"parts": [{"text": prompt}]}]}
         try:
@@ -366,8 +401,21 @@ class AgentManager:
         except Exception as e:
             return {"ok": False, "reason": e.__class__.__name__}
         if r.status_code == 429:
+            self.keyring.get(slot, {}).update(
+                state="rate-limited", cooldown_until=_t.time() + 60,
+                failures=int(self.keyring.get(slot, {}).get("failures", 0)) + 1)
             return {"ok": False, "reason": "rate limited"}
+        if r.status_code in (400, 401, 403):
+            # 400 can be a renamed model id — mark the slot and let the
+            # next call fall back to the pinned id (I-2)
+            self.keyring.get(slot, {}).update(
+                state="invalid", last_error=f"http {r.status_code}",
+                failures=int(self.keyring.get(slot, {}).get("failures", 0)) + 1)
+            return {"ok": False, "reason": f"http {r.status_code}"}
         if r.status_code >= 400:
+            self.keyring.get(slot, {}).update(
+                state="error", last_error=f"http {r.status_code}",
+                failures=int(self.keyring.get(slot, {}).get("failures", 0)) + 1)
             return {"ok": False, "reason": f"http {r.status_code}"}
         # paid-tier detection (Gemini headers expose remaining quota)
         rem = r.headers.get("x-ratelimit-remaining")
@@ -380,6 +428,9 @@ class AgentManager:
         parsed = parse_agent_reply(text)
         parsed["ok"] = True
         parsed["slot"] = slot
+        kr = self.keyring.get(slot)
+        if kr is not None:
+            kr.update(state="ok", last_error="", last_ok=_t.time())
         return parsed
 
     # ---------------- main query ----------------
@@ -496,7 +547,9 @@ class AgentManager:
         mode = ("cloud" if has_cloud and local_ok else
                 "cloud" if has_cloud else
                 "local" if local_ok else "drosophila")
+        kr_view = {k: dict(v) for k, v in self.keyring.items()}
         return {
+            "keyring": kr_view,
             "catalog": cat,
             "groq": {"configured": bool(self.groq_key),
                      "primary": self.GROQ_PRIMARY,
@@ -700,16 +753,106 @@ class AgentManager:
         cands.sort(reverse=True)
         return cands[0][1]
 
+    # ---------------- key ring: ListModels-driven model choice (I-2) -----
+    GEMINI_LIST_URL = ("https://generativelanguage.googleapis.com/v1beta/"
+                       "models?key={key}")
+
+    @staticmethod
+    def choose_model(models: list[dict]) -> str | None:
+        """The ListModels response is the ONLY truth about which models the
+        key may call (I-2): keep generateContent models, drop vision/
+        embedding/tts/image/audio ids, rank by family and generation.
+        A pinned id is honoured only if the key can actually use it."""
+        usable = []
+        for m in models:
+            mid = str(m.get("name") or m.get("id") or "")
+            methods = m.get("supportedGenerationMethods") or []
+            if "generateContent" not in methods:
+                continue
+            low = mid.lower()
+            if any(bad in low for bad in ("vision", "embedding", "tts",
+                                          "image", "audio", "aqa", "guard")):
+                continue
+            usable.append(mid)
+        if not usable:
+            return None
+        def rank(mid: str) -> tuple:
+            low = mid.lower()
+            gen = 2 if "gemini-2" in low else (1 if "gemini-1.5" in low else 0)
+            flash = 0 if "flash" in low else 1      # flash first (speed)
+            pro = 1 if "pro" in low else 0
+            return (-gen, flash, pro, low)
+        usable.sort(key=rank)
+        return usable[0]
+
     async def test(self, slot: str) -> dict:
+        kr = self.keyring.setdefault(slot, {"state": "untested"})
+        kr["calls"] = int(kr.get("calls", 0)) + 1
         key = self.settings.get(f"{slot}_key", "")
         if slot == "local":
             await _to_thread(self.local.try_load, force=True)   # manual retry
             return {"ok": self.local.available, "detail": self.local.label,
                     "error": self.local.error}
+        import time as _t
+        t0 = _t.monotonic()
+        # Gemini family: ListModels first — the response decides which
+        # model id this key may call (I-2). No prefix checks anywhere (I-1).
+        if slot in ("gemini", "backup1") and key:
+            pinned = self.settings.get("gemini_model") or "gemini-1.5-flash"
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    r = await client.get(self.GEMINI_LIST_URL.format(key=key))
+                if r.status_code in (400, 401, 403):
+                    kr.update(state="invalid", last_error=f"http {r.status_code}",
+                              cooldown_until=_t.time() + 300)
+                    self.save_settings()
+                    return {"ok": False, "detail": {"state": "invalid",
+                                                    "error": f"key rejected: http {r.status_code}"}}
+                if r.status_code == 429:
+                    kr.update(state="rate-limited", last_error="429 on ListModels",
+                              cooldown_until=_t.time() + 60)
+                    self.save_settings()
+                    return {"ok": False, "detail": {"state": "rate-limited"}}
+                r.raise_for_status()
+                models = (r.json().get("models") or [])
+                chosen = self.choose_model(models)
+                names = [str(m.get("name") or "") for m in models]
+                pinned_ok = any(pinned in n for n in names)
+                if pinned_ok:
+                    chosen = pinned            # honour pinned only if usable
+                if not chosen:
+                    kr.update(state="error", last_error="no generateContent model")
+                    return {"ok": False, "detail": {"state": "error",
+                                                    "error": "no usable model"}}
+                kr["model"] = chosen
+                kr["pinned_ok"] = pinned_ok
+            except Exception as e:
+                # sandbox/network blocks are documented as such (G-8) —
+                # not presented as "API down"
+                kr.update(state="error", last_error=f"ListModels {e.__class__.__name__}")
+                kr["model"] = pinned
         res = await self._call_provider(
             slot, key, "Reply with only this JSON: "
                        '{"direction": 0, "confidence": 0.5, "insight": "ok"}')
-        return {"ok": bool(res.get("ok")), "detail": res}
+        ms = round((_t.monotonic() - t0) * 1000, 1)
+        kr["latency_ms"] = ms
+        if res.get("ok"):
+            kr.update(state="ok", last_error="", last_ok=_t.time())
+        else:
+            kr["failures"] = int(kr.get("failures", 0)) + 1
+            reason = str(res.get("reason") or "error")
+            if "rate" in reason:
+                kr.update(state="rate-limited", last_error=reason,
+                          cooldown_until=_t.time() + 60)
+            elif "http 40" in reason or "http 401" in reason:
+                kr.update(state="invalid", last_error=reason,
+                          cooldown_until=_t.time() + 300)
+            else:
+                kr.update(state="error", last_error=reason)
+        self.save_settings()
+        return {"ok": bool(res.get("ok")), "detail": res,
+                "keyring": dict(kr), "model": kr.get("model"),
+                "latency_ms": ms}
 
 
 async def _to_thread(fn, *a):

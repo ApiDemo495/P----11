@@ -479,12 +479,24 @@ def test_agent_mode_keyless_runs_drosophila(monkeypatch, tmp_path):
     assert st["has_cloud_keys"] is False
     # every cloud slot is merely "not configured" — nothing throws
     assert all(s["status"] in ("not configured", "disabled") for s in st["slots"])
-    # paste a key → cloud mode, persisted, reloaded
+    # paste a key → cloud mode in memory (advice I-5: keys NEVER touch
+    # any file in the repo — platform secrets/env only)
     m.configure(gemini_key="AIzaTESTKEY")
     assert m.status()["mode"] == "cloud"
-    assert ag.AgentManager().status()["has_cloud_keys"] is True
+    import os as _os
+    from pathlib import Path as _P
+    if _P(ag.SETTINGS_FILE).exists():
+        on_disk = _P(ag.SETTINGS_FILE).read_text()
+        assert "AIzaTESTKEY" not in on_disk, "key leaked to a repo file (I-5)"
+    # a fresh manager reloads keys from the environment (platform secrets)
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaENVKEY")
+    fresh = ag.AgentManager()
+    fresh.local.available = False
+    assert fresh.status()["has_cloud_keys"] is True
+    assert fresh.status()["mode"] == "cloud"
     # keyless + local model → local mode
     m.configure(gemini_key="")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     m.local.available = True
     assert m.status()["mode"] == "local"
 
