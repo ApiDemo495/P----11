@@ -57,6 +57,8 @@ from .brain import BrainSystem
 from .emotion import EmotionSystem
 from .feed import MarketFeed
 from .formulas import FORMULA_FUNCTIONS, FORMULA_NAMES, compute_all
+from .formulas.trace import traced_compute
+from .forward import ForwardTables
 from .formulas.f01_f10 import abs_changes as _abs_changes
 from .formulas._helpers import mean as _mean, pearson as _pearson, sign as _sign, std_pop as _std_pop
 from .formulas.f22_f31 import f30_pcv, fractal_boundary_levels
@@ -106,6 +108,12 @@ class PredictionEngine:
         self.phase_deadline = self.phase_start + INITIAL_ANALYSIS_MAX_SECONDS
         self.phase_warning = False
         self.locked = False
+        # last traced formula pass per (symbol, tf) — advice §2.1 traces
+        self.last_traces: dict[tuple[str, str], dict] = {}
+        # forward expectancy tables + flat watch (advice §2.7 / §2.9)
+        self.forward = ForwardTables()
+        from collections import deque as _dq
+        self.flat: dict[tuple[str, str, int], _dq] = {}
         self.readiness: dict[str, bool] = {
             "bars": False,
             "formulas": False,
@@ -421,7 +429,9 @@ class PredictionEngine:
             ctx = self.build_ctx(symbol, tf)
             ctxs[tf] = ctx
             _anoms: list = []
-            raws[tf] = compute_all(ctx, record=record, anomalies=_anoms)
+            raws[tf], _traces = traced_compute(ctx, record=record,
+                                               anomalies=_anoms)
+            self.last_traces[(symbol, tf)] = _traces
             if _anoms:
                 self.auditor.report_anomalies(symbol, tf, _anoms, raws[tf])
 
@@ -1066,6 +1076,26 @@ class PredictionEngine:
             "edges": edges,
         }
 
+    def _flat_payload(self, cap: int = 8) -> dict:
+        """§2.9 flat watch: share of the last 50 locks each formula spent
+        inside ±0.02, with the zero reason when it had one. Offenders only."""
+        out: dict[str, list] = {}
+        for (symbol, tf, fid), dq in self.flat.items():
+            if not dq:
+                continue
+            share = sum(dq) / len(dq)
+            if share < 0.5:
+                continue
+            tr = (self.last_traces.get((symbol, tf)) or {}).get(fid) or {}
+            out.setdefault(f"{symbol}|{tf}", []).append({
+                "fid": fid, "share": round(share, 2), "n": len(dq),
+                "zero_reason": tr.get("zero_reason"),
+            })
+        for key in out:
+            out[key].sort(key=lambda r: -r["share"])
+            out[key] = out[key][:cap]
+        return out
+
     def formula_history(self, symbol: str, tf: str) -> dict:
         """Sparklines (100 GRCs) + rolling accuracy (50 GRCs) for every
         core formula, emotion and physics formula of one (asset, timeframe)."""
@@ -1535,8 +1565,29 @@ class PredictionEngine:
                                float(prev.get("price") or 0.0),
                                price, int(prev.get("side") or 0),
                                window_end=float(prev.get("window_end") or 0))
+            # forward table: settle the PREVIOUS lock's frozen readings
+            if prev.get("fv"):
+                try:
+                    self.forward.record(symbol, tf,
+                                        {int(k): float(v)
+                                         for k, v in prev["fv"].items()},
+                                        float(prev.get("price") or 0.0),
+                                        price)
+                except Exception:
+                    pass
         dom = ((res.get("emotion") or {}).get("dominant")
                or (res.get("brain") or {}).get("dominant"))
+        # freeze the formula readings with the lock (forward tables +
+        # flat watch read these; the lock never repaints them)
+        tr = self.last_traces.get((symbol, tf)) or {}
+        fv = {str(fid): round(float(t["value"]), 5)
+              for fid, t in tr.items() if isinstance(fid, int)}
+        for fid, t in tr.items():
+            if not isinstance(fid, int) or fid == 20:
+                continue                    # 20 is a confidence gauge, not a vote
+            dq = self.flat.setdefault((symbol, tf, fid),
+                                      __import__("collections").deque(maxlen=50))
+            dq.append(bool(abs(float(t.get("value") or 0.0)) <= 0.02))
         self.locks[(symbol, tf)] = {
             "symbol": symbol, "tf": tf,
             "side": int(res.get("direction") or 0),
@@ -1547,6 +1598,7 @@ class PredictionEngine:
             "locked_at": now, "computed_at": now,
             "window_start": start, "window_end": end,
             "relocks": 0, "relock_at": None,
+            "fv": fv,
         }
         self._save_locks()
 
@@ -2160,6 +2212,10 @@ class PredictionEngine:
                 },
             },
             "brains": self.brains.status(),
+            "formula_traces": {
+                f"{sym}|{tf}": t for (sym, tf), t in self.last_traces.items()
+            },
+            "flat_watch": self._flat_payload(),
             "formula_values": {
                 f"{s}|{tf}": data
                 for (s, tf), data in self.display_formulas.items()

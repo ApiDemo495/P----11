@@ -297,3 +297,7 @@ td b.up { color: var(--green); } td b.down { color: var(--red); } td b.flat { co
   padding: 10px 12px; margin-bottom: 10px; font: 600 12px/1.5 var(--mono); color: var(--gold); }
 .lock-block.relocked { border-color: var(--red); color: var(--red); }
 .lock-block .dim { font-weight: 400; margin-top: 4px; }
+
+.fwd-table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+.fwd-table th, .fwd-table td { padding: 3px 6px; border-bottom: 1px solid var(--line2); text-align: right; }
+.fwd-table th:first-child, .fwd-table td:first-child { text-align: left; }

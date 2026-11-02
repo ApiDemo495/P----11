@@ -388,6 +388,12 @@ async def feeds_diagnose() -> JSONResponse:
     })
 
 
+@app.get("/api/forward")
+async def forward_tables(symbol: str | None = None) -> JSONResponse:
+    """§2.7 forward expectancy: P(up | reading bucket) per formula × horizon."""
+    return JSONResponse({"ok": True, **engine.forward.payload(symbol)})
+
+
 @app.get("/api/ledger")
 async def ledger_api() -> JSONResponse:
     """Strict-sign settlement ledger — the ONLY accuracy source (G-1)."""

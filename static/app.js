@@ -84,6 +84,11 @@ const FORMULA_LOGIC = {
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+// §10: escapeHtml everything from the server — one helper, used everywhere
+function esc(x) {
+  return String(x ?? "").replace(/[&<>"']/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
 const fmt = (v, d = 2) => v == null || Number.isNaN(Number(v)) ? "—" : Number(v).toFixed(d);
 const px = v => v >= 1000 ? Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 })
   : v >= 10 ? Number(v).toFixed(2) : Number(v).toFixed(4);
@@ -528,6 +533,9 @@ async function loadFormulas() {
     (bd.components || []).forEach(c => contribs[c.id] = c);
     const cards = $("#fl-cards"); cards.innerHTML = "";
     const core = fv.raw || {};
+    // advice §2.1-2.4: per-formula trace (µs, span, guard, zero reason,
+    // double check) from the engine's last traced pass
+    const tr = S.snap?.formula_traces?.[`${S.symbol}|${S.focusTf}`] || {};
     Object.keys(core).sort((a, b) => a - b).forEach(fid => {
       const raw = core[fid], adj = (fv.adj || {})[fid] ?? raw;
       const name = (fv.names || {})[fid] || `F${fid}`;
@@ -538,15 +546,25 @@ async function loadFormulas() {
       const mean = hist.length ? hist.reduce((a, b) => a + b, 0) / hist.length : null;
       const card = document.createElement("div");
       card.className = "card";
+      const ft = tr[fid] || null;
+      const zeroChip = ft?.zero_reason
+        ? `<span class="chip chip-warn" title="why it is 0">0 · ${ft.zero_reason}</span>` : "";
+      const dc = ft?.double_check;
+      const dcChip = dc
+        ? `<span class="chip ${dc.ok ? "chip-ok" : "chip-err"}" title="${esc(dc.identity || "")}">${dc.label}</span>` : "";
+      const traceLine = ft
+        ? `<span class="dim">${ft.us} µs · span ${ft.span}/${ft.guard_min ?? "–"} bars${ft.non_directional ? " · non-directional (never votes)" : ""}</span>`
+        : "";
       card.innerHTML = `<h4><span>F${fid} · ${name}</span><span>${contrib >= 0 ? "+" : ""}${contrib != null ? fmt(contrib, 4) : "—"}</span></h4>
         <div class="kv-row">
           <div class="kv"><span>raw</span><b>${raw >= 0 ? "+" : ""}${fmt(raw, 3)}</b></div>
           <div class="kv"><span>Bgn-adj</span><b>${adj >= 0 ? "+" : ""}${fmt(adj, 3)}</b></div>
           <div class="kv"><span>weight ω</span><b>${fmt(w, 4)}</b></div>
         </div>
+        <div class="kv-row trace-row">${zeroChip}${dcChip}${traceLine}</div>
         ${hist.length > 2 ? `<canvas class="spark" height="46" data-f="${fid}"></canvas>
         <div class="kv-row"><div class="kv"><span>min/mean/max (100 GRC)</span><b>${fmt(mn, 3)} / ${fmt(mean, 3)} / ${fmt(mx, 3)}</b></div></div>` : ""}
-        <div class="logic">${FORMULA_LOGIC[fid] || ""}</div>`;
+        <div class="logic">${dc?.identity ? esc(dc.identity) + " · " : ""}${FORMULA_LOGIC[fid] || ""}</div>`;
       cards.appendChild(card);
     });
     // extras F28 ARC / F30 PCV
@@ -561,6 +579,36 @@ async function loadFormulas() {
         <div class="logic">${FORMULA_LOGIC[28]} · ${FORMULA_LOGIC[30]}</div>`;
       cards.appendChild(ex);
     }
+    // advice §2.7/§2.9: flat watch + forward P(up) superposition (4 columns)
+    try {
+      const fwd = await api(`/api/forward?symbol=${S.symbol}`);
+      const flat = S.snap?.flat_watch?.[`${S.symbol}|${S.focusTf}`] || [];
+      const flatEl = $("#fl-flat");
+      if (flatEl) {
+        flatEl.innerHTML = flat.length
+          ? flat.map(r => `<span class="chip chip-warn" title="${esc(r.zero_reason || "flat reading")}"
+              >F${r.fid} ${Math.round(r.share * 100)}% flat · n=${r.n}${r.zero_reason ? " · " + esc(r.zero_reason) : ""}</span>`).join("")
+          : `<span class="dim">no formula stuck flat in the last 50 locks</span>`;
+      }
+      const fwEl = $("#fl-forward");
+      if (fwEl) {
+        const rows = Object.keys(core).sort((a, b) => a - b).map(fid => {
+          const tds = ["tf1", "tf2", "tf3", "tf4"].map(tf => {
+            const cell = (fwd.buckets?.[`F${fid} ${S.symbol} ${tf}`] || [])
+              .find(b => Math.abs(b.bucket - (Math.max(-1, Math.min(1, core[fid])) )) < 0.26);
+            return cell && cell.settled
+              ? `<td title="bucket ${cell.bucket}, n=${cell.n}">${(cell.p_up * 100).toFixed(0)}%<span class="dim"> n${cell.n}</span></td>`
+              : `<td class="dim">—</td>`;
+          }).join("");
+          const cur = (fv.raw?.[fid] ?? core[fid]);
+          return `<tr><td>F${fid} ${(fv.names?.[fid] || "")}</td><td>${fmt(cur, 3)}</td>${tds}</tr>`;
+        }).join("");
+        fwEl.innerHTML = `<table class="fwd-table"><thead><tr><th>formula</th><th>now</th>
+          <th>tf1 P(up)</th><th>tf2 P(up)</th><th>tf3 P(up)</th><th>tf4 P(up)</th></tr></thead>
+          <tbody>${rows}</tbody></table>
+          <div class="hint">Forward P(up) is settled strict-sign from this ledger — n≥30 per bucket before it speaks (advice §2.7). Current value beside it: superposition (§2.8).</div>`;
+      }
+    } catch (e) { console.warn("forward/flat:", e); }
     drawSparks(fh.core || {});
   } catch (e) { toast("formulas: " + e.message, "err"); }
 }
