@@ -76,6 +76,7 @@ async def _vault_loop() -> None:
             engine.learning.save_state(engine=engine, brains=engine.brains)
             engine.forward.save()
             engine.genesis.save()
+            engine.vault_last_write = time.time()
             engine.hindsight()          # reads rings; keeps payload warm
         except asyncio.CancelledError:
             raise
@@ -515,6 +516,12 @@ async def genesis_formula(fid: str) -> JSONResponse:
 async def genesis_domains() -> JSONResponse:
     """§7 the ten domains with the maths of each."""
     return JSONResponse({"ok": True, "domains": engine.genesis.domains_payload()})
+
+
+@app.get("/api/ops")
+async def ops() -> JSONResponse:
+    """§12 ops row: degradation + vault + watchdog + uptime + build id."""
+    return JSONResponse({"ok": True, **engine.ops_status()})
 
 
 @app.get("/api/degrade")

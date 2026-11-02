@@ -617,13 +617,14 @@ async function loadFormulas() {
       const card = document.createElement("div");
       card.className = "card";
       const ft = tr[fid] || null;
+      const hz = (S.snap?.hindsight?.per || {})[`${S.symbol}|${S.focusTf}|F${fid}`];
       const zeroChip = ft?.zero_reason
         ? `<span class="chip chip-warn" title="why it is 0">0 · ${ft.zero_reason}</span>` : "";
       const dc = ft?.double_check;
       const dcChip = dc
         ? `<span class="chip ${dc.ok ? "chip-ok" : "chip-err"}" title="${esc(dc.identity || "")}">${dc.label}</span>` : "";
-      const traceLine = ft
-        ? `<span class="dim">${ft.us} µs · span ${ft.span}/${ft.guard_min ?? "–"} bars${ft.non_directional ? " · non-directional (never votes)" : ""}</span>`
+      const traceLine = (ft || hz)
+        ? `<span class="dim">${ft ? `${ft.us} µs · span ${ft.span}/${ft.guard_min ?? "–"} bars` : ""}${hz ? ` · z ${hz.z ?? "—"} · ${Math.round((hz.rate ?? 0) * 100)}% (${hz.hits ?? "?"}/${hz.n ?? "?"})` : ""}${ft?.non_directional ? " · non-directional (never votes)" : ""}</span>`
         : "";
       card.innerHTML = `<h4><span>F${fid} · ${name}</span><span>${contrib >= 0 ? "+" : ""}${contrib != null ? fmt(contrib, 4) : "—"}</span></h4>
         <div class="kv-row">
@@ -1321,7 +1322,11 @@ function applySnapshot(snap) {
       chip("news " + c.news, c.news === "live" ? "chip-ok" : "chip-warn",
            "news source state") +
       (c.degrade > 0 ? chip("L" + c.degrade + " DEGRADED", "chip-warn",
-                            "see /api/degrade") : "");
+                            "see /api/degrade") : "") +
+      (c.deadline_misses ? chip(c.deadline_misses + " LATE AGENT CALLS",
+                                "chip-warn",
+                                "late answers discarded, never applied (I-3)")
+                         : "");
   }
   refreshActiveView();
 }

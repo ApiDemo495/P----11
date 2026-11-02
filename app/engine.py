@@ -152,6 +152,10 @@ class PredictionEngine:
         # §11.2 agent call discipline: one call per window + hard deadline
         # (lead ≈ agent_timeout + 1.5s + formula pass, ≤2% of W → 20s at 22m)
         self._agent_cache: dict = {}
+        self.agent_deadline_misses = 0     # §12 agents: deadline misses
+        self.started_at = time.time()      # §12 ops: uptime
+        self.vault_last_write = 0.0        # §12 ops: vault last write
+        self.build_id = ""                 # §12 ops: build id vs remote
         # hourly/daily hindsight reviews (advice §8.3)
         self.hindsight_mult: dict[tuple[str, str, int], float] = {}
         self.hindsight_changes: list[dict] = []
@@ -1336,6 +1340,28 @@ class PredictionEngine:
                 "supporters": pick(supporters), "opponents": pick(opponents),
                 "subsystem_votes": subsystems}
 
+    def ops_status(self) -> dict:
+        """§12 ops row: degradation, vault last write, watchdog, uptime,
+        build id vs remote."""
+        if not self.build_id:
+            try:
+                import subprocess
+                self.build_id = subprocess.check_output(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    stderr=subprocess.DEVNULL, timeout=2).decode().strip()
+            except Exception:
+                self.build_id = "unknown"
+        wd = getattr(self, "_watchdog", {}) or {}
+        return {
+            "degrade": self.degrade_status(),
+            "vault_last_write_ago_s": (round(time.time() - self.vault_last_write, 1)
+                                       if self.vault_last_write else None),
+            "watchdog": {"alert": bool(wd.get("alert")),
+                         "seconds_since_window": wd.get("seconds_since_window")},
+            "uptime_s": round(time.time() - self.started_at, 1),
+            "build_id": self.build_id,
+        }
+
     def degrade_status(self) -> dict:
         """§9.4 honest degradation levels: every level with its reasons and
         which endpoint still serves what. L5 is explicit shutdown only."""
@@ -1593,6 +1619,7 @@ class PredictionEngine:
                         self.agents.query(ctx), timeout=AGENT_DEADLINE_S)
                 except asyncio.TimeoutError:
                     late_by = round(time.monotonic() - t_call, 1)
+                    self.agent_deadline_misses += 1
                     log.warning("agent late by %.1fs — discarded (deadline %ss)",
                                 late_by, AGENT_DEADLINE_S)
                     sig = {"direction": 0, "confidence": 0.0, "weight": 0.0,
@@ -2767,6 +2794,7 @@ class PredictionEngine:
                                    ("gemini_key", "backup1_key", "backup2_key",
                                     "backup3_key")),
                 "degrade": self.degrade_status()["level"],
+                "deadline_misses": self.agent_deadline_misses,
             },
             "meta": self.meta.payload(),
             "formula_values": {

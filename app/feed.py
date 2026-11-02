@@ -198,6 +198,10 @@ class MarketFeed:
             "real_age_s": (round(now - self.last_real_delivery, 1)
                            if self.last_real_delivery else None),
             "bars": sum(len(st.times) for st in self.states.values()),
+            "bootstrap_span_min": max(
+                (st.times[-1] - st.times[0]) / 60.0
+                for st in self.states.values() if st.times) if any(
+                st.times for st in self.states.values()) else 0.0,
             "bars_sim": sum(1 for st in self.states.values()
                             for src in st.sources if _family(src) == "sim"),
             "stale": stale,

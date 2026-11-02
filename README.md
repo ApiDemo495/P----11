@@ -487,3 +487,37 @@ Every GRC writes `data/history_YYYY-MM-DD.json`: timestamp, prices, per-tf/asset
 `POST /api/agents/test/{slot}` · `GET /api/state/export` · `POST /api/state/import` · `GET /api/systems`.
 
 **Tests: 119 passed** (test_part1/2/3 + `tests/test_part4.py` — learning cycles, HMM, persistence round-trip, two-tier CCI, double-check matrix, agents failover, history retention, UI contract).
+
+## Honesty layer (ADVICE_FOR_A_MULTI_ASSET_INTRADAY_APP.md — fully applied)
+
+Every item of the advice document is implemented in this app (translated
+from scalping timings to the intraday horizons):
+
+| Advice | Where it lives |
+|---|---|
+| §1 tape hardening (D-1/D-2/D-3/D-7) | `app/feed.py` — single-writer guard, 120s grace, adopt/demote reconcile, binance.vision rotation, quote-print counting, `/api/feeds/diagnose` |
+| §2 formula traces / zero-reasons / double-check / self-test tapes / forward tables / flat watch / superposition | `app/formulas/trace.py`, `app/formulas/selftest.py`, `app/forward.py`, formulas view |
+| §3 brain push-pull, polarity calibration, endpoints | `app/brain.py` probes, `/api/brain/{status,wiring,explain,reconnect}` |
+| §4 news macro lexicon, relevance gate, critical events, heartbeats | `app/news.py`, `/api/news/{status,poll}` |
+| §5 emotion features, complacency gate, ±15% confidence band | `app/emotion.py`, engine band |
+| §6 physics mechanism table with reasons + 4 derivation estimators | `app/physics.py` (`mechanisms`, `estimators`) |
+| §7 genesis layer (10 domains, 7 metrics, lifecycle + autopsy) | `app/genesis.py`, `/api/genesis/*` |
+| §8.1–8.5 ladder, mass, hindsight, meta-combiner, evidence ledger | `app/engine.py`, `app/meta.py` |
+| §8.6 edge guard, temporal twin, BOCPD, Hawkes | `engine._learners` |
+| §9 vault, watchdog-exit75, supervisor, placeholder, degradation | `run.sh --supervise`, `/api/{ops,watchdog,degrade,secrets/status}`, `/placeholder` |
+| §10 one setInterval, 15s silent-socket, status chips, esc() | `static/app.js`, honesty tests |
+| §11 key ring, ListModels model choice, deadline + window cache | `app/agents.py`, `engine._apply_agents` |
+| §13 Part B detection tests | `tests/test_advice_guards.py` (18 guards) |
+
+Run the detection suite:
+
+```bash
+.venv/bin/python -m pytest tests/test_advice_guards.py -q
+```
+
+Start under the supervisor (single instance, health loop, exit 75 on a
+hung boot):
+
+```bash
+./run.sh --supervise
+```
