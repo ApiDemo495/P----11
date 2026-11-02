@@ -319,7 +319,7 @@ function renderQuads() {
   });
   renderRail();
   try { renderCalls(); } catch (e) { console.error("calls", e); }
-  try { renderLedger(); } catch (e) { console.error("ledger", e); }
+  try { renderLedger(); renderHindsight(); } catch (e) { console.error("ledger", e); }
 }
 function renderRail() {
   const a = S.snap?.assets || {};
@@ -459,6 +459,36 @@ function renderLedger() {
     <tbody>${rows}</tbody></table>
     <div class="kv-row" style="margin-top:8px">${pooled}</div>
     <div class="hint">${led.rule} — every accuracy number in the app is read from this ledger, nowhere else.</div>`;
+}
+
+/* ═══════ HINDSIGHT (advice §8.3): z-graded multipliers, printed ═══════ */
+function renderHindsight() {
+  const el = $("#hindsight-panel"); if (!el) return;
+  const h = S.snap?.hindsight; if (!h) { el.innerHTML = `<div class="dim">no re-grade data yet</div>`; return;
+  }
+  const per = Object.values(h.per || {});
+  const enough = per.filter(e => e.enough);
+  const inverted = enough.filter(e => e.inverted);
+  const damped = [...enough].sort((a, b) => a.multiplier - b.multiplier).slice(0, 8);
+  const changes = (h.changes || []).slice().reverse().slice(0, 6);
+  el.innerHTML = `
+    <div class="kv-row">
+      <div class="kv"><span>graded (n≥${h.min_decided})</span><b>${enough.length}</b></div>
+      <div class="kv"><span>not enough windows</span><b>${per.length - enough.length}</b></div>
+      <div class="kv"><span>inverted (z≤−3, n≥16)</span><b>${inverted.length}</b></div>
+      <div class="kv"><span>cadence</span><b>${Object.entries(h.cadence || {}).map(([k, v]) => k.toUpperCase() + " " + v).join(" · ")}</b></div>
+    </div>
+    <table class="tbl" style="margin-top:6px">
+      <thead><tr><th>SUBJECT</th><th>n</th><th>HITS</th><th>MISSES</th><th>RATE</th><th>z</th><th>MULT</th><th>NOTE</th></tr></thead>
+      <tbody>${damped.map(e => `<tr class="${e.inverted ? "acc-dn" : ""}">
+        <td>${esc(e.label)}</td><td>${e.n}</td><td class="acc-up">${e.hits}</td>
+        <td class="acc-dn">${e.misses}</td><td>${Math.round(e.rate * 100)}%</td>
+        <td>${e.z}</td><td><b>${e.multiplier}</b></td>
+        <td class="dim">${esc(e.changes_note || "")}</td></tr>`).join("")}</tbody>
+    </table>
+    <div class="hint">Changes applied at the window boundary: ${changes.map(c =>
+      `<span class="chip chip-warn">${esc(c.formula)} ${c.from}→${c.to} (${esc(c.reason)})</span>`).join(" ") || "none yet"}</div>
+    <div class="hint">${esc(h.rule || "")}</div>`;
 }
 
 /* ═══════════ CALLS & TARGETS — TP/SL for every timeframe ═══════════ */

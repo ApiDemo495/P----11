@@ -117,6 +117,11 @@ class PredictionEngine:
         self.last_traces: dict[tuple[str, str], dict] = {}
         # forward expectancy tables + flat watch (advice §2.7 / §2.9)
         self.forward = ForwardTables()
+        # hourly/daily hindsight reviews (advice §8.3)
+        self.hindsight_mult: dict[tuple[str, str, int], float] = {}
+        self.hindsight_changes: list[dict] = []
+        self._hindsight_last: dict[str, float] = {}   # tf -> last review ts
+        self._hindsight_reviewed_n: dict[str, int] = {}
         # fused-score history for the noise floor (advice §8.2 step 1)
         from collections import deque as _dq2
         self.score_hist: dict[tuple[str, str], _dq2] = {}
@@ -495,7 +500,8 @@ class PredictionEngine:
                     # rolling accuracy rings (last 50 scored GRCs) for the
                     # formula panels — same reward rule as weight learning
                     for fid, r in rewards.items():
-                        if fid in FORMULA_FUNCTIONS or fid in (28, 30):
+                        if fid in FORMULA_FUNCTIONS or fid in (
+                                28, 30, 97, 98, 99, 100, 101):
                             ring = self.hist.ring(
                                 self.hist.tf_key(symbol, tf, f"facc{fid}"), 50
                             )
@@ -530,7 +536,12 @@ class PredictionEngine:
                 if self.last_agent_signal and self.agents.active_slot:
                     _adir = int(self.last_agent_signal.get("direction") or 0)
                     if _adir != 0:
-                        self.agents.record_outcome(_adir == _sign(move))
+                        _ok = _adir == _sign(move)
+                        self.agents.record_outcome(_ok)
+                        # agent re-grade ring (advice §8.3: every system)
+                        self.hist.ring(
+                            self.hist.tf_key(symbol, tf, "facc_agent"), 50
+                        ).append(1.0 if _ok else -1.0)
                 # consecutive-correct running ratio (0..1, last 10)
                 pdir = self.prev_cci_dir.get((symbol, tf), 0)
                 if move != 0 and pdir != 0:
@@ -650,6 +661,7 @@ class PredictionEngine:
                 fid: base_w.get(fid, 0.0)
                 * self.learning.performance_multiplier(fid, "tf", tf)
                 * self.learning.performance_multiplier(fid, "sym", symbol)
+                * self._hindsight_factor(symbol, tf, fid)
                 for fid in WEIGHT_IDS
             }
             pack = self.cci.compute(
@@ -1440,30 +1452,121 @@ class PredictionEngine:
                     disp["issued"] = False
                     disp["reason"] = res["reason"]
 
+    # cadence per advice §8.3: 4-hourly for 22/44 min, daily for 130/247
+    _HINDSIGHT_CADENCE = {"tf1": 4 * 3600, "tf2": 4 * 3600,
+                          "tf3": 24 * 3600, "tf4": 24 * 3600}
+    HINDSIGHT_MIN_DECIDED = 8          # advice §8.3
+    HINDSIGHT_INVERT_Z = -3.0          # invert only at z ≤ −3 …
+    HINDSIGHT_INVERT_MIN_N = 16        # … with ≥ 16 decided windows
+
+    @staticmethod
+    def _grade_ring(ring: list[float]) -> dict | None:
+        """Hits/misses/silent, bias, z of the signed edge — strict sign."""
+        decided = [v for v in ring if v != 0]
+        silent = len(ring) - len(decided)
+        if not decided:
+            return None
+        hits = sum(1 for v in decided if v > 0)
+        misses = len(decided) - hits
+        n = len(decided)
+        mean = sum(decided) / n
+        var = sum((v - mean) ** 2 for v in decided) / max(1, n - 1)
+        std = var ** 0.5
+        z = (mean / (std / (n ** 0.5))) if std > 1e-9 else 0.0
+        mult = max(0.25, min(1.5, 1.0 + 0.25 * z))
+        inverted = z <= -3.0 and n >= 16
+        if inverted:
+            mult = -max(0.25, min(1.5, 1.0 + 0.25 * abs(z) * 0.5))
+        return {"n": n, "hits": hits, "misses": misses, "silent": silent,
+                "rate": round(hits / n, 3), "bias": round(mean, 4),
+                "z": round(z, 3), "multiplier": round(mult, 3),
+                "inverted": inverted}
+
     def hindsight(self) -> dict:
-        """Daily/4-hourly re-grade view (advice 8.3): per core formula the
-        recent strict-sign edge from the facc rings + derived multiplier."""
-        out: dict[str, dict] = {}
+        """§8.3 re-grade of every formula AND system on the recent windows:
+        hits/misses/silent, won rate, bias, z of the signed edge, multiplier
+        clip(1 + 0.25·z, 0.25, 1.5); inversion only at z ≤ −3 with ≥ 16
+        decided; MIN_DECIDED = 8 — below it the card says 'not enough
+        windows', never a percentage (advice §0.5)."""
+        per: dict[str, dict] = {}
         for symbol in SYMBOL_ORDER:
             for tf in TF_ORDER:
-                for fid in list(WEIGHT_IDS)[:31]:
-                    key = self.hist.tf_key(symbol, tf, f"facc{fid}")
+                for fid in list(WEIGHT_IDS) + ["agent"]:
+                    key_name = (f"facc{fid}" if fid != "agent"
+                                else "facc_agent")
+                    key = self.hist.tf_key(symbol, tf, key_name)
                     ring = list(self.hist.ring(key, 50))
-                    if len(ring) < 8:
-                        continue
-                    mean = sum(ring) / len(ring)
-                    mult = max(0.25, min(1.5, 1.0 + 0.25 * (mean / 0.25)))
-                    k = str(fid)
-                    prev = out.get(k)
-                    out[k] = {"fid": fid,
-                              "acc": round((mean + 1) / 2, 3),
-                              "n": len(ring),
-                              "multiplier": round(mult, 3)}
-                    if prev and prev.get("n", 0) > out[k]["n"]:
-                        out[k] = prev
-        top = sorted(out.values(), key=lambda d: d["multiplier"])[:6]
-        return {"per_formula": out, "most_damped": top,
-                "rule": "mult = clip(1 + z, 0.25, 1.5) on last-50 strict-sign edge"}
+                    label = f"F{fid}" if fid != "agent" else "agent"
+                    if len(ring) < self.HINDSIGHT_MIN_DECIDED:
+                        entry = {"label": label, "n": len(ring),
+                                 "enough": False,
+                                 "note": "not enough windows to say "
+                                         f"(need {self.HINDSIGHT_MIN_DECIDED})"}
+                    else:
+                        g = self._grade_ring(ring)
+                        if not g:
+                            continue
+                        entry = {"label": label, "enough": True, **g}
+                        entry["changes_note"] = (
+                            f"damped {label} ×{g['multiplier']}: "
+                            f"{g['hits']}/{g['n']}"
+                            + (" · INVERTED" if g["inverted"] else ""))
+                    k = f"{symbol}|{tf}|{label}"
+                    prev = per.get(k)
+                    if prev is None or entry.get("n", 0) >= prev.get("n", 0):
+                        per[k] = entry
+        top = sorted((e for e in per.values() if e.get("enough")),
+                     key=lambda d: d["multiplier"])[:6]
+        return {
+            "per": per,
+            "most_damped": top,
+            "min_decided": self.HINDSIGHT_MIN_DECIDED,
+            "cadence": {k: f"{v // 3600}h" for k, v in self._HINDSIGHT_CADENCE.items()},
+            "last_review": {k: v for k, v in self._hindsight_last.items()},
+            "changes": self.hindsight_changes[-8:],
+            "rule": ("mult = clip(1 + 0.25·z, 0.25, 1.5) on the strict-sign "
+                     "edge; invert only at z ≤ −3 with ≥16 decided; "
+                     "MIN_DECIDED = 8; changes apply at the next boundary"),
+        }
+
+    def _maybe_review_hindsight(self, symbol: str, tf: str, now: float) -> None:
+        """Called at every window boundary: re-grade if the cadence is due,
+        publish the multiplier changes, apply at THIS boundary (advice §8.3:
+        changes apply at the next boundary and the card prints them)."""
+        period = self._HINDSIGHT_CADENCE.get(tf, 24 * 3600)
+        last = self._hindsight_last.get(tf, 0.0)
+        snap = self.hindsight()                 # cheap: reads rings only
+        enough_n = sum(1 for e in snap["per"].values() if e.get("enough"))
+        reviewed_n = self._hindsight_reviewed_n.get(tf, 0)
+        # due by cadence, OR enough newly-decided entries that waiting out
+        # the cadence would leave the card stale (cold-start refill)
+        if last and now - last < period and enough_n <= reviewed_n + 4:
+            return
+        self._hindsight_last[tf] = now
+        self._hindsight_reviewed_n[tf] = enough_n
+        for key, entry in snap["per"].items():
+            if not entry.get("enough"):
+                continue
+            sym, t, label = key.rsplit("|", 2)
+            if label == "agent":
+                continue                     # agents have no weight slot
+            try:
+                fid = int(label[1:])
+            except (ValueError, TypeError):
+                continue
+            old_m = self.hindsight_mult.get((sym, t, fid), 1.0)
+            new_m = float(entry["multiplier"])
+            if abs(old_m - new_m) > 1e-6:
+                self.hindsight_changes.append({
+                    "at": now, "symbol": sym, "tf": t, "formula": label,
+                    "from": round(old_m, 3), "to": round(new_m, 3),
+                    "reason": entry.get("changes_note", ""),
+                })
+            self.hindsight_mult[(sym, t, fid)] = new_m
+        self.hindsight_changes = self.hindsight_changes[-40:]
+
+    def _hindsight_factor(self, symbol: str, tf: str, fid: int) -> float:
+        return self.hindsight_mult.get((symbol, tf, fid), 1.0)
 
     async def _apply_groq_synthesis(self, symbol: str,
                                    res_pack: dict[str, dict]) -> None:
@@ -1746,6 +1849,7 @@ class PredictionEngine:
             "relocks": 0, "relock_at": None,
             "fv": fv,
         }
+        self._maybe_review_hindsight(symbol, tf, now)   # cadence-gated §8.3
         self._save_locks()
 
     def fresh_cycle(
