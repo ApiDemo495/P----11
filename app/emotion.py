@@ -409,8 +409,16 @@ class EmotionSystem:
             "pidx": idx_now,
             "nsp": emos[17] * (1 if pol >= 0 else -1),
         }
+        zero_reasons: dict[str, str] = {}
+        if emos.get(5, 1.0) == 0.0:
+            zero_reasons["5"] = "no octopamine spike — reflex not fired this window"
+        if emos.get(9, 0.5) == 0.0:
+            zero_reasons["9"] = "no down closes in the last 10 minutes (all-up tape)"
+        if emos.get(18, 1.0) == 0.0:
+            zero_reasons["18"] = "lag comparator flat — index unchanged vs the lag ring"
         return {
             "emotions": {k: round(v, 5) for k, v in emos.items()},
+            "zero_reasons": zero_reasons,
             "directions": dirs,
             "cerc": round(cerc, 5),
             "rtp": emos[9],

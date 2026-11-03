@@ -256,6 +256,59 @@ class PredictionEngine:
         self.readiness["emotions"] = self.emotions.ready
         self.readiness["news"] = self.news.ready
         self.readiness["physics"] = self.physics.ready
+        # bootstrap warm-up: replay the real backfill through the record
+        # path so every baseline ring (sigma/tau/SS/R, emotion lag rings)
+        # has its first samples IMMEDIATELY — otherwise the first ~5 GRCs
+        # (hours at tf3/tf4) show 0.00 for every gated formula (the user's
+        # 'most formulas are 0' report). Same tape, no invented data; the
+        # reward path is inert (move == 0), so accuracy rings stay clean.
+        await asyncio.get_event_loop().run_in_executor(
+            None, self._warmup_baselines)
+
+    def _warmup_baselines(self, passes: int = 6) -> None:
+        """Replay SLIDING windows of the real backfill through the record
+        path so baseline rings hold VARIETY (a static tape gives std≈0,
+        which gated F6/F7/F9/F31 to 0.00 even with 'enough' samples)."""
+        from .models import FormulaContext
+        for symbol in SYMBOL_ORDER:
+            st = self.feed.state(symbol)
+            closes, times = list(st.closes), list(st.times)
+            opens = list(st.opens) if st.opens else list(closes)
+            highs = list(st.highs) if st.highs else list(closes)
+            lows = list(st.lows) if st.lows else list(closes)
+            volumes = list(st.volumes)
+            if len(closes) < 30:
+                continue
+            for tf in TF_ORDER:
+                W = TIMEFRAMES[tf]["minutes"]
+                for i in range(passes):
+                    end = len(closes) - 1 - i * max(1, W // 4)
+                    start = end - W
+                    if start < 1:
+                        break
+                    try:
+                        ctx = FormulaContext(
+                            symbol=symbol, tf=tf, W=W,
+                            P=closes[start:end + 1],
+                            V=volumes[start:end + 1],
+                            T=times[start:end + 1],
+                            hist=self.hist,
+                            O=opens[start:end + 1],
+                            H=highs[start:end + 1],
+                            L=lows[start:end + 1],
+                        )
+                        compute_all(ctx, record=True)
+                    except Exception:
+                        log.exception("warm-up %s/%s pass %d failed",
+                                      symbol, tf, i)
+            # emotion lag rings (pidx/octo/dpi/nsp) are written by the
+            # compute_asset record path — two passes so E18's lag comparator
+            # exists from the first render instead of returning 0.00
+            for _ in range(2):
+                try:
+                    self.compute_asset(symbol, record=True)
+                except Exception:
+                    log.exception("warm-up compute failed for %s", symbol)
 
     # ==================================================================
     # context construction
@@ -794,6 +847,7 @@ class PredictionEngine:
                 "tedr": em["tedr"],
                 # advice §5: measured features + print accounting (D-7)
                 "features": em.get("features") or {},
+                "zero_reasons": em.get("zero_reasons") or {},
                 "prints": {"quote_prints": self.feed.quote_prints,
                            "note": "quote prints excluded from volume/side stats"},
             }
@@ -1049,6 +1103,7 @@ class PredictionEngine:
                         "aggregate": round(cerc_sync[tf], 5),
                         "cerc": em["cerc"],
                         "features": em.get("features") or {},
+                        "zero_reasons": em.get("zero_reasons") or {},
                         "emotions": em["emotions"],
                         "directions": em["directions"],
                         "rtp": round(em["rtp"], 4),

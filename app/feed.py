@@ -149,6 +149,7 @@ class MarketFeed:
         self._reconcile_task: asyncio.Task | None = None
         self._sim_tasks: list[asyncio.Task] = []
         self._next_revive = 0.0
+        self._probing = False
         self._tick_times: list[float] = []
         self.switches = 0
         self.mode = "sim"
@@ -270,8 +271,9 @@ class MarketFeed:
                 self._switch_tape("sim", "sim")
             # revive: while in sim under auto, keep probing Binance
             if (self.mode == "sim" and FEED_MODE == "auto"
-                    and now >= self._next_revive):
+                    and now >= self._next_revive and not self._probing):
                 self._next_revive = now + 30.0
+                self._probing = True
                 try:
                     async with httpx.AsyncClient(base_url=BINANCE_REST,
                                                  timeout=5.0) as c:
@@ -285,13 +287,14 @@ class MarketFeed:
                     self._switch_tape("binance", "binance-rest")
                 except Exception:
                     pass
+                finally:
+                    self._probing = False
 
     async def start(self) -> None:
         mode = FEED_MODE
-        if mode in ("auto", "binance"):
-            # real-feed grace (advice §1.1): retry the real feed for up to
-            # FEED_GRACE_S before the simulator is allowed to start
-            deadline = time.time() + (FEED_GRACE_S if mode == "auto" else 0.0)
+        if mode == "binance":
+            # strict: the real feed or nothing (retries under the grace)
+            deadline = time.time() + FEED_GRACE_S
             while True:
                 try:
                     await self._start_binance()
@@ -299,19 +302,43 @@ class MarketFeed:
                     log.info("feed: Binance mode active")
                     break
                 except Exception as exc:  # pragma: no cover - network dependent
-                    if mode == "binance":
-                        raise
                     if time.time() >= deadline:
-                        log.warning("feed: Binance unavailable after %.0fs "
-                                    "grace (%s); simulator may start",
-                                    FEED_GRACE_S, exc)
-                        break
+                        raise
                     await asyncio.sleep(5.0)
-        if self.mode != "binance":
+        else:
+            # auto: the simulator starts IMMEDIATELY so the tape is never
+            # empty at boot (formula/emotion windows must exist from the
+            # first compute — an empty tape made every reading 0.00).
+            # The real feed is probed in the background and ADOPTED the
+            # moment it delivers (advice D-1/D-2: sim runs under real).
             await self._start_sim()
             self.mode = "sim"
+            self._tasks.append(asyncio.create_task(self._try_binance_once()))
         self._reconcile_task = asyncio.create_task(self._reconcile_loop())
         self._tasks.append(self._reconcile_task)
+
+    async def _try_binance_once(self) -> None:
+        """Background probe: adopt Binance as soon as it answers — never
+        blocking the tape the UI and formulas already depend on."""
+        await asyncio.sleep(2.0)          # let the sim tape settle first
+        if FEED_MODE != "auto" or self.mode == "binance":
+            return
+        if self._probing:
+            return
+        self._probing = True
+        try:
+            await self._start_binance()
+            self.last_real_delivery = time.time()
+            for t in list(self._sim_tasks):
+                t.cancel()
+            self._sim_tasks.clear()
+            self._switch_tape("binance", "binance-rest")
+            log.info("feed: real feed adopted over the simulator (D-2)")
+        except Exception as exc:
+            log.info("feed: real feed not available yet (%s) — "
+                     "simulator keeps the tape; retrying in reconcile", exc)
+        finally:
+            self._probing = False
 
     async def stop(self) -> None:
         self._stop.set()

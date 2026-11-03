@@ -31,7 +31,12 @@ def test_every_formula_has_identity_and_guard():
 
 def test_zero_reason_contract():
     assert zero_reason(1, 0.0, 8) == "needs 15 bars, had 8"
-    assert "genuinely flat" in zero_reason(1, 0.0, 40)
+    # event-gated formulas say WHICH event did not occur — never "flat"
+    assert "path balance" in zero_reason(1, 0.0, 40)
+    assert "drop" in zero_reason(15, 0.0, 40)
+    assert "streak" in zero_reason(18, 0.0, 40)
+    # a plain computed zero stays "genuinely flat"
+    assert "genuinely flat" in zero_reason(3, 0.0, 40)
     assert "inner gate" in zero_reason(6, 0.0, 40)
     assert zero_reason(1, 0.42, 40) is None        # non-zero -> no reason needed
 

@@ -86,10 +86,19 @@ class Connectome:
         try:
             import json as _json
             import os as _os
-            _rp = _os.path.join(_os.path.dirname(_os.path.dirname(
-                _os.path.abspath(__file__))), "data", "brain_real.json")
-            with open(_rp, encoding="utf-8") as _fh:
-                self.real = _json.load(_fh)
+            _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+            # tracked dataset first (assets/ survives sandbox resets —
+            # data/ is gitignored runtime state), runtime copy as fallback
+            for _rp in (_os.path.join(_root, "assets", "brain_real.json"),
+                        _os.path.join(_root, "data", "brain_real.json")):
+                try:
+                    with open(_rp, encoding="utf-8") as _fh:
+                        self.real = _json.load(_fh)
+                    break
+                except (OSError, ValueError):
+                    continue
+            if not self.real:
+                raise OSError("no brain_real.json found")
             self.top_degrees = [int(d) for d in (self.real.get("top_degrees") or [])]
             # REAL Drosophila brain: Janelia hemibrain v1.2 structural data
             self.neuprint_status = "hemibrain-v1.2-real"

@@ -78,6 +78,18 @@ DOUBLE_CHECK: dict[int, str] = {
     31: "CLRE: close-range anomaly vs R_baseline/sigma_R",
 }
 
+# Event-gated formulas: they return 0 when THEIR event did not occur —
+# never mislabel that as "flat" (the user reads a bare 0.00 as 'unused').
+EVENT_REASON: dict[int, str] = {
+    1: "up/down path balance sums to exactly 0 (equal polarities)",
+    2: "inversion counts equal across window quarters (no recent skew)",
+    14: "no return exceeds 1.5× the median — nothing significant this window",
+    15: "no qualifying drop > 0.5·ATR to recover from (formula abstains)",
+    18: "streak state from GRC history (cold start returns 0)",
+    19: "aligned other-asset series not ready for this window",
+    27: "volatility-cluster history needs ≥3 clusters before it speaks",
+}
+
 # Formulas whose honest 0 can be "genuinely flat" (no inner gate fired).
 # Non-directional (never vote — advice §2.10) live in formulas/__init__.
 
@@ -93,6 +105,9 @@ def zero_reason(fid: int, value: float, w_eff: int, hit_exception: bool = False)
     need = PRIMARY_GUARD.get(fid, 0)
     if need and w_eff < need:
         return f"needs {need} bars, had {w_eff}"
+    ev = EVENT_REASON.get(fid)
+    if ev:
+        return ev
     sec = SECONDARY_GUARD.get(fid)
     if sec:
         return f"inner gate: {sec}"

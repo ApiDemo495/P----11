@@ -89,6 +89,15 @@ function esc(x) {
   return String(x ?? "").replace(/[&<>"']/g,
     c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+// tiny non-zero values must not read as "0.00" — the user reads that as
+// "the formula is not being used" (honesty: show the actual magnitude)
+const fmtSig = (v) => {
+  if (v == null || Number.isNaN(Number(v))) return "—";
+  const n = Number(v);
+  if (n === 0) return "0.000";
+  if (Math.abs(n) < 0.001) return n.toPrecision(2);
+  return n.toFixed(3);
+};
 const fmt = (v, d = 2) => v == null || Number.isNaN(Number(v)) ? "—" : Number(v).toFixed(d);
 const px = v => v >= 1000 ? Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 })
   : v >= 10 ? Number(v).toFixed(2) : Number(v).toFixed(4);
@@ -628,8 +637,8 @@ async function loadFormulas() {
         : "";
       card.innerHTML = `<h4><span>F${fid} · ${name}</span><span>${contrib >= 0 ? "+" : ""}${contrib != null ? fmt(contrib, 4) : "—"}</span></h4>
         <div class="kv-row">
-          <div class="kv"><span>raw</span><b>${raw >= 0 ? "+" : ""}${fmt(raw, 3)}</b></div>
-          <div class="kv"><span>Bgn-adj</span><b>${adj >= 0 ? "+" : ""}${fmt(adj, 3)}</b></div>
+          <div class="kv"><span>raw</span><b>${raw >= 0 ? "+" : ""}${fmtSig(raw)}</b></div>
+          <div class="kv"><span>Bgn-adj</span><b>${adj >= 0 ? "+" : ""}${fmtSig(adj)}</b></div>
           <div class="kv"><span>weight ω</span><b>${fmt(w, 4)}</b></div>
         </div>
         <div class="kv-row trace-row">${zeroChip}${dcChip}${traceLine}</div>
@@ -761,9 +770,13 @@ async function loadEmotion() {
       const dir = em.directions?.[i] ?? 0;
       const cell = $("#ec-" + i);
       cell.className = "em-cell " + (dir > 0 ? "bullish" : dir < 0 ? "bearish" : "");
+      // an exact 0.00 is an EVENT gate, not a dead channel — say why
+      const zr = em.zero_reasons?.[String(i)] || em.zero_reasons?.[i];
+      cell.title = (v === 0 && zr) ? zr
+        : (v === 0 ? "no event this window — channel abstains" : "");
       const ring = $(".em-ring", cell);
       ring.style.setProperty("--p", `${clamp(Math.abs(v) * 100, 0, 100)}%`);
-      $("i", ring).textContent = (v >= 0 ? "+" : "") + v.toFixed(2);
+      $("i", ring).textContent = (v >= 0 ? "+" : "") + (v === 0 ? "0.00" : v.toFixed(Math.abs(v) < 0.001 ? 4 : 2));
       const tag = $(".em-tag", cell);
       let label = "NEUTRAL";
       if (Math.abs(v) > 0.7) label = "EXTREME"; else if (Math.abs(v) > 0.45) label = "ELEVATED";
