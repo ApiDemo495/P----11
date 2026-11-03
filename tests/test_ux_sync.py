@@ -139,8 +139,18 @@ def test_docs_and_requirements_in_sync():
     readme = (ROOT / "README.md").read_text()
     # README must describe the current surface, not an older era
     for token in ("FlyWire", "/api/explain", "AUTO-PREDICT",
-                  "221 tests", "CONTRIBUTION TICKS", "CONNECTOME_CACHE"):
+                  "CONTRIBUTION TICKS", "CONNECTOME_CACHE"):
         assert token in readme, token
+    # test count must track the real collection (no stale "54 tests")
+    m = re.search(r"#\s*(\d+) tests", readme)
+    assert m, "README must state the test count"
+    assert int(m.group(1)) >= 230, f"stale test count in README: {m.group(1)}"
+    ini = (ROOT / "pytest.ini").read_text()
+    assert "asyncio_mode = strict" in ini
+    assert "no:cacheprovider" in ini
+    pins = (ROOT / "requirements.txt").read_text()
+    assert re.search(r"pytest==9\.", pins), pins
+    assert "pytest-asyncio==1." in pins
     api = (ROOT / "API_SETUP.md").read_text()
     for token in ("flywire_783.npz", "qwen2.5-coder:3b",
                   "setup_local_llm.sh", "no fallback matrix"):

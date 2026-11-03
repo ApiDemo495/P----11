@@ -32,7 +32,7 @@ provided), then run `./run.sh` and forward port **8000**.
 Run the test suite:
 
 ```bash
-.venv/bin/python -m pytest -q    # 221 tests (honesty, parts 1-4, news, brain, UX)
+.venv/bin/python -m pytest -q    # 231 tests (honesty, parts 1-4, news, brain, UX sync)
 ```
 
 Environment:
@@ -314,8 +314,10 @@ static/
                    contribution ticks, AUTO chip, gauges, news stream
   brains3d.js      Three.js 2×2 instanced brain visualization
   vendor/          three.module.js v0.160.1 (MIT, vendored — no CDN)
-tests/             221 tests: parts 1–4, honesty guards, news (docs11),
+tests/             231 tests: parts 1–4, honesty guards, news (docs11),
                    FlyWire brain (10 acceptance), UX sync, visualization
+pytest.ini         pytest 9 + pytest-asyncio 1, strict asyncio mode,
+                   plain `pytest` works (no cache plugin dependency)
 ```
 
 ## Part 3 — Physics (P1–P22), News, Hedge-Fund, Visualization ✅

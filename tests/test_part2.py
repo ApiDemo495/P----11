@@ -36,6 +36,11 @@ from app.risk import arc_ratio, dynamic_level_placement
 from test_formulas import flat, make_ctx, trend_down, trend_up
 
 
+def _run_sync(coro):
+    from conftest import run_sync
+    return run_sync(coro)
+
+
 # --------------------------------------------------------------- registry
 def test_registry_includes_part2_signals():
     for fid in (22, 23, 24, 25, 26, 27, 31):
@@ -272,7 +277,7 @@ def test_brain_instances_and_hormone_directions():
             assert inst["h_signal"] == pytest.approx(expect, abs=1e-9)
         return res
 
-    asyncio.get_event_loop().run_until_complete(_run())
+    _run_sync(_run())
 
 
 def test_brain_affinity_input_applied_when_strong():
@@ -478,7 +483,7 @@ def test_brain4_secondary_weight_adjustment():
         assert sum(w_after.values()) == pytest.approx(1.0, abs=1e-9)
         assert all(W_CLAMP_LO <= v <= W_CLAMP_HI for v in w_after.values())
 
-    asyncio.get_event_loop().run_until_complete(_run())
+    _run_sync(_run())
 
 
 # ------------------------------------------------------- engine integration

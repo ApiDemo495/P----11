@@ -105,7 +105,8 @@ def test_groq_synthesize_parses_and_bounds():
                 "confidence_score": 0.8,
                 "rationale": "momentum aligned across timeframes"})}
             am._groq_call = lambda *a, **k: asyncio.sleep(0, result=fake)
-            out = asyncio.get_event_loop().run_until_complete(
+            from conftest import run_sync
+            out = run_sync(
                 am.synthesize({"symbol": "BTC", "direction": 1}))
             assert out["ok"] and out["regime"] == "Trending"
             # adjustments bounded to [0.5, 1.5], bad entries dropped
@@ -116,7 +117,7 @@ def test_groq_synthesize_parses_and_bounds():
             # invalid regime rejected
             fake["text"] = json.dumps({"regime": "sideways",
                                        "confidence_score": 0.5})
-            out2 = asyncio.get_event_loop().run_until_complete(
+            out2 = run_sync(
                 am.synthesize({}))
             assert not out2["ok"]
         finally:
@@ -127,7 +128,8 @@ def test_groq_backoff_returns_failure_without_key():
     from app.agents import AgentManager
     am = AgentManager()
     am.settings.pop("groq_key", None)
-    out = asyncio.get_event_loop().run_until_complete(am.synthesize({}))
+    from conftest import run_sync
+    out = run_sync(am.synthesize({}))
     assert out["ok"] is False and out["reason"] == "no GROQ_API_KEY"
 
 

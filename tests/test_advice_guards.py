@@ -309,7 +309,8 @@ def test_analyse_pipeline_stages_and_readonly():
         out = eng.start_analyse("ETH", "tf2")
         assert out["ok"], out
         await eng._analyse_task
-    _a.get_event_loop().run_until_complete(go())
+    from conftest import run_sync
+    run_sync(go())
     job = eng.analyse_job
     assert job["status"] == "done", job.get("error")
     order = [s["stage"] for s in job["stages"]]

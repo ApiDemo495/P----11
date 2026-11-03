@@ -527,11 +527,12 @@ def test_simulator_live_regimes_persist(monkeypatch):
     f = F.MarketFeed()
     assert hasattr(f, "_sim_regime")
     import asyncio
-    asyncio.get_event_loop().run_until_complete(f._start_sim())
+    from conftest import run_sync
+    run_sync(f._start_sim())
     assert set(f._sim_regime) == set(F.SYMBOL_ORDER)
     r = f._sim_regime["BTC"]
     assert 1 <= r["left"] <= 2400 and isinstance(r["drift"], float)
-    asyncio.get_event_loop().run_until_complete(f.stop())
+    run_sync(f.stop())
 
 
 def test_candles_endpoint_aggregates_timeframes():

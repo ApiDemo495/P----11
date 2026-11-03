@@ -87,7 +87,8 @@ def make_engine():
 
 
 def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    from conftest import run_sync
+    return run_sync(coro)
 
 
 @pytest.fixture(scope="module")

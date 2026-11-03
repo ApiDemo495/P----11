@@ -2,8 +2,8 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 websockets==14.1
 httpx==0.28.1
-pytest==8.3.4
-pytest-asyncio==0.25.0
+pytest==9.2.0
+pytest-asyncio==1.4.1.post1
 numpy==2.4.6
 ripser==0.6.15
 pyarrow==26.0.0
