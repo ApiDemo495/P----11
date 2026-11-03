@@ -73,7 +73,9 @@ async def _vault_loop() -> None:
     while True:
         try:
             await asyncio.sleep(30.0)
-            engine.learning.save_state(engine=engine, brains=engine.brains)
+            engine.learning.save(engine)
+            engine.cci.save()
+            engine.physics.save()
             engine.forward.save()
             engine.genesis.save()
             engine.vault_last_write = time.time()

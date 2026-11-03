@@ -346,3 +346,22 @@ def test_analyse_pipeline_stages_and_readonly():
     out2 = eng.start_analyse("ETH", "tf2")
     assert out2["ok"] is False
     eng.analyse_job = None
+
+
+def test_vault_saves_real_state():
+    """§9/E-7: the 30s vault must call methods that actually exist —
+    a wrong name silently disabled every save (caught in a server log)."""
+    from tests.test_engine import make_engine, _boot, run
+    eng, _f, _e = make_engine()
+    run(_boot(eng))
+    assert callable(getattr(eng.learning, "save", None))
+    assert callable(getattr(eng.cci, "save", None))
+    assert callable(getattr(eng.physics, "save", None))
+    assert callable(getattr(eng.forward, "save", None))
+    assert callable(getattr(eng.genesis, "save", None))
+    # they actually write without raising
+    eng.learning.save(eng)
+    eng.cci.save()
+    eng.physics.save()
+    eng.forward.save()
+    eng.genesis.save()
