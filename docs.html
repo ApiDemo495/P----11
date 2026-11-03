@@ -238,11 +238,15 @@ clamp ≥ 0; issue when &gt; 0.35
 <p>  region clusters of 50 → <b>7,700 units/brain</b>; one sparse sweep (out-degree</p>
 <p>  4) per GRC — the whole 4×4×4 brain pass costs well under a second.</p>
 <ul>
-<li>Connectome source: live neuPrint API when <code>NEUPRINT_URL</code>/<code>NEUPRINT_TOKEN</code></li>
+<li>Instance structure: the four legacy instances run on the seeded graph</li>
 </ul>
-<p>  are configured, otherwise the deterministic structural fallback</p>
-<p>  (populations: PAM 130 · SE 80 · OA 40 · TA 30 · MBON 34 · KC 2000 ·</p>
-<p>  LH 1500 · CC 250 · FSB 150 · EB 100 · DN 500, plus generic/cluster units).</p>
+<p>  parameterised by the real hemibrain v1.2 stats (<code>assets/brain_real.json</code>,</p>
+<p>  populations PAM 130 · SE 80 · OA 40 · TA 30 · MBON 34 · KC 2000 · LH 1500 ·</p>
+<p>  CC 250 · FSB 150 · EB 100 · DN 500, plus generic/cluster units) — this</p>
+<p>  powers B1–B4/hormones/geometry only. The <b>directional brain VOTE</b> is</p>
+<p>  never taken from a stand-in: it comes from the FlyWire v783 connectome</p>
+<p>  below (or is withheld with weight 0). Live neuPrint</p>
+<p>  (<code>NEUPRINT_URL</code>/<code>NEUPRINT_TOKEN</code>) is an optional extra query source.</p>
 <ul>
 <li><b>FlyWire v783 whole-brain vote (brain.md):</b> the MB sub-circuit path</li>
 </ul>

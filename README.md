@@ -207,10 +207,14 @@ contradiction log below).
 * **Reduced compute** (spec optimization): top 5,000 neurons individually +
   region clusters of 50 → **7,700 units/brain**; one sparse sweep (out-degree
   4) per GRC — the whole 4×4×4 brain pass costs well under a second.
-* Connectome source: live neuPrint API when `NEUPRINT_URL`/`NEUPRINT_TOKEN`
-  are configured, otherwise the deterministic structural fallback
-  (populations: PAM 130 · SE 80 · OA 40 · TA 30 · MBON 34 · KC 2000 ·
-  LH 1500 · CC 250 · FSB 150 · EB 100 · DN 500, plus generic/cluster units).
+* Instance structure: the four legacy instances run on the seeded graph
+  parameterised by the real hemibrain v1.2 stats (`assets/brain_real.json`,
+  populations PAM 130 · SE 80 · OA 40 · TA 30 · MBON 34 · KC 2000 · LH 1500 ·
+  CC 250 · FSB 150 · EB 100 · DN 500, plus generic/cluster units) — this
+  powers B1–B4/hormones/geometry only. The **directional brain VOTE** is
+  never taken from a stand-in: it comes from the FlyWire v783 connectome
+  below (or is withheld with weight 0). Live neuPrint
+  (`NEUPRINT_URL`/`NEUPRINT_TOKEN`) is an optional extra query source.
 * **FlyWire v783 whole-brain vote (brain.md):** the MB sub-circuit path
   (685 ALPNs → 5,177 KCs → 96 MBONs, top-5 % APL sparsity, PAM/PPL1
   dopamine gains) presents the 30 signed formula outputs as an odour

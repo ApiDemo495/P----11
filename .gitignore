@@ -23,3 +23,4 @@ models/
 .setup_stamp
 data/
 data.pre-r2-1347/
+.app.lock

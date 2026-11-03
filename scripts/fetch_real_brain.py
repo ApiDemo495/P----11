@@ -6,8 +6,10 @@ Priority:
      https://neuprint.janelia.org with a free token)
   2. GitHub mirror       (hemibrain v1.2 structural outputs, CC BY 4.0 —
      Janelia FlyEM data via github.com/ROHITCRAFTSYT/FruitFlyBrain)
-  3. keep whatever is already in data/brain_real.json (or the structural
-     fallback) — the app NEVER depends on this succeeding.
+  3. keep whatever is already in data/brain_real.json — this file is the
+     LEGACY instance display stats only; the directional vote comes from
+     the FlyWire v783 build (app/flywire.py) and the app NEVER depends
+     on this script succeeding.
 
 Writes data/brain_real.json: degree distribution of all 21,739 traced
 neurons, top-40 hubs with real type/instance names (APL, DPM, MBONs…),

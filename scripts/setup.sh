@@ -79,7 +79,7 @@ fi
 if [ ! -f data/brain_real.json ]; then
   log "fetching real hemibrain connectome data…"
   "$VENV_PY" scripts/fetch_real_brain.py >> data/setup.log 2>&1 \
-    || warn "brain fetch failed (app uses structural fallback)"
+    || warn "stats fetch failed (legacy instance display only — the FlyWire vote builds separately at first boot)"
 fi
 "$VENV_PY" scripts/make_docs_html.py >> data/setup.log 2>&1 || true
 
