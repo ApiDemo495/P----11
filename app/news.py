@@ -122,22 +122,90 @@ _ASSET_KEYS: dict[str, tuple[str, ...]] = {
     "BNB": ("bnb", "binance", "chain", "token"),
 }
 _MACRO_KEYS = (
-    "fed", "rate", "inflation", "cpi", "war", "sanction", "tariff",
-    "recession", "etf", "exchange", "regulat", "sec", "central bank",
-    "enforcement", "monetary",
+    "fed", "rate", "inflation", "cpi", "recession", "etf", "exchange",
+    "regulat", "sec", "central bank", "enforcement", "monetary",
+    "yield", "dollar", "recession",
+)
+# docs11 §4.1 geo tier: wires phrase risk in these, not in crypto words
+_GEO_KEYS = (
+    "war", "strike", "strikes", "missile", "troops", "drone", "attack",
+    "sanction", "sanctions", "tariff", "tariffs", "blockade", "embargo",
+    "invasion", "escalat", "airstrike", "bombing", "explosion",
 )
 
 
 def relevance(symbol: str, headline: str) -> float:
-    """0..1 per-asset relevance: asset keywords first, macro set hits all.
-    score == 0 items are COUNTED and shown as 'relevance gate dropped n'
-    (error C-4), never silently hidden."""
+    """0..1 per-asset relevance (docs11 §4.1): direct asset terms 1.0,
+    macro 0.7, geo 0.6, else 0.0. Zero-for-every-asset items are dropped
+    at ingest AND counted with examples (N-5), never hidden."""
     h = (headline or "").lower()
     if any(k in h for k in _ASSET_KEYS.get(symbol, ())):
         return 1.0
     if any(k in h for k in _MACRO_KEYS):
+        return 0.7
+    words = set(h.split())
+    if any((k in words) if len(k) <= 6 else (k in h) for k in _GEO_KEYS):
         return 0.6
     return 0.0
+
+# ── theme -> signed per-asset impact priors (docs11 §4.4) ──────────────
+# Data, not code: app/themes.json. Whole-word keywords, most specific first.
+import json as _json
+import os as _os
+
+_THEMES_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                             "themes.json")
+try:
+    with open(_THEMES_PATH, encoding="utf-8") as _fh:
+        THEMES: list[dict] = (_json.load(_fh).get("themes") or [])
+except (OSError, ValueError):            # pragma: no cover
+    THEMES = []
+
+
+def classify_theme(headline: str) -> dict | None:
+    """First matching theme (keywords most-specific-first in file order)."""
+    h = (headline or "").lower()
+    words = set(h.replace("-", " ").split())
+    for th in THEMES:
+        for kw in th["keywords"]:
+            if " " in kw:
+                if kw in h:
+                    return th
+            elif kw in words:
+                return th
+    return None
+
+
+def source_tier(source: str) -> int:
+    """1 = wire/tier-1 desks, 2 = quality press, 3 = everything else."""
+    s = (source or "").lower()
+    if any(t in s for t in NEWS_TOP_SOURCES):
+        return 1
+    if any(m in s for m in NEWS_MID_SOURCES):
+        return 2
+    return 3
+
+
+TIER_CREDIBILITY = {1: 1.0, 2: 0.7, 3: 0.45}
+
+
+def enrich_item(item: dict) -> dict:
+    """docs11 §4: the full computed record at INGEST — tier, credibility,
+    per-asset relevance, theme, magnitude, signed impacts, scope."""
+    headline = str(item.get("headline") or "")
+    tier = source_tier(str(item.get("source") or ""))
+    item["tier"] = tier
+    item.setdefault("credibility", TIER_CREDIBILITY[tier])
+    item.setdefault("relevance_by_asset",
+                    {sym: relevance(sym, headline) for sym in SYMBOL_ORDER})
+    th = classify_theme(headline)
+    item["theme"] = th["name"] if th else None
+    item["magnitude"] = th["magnitude"] if th else 0.3
+    item["impacts"] = dict(th["impacts"]) if th else {}
+    item["scope"] = th["scope"] if th else "asset"
+    item.setdefault("synthetic", str(item.get("source")) in ("seed", "sim"))
+    return item
+
 
 # Seed headlines (pre-launch content so the pipeline is never empty at boot).
 _SEED: list[tuple[str, str, float, int, tuple[str, ...]]] = [
@@ -224,6 +292,19 @@ class NewsSystem:
         self.source = "seed"
         self._fingerprints: dict[str, float] = {}   # fp -> first ts
         self.source_stats: dict[str, dict] = {}     # heartbeat per source
+        # docs11 §4 evaluation state (pure arithmetic, no network)
+        self.filtered = 0                           # all-asset relevance 0
+        self.filtered_examples: list[str] = []
+        self._theme_arrival: dict[str, float] = {}  # theme -> last arrival
+        self._theme_streak: dict[str, float] = {}   # theme -> streak start
+        self._theme_count: dict[str, int] = {}      # theme -> k since reset
+        self._counted_heads: list[set] = []         # token sets (novelty)
+        self.tape_accel: dict[str, float] = {}
+        self.last_emergency: dict[str, float] = {}
+        self.emergency_history: list[dict] = []
+        self.stats_bugs: list[dict] = []      # symbol -> accel (SMD)
+        self._niv_hist: dict[str, list] = {}        # symbol -> [(ts, niv)]
+        self.last_eval: dict[str, dict] = {}        # symbol -> evaluate()
 
     # -- lifecycle ----------------------------------------------------------
     def initialize(self) -> None:
@@ -258,6 +339,21 @@ class NewsSystem:
     def _append(self, item: dict[str, Any]) -> bool:
         """False when the fingerprint was already seen (dedupe)."""
         now = time.time()
+        enrich_item(item)
+        # docs11 §4.1 / error N-5: an item irrelevant to EVERY asset is
+        # dropped at ingest and COUNTED with examples — never hidden.
+        # Synthetic/seed packs are the labelled offline layer (excepted).
+        rb = item.get("relevance_by_asset") or {}
+        if not item.get("synthetic") and all(v == 0.0 for v in rb.values()):
+            self.filtered += 1
+            head = str(item.get("headline") or "")[:90]
+            if head not in self.filtered_examples:
+                self.filtered_examples = (self.filtered_examples + [head])[-3:]
+            st = self.source_stats.setdefault(item.get("source", "?"),
+                                              {"ok": 0, "dupes": 0,
+                                               "errors": 0, "last_ok": 0.0})
+            st["filtered"] = st.get("filtered", 0) + 1
+            return False
         fp = self._fingerprint(str(item.get("headline") or ""))
         first = self._fingerprints.get(fp)
         if first is not None and now - first < 600.0:
@@ -278,6 +374,23 @@ class NewsSystem:
                                            "last_ok": 0.0})
         st["ok"] += 1
         st["last_ok"] = now
+        # novelty clock (docs11 §4.5): k-th distinct headline on a theme
+        # since a 90-minute gap; a new gap resets the theme to full weight
+        th = item.get("theme")
+        if th:
+            last = self._theme_arrival.get(th, 0.0)
+            if now - last > 5400.0:                 # 90-min gap -> reset
+                self._theme_count[th] = 0
+                self._theme_streak[th] = now
+            self._theme_arrival[th] = now
+            self._theme_count[th] = self._theme_count.get(th, 0) + 1
+            item["theme_k"] = self._theme_count[th]
+        else:
+            item["theme_k"] = 1
+        self._counted_heads.append(
+            set(str(item.get("headline") or "").lower().split()))
+        if len(self._counted_heads) > 400:
+            self._counted_heads = self._counted_heads[-400:]
         self.items.append(item)
         return True
 
@@ -502,7 +615,8 @@ class NewsSystem:
             "source": self.source,
             "niv": round(niv, 4),
             "resting_evidence": 0.5,
-            "relevance_dropped": dropped,
+            # in-window zeros + ingest-gate drops (N-5): never hidden
+            "relevance_dropped": dropped + self.filtered,
             "critical": self._critical_check(live, now),
             "heartbeats": {k: {kk: (round(vv, 1) if isinstance(vv, float) else vv)
                                for kk, vv in v.items()}
@@ -512,6 +626,153 @@ class NewsSystem:
                           "bear": max(0.0, min(1.0, -bear))},
         }
         return agg
+
+    # ==================================================================
+    # docs11 §4 EVALUATION layer — pure arithmetic over the cache, no
+    # network. Runs every 4 s (the ticker) and on demand; this is the
+    # layer that is actually "alive", not the poller.
+    # ==================================================================
+    def _novelty(self, item: dict, now: float) -> tuple[float, dict]:
+        """(novelty weight, trace) — Jaccard near-dups weigh 0; the k-th
+        distinct headline on a theme weighs 1/k; a theme continuously on
+        the wire halves every 2 h and resets after a 90-minute gap."""
+        head = set(str(item.get("headline") or "").lower().split())
+        dup = False
+        for prev in self._counted_heads:
+            if not head or not prev or prev == head:
+                continue                      # never compare with itself
+            j = len(head & prev) / max(1, len(head | prev))
+            if j >= 0.6:
+                dup = True
+                break
+        if dup:
+            return 0.0, {"reason": "near-duplicate (Jaccard ≥ 0.6)"}
+        k = int(item.get("theme_k") or 1)
+        base = 1.0 / max(1, k)
+        th = item.get("theme")
+        habit = 1.0
+        if th:
+            last = self._theme_arrival.get(th, 0.0)
+            streak = self._theme_streak.get(th, now)
+            if now - last > 5400.0:
+                habit = 1.0                          # 90-min gap -> reset
+            else:
+                hours = max(0.0, (now - streak) / 3600.0)
+                habit = 0.5 ** (hours / 2.0)         # halves every 2 h
+        return base * habit, {"k": k, "habituation": round(habit, 4)}
+
+    def evaluate(self, symbol: str, now: float | None = None) -> dict:
+        """Per asset × per horizon: impact index (docs11 §4.7), NIV with
+        τ_h = W/4 and W₀ = 0.5 (§4.8), SMD = tanh(NIV − tape accel), and
+        the top-4 drivers with their full weight traces."""
+        now = now if now is not None else time.time()
+        accel = float(self.tape_accel.get(symbol, 0.0))
+        out: dict[str, Any] = {"symbol": symbol, "evaluated_at": now,
+                               "tape_accel": accel, "horizons": {}}
+        relevant = [
+            it for it in self._live_items()
+            if float((it.get("relevance_by_asset") or {}).get(symbol, 0.0)) > 0.0
+        ]
+        for tf in TF_ORDER:
+            W = TIMEFRAMES[tf]["minutes"]
+            halflife = W / 2.0
+            tau = W / 4.0
+            total = 0.0
+            drivers: list[dict] = []
+            niv_num = niv_den = 0.0
+            newest: list[dict] = []
+            for it in relevant:
+                age_min = (now - float(it.get("ts") or now)) / 60.0
+                cred = float(it.get("credibility") or 0.45)
+                rel = float((it.get("relevance_by_asset") or {}).get(symbol, 0.0))
+                # skip beyond 12 half-lives of this horizon (docs11 §4.6)
+                if age_min > 12.0 * halflife:
+                    continue
+                novelty, ntrace = self._novelty(it, now)
+                decay = 0.5 ** (age_min / halflife)
+                mag = float(it.get("magnitude") or 0.3)
+                signed = float((it.get("impacts") or {}).get(symbol, 0.0))
+                contrib = (cred * decay * novelty * mag * signed * rel)
+                total += contrib
+                drivers.append({
+                    "headline": str(it.get("headline"))[:110],
+                    "theme": it.get("theme"), "age_min": round(age_min, 1),
+                    "novelty": round(novelty, 4), "k": ntrace.get("k"),
+                    "habituation": ntrace.get("habituation"),
+                    "contribution": round(contrib, 5),
+                    "synthetic": bool(it.get("synthetic")),
+                })
+                newest.append(it)
+            # NIV: five newest relevant items, τ_h = W/4, W₀ = 0.5
+            newest.sort(key=lambda x: -float(x.get("ts") or 0))
+            for it in newest[:5]:
+                age_min = (now - float(it.get("ts") or now)) / 60.0
+                w = (float(it.get("credibility") or 0.45)
+                     * rel if (rel := float((it.get("relevance_by_asset") or {}).get(symbol, 0.0))) > 0 else 0.0)
+                w *= math.exp(-age_min / max(tau, 1e-9))
+                niv_num += float(it.get("sentiment") or 0.0) * w
+                niv_den += w
+            niv = niv_num / (niv_den + 0.5) if (niv_den + 0.5) > 0 else 0.0
+            drivers.sort(key=lambda d: -abs(d["contribution"]))
+            out["horizons"][tf] = {
+                "impact": round(math.tanh(total), 4),
+                "niv": round(niv, 4),
+                "smd": round(math.tanh(niv - accel), 4),
+                "half_life_min": halflife,
+                "tau_min": tau,
+                "drivers": drivers[:4],
+                "n_items": len(drivers),
+            }
+        # NIV history for the sentiment-swing trigger (|ΔNIV| over 90 s)
+        hist = self._niv_hist.setdefault(symbol, [])
+        hist.append((now, out["horizons"]["tf1"]["niv"]))
+        self._niv_hist[symbol] = [h for h in hist if now - h[0] <= 90.0]
+        swing = 0.0
+        if len(self._niv_hist.get(symbol, [])) >= 2:
+            vals = [v for _t, v in self._niv_hist[symbol]]
+            swing = abs(vals[-1] - vals[0])
+        out["niv_swing_90s"] = round(swing, 4)
+        # theme inputs for the learned layer (docs11 §5 path 4)
+        theme_inputs: dict[str, float] = {}
+        for d in drivers:
+            if d["theme"] and not d["synthetic"]:
+                theme_inputs[f"news:theme:{d['theme']}"] = round(
+                    theme_inputs.get(f"news:theme:{d['theme']}", 0.0)
+                    + d["contribution"], 5)
+        out["theme_inputs"] = theme_inputs
+        # docs11 §4.9 / error N-8: CRITICAL event + sentiment swing
+        # triggers an emergency re-lock; >1/hour is a BUG and is rejected.
+        crit = self.critical(symbol, max(10.0, TIMEFRAMES["tf1"]["minutes"] / 10.0))
+        out["critical_count"] = len(crit)
+        trig = None
+        if crit and swing > 0.02 and (now - self.last_emergency.get(symbol, 0.0)) > 60.0:
+            hour = [t for t in self.emergency_history
+                    if t.get("asset") == symbol and now - t.get("ts", 0.0) < 3600.0]
+            if len(hour) >= 6:
+                self.stats_bugs.append({
+                    "at": now, "code": "N-8",
+                    "detail": f">6 emergency re-locks in 1 h for {symbol} — BUG"})
+            else:
+                trig = {"reason": "NEWS_EMERGENCY: " + "; ".join(
+                            str(c.get("headline"))[:70] for c in crit[:3]),
+                        "niv_swing_90s": swing}
+        out["emergency_trigger"] = trig
+        self.last_eval[symbol] = out
+        return out
+
+    def impact(self, symbol: str, tf: str) -> dict:
+        """GET /api/news/impact?asset=&horizon= — index + drivers."""
+        ev = self.last_eval.get(symbol) or self.evaluate(symbol)
+        h = (ev.get("horizons") or {}).get(tf)
+        if h is None:
+            return {"ok": False, "error": "unknown horizon"}
+        return {"ok": True, "asset": symbol, "horizon": tf, **h,
+                "theme_inputs": ev.get("theme_inputs", {}),
+                "niv_swing_90s": ev.get("niv_swing_90s", 0.0)}
+
+    def set_tape_accel(self, symbol: str, accel: float) -> None:
+        """Engine feeds tape acceleration for SMD (news-vs-price)."""
+        self.tape_accel[symbol] = float(accel)
 
     def impact_against(self, symbol: str, direction: int) -> float:
         """Opposing news impact magnitude in [0,1] (Extreme Override > 0.8)."""
@@ -555,7 +816,81 @@ class NewsSystem:
             "total": len(self.items),
             "source": self.source,
             "categories": len(NEWS_CATEGORIES),
+            "filtered": self.filtered,
+            "filtered_examples": self.filtered_examples,
+            "coverage": self.coverage_string(),
+            "sources": self.source_lines(),
+            "horizons": {sym: ev.get("horizons")
+                         for sym, ev in self.last_eval.items() if ev},
+            "emergency_history": self.emergency_history[-10:],
         }
+
+    # ------------------------------------------------------------- docs11 §3.6
+    def coverage_string(self) -> str:
+        """Honest header, e.g. 'LIVE Reuters CoinDesk · last 15 min 7
+        items · 2 topics skipped for no crypto relevance · rate limited
+        1 sources'. SEED/SYNTHETIC items never claim to be live (N-2)."""
+        now = time.time()
+        live, down = [], []
+        for name, st in self.source_stats.items():
+            cool = float(st.get("cooldown_until") or 0.0)
+            if cool > now:
+                down.append(name)
+            elif now - float(st.get("last_ok") or 0.0) < 300.0:
+                live.append(name)
+        recent = len([i for i in self.items
+                      if now - float(i.get("ts") or 0) < 900.0
+                      and not i.get("synthetic")])
+        seeds = len(self.items) - recent
+        parts = []
+        if live:
+            parts.append("LIVE " + " ".join(sorted(live)))
+        if seeds:
+            parts.append(f"SEED x{seeds}")
+        parts.append(f"last 15 min {recent} items")
+        if self.filtered:
+            parts.append(
+                f"{self.filtered} topics skipped for no crypto relevance")
+        if down:
+            parts.append(f"rate limited {len(down)} sources")
+        if not any(not it.get("synthetic") for it in self.items):
+            parts.append("coverage: synthetic")
+        return " · ".join(parts)
+
+    def source_lines(self) -> list[dict]:
+        """Per-source lines for the news card (state + backoff level)."""
+        now = time.time()
+        out = []
+        for name, st in sorted(self.source_stats.items()):
+            cool = float(st.get("cooldown_until") or 0.0)
+            age = now - float(st.get("last_ok") or 0.0)
+            state = ("backing off" if cool > now else
+                     "live" if age < 300.0 else "idle")
+            out.append({
+                "source": name, "tier": source_tier(name),
+                "state": state,
+                "cooldown_s": round(max(0.0, cool - now)),
+                "backoff_level": int(st.get("backoff_level") or 0),
+                "dropped_429": int(st.get("dropped_429") or 0),
+                "ok": int(st.get("ok") or 0),
+                "dupes": int(st.get("dupes") or 0),
+                "filtered": int(st.get("filtered") or 0),
+                "last_ok_age_s": round(age, 1),
+            })
+        return out
+
+    def record_emergency(self, asset: str, lock_id: str, reason: str,
+                         old_entry: float, new_entry: float,
+                         ok: bool = True) -> dict:
+        """Audit row for every emergency re-lock (acceptance 6 / N-8)."""
+        row = {"ts": time.time(), "asset": asset, "lock_id": lock_id,
+               "reason": reason, "old_entry": old_entry,
+               "new_entry": new_entry, "ok": ok}
+        self.emergency_history.append(row)
+        self.emergency_history = self.emergency_history[-50:]
+        if ok:
+            self.last_emergency[asset] = row["ts"]
+        return row
 
 
 # --------------------------------------------------------------------------

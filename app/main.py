@@ -110,6 +110,7 @@ async def _startup() -> None:
     _learning_task = asyncio.create_task(_hourly_learning_loop())
     asyncio.create_task(_startup_watchdog())
     app.state._vault_task = asyncio.create_task(_vault_loop())
+    app.state._news_ticker = asyncio.create_task(_news_ticker())
     log.info("application started (feed=%s)", feed.mode)
 
 
@@ -128,6 +129,41 @@ async def _shutdown() -> None:
 _last_tick_broadcast = 0.0
 
 _learning_task: asyncio.Task | None = None
+
+
+async def _news_ticker() -> None:
+    """docs11 §6 — the 4-second publisher: pure evaluation per asset,
+    emergency trigger, NEWS WS ticker (REST mirrors: /api/news/impact,
+    /api/news/status)."""
+    await asyncio.sleep(2.0)
+    while True:
+        try:
+            tick: dict[str, Any] = {"type": "NEWS", "ts": time.time(),
+                                    "assets": {}}
+            for sym in SYMBOLS:
+                ev = engine.news.evaluate(sym)
+                tick["assets"][sym] = {
+                    "coverage": engine.news.coverage_string(),
+                    "horizons": {tf: {
+                        "impact": h.get("impact"), "niv": h.get("niv"),
+                        "smd": h.get("smd"), "n_items": h.get("n_items"),
+                    } for tf, h in (ev.get("horizons") or {}).items()},
+                    "top_theme": ((ev.get("horizons") or {})
+                                  .get("tf1", {}).get("drivers") or [{}]
+                                  )[0].get("theme"),
+                    "critical": ev.get("critical_count", 0),
+                }
+                trig = ev.get("emergency_trigger")
+                if trig:
+                    out = engine.emergency_relock(
+                        sym, "tf1", trig.get("reason") or "")
+                    tick["assets"][sym]["emergency"] = out
+            await manager.broadcast(tick)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            log.debug("news ticker error", exc_info=True)
+        await asyncio.sleep(4.0)
 
 
 async def _hourly_learning_loop() -> None:
@@ -278,17 +314,65 @@ async def brain_activations(symbol: str = "BTC", tf: str = "tf1") -> JSONRespons
 
 @app.get("/api/news/status")
 async def news_status() -> JSONResponse:
-    """§4.2 per-source heartbeat: items/hour, last success, dropped, dupes."""
+    """docs11 §3.6/§7 — coverage string, per-source backoff lines,
+    per-horizon indices and the emergency audit trail."""
     engine.news.refresh()
-    return JSONResponse({"ok": True, **engine.news.stats()})
+    return JSONResponse({"ok": True, **engine.news.stats(),
+                         **engine.news.status()})
 
 
 @app.post("/api/news/poll")
 async def news_poll() -> JSONResponse:
-    """§4.2 manual kick — one refresh pass, honest result."""
-    engine.news.refresh()
+    """docs11 §7 — manual poll NOW (rate-limit aware) + evaluate."""
+    n = await engine.news.poll(force=True)
+    for sym in SYMBOLS:
+        engine.news.evaluate(sym)
     return JSONResponse({"ok": True, "items": len(engine.news.items),
+                         "polled": n, "coverage": engine.news.coverage_string(),
                          "stats": engine.news.stats()})
+
+
+@app.get("/api/news/feed")
+async def news_feed_items(asset: str = "BTC", limit: int = 30) -> JSONResponse:
+    """docs11 §7 — newest-first feed with per-item coverage label."""
+    ns = engine.news
+    out = [{
+        "ts": it.get("ts"), "headline": it.get("headline"),
+        "source": it.get("source"), "tier": it.get("tier"),
+        "theme": it.get("theme"),
+        "relevance": (it.get("relevance_by_asset") or {}).get(asset, 0.0),
+        "sentiment": it.get("sentiment"),
+        "synthetic": bool(it.get("synthetic")),
+        "coverage": "synthetic" if it.get("synthetic") else "live",
+    } for it in list(reversed(ns.items))[:max(1, min(200, limit))]]
+    return JSONResponse({"ok": True, "asset": asset, "items": out,
+                         "filtered": ns.filtered,
+                         "filtered_examples": ns.filtered_examples})
+
+
+@app.get("/api/news/impact")
+async def news_impact(asset: str = "BTC", horizon: str = "tf1") -> JSONResponse:
+    """docs11 §4 — per-horizon impact/NIV/SMD + top-4 drivers + theme
+    inputs. Defined before /api/news/{symbol} so 'impact' never parses
+    as a symbol."""
+    return JSONResponse(engine.news.impact(asset, horizon))
+
+
+@app.post("/api/news/emergency")
+async def news_emergency(payload: dict) -> JSONResponse:
+    """docs11 §4.9 — drill (no open lock) or live emergency re-lock.
+    Acceptance 6: re-locks at today's price, original entry preserved in
+    the reason, 30 s halt; >1/hour rejected as a bug (N-8)."""
+    symbol = str(payload.get("asset") or "BTC").upper()
+    if symbol not in SYMBOLS:
+        return JSONResponse({"ok": False, "error": "unknown asset"},
+                            status_code=400)
+    tf = str(payload.get("tf") or "tf1")
+    reason = str(payload.get("reason") or "manual emergency drill")[:300]
+    out = engine.emergency_relock(symbol, tf, reason)
+    if out.get("ok"):
+        await manager.broadcast({"type": "news_emergency_ack", **out})
+    return JSONResponse(out)
 
 
 @app.get("/api/news/{symbol}")

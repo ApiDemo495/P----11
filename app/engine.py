@@ -2110,6 +2110,68 @@ class PredictionEngine:
             lock["reason"] = str((res_pack.get("tf1") or {}).get("reason") or "")[:500]
             self._save_locks()
 
+    def emergency_relock(self, symbol: str, tf: str = "tf1",
+                         reason: str = "") -> dict:
+        """docs11 §4.9 — THE ONLY path that mutates an already-locked
+        entry: re-opens it at the current price, records the original
+        entry in the reason, then halts all new locks for 30 s.
+        Rate guard: >6/hour is a BUG (error N-8) and is rejected."""
+        now = time.time()
+        hour = [r for r in self.news.emergency_history
+                if r.get("asset") == symbol and now - r.get("ts", 0.0) < 3600.0]
+        if len(hour) >= 6:
+            self.news.stats_bugs.append({
+                "at": now, "code": "N-8",
+                "detail": f">6 emergency re-locks in 1 h for {symbol} — BUG"})
+            return {"ok": False,
+                    "error": "N-8: >6 emergency re-locks in one hour — bug, not a signal"}
+        price = 0.0
+        for _tf, bars in (self.feed.tape(symbol) or {}).items():
+            if bars:
+                price = float(bars[-1].close)
+        if price <= 0:
+            price = self.ledger.price(symbol) or self.feed.last(symbol) or 0.0
+        lock = self.locks.get((symbol, tf))
+        halt = getattr(self, "_halt_until", None)
+        if halt is None:
+            halt = self._halt_until = {}
+        halt[symbol] = now + 30.0
+        if lock is None:
+            # drill with no open entry: audit row only, still counts the hour
+            lock_id = f"emg-{int(now)}"
+            row = self.news.record_emergency(symbol, lock_id, reason,
+                                             price, price, ok=True)
+            return {"ok": True, "drill": True, "lock_id": lock_id,
+                    "original_id": None, "new_entry": price,
+                    "halt_s": 30, "row": row}
+        old_entry = float(lock.get("price") or price)
+        lock["relocks"] = int(lock.get("relocks") or 0) + 1
+        lock["relock_at"] = now
+        lock["original_price"] = old_entry
+        lock["original_id"] = lock.get("lock_id") or (
+            f"{symbol}-{tf}-{int(lock.get('locked_at') or 0)}")
+        lock["lock_id"] = f"emg-{int(now)}"
+        lock["price"] = price
+        lock["locked_at"] = now
+        lock["reason"] = (f"NEWS_EMERGENCY re-lock: {(reason or 'news event')[:140]}"
+                          f" | original entry {old_entry:.6f}")
+        lock["emergency"] = True
+        row = self.news.record_emergency(symbol, lock["lock_id"],
+                                         reason or "news emergency",
+                                         old_entry, price, ok=True)
+        try:
+            self._save_locks()
+        except Exception:
+            pass
+        self._schedule_broadcast({
+            "type": "news_emergency", "asset": symbol, "tf": tf,
+            "lock_id": lock["lock_id"], "original_id": lock["original_id"],
+            "reason": reason, "old_entry": round(old_entry, 4),
+            "new_entry": round(price, 4), "at": now, "halt_s": 30})
+        return {"ok": True, "drill": False, "lock_id": lock["lock_id"],
+                "original_id": lock["original_id"], "old_entry": old_entry,
+                "new_entry": price, "halt_s": 30, "row": row}
+
     def _apply_tape_veto(self, symbol: str, res_pack: dict[str, dict]) -> None:
         """Last 2-3 bars contradicting the side flatten a low-conviction
         call (advice 8.1). Printed as tape_veto in the reason."""
@@ -2492,6 +2554,10 @@ class PredictionEngine:
                          res: dict) -> None:
         """Settle the previous window in the ledger, then freeze the new
         signal. Mid-window refashes (same grid window) keep the lock."""
+        # docs11 §4.9: a 30-second halt after an emergency re-lock
+        if time.time() < float(getattr(self, "_halt_until", {})
+                               .get(symbol, 0.0)):
+            return
         prev = self.locks.get((symbol, tf))
         start, end = self._grid_window(tf, now)
         if prev is not None:
