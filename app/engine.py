@@ -20,6 +20,8 @@ import json
 import logging
 import math
 import time
+
+import numpy as np
 from collections import deque
 from typing import Any, Awaitable, Callable
 
@@ -196,6 +198,10 @@ class PredictionEngine:
         self.prev_cci_dir: dict[tuple[str, str], int] = {}
         self.prev_physics: dict[tuple[str, str], dict[int, float]] = {}
         self.brain_weight_adj: dict[tuple[str, str], dict[int, float]] = {}
+        # brain.md §6: brain vote fusion weight = 0.25 × hindsight
+        # multiplier clip(1 + 0.25·z, 0.25, 1.5); 0 when absent
+        self._fw_hindsight: dict[tuple[str, str], float] = {}
+        self._fw_last_vote: dict[tuple[str, str], float] = {}
         self.news_polarity: deque[float] = deque(maxlen=30)
         self._market_cache: dict[str, dict] = {}
         self._market_cache_ts: float = 0.0
@@ -224,6 +230,12 @@ class PredictionEngine:
     async def start(self) -> None:
         self.genesis.start_worker()
         self.cci.load()
+        # brain.md B-11: never block first prediction — load the cached
+        # connectome now or build it in the background (absent until then)
+        try:
+            self.brains.fw.ensure()
+        except Exception:
+            log.exception("flywire ensure failed")
         # Section 10: learned weights/brain state resume from the JSON file
         self.learning.load_state(engine=self, brains=self.brains)
         try:
@@ -634,6 +646,29 @@ class PredictionEngine:
                         eta=self.learning.rates["emotion"],
                         scale=_scale,
                     )
+                # brain.md §6/§7: the connectome vote's own outcome ring
+                # (feeds hindsight) and dopamine RPE — boundaries only
+                fwv = self._fw_last_vote.get((symbol, tf), 0.0)
+                fw_dir = (1 if fwv > 1e-6 else
+                          (-1 if fwv < -1e-6 else 0))
+                if fw_dir:
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, "facc_brain"),
+                        50).append(1.0 if fw_dir == _sign(move) else -1.0)
+                    if self.brains.fw.state == "ready" and move != 0:
+                        entry = self.brains.fw.rpe_update(
+                            vote=fwv, direction=fw_dir,
+                            actual_move=move, horizon=tf)
+                        if entry is not None:
+                            active = self.brains.fw._last_active_kc
+                            if active is not None and len(active):
+                                signs = np.where(
+                                    self.brains.fw._mbon_approach,
+                                    1.0, -1.0).astype(np.float32)
+                                self.brains.fw.apply_rpe_weights(
+                                    active,
+                                    np.arange(len(signs), dtype=np.int64),
+                                    signs)
                 # agent scorecard: each cloud agent's realized accuracy
                 # ("best of best" auto-routing ranks on this)
                 if self.last_agent_signal and self.agents.active_slot:
@@ -671,8 +706,11 @@ class PredictionEngine:
             )
             brain_res[tf] = self.brains.evaluate(
                 symbol, tf, market, affinity, self._thing2(symbol, tf, tf_ctx, atr_tf, market),
-                advance=record,
+                advance=record, raws=raws[tf],
             )
+            # brain.md: remember the connectome's vote for fusion + RPE
+            self._fw_last_vote[(symbol, tf)] = float(
+                (brain_res[tf].get("flywire") or {}).get("vote") or 0.0)
             if record:
                 # B1 valence learns from THIS pass' DB-1 pattern activations
                 self.brains._prev_pattern_act[(symbol, tf)] = \
@@ -825,6 +863,9 @@ class PredictionEngine:
                 "strength": br["strength"],
                 "agreement": br["agreement"],
                 "consensus": br["consensus"],
+                # brain.md §9: every prediction card carries the REAL
+                # circuit's vote + its confidence (absent = null/0)
+                "flywire": br.get("flywire"),
                 "values": {i["id"]: round(i["h_signal"], 5) for i in br["instances"]},
                 "instances": [
                     {k: (round(v, 5) if isinstance(v, float) else v)
@@ -1495,7 +1536,8 @@ class PredictionEngine:
                 affinity = {fid: abs(v) for fid, v in raws[t].items()
                             if abs(v) > 0.7}
                 br = self.brains.evaluate(symbol, t, market, affinity,
-                                          thing2, advance=False)
+                                          thing2, advance=False,
+                                          raws=raws[t])
                 em = self.emotions.compute(ctx, market, br, news_agg, None)
                 dom = max(em["emotions"], key=em["emotions"].get)
                 em_out[t] = {"cerc": round(em["cerc"], 4),
@@ -2067,8 +2109,20 @@ class PredictionEngine:
             if not res:
                 continue
             # Section 11: CCI × (1 + w_agent × gd × gc)
+            # brain.md §6: × (1 + w_brain × vote × conf) with
+            # w_brain = 0.25 × hindsight, 0 when the connectome is absent
+            factor = 1.0
+            _factors = []
             if gw > 0 and gd > 0:
-                factor = 1.0 + gw * gd * res.get("base_confidence", 0.0)
+                factor *= 1.0 + gw * gd * res.get("base_confidence", 0.0)
+                _factors.append(f"agent ×{factor:.3f}")
+            w_fw = self.brain_fusion_weight(symbol, tf)
+            fv = self._fw_last_vote.get((symbol, tf), 0.0)
+            if w_fw > 0 and fv:
+                _fwf = 1.0 + w_fw * fv * res.get("base_confidence", 0.0)
+                factor *= _fwf
+                _factors.append(f"brain vote {fv:+.3f} ×{w_fw:.2f} → {_fwf:.3f}")
+            if factor != 1.0:
                 res["cci_adjusted"] = res["cci_adjusted"] * factor
                 _lad2, _src2, _fl2 = self._direction_ladder(
                     symbol, tf, float(res["cci_adjusted"]),
@@ -2078,6 +2132,7 @@ class PredictionEngine:
                 res["direction"] = _lad2
                 res["ladder"] = {"source": _src2, "noise_floor": round(_fl2, 5),
                                  "score": round(float(res["cci_adjusted"]), 5)}
+                res["fusion_factors"] = _factors
             res["agent"] = {
                 "direction": g_dir, "confidence": round(gd, 4),
                 "weight": round(gw, 5), "source": sig.get("source", "none"),
@@ -2089,7 +2144,10 @@ class PredictionEngine:
                 "pcv": 1 if res.get("pcv", 0.0) > 0 else (
                     -1 if res.get("pcv", 0.0) < 0 else 0),
                 "agent": g_dir,
-                "brain": int(res.get("brain", {}).get("polarity", 0)),
+                # the REAL circuit's vote when connected (brain.md §6),
+                # legacy consensus only as the pre-connectome fallback
+                "brain": (int(np.sign(fv)) if fv
+                          else int(res.get("brain", {}).get("polarity", 0))),
             }
             dc = self.cci.double_check(res["direction"], res["confidence"], votes)
             if dc["label"] == "mixed":
@@ -2260,12 +2318,16 @@ class PredictionEngine:
         per: dict[str, dict] = {}
         for symbol in SYMBOL_ORDER:
             for tf in TF_ORDER:
-                for fid in list(WEIGHT_IDS) + ["agent"]:
-                    key_name = (f"facc{fid}" if fid != "agent"
-                                else "facc_agent")
+                for fid in list(WEIGHT_IDS) + ["agent", "brain"]:
+                    if fid == "brain":
+                        key_name = "facc_brain"
+                    else:
+                        key_name = (f"facc{fid}" if fid != "agent"
+                                    else "facc_agent")
                     key = self.hist.tf_key(symbol, tf, key_name)
                     ring = list(self.hist.ring(key, 50))
-                    label = f"F{fid}" if fid != "agent" else "agent"
+                    label = (f"F{fid}" if fid not in ("agent", "brain")
+                             else fid)
                     if len(ring) < self.HINDSIGHT_MIN_DECIDED:
                         entry = {"label": label, "n": len(ring),
                                  "enough": False,
@@ -2319,6 +2381,25 @@ class PredictionEngine:
             sym, t, label = key.rsplit("|", 2)
             if label == "agent":
                 continue                     # agents have no weight slot
+            if label == "brain":
+                # brain.md §6: the brain's own hindsight multiplier
+                old_b = self._fw_hindsight.get((sym, t), 1.0)
+                self._fw_hindsight[(sym, t)] = float(entry["multiplier"])
+                # §7 rollback: if the brain got WORSE, revert its last
+                # dopamine change (the vote's sign is never hand-edited)
+                if (entry.get("z", 0.0) <= -1.0
+                        and float(entry["multiplier"]) < old_b
+                        and self.brains.fw.state == "ready"):
+                    if self.brains.fw.rollback():
+                        self.hindsight_changes.append({
+                            "at": now, "symbol": sym, "tf": t,
+                            "formula": "brain",
+                            "from": round(old_b, 3),
+                            "to": round(float(entry["multiplier"]), 3),
+                            "reason": "RPE rollback (brain worse than "
+                                      "before its last change)",
+                        })
+                continue
             try:
                 fid = int(label[1:])
             except (ValueError, TypeError):
@@ -2567,6 +2648,15 @@ class PredictionEngine:
         ws = TIMEFRAMES[tf]["minutes"] * 60
         start = math.floor(now / ws) * ws
         return float(start), float(start + ws)
+
+    def brain_fusion_weight(self, symbol: str, tf: str) -> float:
+        """brain.md §6: 0.25 start, hindsight moves it, 0 when the
+        connectome is absent (absence contributes exactly nothing)."""
+        if self.brains.fw.state != "ready":
+            return 0.0
+        mult = self._fw_hindsight.get((symbol, tf), 1.0)
+        mult = max(0.25, min(1.5, float(mult)))
+        return round(0.25 * mult, 6)
 
     def _settle_and_lock(self, symbol: str, tf: str, now: float,
                          res: dict) -> None:

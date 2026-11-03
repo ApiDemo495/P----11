@@ -350,3 +350,5 @@ td b.up { color: var(--green); } td b.down { color: var(--red); } td b.flat { co
 .an-w b { color: var(--gold, #c9a227); font-family: monospace; }
 .an-ai { grid-column: 1 / -1; font-size: 10.5px; color: #9aa5b5; border-top: 1px dashed var(--line2, #2c3542); padding-top: 6px; }
 .an-period { grid-column: 1 / -1; font-size: 10px; color: #7b8698; font-family: monospace; }
+
+.acc-warn { color: #f5a524 !important; font-weight: 600; }

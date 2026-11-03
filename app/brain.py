@@ -286,6 +286,10 @@ class BrainInstance:
 
 class BrainSystem:
     def __init__(self) -> None:
+        # brain.md: the REAL connectome or absent — hot-swapped in by the
+        # engine's start() (never blocking first paint, B-11)
+        from .flywire import get_flywire
+        self.fw = get_flywire()
         self.connectome = Connectome()
         self.instances = [BrainInstance(i, self.connectome) for i in range(4)]
         self.neuprint_status = self.connectome.neuprint_status
@@ -382,6 +386,50 @@ class BrainSystem:
         }
 
     # ------------------------------------------------------------------
+    def _flywire_eval(self, symbol: str, tf: str,
+                      raws: dict | None,
+                      hormones: dict | None = None) -> dict:
+        """brain.md §4-§8: the REAL connectome's vote on this window's
+        formula vector — or an honest absence (never a stand-in, B-3)."""
+        fw = self.fw
+        if fw.state != "ready":
+            return {"ready": False, "vote": None,
+                    "reason": fw.last_error or "brain absent",
+                    "zero_reasons": {"ccsv2": "brain absent",
+                                     "kcae": "brain absent"},
+                    "chip": fw.chip()}
+        if not raws:
+            return {"ready": False, "vote": None,
+                    "reason": "no input vector",
+                    "zero_reasons": {"ccsv2": "no input vector",
+                                     "kcae": "no input vector"},
+                    "chip": fw.chip()}
+        from .formulas import FORMULA_FUNCTIONS
+        fids = [i for i in sorted(FORMULA_FUNCTIONS) if i != 20]
+        values = [float(raws.get(fid, 0.0) or 0.0)
+                  for fid in fids[:fw.n_channels()]]
+        hsi = 0.0
+        if hormones:
+            # stress index from the volatility-ratio hormone (tyramine)
+            hsi = max(0.0, min(1.0,
+                               float(hormones.get("tyramine") or 1.0) - 1.0))
+        out = fw.vote(values, hsi=hsi)
+        cc = fw.ccsv2()
+        kc = fw.kcae()
+        top_ch = sorted(
+            ({"fid": int(fids[i]), "value": round(values[i], 4)}
+             for i in range(len(values)) if abs(values[i]) > 1e-9),
+            key=lambda c: -abs(c["value"]))[:3]
+        zr = {k: v.get("zero_reasons") for k, v in (("ccsv2", cc),
+                                                    ("kcae", kc))
+              if v.get("zero_reasons")}
+        return {"ready": True, "vote": out.get("vote"),
+                "conf": out.get("conf"), "balance": out.get("balance"),
+                "reason": out.get("reason"), "ccsv2": cc, "kcae": kc,
+                "zero_reasons": zr, "chip": fw.chip(),
+                "top_channels": top_ch,
+                "pass_ms": fw.last_pass_ms, "age_s": fw.pass_age_s}
+
     def evaluate(
         self,
         symbol: str,
@@ -391,6 +439,7 @@ class BrainSystem:
         thing2: dict,
         advance: bool = True,
         settle_steps: int = 1,
+        raws: dict | None = None,
     ) -> dict:
         """Run all four instances for one (asset, timeframe).
 
@@ -558,6 +607,7 @@ class BrainSystem:
             for k in ("dopamine", "serotonin", "octopamine", "tyramine")
         }
         return {
+            "flywire": self._flywire_eval(symbol, tf, raws, avg_hormones),
             "instances": results,
             "consensus": round(mean_signal, 5),
             "polarity": polarity,
@@ -671,6 +721,9 @@ class BrainSystem:
                           for (tf, fid), until in self._inhibited.items()},
             "reward_windows": {str(k): v for k, v in self.reward_windows.items()},
             "calibration": base_calibration,
+            # brain.md §7: dopamine RPE state persists with the vault
+            "flywire": (self.fw.state_dict()
+                        if getattr(self, "fw", None) is not None else None),
         }
 
     def load_state(self, d: dict) -> None:
@@ -691,6 +744,14 @@ class BrainSystem:
         self._channel_sign = {int(k): float(v)
                              for k, v in (cal.get("channel_sign") or {}).items()}
         self._dc_offset = float(cal.get("dc_offset") or 0.0)
+        # brain.md §7: restore the dopamine RPE state (constants such as
+        # BUILD_VERSION and floors always come from code — zeros cause 3)
+        fw_payload = d.get("flywire")
+        if fw_payload and getattr(self, "fw", None) is not None:
+            try:
+                self.fw.load_state(fw_payload)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # advice §3.3/§3.4 probes: odd-symmetry (A-2), channel polarity (A-3),
@@ -791,7 +852,14 @@ class BrainSystem:
 
     def reconnect(self) -> dict:
         """A-6: re-run verification on demand — status rows must never be
-        a stale ❌ while the brain is actually healthy."""
+        a stale ❌ while the brain is actually healthy. Also re-runs the
+        FlyWire five-step and restarts a failed/absent build (brain.md)."""
+        fw_out = {}
+        if getattr(self, "fw", None) is not None:
+            try:
+                fw_out = self.fw.rebuild()
+            except Exception as exc:
+                fw_out = {"ok": False, "error": repr(exc)}
         try:
             self.initialize()
         except Exception:
@@ -819,9 +887,13 @@ class BrainSystem:
             {"step": "instances ready", "ok": all(b.ready for b in self.instances),
              "detail": f'{sum(1 for b in self.instances if b.ready)}/4 brains'},
         ]
+        fw = getattr(self, "fw", None)
         return {
             "ready": self.ready,
             "verify": verify,
+            "flywire": (fw.status() if fw is not None else
+                        {"state": "absent", "verify": []}),
+            "chip": (fw.chip() if fw is not None else None),
             "connectome": {
                 "source": self.neuprint_status,
                 "units_per_brain": self.connectome.unit_count,

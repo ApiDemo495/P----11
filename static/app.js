@@ -551,6 +551,14 @@ function renderWhy() {
         <h5 style="margin-top:12px">SUBSYSTEM VOTES</h5>
         <div class="votes">${Object.entries(votes).map(([k, v]) =>
           `<span class="vote ${v > 0 ? "pos" : v < 0 ? "neg" : ""}">${k} ${v > 0 ? "▲" : v < 0 ? "▼" : "·"}</span>`).join("")}</div>
+        ${(() => {
+          const f = s.brain?.flywire;
+          if (!f) return "";
+          const tip = (f.top_channels || []).map(c => `F${c.fid} ${c.value >= 0 ? "+" : ""}${fmt(c.value, 3)}`).join(" · ");
+          return f.ready
+            ? `<div class="kv" style="margin-top:6px"><span title="${esc(tip)}">brain +${fmt(f.vote, 3)} <span class="dim">(FlyWire v783 · conf ${fmt(f.conf, 2)}${tip ? " · hover for top channels" : ""})</span></span><b class="${f.vote >= 0 ? "up" : "down"}">${f.vote >= 0 ? "approach" : "avoid"}</b></div>`
+            : `<div class="kv" style="margin-top:6px"><span>brain</span><b class="down" title="${esc(f.reason || "")}">absent — vote withheld, weight 0</b></div>`;
+        })()}
         <div class="hint">4-vote double-check: PCV + agent + brain (+ emotion/physics here) must agree to issue.</div>
       </div>
     </div>
@@ -1130,9 +1138,10 @@ async function drillEmergency() {
 /* ═══════════ BRAINS ═══════════ */
 async function loadBrains() {
   try {
-    const [geo, sys] = await Promise.all([
+    const [geo, sys, bst] = await Promise.all([
       api("/api/brain-geometry"),
       api(`/api/systems?symbol=${S.symbol}`),
+      api("/api/brain/status").catch(() => null),
     ]);
     const s = sys.systems?.[`${S.symbol}|${S.focusTf}`] || {};
     const br = s.brain || {};
@@ -1176,6 +1185,63 @@ async function loadBrains() {
         <div class="logic">pattern ${fmt(inst.pattern, 3)} · P(dominant) ${fmt(inst.p_dominant, 2)}</div>`;
       wrap.appendChild(card);
     });
+    // ── FlyWire v783: chip, five-step verification, polarity, RPE ──
+    if (bst && bst.flywire) {
+      const fw = bst.flywire;
+      const chip = bst.chip || fw.chip || { kind: "absent", text: "brain absent" };
+      const cc = chip.kind === "ok" ? "#22c55e"
+        : chip.kind === "build" ? "#3b82f6" : "#ef4444";
+      const cel = $("#br-chip");
+      if (cel) {
+        cel.textContent = chip.text;
+        cel.style.color = cc;
+        cel.style.border = `1px solid ${cc}`;
+      }
+      $("#br-verify").innerHTML = (fw.verify || []).map(v =>
+        `<div class="kv"><span>${esc(v.step)}${v.ms != null ? ` <span class="dim">${v.ms} ms</span>` : ""}</span>` +
+        `<b class="${v.ok ? "acc-up" : "acc-dn"}" title="${esc(v.detail || "")}">${esc(String(v.detail || "").slice(0, 90))}</b></div>`
+      ).join("") || `<div class="dim">no verification yet</div>`;
+      const pol = fw.polarity || {};
+      const flips = pol.flips || [];
+      const flipped = flips.map((f, i) => f < 0 ? i : -1).filter(i => i >= 0);
+      $("#br-polarity").innerHTML = `
+        <div class="kv"><span>channels</span><b>${pol.n_channels || 0}</b></div>
+        <div class="kv"><span>flipped (innate aversion)</span><b>${flipped.length ? flipped.join(", ") : "none"}</b></div>
+        <div class="kv"><span>dead (no circuit response)</span><b>${(pol.dead || []).length ? pol.dead.join(", ") : "none"}</b></div>
+        <div class="kv"><span>pass</span><b>${fw.pass?.ms ?? "—"} ms · ${fw.pass?.age_s ?? "—"} s ago · conf ${fw.pass?.conf ?? "—"}</b></div>`;
+      const dp = fw.dopamine || {};
+      $("#br-dopamine").innerHTML = `
+        <div class="kv"><span>E (expectation)</span><b>${fmt(dp.E, 3)}</b></div>
+        <div class="kv"><span>δ (last RPE)</span><b>${fmt(dp.delta, 3)}</b></div>
+        <div class="kv"><span>drg (tanh 2.25·δ)</span><b>${fmt(dp.drg, 3)}</b></div>
+        <div class="kv"><span>α (learn rate)</span><b>${fmt(dp.alpha, 3)}</b></div>
+        <div class="kv"><span>tonic / phasic</span><b>${fmt(dp.tonic, 2)} / ${fmt(dp.phasic, 3)}</b></div>`;
+      const fm = fw.formulas || {};
+      const cell = (name, f) => {
+        const v = f || {};
+        return `<div class="kv"><span>${name}${v.kind === "gauge" ? " (gauge)" : ""}</span>` +
+          `<b class="${v.zero_reasons ? "acc-warn" : ""}" title="${esc(v.zero_reasons || "")}">` +
+          `${v.zero_reasons ? "why: " + esc(v.zero_reasons) : fmt(v.value, 4)}</b></div>`;
+      };
+      $("#br-fw-formulas").innerHTML =
+        cell("CCSv2 circuit consensus", fm.ccsv2) + cell("KCAE stability", fm.kcae);
+      $("#br-fw-note").textContent =
+        fw.state === "ready"
+          ? `connectome ${fw.meta?.neurons?.toLocaleString?.() ?? "?"} neurons · ${fw.meta?.edges?.toLocaleString?.() ?? "?"} connections · build v${fw.build_version} · vote enters fusion at weight 0.25 × hindsight, never hand-signed`
+          : `absent — vote withheld, fusion weight 0, both brain formulas report "brain absent" (${fw.last_error || "not loaded"}).`;
+      const rb = $("#br-reconnect");
+      if (rb && !rb.dataset.wired) {
+        rb.dataset.wired = "1";
+        rb.addEventListener("click", async () => {
+          rb.disabled = true;
+          try {
+            const out = await api("/api/brain/reconnect", { method: "POST" });
+            toast(out.flywire?.ok !== false ? "reconnect — verify/build restarted" : "reconnect sent", "ok");
+          } catch (e) { toast("reconnect: " + e.message, "err"); }
+          setTimeout(() => { rb.disabled = false; loadBrains(); }, 1500);
+        });
+      }
+    }
     renderCorel(s.corelation);
     // §3.3 wiring + A-2/A-3 probes (cached server-side after first run)
     try {
