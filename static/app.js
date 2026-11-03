@@ -217,11 +217,18 @@ function buildRail() {
 }
 function setSymbol(sym) {
   S.lastViewFetch = 0;
+  const ab = $("#analyse-sym"); if (ab) ab.textContent = sym;
   S.symbol = sym;
   $$(".asset-btn").forEach(b => b.classList.toggle("active", b.dataset.sym === sym));
   syncToolbar();
   refreshActiveView(true);
   buildQuads(); loadCandles();
+}
+function setView(v) {
+  S.view = v; S.lastViewFetch = 0;
+  $$(".tab-btn").forEach(x => x.classList.toggle("active", x.dataset.view === v));
+  $$(".view").forEach(x => x.classList.toggle("active", x.id === "view-" + v));
+  refreshActiveView(true);
 }
 function buildTabs() {
   $$(".tab-btn").forEach(b => b.addEventListener("click", () => {
@@ -351,6 +358,86 @@ function renderQuads(opts = {}) {
   renderRail();
   try { renderCalls(); } catch (e) { console.error("calls", e); }
   try { renderLedger(); renderHindsight(); renderMeta(); } catch (e) { console.error("ledger", e); }
+}
+/* ═══════ staged ANALYSE: button, timeline, result box ═══════ */
+function bindAnalyse() {
+  const b = $("#btn-analyse");
+  if (!b) return;
+  b.addEventListener("click", async () => {
+    if (b.disabled) return;
+    b.disabled = true;
+    const sym = S.symbol;
+    try {
+      const r = await api(`/api/analyse/${sym}?tf=${S.focusTf}`, { method: "POST" });
+      if (!r.ok) { toast(r.error || "analysis unavailable", "err"); b.disabled = false; return; }
+      // show the panel on the dashboard immediately — timestamps anchor
+      // to the button press (started_at comes from the server)
+      setView("dashboard");
+      const panel = $("#analyse-panel");
+      panel?.classList.remove("hidden");
+      const started = new Date(r.started_at * 1000);
+      $("#an-title").textContent = `ANALYSING ${sym} · ${S.focusTf.toUpperCase()}`;
+      $("#an-sub").textContent = `started ${started.toISOString().slice(11, 23)}Z — calculating…`;
+      $("#an-stages").innerHTML = (r.stages || []).map((name, i) =>
+        `<div class="an-row" id="anr-${name}">
+           <span class="dim">${i + 1}</span><span class="an-name">${name.replace("_", " ")}</span>
+           <span class="an-ms">…</span><span class="an-at">—</span>
+           <span class="an-sum dim">queued</span></div>`).join("");
+      const box = $("#an-result");
+      if (box) { box.innerHTML = ""; box.classList.add("hidden"); }
+    } catch (e) { toast("analyse: " + e.message, "err"); }
+    b.disabled = false;
+  });
+}
+function onAnalyseStage(msg) {
+  const st = msg.stage; if (!st) return;
+  const row = $("#anr-" + st.stage);
+  if (!row) return;
+  row.className = "an-row " + (st.status || "done");
+  $(".an-ms", row).textContent = st.duration_ms + " ms";
+  $(".an-at", row).textContent = new Date(st.t_start_ms).toISOString().slice(11, 23) + "Z";
+  $(".an-sum", row).textContent = st.summary || "";
+  row.title = st.summary || "";
+}
+function onAnalyseDone(msg) {
+  const b = $("#btn-analyse"); if (b) b.disabled = false;
+  const r = msg.result;
+  const sub = $("#an-sub");
+  if (!r) {
+    if (sub) sub.textContent = "FAILED — " + (msg.error || "unknown error");
+    toast("analysis failed: " + (msg.error || ""), "err");
+    return;
+  }
+  if (sub) sub.textContent =
+    `finished ${new Date(r.calculation_period.finished_at * 1000).toISOString().slice(11, 23)}Z · total ${r.elapsed_ms} ms`;
+  const box = $("#an-result");
+  if (!box) return;
+  box.classList.remove("hidden");
+  const dirCls = r.signal === "BUY" ? "buy" : r.signal === "SELL" ? "sell" : "flat";
+  const ai = r.ai || {};
+  let aiLine = ai.available
+    ? Object.entries(ai.reviews || {}).map(([name, rv]) =>
+        `${name}: ${rv.ok ? ((rv.errors || []).length ? (rv.errors || []).length + " issue(s) found — " + (rv.reason || "") : "no issues — " + (rv.reason || "concurs")) : "unavailable (" + (rv.error || "") + ")"}`).join(" · ")
+    : (ai.note || "keyless — deterministic pipeline only");
+  if (ai.correction) {
+    aiLine += ` · ⚠ AI CORRECTION by ${ai.correction.by}: ${ai.correction.direction > 0 ? "BUY" : "SELL"} (${Math.round(ai.correction.confidence * 100)}%) — ${ai.correction.reason}`;
+  }
+  const period = (r.calculation_period?.stages || []).map(c =>
+    `${c.stage} ${Math.round(c.ms)}ms`).join(" → ");
+  box.innerHTML = `<div class="an-box">
+    <div class="an-signal ${dirCls}">
+      <div class="big">${r.signal}</div>
+      <div class="conf">confidence ${fmt(r.confidence, 3)}${r.issued ? " · ISSUED" : " · below floor"}</div>
+      <div class="conf">entry ${px(r.price)} · ATR ${fmt(r.atr, 4)}</div>
+    </div>
+    <div class="an-grid">
+      ${r.tps.map(t => `<div class="an-cell"><div class="k">TP${t.k} · ${t.minutes}m</div><div class="v">${px(t.level)}</div></div>`).join("")}
+      <div class="an-cell"><div class="k">STOP LOSS</div><div class="v" style="color:#f0385a">${r.sl ? px(r.sl) : "—"}</div></div>
+      <div class="an-cell"><div class="k">LADDER</div><div class="v" style="font-size:10.5px;font-weight:400">${esc(r.ladder?.source || "—")}</div></div>
+      <div class="an-w">weightage for ${msg.symbol} (per-asset mix): ${(r.weightage || []).map(w => `F${w.id} <b>${w.w}</b>`).join(" · ")}<br/><span class="dim">${esc(r.weightage_note || "")}</span></div>
+      <div class="an-ai">AI review — ${esc(aiLine)}</div>
+      <div class="an-period">calculation period: ${esc(period)} · total ${r.elapsed_ms} ms</div>
+    </div></div>`;
 }
 function renderRail() {
   const a = S.snap?.assets || {};
@@ -1380,6 +1467,8 @@ function handleMessage(msg) {
   else if (msg.type === "tick") onTick(msg);
   else if (msg.type === "phase") renderBoot({ phase: msg.phase, analysis: msg });
   else if (msg.type === "sl_event") toast(msg.message || msg.kind, msg.kind === "close" ? "err" : "warn");
+  else if (msg.type === "analyse_stage") onAnalyseStage(msg);
+  else if (msg.type === "analyse_done") onAnalyseDone(msg);
 }
 let ws;                       // module scope: master tick guards silence
 function connectWS() {
@@ -1465,7 +1554,7 @@ window.addEventListener("unhandledrejection", e => {
 
 /* ═══════════ boot ═══════════ */
 (function boot() {
-  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal();
+  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse();
   connectWS();
   api("/api/snapshot").then(applySnapshot).catch(() => {});
   // REST safety net lives in the single master setInterval below (H-2)

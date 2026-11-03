@@ -509,6 +509,27 @@ from scalping timings to the intraday horizons):
 | §11 key ring, ListModels model choice, deadline + window cache | `app/agents.py`, `engine._apply_agents` |
 | §13 Part B detection tests | `tests/test_advice_guards.py` (18 guards) |
 
+### Staged ANALYSE (per asset)
+
+Press **▶ ANALYSE** in the toolbar: the pipeline runs visibly in order —
+formulas → emotions → physics → news → hedge → AI review (Gemini + the
+local qwen2.5-coder, skipped honestly when keyless) → final box with the
+BUY/SELL signal, all four TPs, the stop-loss, the per-asset weightage and
+the full calculation period (every stage timestamped from the button
+press). Each asset analyses with its own weights; switch asset and press
+ANALYSE again. An analysis is read-only — locks change only at the window
+boundary.
+
+```bash
+curl -X POST "localhost:8000/api/analyse/BTC?tf=tf1"
+```
+
+### Repository rules
+
+- **No pull requests, no merges.** Work is committed and pushed directly
+  to the working branch; PR/merge operations are never used in this
+  repository.
+
 Run the detection suite:
 
 ```bash

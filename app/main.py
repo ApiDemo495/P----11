@@ -498,6 +498,22 @@ async def feeds_diagnose() -> JSONResponse:
     })
 
 
+@app.post("/api/analyse/{symbol}")
+async def analyse_start(symbol: str, tf: str = "tf1") -> JSONResponse:
+    """Staged ANALYSE: formulas → emotions → physics → news → hedge →
+    AI review (Gemini + local qwen2.5-coder) → final box (signal, four
+    TPs, SL). Read-only — locks never change here."""
+    out = engine.start_analyse(symbol, tf)
+    status = 200 if out.get("ok") else 409
+    return JSONResponse(out, status_code=status)
+
+
+@app.get("/api/analyse/status")
+async def analyse_status() -> JSONResponse:
+    job = engine.analyse_job or {"status": "idle"}
+    return JSONResponse({"ok": True, "job": job})
+
+
 @app.get("/api/genesis/status")
 async def genesis_status() -> JSONResponse:
     """§7 pool counts, next generation time, rules (NumPy only)."""

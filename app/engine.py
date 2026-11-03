@@ -153,6 +153,8 @@ class PredictionEngine:
         # (lead ≈ agent_timeout + 1.5s + formula pass, ≤2% of W → 20s at 22m)
         self._agent_cache: dict = {}
         self.agent_deadline_misses = 0     # §12 agents: deadline misses
+        self.analyse_job: dict | None = None   # staged ANALYSE flow
+        self._analyse_task: asyncio.Task | None = None
         self.started_at = time.time()      # §12 ops: uptime
         self.vault_last_write = 0.0        # §12 ops: vault last write
         self.build_id = ""                 # §12 ops: build id vs remote
@@ -1394,6 +1396,351 @@ class PredictionEngine:
         return {"for": round(for_mass, 5), "against": round(against, 5),
                 "supporters": pick(supporters), "opponents": pick(opponents),
                 "subsystem_votes": subsystems}
+
+    # ==================================================================
+    # Staged ANALYSE flow: formulas → emotions → physics → news → hedge →
+    # AI review (Gemini + local qwen2.5-coder) → final box (signal, 4 TPs,
+    # SL). Each stage carries its own timestamps — the "calculation
+    # period" the user sees from the moment ANALYSE is pressed. Read-only:
+    # locks are NEVER mutated by an analysis (they change only at the
+    # window boundary).
+    # ==================================================================
+    ANALYSE_STAGES = ("formulas", "emotions", "physics", "news", "hedge",
+                      "ai_review", "final")
+
+    def start_analyse(self, symbol: str, tf: str = "tf1") -> dict:
+        if self.analyse_job and self.analyse_job.get("status") == "running":
+            return {"ok": False, "error": "an analysis is already running"}
+        if symbol not in SYMBOL_ORDER:
+            return {"ok": False, "error": "unknown symbol"}
+        self.analyse_job = {
+            "symbol": symbol, "tf": tf,
+            "started_at": time.time(), "stages": [],
+            "status": "running", "result": None,
+        }
+        self._analyse_task = asyncio.create_task(
+            self._run_analyse(self.analyse_job))
+        return {"ok": True, "symbol": symbol, "tf": tf,
+                "started_at": self.analyse_job["started_at"],
+                "stages": list(self.ANALYSE_STAGES)}
+
+    async def _emit_stage(self, job: dict, stage: str, status: str,
+                          t0: float, t1: float, summary: str,
+                          data: dict | None = None) -> None:
+        entry = {"stage": stage, "status": status,
+                 "t_start_ms": int(t0 * 1000), "t_end_ms": int(t1 * 1000),
+                 "duration_ms": round((t1 - t0) * 1000, 1),
+                 "summary": summary}
+        if data is not None:
+            entry["data"] = data
+        job["stages"].append(entry)
+        await self.emit({"type": "analyse_stage", "symbol": job["symbol"],
+                         "stage": entry})
+
+    async def _run_analyse(self, job: dict) -> None:
+        symbol, tf = job["symbol"], job["tf"]
+        t_job0 = time.time()
+        await self.emit({"type": "analyse_started", "symbol": symbol,
+                         "tf": tf, "started_at": job["started_at"],
+                         "stages": list(self.ANALYSE_STAGES)})
+        store: dict = {}
+        try:
+            # 1 ── formulas: every value, every timeframe, timed ----------
+            t0 = time.time()
+            raws, per_tf_ms = {}, {}
+            for t in TF_ORDER:
+                ctx = self.build_ctx(symbol, t)
+                anoms: list = []
+                f0 = time.perf_counter()
+                raws[t] = compute_all(ctx, record=False, anomalies=anoms)
+                per_tf_ms[t] = round((time.perf_counter() - f0) * 1000, 1)
+            store["raws"] = raws
+            nz = sum(1 for t in TF_ORDER for v in raws[t].values()
+                     if abs(v) > 1e-9)
+            total = sum(len(v) for v in raws.values())
+            top = sorted(
+                ((v, t, fid) for t in TF_ORDER for fid, v in raws[t].items()),
+                key=lambda r: -abs(r[0]))[:5]
+            await self._emit_stage(
+                job, "formulas", "done", t0, time.time(),
+                f"{nz}/{total} readings non-zero · top: " + ", ".join(
+                    f"F{fid}@{t.upper()}={v:+.3f}" for v, t, fid in top),
+                {"nonzero": nz, "total": total, "per_tf_ms": per_tf_ms})
+            # 2 ── emotions (brain consensus feeds them) -------------------
+            t0 = time.time()
+            market = self._build_market(symbol)
+            news_agg = self.news.aggregate(symbol)
+            em_out = {}
+            for t in TF_ORDER:
+                ctx = self.build_ctx(symbol, t)
+                atr = self._atr(ctx)
+                thing2 = self._thing2(symbol, t, ctx, atr, market)
+                affinity = {fid: abs(v) for fid, v in raws[t].items()
+                            if abs(v) > 0.7}
+                br = self.brains.evaluate(symbol, t, market, affinity,
+                                          thing2, advance=False)
+                em = self.emotions.compute(ctx, market, br, news_agg, None)
+                dom = max(em["emotions"], key=em["emotions"].get)
+                em_out[t] = {"cerc": round(em["cerc"], 4),
+                             "top_emotion": f"E{dom}",
+                             "brain_state": br["dominant"],
+                             "polarity": br["polarity"]}
+            store["emotions"] = em_out
+            e1 = em_out[tf]
+            await self._emit_stage(
+                job, "emotions", "done", t0, time.time(),
+                f"CERC {e1['cerc']:+.4f} · top {e1['top_emotion']} · "
+                f"brain {e1['brain_state']} ({e1['polarity']:+d})",
+                em_out)
+            # 3 ── physics (P1..P21 + UFP) --------------------------------
+            t0 = time.time()
+            long_closes = {sym: list(self.feed.state(sym).closes)
+                           for sym in SYMBOL_ORDER}
+            news_minutes = self.news.arrival_minutes_last(600)
+            phys_out = {}
+            for t in TF_ORDER:
+                ctx = self.build_ctx(symbol, t)
+                w = self.cci.get_weights(symbol, t)
+                comp_core = {fid: raws[t].get(fid, 0.0)
+                             for fid in FORMULA_FUNCTIONS}
+                wsum = sum(w.get(fid, 0.0) for fid in comp_core) or 1.0
+                cci_ref = sum(w.get(fid, 0.0) * v
+                              for fid, v in comp_core.items()) / wsum
+
+                def _recompute(c):
+                    return compute_all(c, record=False)
+                ph = self.physics.evaluate(
+                    symbol, t, ctx, atr=self._atr(ctx), raws=raws[t],
+                    cci_ref=cci_ref, long_closes=long_closes,
+                    news_minutes=news_minutes, weights=w,
+                    recompute=_recompute, hist=self.hist, record=False)
+                mech = ph.get("mechanisms") or []
+                phys_out[t] = {
+                    "ufp": round(ph["ufp"]["value"], 4),
+                    "wfcp": round(ph["wfcp"], 4),
+                    "drpt": round(ph["drpt"], 4),
+                    "gspi": round(ph["gspi"], 4),
+                    "mech_active": sum(1 for m in mech if m["active"]),
+                    "mech_total": len(mech),
+                }
+            store["physics"] = phys_out
+            pe = phys_out[tf]
+            await self._emit_stage(
+                job, "physics", "done", t0, time.time(),
+                f"UFP {pe['ufp']:+.4f} · {pe['mech_active']}/{pe['mech_total']} "
+                f"mechanisms active · WFCP {pe['wfcp']:.3f} DRPT {pe['drpt']:.3f}",
+                phys_out)
+            # 4 ── news ----------------------------------------------------
+            t0 = time.time()
+            self.news.refresh()
+            agg = self.news.aggregate(symbol)
+            news_out = {"value": agg["value"], "niv": agg["niv"],
+                        "count": agg["count"],
+                        "dropped": agg.get("relevance_dropped", 0),
+                        "critical": agg.get("critical", {}).get("active", False),
+                        "impacts": agg["impacts"]}
+            store["news"] = news_out
+            await self._emit_stage(
+                job, "news", "done", t0, time.time(),
+                f"NIV {news_out['niv']:+.3f} · {news_out['count']} items · "
+                f"{news_out['dropped']} dropped by relevance gate"
+                + (" · ⚠ CRITICAL" if news_out["critical"] else ""),
+                news_out)
+            # 5 ── hedge / dark-pool ---------------------------------------
+            t0 = time.time()
+            hedge_out = {}
+            for t in TF_ORDER:
+                ctx = self.build_ctx(symbol, t)
+                ifr = hedgefund.institutional_flow(ctx)
+                dpad = hedgefund.dark_pool_flow(ctx)
+                smdi = hedgefund.smart_money_divergence(
+                    ifr["value"], store["emotions"][t]["polarity"])
+                hedge_out[t] = {
+                    "ifr": round(ifr["value"], 4),
+                    "dpad": round(dpad["value"], 4),
+                    "smdi": round(smdi, 4),
+                    "combined": round(hedgefund.combined_signal(
+                        ifr["value"], dpad["value"], smdi), 4),
+                }
+            store["hedge"] = hedge_out
+            he = hedge_out[tf]
+            await self._emit_stage(
+                job, "hedge", "done", t0, time.time(),
+                f"combined {he['combined']:+.4f} · IFR {he['ifr']:+.3f} · "
+                f"dark-pool {he['dpad']:+.3f} · smart-money {he['smdi']:+.3f}",
+                hedge_out)
+            # 6 ── AI review: Gemini + local qwen2.5-coder -----------------
+            await self._analyse_ai_review(job, store, tf)
+            # 7 ── final: authoritative fusion + box ------------------------
+            t0 = time.time()
+            res_pack = self.compute_asset(symbol, record=False, display=True)
+            res = res_pack.get(tf) or {}
+            price = self.feed.prices().get(symbol, 0.0)
+            atr = float(res.get("atr") or self._atr(self.build_ctx(symbol, tf)))
+            direction = int(res.get("direction") or 0)
+            conf = float(res.get("confidence") or 0.0)
+            minutes = TIMEFRAMES[tf]["targets"]
+            tps = []
+            for k, mins in enumerate(minutes, start=1):
+                lvl = self._project_level(price, direction or 1, conf, atr, mins)
+                tps.append({"k": k, "minutes": mins, "level": round(lvl, 6)})
+            cyc = self.cycles.get((symbol, tf))
+            sl = None
+            if cyc is not None and cyc.sl:
+                sl = cyc.sl
+            elif direction != 0:
+                sl = price - direction * atr * 1.0
+            # per-asset weightage — every asset runs its OWN weights
+            wts = self.cci.get_weights(symbol, tf)
+            top_w = sorted(wts.items(), key=lambda kv: -abs(kv[1]))[:8]
+            ai = job.get("ai") or {}
+            final = {
+                "signal": "BUY" if direction > 0 else ("SELL" if direction < 0 else "FLAT"),
+                "direction": direction,
+                "confidence": round(conf, 4),
+                "issued": bool(res.get("issued")),
+                "price": price,
+                "atr": round(atr, 6),
+                "tps": tps,
+                "sl": round(sl, 6) if sl else None,
+                "ratio": None,
+                "weightage": [{"id": str(k), "w": round(v, 5)}
+                              for k, v in top_w],
+                "weightage_note": ("per-asset, per-timeframe weights — "
+                                   "every asset analyses with its own mix"),
+                "ladder": res.get("ladder"),
+                "ai": ai,
+                "elapsed_ms": round((time.time() - t_job0) * 1000, 1),
+                "calculation_period": {
+                    "started_at": job["started_at"],
+                    "finished_at": time.time(),
+                    "stages": [{"stage": e["stage"],
+                                "at": e["t_start_ms"],
+                                "ms": e["duration_ms"]}
+                               for e in job["stages"]],
+                },
+            }
+            job["result"] = final
+            job["status"] = "done"
+            await self._emit_stage(
+                job, "final", "done", t0, time.time(),
+                f"{final['signal']} · conf {final['confidence']:.3f} · "
+                f"TP1 {tps[0]['level']} · SL {final['sl']} · "
+                f"total {final['elapsed_ms']:.0f} ms", final)
+            await self.emit({"type": "analyse_done", "symbol": symbol,
+                             "tf": tf, "result": final})
+        except Exception as exc:
+            job["status"] = "error"
+            job["error"] = repr(exc)
+            log.exception("analysis failed for %s", symbol)
+            await self.emit({"type": "analyse_done", "symbol": symbol,
+                             "tf": tf, "result": None,
+                             "error": repr(exc)})
+
+    async def _analyse_ai_review(self, job: dict, store: dict,
+                                 tf: str) -> None:
+        """Stage 6: Gemini and the local qwen2.5-coder review the assembled
+        analysis for errors/mistakes and propose corrections. Keyless →
+        skipped with a printed note (agents are always optional)."""
+        t0 = time.time()
+        symbol = job["symbol"]
+        raws = store.get("raws", {}).get(tf, {})
+        top = sorted(raws.items(), key=lambda kv: -abs(kv[1]))[:8]
+        payload = {
+            "symbol": symbol, "tf": tf,
+            "formulas_top": {f"F{k}": round(v, 4) for k, v in top},
+            "emotions": store.get("emotions", {}).get(tf),
+            "physics": store.get("physics", {}).get(tf),
+            "news": store.get("news"),
+            "hedge": store.get("hedge", {}).get(tf),
+        }
+        prompt = (
+            'You are reviewing an intraday market analysis BEFORE it is '
+            'shown to a trader. Find mistakes or contradictions in this '
+            'analysis (sign conflicts, stale/absurd numbers, risk that '
+            'does not match volatility) and give your own call. '
+            'Reply ONLY with JSON: {"errors": ["..."], "fixes": ["..."], '
+            '"direction": 1|-1|0, "confidence": 0.0..1.0, '
+            '"reason": "one sentence"}. Data:\n'
+            + json.dumps(payload, default=str)[:4000]
+        )
+        reviews: dict[str, dict] = {}
+        # Gemini (real API call through the key ring)
+        key = (self.agents.settings.get("gemini_key") or "")
+        if key:
+            try:
+                res = await self.agents._call_provider("gemini", key, prompt)
+                if res.get("ok"):
+                    reviews["gemini"] = self._parse_ai_review(
+                        res.get("insight") or res.get("text") or "", res)
+                else:
+                    reviews["gemini"] = {"ok": False,
+                                         "error": str(res.get("reason"))}
+            except Exception as e:
+                reviews["gemini"] = {"ok": False, "error": repr(e)}
+        # local qwen2.5-coder (the engine's own reviewer)
+        if getattr(self.agents.local, "available", False):
+            try:
+                text = await asyncio.get_event_loop().run_in_executor(
+                    None, self.agents.local.query, prompt)
+                reviews["qwen2.5-coder"] = self._parse_ai_review(text or "", {})
+            except Exception as e:
+                reviews["qwen2.5-coder"] = {"ok": False, "error": repr(e)}
+        t1 = time.time()
+        if not reviews:
+            await self._emit_stage(
+                job, "ai_review", "skipped", t0, t1,
+                "no AI configured — deterministic pipeline only "
+                "(keyless operation, agents optional)", {})
+            job["ai"] = {"available": False,
+                         "note": "keyless — brain + formulas + physics only"}
+            return
+        # an AI correction only counts at confidence ≥ 0.70 (printed, never
+        # silent — the deterministic ladder stays visible underneath)
+        correction = None
+        for name, rv in reviews.items():
+            if rv.get("ok") and abs(int(rv.get("direction") or 0)) == 1                     and float(rv.get("confidence") or 0) >= 0.70:
+                correction = {"by": name,
+                              "direction": int(rv["direction"]),
+                              "confidence": float(rv["confidence"]),
+                              "reason": rv.get("reason", "")}
+                break
+        job["ai"] = {"available": True, "reviews": reviews,
+                     "correction": correction}
+        bits = []
+        for name, rv in reviews.items():
+            if rv.get("ok"):
+                n_err = len(rv.get("errors") or [])
+                bits.append(f"{name}: {n_err} issue(s), "
+                            f"{'CORRECTS to ' + ('BUY' if rv['direction'] > 0 else 'SELL') if rv is correction else 'concurs'}")
+            else:
+                bits.append(f"{name}: {rv.get('error', 'failed')}")
+        await self._emit_stage(
+            job, "ai_review", "done", t0, t1, " · ".join(bits),
+            job["ai"])
+
+    @staticmethod
+    def _parse_ai_review(text: str, fallback: dict) -> dict:
+        out = {"ok": True, "errors": [], "fixes": [],
+               "direction": int(fallback.get("direction") or 0),
+               "confidence": float(fallback.get("confidence") or 0.0),
+               "reason": str(fallback.get("insight") or "")[:300],
+               "raw": str(text)[:600]}
+        try:
+            m = text[text.find("{"):text.rfind("}") + 1]
+            data = json.loads(m)
+            out["errors"] = [str(x) for x in (data.get("errors") or [])][:6]
+            out["fixes"] = [str(x) for x in (data.get("fixes") or [])][:6]
+            out["direction"] = int(data.get("direction") or 0)
+            out["confidence"] = float(data.get("confidence") or 0.0)
+            out["reason"] = str(data.get("reason") or out["reason"])[:300]
+        except Exception:
+            pass
+        if not out["direction"]:
+            out["direction"] = int(fallback.get("direction") or 0)
+        if not out["confidence"]:
+            out["confidence"] = float(fallback.get("confidence") or 0.0)
+        return out
 
     def ops_status(self) -> dict:
         """§12 ops row: degradation, vault last write, watchdog, uptime,

@@ -43,6 +43,7 @@
     <div class="seg" id="seg-tf"><span class="seg-lbl">TIMEFRAME</span></div>
     <div id="feed-chip" class="feed-chip">…</div>
     <div id="status-chips" class="trace-row"></div>
+    <button id="btn-analyse" class="btn-analyse" title="Run the staged analysis for this asset">▶ ANALYSE <span id="analyse-sym">BTC</span></button>
   </div>
 
   <!-- alert bar -->
@@ -70,6 +71,14 @@
 
   <!-- ═══ VIEW: DASHBOARD ═══ -->
   <section class="view active" id="view-dashboard">
+    <div id="analyse-panel" class="analyse-panel hidden">
+      <div class="analyse-head">
+        <b id="an-title">ANALYSIS</b>
+        <span class="dim" id="an-sub">press ▶ ANALYSE</span>
+      </div>
+      <div id="an-stages" class="an-stages"></div>
+      <div id="an-result" class="an-result"></div>
+    </div>
     <div class="quad-grid" id="quad-grid"></div>
     <div class="panel">
       <div class="panel-h">CALLS &amp; TARGETS — every timeframe, TP/SL per call <span class="dim" id="calls-scope"></span></div>
@@ -268,6 +277,6 @@
 </nav>
 
 <div id="toast-wrap"></div>
-<script type="module" src="/app.js?v=r12"></script>
+<script type="module" src="/app.js?v=r13"></script>
 </body>
 </html>

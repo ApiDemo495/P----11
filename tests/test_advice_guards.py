@@ -289,3 +289,60 @@ def test_8_6_learners_present():
         assert k in L, k
     assert "var_single_leg" in L["temporal_twin"]
     assert L["bocpd"]["hazard"] == round(1 / 14, 4)
+
+
+# ── staged ANALYSE: order, timing, read-only, keyless honesty ──────────
+def test_analyse_pipeline_stages_and_readonly():
+    """Button → formulas → emotions → physics → news → hedge → AI review →
+    final box with signal + four TPs + SL; every stage timestamped; locks
+    never mutated by an analysis."""
+    from tests.test_engine import make_engine, _boot, run
+    import asyncio as _a
+    eng, _f, _e = make_engine()
+    run(_boot(eng))
+    msgs = []
+    async def _emit(m): msgs.append(m)
+    eng.emit = _emit
+    locks_before = {k: dict(v) for k, v in eng.locks.items()}
+
+    async def go():
+        out = eng.start_analyse("ETH", "tf2")
+        assert out["ok"], out
+        await eng._analyse_task
+    _a.get_event_loop().run_until_complete(go())
+    job = eng.analyse_job
+    assert job["status"] == "done", job.get("error")
+    order = [s["stage"] for s in job["stages"]]
+    assert order == ["formulas", "emotions", "physics", "news", "hedge",
+                     "ai_review", "final"], order
+    # every stage carries the calculation period (start/end/duration)
+    for st in job["stages"]:
+        assert st["t_start_ms"] <= st["t_end_ms"]
+        assert st["duration_ms"] >= 0
+        assert st["summary"]
+    # final box: signal + 4 TPs + SL + per-asset weightage + total time
+    r = job["result"]
+    assert r["signal"] in ("BUY", "SELL", "FLAT")
+    assert len(r["tps"]) == 4
+    assert r["sl"] is not None
+    assert r["weightage"] and r["weightage_note"]
+    assert r["elapsed_ms"] > 0
+    assert len(r["calculation_period"]["stages"]) >= 6
+    # WS stream reached the client
+    types = [m["type"] for m in msgs]
+    assert types[0] == "analyse_started"
+    assert types[-1] == "analyse_done"
+    assert types.count("analyse_stage") == 7
+    # keyless AI stage is honest about skipping
+    ai_stage = next(s for s in job["stages"] if s["stage"] == "ai_review")
+    if not eng.agents.settings.get("gemini_key"):
+        assert ai_stage["status"] == "skipped"
+        assert "keyless" in ai_stage["summary"] or "no AI" in ai_stage["summary"]
+    # read-only: every lock identical after the analysis
+    for k, v in locks_before.items():
+        assert eng.locks[k] == v, f"lock {k} mutated by analysis"
+    # one analysis at a time (guard fires before any task is created)
+    eng.analyse_job = {"status": "running"}
+    out2 = eng.start_analyse("ETH", "tf2")
+    assert out2["ok"] is False
+    eng.analyse_job = None
