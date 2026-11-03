@@ -1438,6 +1438,23 @@ class PredictionEngine:
                          "stage": entry})
 
     async def _run_analyse(self, job: dict) -> None:
+        """User budget: the whole analysis must never exceed 3 minutes.
+        The body runs under a hard 175 s watchdog; on timeout the job is
+        failed honestly (no silent hang, no partial result shown as done)."""
+        try:
+            await asyncio.wait_for(self._analyse_body(job), timeout=175.0)
+        except asyncio.TimeoutError:
+            job["status"] = "error"
+            job["error"] = "analysis exceeded the 175 s budget (3 min cap)"
+            log.error("analysis for %s exceeded 175 s budget",
+                      job.get("symbol"))
+            await self.emit({"type": "analyse_done",
+                             "symbol": job.get("symbol"),
+                             "tf": job.get("tf"), "result": None,
+                             "error": "exceeded the 175 s budget "
+                                      "(3 minute cap)"})
+
+    async def _analyse_body(self, job: dict) -> None:
         symbol, tf = job["symbol"], job["tf"]
         t_job0 = time.time()
         await self.emit({"type": "analyse_started", "symbol": symbol,

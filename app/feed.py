@@ -237,8 +237,17 @@ class MarketFeed:
         if new_mode == self.mode:
             return
         if new_mode == "binance":
-            for st in self.states.values():
-                st.flush_foreign("binance")
+            # count REAL-family bars only (sim placeholders are still in
+            # the tape at this moment and would mask a thin real history)
+            real = [sum(1 for src in st.sources
+                        if _family(src) == "binance")
+                    for st in self.states.values()]
+            if min(real) < 25:
+                log.info("feed: real history thin (%s) — keeping sim "
+                         "placeholders until klines arrive", real)
+            else:
+                for st in self.states.values():
+                    st.flush_foreign("binance")
         self.mode = new_mode
         self.note(source)               # counts switches in stats()
 
@@ -269,6 +278,21 @@ class MarketFeed:
                             self._sim_price[sym] = st.live_price
                     await self._start_sim()
                 self._switch_tape("sim", "sim")
+            # backfill retry: adopted but klines came up short (or the
+            # first fetch was geo-refused) — keep pulling until every
+            # window is full, so formulas never sit on a 4-bar tape
+            if (self.mode == "binance"
+                    and any(len(st.closes) < 60
+                            for st in self.states.values())
+                    and now >= getattr(self, "_next_backfill", 0.0)):
+                self._next_backfill = now + 30.0
+                try:
+                    await self._fetch_backfill()
+                    log.info("feed: backfill retry delivered %s",
+                             {k: len(v.closes)
+                              for k, v in self.states.items()})
+                except Exception as exc:
+                    log.info("feed: backfill retry failed (%s)", exc)
             # revive: while in sim under auto, keep probing Binance
             if (self.mode == "sim" and FEED_MODE == "auto"
                     and now >= self._next_revive and not self._probing):
@@ -347,16 +371,17 @@ class MarketFeed:
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
     # ------------------------------------------------------------- Binance
-    async def _start_binance(self) -> None:
-        # 1m kline backfill so all four TF windows (248 bars) are ready instantly.
-        # D-3: rotate to data-stream.binance.vision when the main host refuses
-        # (geo-block on some Codespaces regions).
+    async def _fetch_backfill(self) -> int:
+        """1m kline pull (main host, then the vision mirror). Reused by
+        startup AND the reconcile retry loop so a short first fetch can
+        never leave the formula windows starved. Returns bars pushed."""
         bases = [BINANCE_REST, BINANCE_REST_VISION]
         last_exc: Exception | None = None
-        rows_by_sym: dict[str, list] = {}
+        pushed = 0
         async with httpx.AsyncClient(timeout=15.0) as client:
             for base in bases:
                 try:
+                    rows_by_sym: dict[str, list] = {}
                     for sym, ex_symbol in SYMBOLS.items():
                         resp = await client.get(
                             f"{base}/api/v3/klines",
@@ -373,7 +398,6 @@ class MarketFeed:
                 raise last_exc
             for sym, rows in rows_by_sym.items():
                 st = self.states[sym]
-                prev_close = None
                 for row in rows:
                     ts = int(row[0]) // 1000
                     o, h, l, c, v = (
@@ -381,13 +405,19 @@ class MarketFeed:
                         float(row[4]), float(row[5]),
                     )
                     st.push_bar(ts, c, v, o, h, l, source="binance-rest")
-                    prev_close = c
+                    pushed += 1
                 if st.closes:
                     st.live_price = st.closes[-1]
                     st.live_open = st.opens[-1]
                     st.live_high = st.highs[-1]
                     st.live_low = st.lows[-1]
                 st.day_open = st.closes[0] if st.closes else 0.0
+        return pushed
+
+    async def _start_binance(self) -> None:
+        # 1m kline backfill so all four TF windows (248 bars) are ready
+        # instantly; D-3 mirror rotation lives in _fetch_backfill.
+        await self._fetch_backfill()
         self.last_real_delivery = time.time()
         if all(len(self.states[s].closes) >= 30 for s in SYMBOL_ORDER):
             self.ready.set()

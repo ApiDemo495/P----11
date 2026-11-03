@@ -97,7 +97,11 @@ def test_real_drosophila_brain_dataset():
     from pathlib import Path as _P
     root = _P(__file__).resolve().parent.parent
     import json as _json
-    br = _json.load(open(root / "data" / "brain_real.json"))
+    # dataset ships in assets/ (tracked); data/ copy is a runtime fallback
+    _ds = next((root / d / "brain_real.json" for d in ("assets", "data")
+                if (root / d / "brain_real.json").exists()), None)
+    assert _ds is not None, "brain_real.json missing from assets/ and data/"
+    br = _json.load(open(_ds))
     assert br["stats"]["neurons"] == 21739
     assert br["stats"]["synapses"] == 14329229
     hubs = [h["type"] for h in br["hubs"]]

@@ -427,6 +427,17 @@ class NewsSystem:
                 self._sim_tick(now, force=True)
                 for sym in (self.items[-1].get("symbols", []) if self.items else []):
                     by_sym[sym] = by_sym.get(sym, 0) + 1
+            # CONTINUOUS STREAM (user request): drip one fresh headline
+            # roughly every 8 s while the ticker calls us every 4 s — the
+            # News tab keeps receiving items without anyone pressing
+            # refresh. Rate-limited so the 600 s dedupe and the
+            # evaluation layer stay meaningful.
+            youngest = max((float(it.get("ts") or 0) for it in self.items),
+                           default=0.0)
+            recent_n = sum(1 for it in self.items
+                           if now - float(it.get("ts") or 0) < 300.0)
+            if now - youngest > 8.0 and recent_n < 40:
+                self._sim_tick(now, force=True)
 
     # -- live source (docs11 §3 ingest layer) -------------------------------
     def _load_keyring(self) -> None:

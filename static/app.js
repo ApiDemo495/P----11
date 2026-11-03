@@ -439,6 +439,10 @@ function onAnalyseDone(msg) {
       <div class="an-ai">AI review — ${esc(aiLine)}</div>
       <div class="an-period">calculation period: ${esc(period)} · total ${r.elapsed_ms} ms</div>
     </div></div>`;
+  // SYNC: the analysis recomputes every subsystem — refetch whatever view
+  // is open so formulas/emotion/physics/brain/news all show the same run
+  refreshActiveView(true);
+  toast("analysis complete — all views synced", "ok");
 }
 function renderRail() {
   const a = S.snap?.assets || {};
@@ -1049,8 +1053,15 @@ async function loadNews() {
   } catch (e) { toast("news: " + e.message, "err"); }
 }
 
+let NEWS_LAST_COUNT = 0;
 function onNewsTicker(msg) {
-  // docs11 §6: 4-second publisher — update chips live, feed the NIV trace
+  // docs11 §6: 4-second publisher — update chips live, feed the NIV trace,
+  // and STREAM new headlines into an open News tab without a manual refresh
+  if (S.view === "news" && msg.count !== undefined &&
+      msg.count !== NEWS_LAST_COUNT) {
+    NEWS_LAST_COUNT = msg.count;
+    loadNews();
+  }
   const a = (msg.assets || {})[S.symbol];
   if (a && S.view === "news") {
     const hz = a.horizons || {};

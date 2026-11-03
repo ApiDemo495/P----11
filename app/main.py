@@ -138,7 +138,17 @@ async def _news_ticker() -> None:
     await asyncio.sleep(2.0)
     while True:
         try:
+            # ingest pass every tick: sim keeps dripping (rate-aware for
+            # the live source) so the News tab is a continuous stream
+            engine.news.refresh()
             tick: dict[str, Any] = {"type": "NEWS", "ts": time.time(),
+                                    "count": len(engine.news.items),
+                                    "latest": [{
+                                        "ts": it.get("ts"),
+                                        "headline": it.get("headline"),
+                                        "source": it.get("source"),
+                                        "synthetic": bool(it.get("synthetic")),
+                                    } for it in list(engine.news.items)[-3:]],
                                     "assets": {}}
             for sym in SYMBOLS:
                 ev = engine.news.evaluate(sym)
