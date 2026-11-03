@@ -42,19 +42,28 @@ pip install -r requirements.txt
 <p>provided), then run <code>./run.sh</code> and forward port <b>8000</b>.</p>
 <p>Run the test suite:</p>
 <pre><code>
-python -m pytest -q    # 54 tests (32 part-1 + 22 part-2)
+.venv/bin/python -m pytest -q    # 221 tests (honesty, parts 1-4, news, brain, UX)
 </code></pre>
 <p>Environment:</p>
 <table>
 <tr><td>Variable</td><td>Values</td><td>Default</td><td>Purpose</td></tr>
 <tr><td>`FEED_MODE`</td><td>`auto` / `binance` / `sim`</td><td>`auto`</td><td>Binance WS+REST, auto-fallback simulator</td></tr>
 <tr><td>`PORT`</td><td>any port number</td><td>`8000`</td><td>HTTP port</td></tr>
-<tr><td>`NEUPRINT_URL`</td><td>neuPrint HTTP endpoint</td><td>*(none)*</td><td>Optional live connectome source (Part 4)</td></tr>
-<tr><td>`NEUPRINT_TOKEN`</td><td>bearer token</td><td>*(none)*</td><td>neuPrint auth</td></tr>
+<tr><td>`SKIP_SETUP`</td><td>`1` to skip bootstrap</td><td>*(unset)*</td><td>`run.sh` fast path</td></tr>
+<tr><td>`OLLAMA_URL`</td><td>Ollama daemon base URL</td><td>`http://127.0.0.1:11434`</td><td>local qwen2.5-coder:3b (auditor + tab explainer)</td></tr>
+<tr><td>`OLLAMA_MODEL`</td><td>model tag</td><td>`qwen2.5-coder:3b`</td><td>pulled automatically when missing</td></tr>
+<tr><td>`CONNECTOME_CACHE`</td><td>cache directory</td><td>`~/.cache/drosophila-trader/connectome`</td><td>FlyWire v783 parquet + npz (never committed)</td></tr>
+<tr><td>`NEUPRINT_URL`</td><td>neuPrint HTTP endpoint</td><td>*(none)*</td><td>OPTIONAL extra brain queries</td></tr>
+<tr><td>`NEUPRINT_TOKEN`</td><td>bearer token (memory only)</td><td>*(none)*</td><td>neuPrint auth — never written to disk</td></tr>
+<tr><td>`GEMINI_API_KEY`</td><td>Google AI Studio key</td><td>*(none)*</td><td>primary agent (see `API_SETUP.md`)</td></tr>
+<tr><td>`NEWSAPI_KEY`</td><td>newsapi.org key</td><td>*(none)*</td><td>live news (else seeded/synthetic stream)</td></tr>
 </table>
-<p>With <code>NEUPRINT_URL</code> unset the brains use the deterministic structural</p>
-<p>connectome fallback (identical populations, sizes, gain rules and reduced</p>
-<p>compute layout) so the app is fully self-contained.</p>
+<p>The brain is the <b>real FlyWire v783 connectome</b> (138,639 neurons ·</p>
+<p>15.09 M connections) or it is <b>absent with weight 0</b> — there is no</p>
+<p>substitute matrix of any size. It downloads once (GitHub, size-checked),</p>
+<p>builds in a worker, and hot-swaps in at boot; <code>POST /api/brain/reconnect</code></p>
+<p>restarts verification/build. neuPrint is an optional extra, not a</p>
+<p>requirement.</p>
 <p>---</p>
 <h4>Architecture</h4>
 <h5>World Clock Alignment (master clock)</h5>
@@ -235,6 +244,23 @@ clamp ≥ 0; issue when &gt; 0.35
 <p>  (populations: PAM 130 · SE 80 · OA 40 · TA 30 · MBON 34 · KC 2000 ·</p>
 <p>  LH 1500 · CC 250 · FSB 150 · EB 100 · DN 500, plus generic/cluster units).</p>
 <ul>
+<li><b>FlyWire v783 whole-brain vote (brain.md):</b> the MB sub-circuit path</li>
+</ul>
+<p>  (685 ALPNs → 5,177 KCs → 96 MBONs, top-5 % APL sparsity, PAM/PPL1</p>
+<p>  dopamine gains) presents the 30 signed formula outputs as an odour</p>
+<p>  (push-pull ON/OFF groups), reads approach {ACh,GABA} vs avoid {Glu}</p>
+<p>  MBON balance, and mirrors it <code>vote = ½(f(x) − f(−x))</code> (antisymmetric,</p>
+<p>  exact 0 on a flat market). Whole-brain pass (138,639 n · 15.09 M e)</p>
+<p>  runs on its own thread every 2 s (~60 ms) for the DN-share confidence</p>
+<p>  (0.2–1.0, age-tagged). Learning is <b>dopamine RPE only</b></p>
+<p>  (<code>drg = tanh(2.25·δ)</code>, α ∈ [0.10,0.50], tonic 0.85) on a KC→MBON delta</p>
+<p>  overlay at window boundaries, persisted in the vault, rolled back by</p>
+<p>  hindsight when the brain gets worse. Fusion: `CCI × (1 + 0.25 ×</p>
+<p>  hindsight × vote × base_conf)`; when the connectome is absent the</p>
+<p>  weight is <b>0</b> and both brain formulas report <code>brain absent</code></p>
+<p>  (CCSv2 signed, KCAE gauge). UI: brain chip, five-step verification,</p>
+<p>  polarity map, dopamine panel, reconnect.</p>
+<ul>
 <li><b>Thing 1 (shared):</b> hormone inputs <code>I_dopamine = max(0, r30)·V_ratio</code>,</li>
 </ul>
 <p>  <code>I_serotonin = σ(5×(streak/60 − 0.5))</code>, <code>I_octopamine = min(1, |r1|/3σ)</code>,</p>
@@ -303,25 +329,33 @@ app/
   bgn.py           Synchronization matrix + adjustment
   cci.py           Formula 21: 31 weighted components, rewards, confidence
   risk.py          Formula 28 (exact ARC) + Formula 29 (exact DLP)
-  brain.py         4 Drosophila instances: connectome, Thing 1 + B1–B4,
-                   news inputs, 3D geometry + activations payloads
+  brain.py         4 Drosophila instances (Thing 1 + B1–B4) + FlyWire
+                   vote integration, probes, status/reconnect
+  flywire.py       FlyWire v783 import: acquire/build (worker)/five-step
+                   verify, odour encoding, MB pass, valence vote, RPE
+  explainer.py     tab explainer: qwen2.5-coder:3b (Ollama, auto-pull)
+                   + deterministic fallback with the TP/SL math
+  auditor.py       local LLM formula auditor (Ollama, offline-safe)
   emotion.py       E1–E22 with CERC weighting + η reward learning
   orderflow.py     OFTI / CMP / news-price correlation
-  news.py          News impact engine: categories, decay, per-TF impacts
+  news.py          News engine (docs11): ingest/backoff/keyring, 4s
+                   evaluation, novelty/habituation, emergency re-lock
   hedgefund.py     IFR · DPAD · SMDI (CCI component 101)
   physics.py       P1..P22 — PSSA…QDPC + UFP (exact Part-3 physics)
   formulas/
     f01_f10.py     Formulas 1–10
     f11_f20.py     Formulas 11–20
     f22_f31.py     Formulas 22–27, 30, 31 (+ shared F29 boundary helper)
-    __init__.py    Registry (27 signal formulas) + GRC recording
+    __init__.py    Registry (31 signal formulas, F21 = CCI) + GRC recording
 static/
-  index.html       Dashboard shell + 5 tabs
-  app.js           Tabs, candle chart, gauges, 75 panels, co-relation, news
+  index.html       Dashboard shell + 9 tabs (dashboard/formulas/emotion/
+                   physics/news/brains/agents/history/settings)
+  app.js           Tabs, candle chart, fx() formatter, explain panels,
+                   contribution ticks, AUTO chip, gauges, news stream
   brains3d.js      Three.js 2×2 instanced brain visualization
   vendor/          three.module.js v0.160.1 (MIT, vendored — no CDN)
-tests/             91 tests: parts 1–3 (formulas, brains, emotions,
-                   confidence, news, HF, P1–P22, engine, visualization)
+tests/             221 tests: parts 1–4, honesty guards, news (docs11),
+                   FlyWire brain (10 acceptance), UX sync, visualization
 </code></pre>
 <h4>Part 3 — Physics (P1–P22), News, Hedge-Fund, Visualization ✅</h4>
 <p>Everything below is implemented exactly as specified — no substitution with</p>
@@ -521,7 +555,99 @@ tests/             91 tests: parts 1–3 (formulas, brains, emotions,
 <p><code>GET /api/learning</code> · <code>POST /api/learning/macro</code> · <code>POST /api/learning/deep</code> · <code>POST /api/learning/reset</code> ·</p>
 <p><code>GET /api/history/days|day|replay|leaderboard</code> · <code>GET|PUT /api/settings</code> · <code>GET /api/agents/status</code> ·</p>
 <p><code>POST /api/agents/test/{slot}</code> · <code>GET /api/state/export</code> · <code>POST /api/state/import</code> · <code>GET /api/systems</code>.</p>
-<p><b>Tests: 119 passed</b> (test_part1/2/3 + <code>tests/test_part4.py</code> — learning cycles, HMM, persistence round-trip, two-tier CCI, double-check matrix, agents failover, history retention, UI contract).</p></article><article><h1 class="doc-title">API_SETUP.md</h1><h3>API Setup Guide</h3>
+<p><b>Tests: 119 passed</b> (test_part1/2/3 + <code>tests/test_part4.py</code> — learning cycles, HMM, persistence round-trip, two-tier CCI, double-check matrix, agents failover, history retention, UI contract).</p>
+<h4>Honesty layer (ADVICE_FOR_A_MULTI_ASSET_INTRADAY_APP.md — fully applied)</h4>
+<p>Every item of the advice document is implemented in this app (translated</p>
+<p>from scalping timings to the intraday horizons):</p>
+<table>
+<tr><td>Advice</td><td>Where it lives</td></tr>
+<tr><td>§1 tape hardening (D-1/D-2/D-3/D-7)</td><td>`app/feed.py` — single-writer guard, 120s grace, adopt/demote reconcile, binance.vision rotation, quote-print counting, `/api/feeds/diagnose`</td></tr>
+<tr><td>§2 formula traces / zero-reasons / double-check / self-test tapes / forward tables / flat watch / superposition</td><td>`app/formulas/trace.py`, `app/formulas/selftest.py`, `app/forward.py`, formulas view</td></tr>
+<tr><td>§3 brain push-pull, polarity calibration, endpoints</td><td>`app/brain.py` probes, `/api/brain/{status,wiring,explain,reconnect}`</td></tr>
+<tr><td>§4 news macro lexicon, relevance gate, critical events, heartbeats</td><td>`app/news.py`, `/api/news/{status,poll}`</td></tr>
+<tr><td>§5 emotion features, complacency gate, ±15% confidence band</td><td>`app/emotion.py`, engine band</td></tr>
+<tr><td>§6 physics mechanism table with reasons + 4 derivation estimators</td><td>`app/physics.py` (`mechanisms`, `estimators`)</td></tr>
+<tr><td>§7 genesis layer (10 domains, 7 metrics, lifecycle + autopsy)</td><td>`app/genesis.py`, `/api/genesis/*`</td></tr>
+<tr><td>§8.1–8.5 ladder, mass, hindsight, meta-combiner, evidence ledger</td><td>`app/engine.py`, `app/meta.py`</td></tr>
+<tr><td>§8.6 edge guard, temporal twin, BOCPD, Hawkes</td><td>`engine._learners`</td></tr>
+<tr><td>§9 vault, watchdog-exit75, supervisor, placeholder, degradation</td><td>`run.sh --supervise`, `/api/{ops,watchdog,degrade,secrets/status}`, `/placeholder`</td></tr>
+<tr><td>§10 one setInterval, 15s silent-socket, status chips, esc()</td><td>`static/app.js`, honesty tests</td></tr>
+<tr><td>§11 key ring, ListModels model choice, deadline + window cache</td><td>`app/agents.py`, `engine._apply_agents`</td></tr>
+<tr><td>§13 Part B detection tests</td><td>`tests/test_advice_guards.py` (18 guards)</td></tr>
+</table>
+<h5>Staged ANALYSE + AUTO-PREDICT</h5>
+<p>The <b>▶ ANALYSE</b> button lives on the <b>dashboard only</b>: the pipeline</p>
+<p>runs visibly in order — formulas → emotions → physics → news → hedge →</p>
+<p>AI review (Gemini + the local qwen2.5-coder, skipped honestly when</p>
+<p>keyless) → final box with the BUY/SELL signal, all four TPs, the</p>
+<p>stop-loss and the full calculation period. The whole run is under a</p>
+<p><b>hard 175 s watchdog</b> (3-minute user cap) and on completion every open</p>
+<p>tab refetches — one button, all views in sync.</p>
+<p><b>AUTO-PREDICT</b> (dashboard chip <code>AUTO</code>/<code>MANUAL</code>, also in Settings,</p>
+<p>persisted in <code>/api/settings</code>): when ON (default) the same staged analysis</p>
+<p>re-runs itself at least every 45 s, so every tab is <i>already analysed</i></p>
+<p>before you look; when OFF only your manual ▶ ANALYSE runs it. An analysis</p>
+<p>is read-only — locks change only at the window boundary.</p>
+<pre><code>
+curl -X POST &quot;localhost:8000/api/analyse/BTC?tf=tf1&quot;
+curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&#x27; -d &#x27;{&quot;auto_predict&quot;: false}&#x27;
+</code></pre>
+<h5>Tab explainer (local qwen2.5-coder:3b)</h5>
+<p>Every main tab auto-loads a <b>WHY — plain-language readout</b> built from</p>
+<p>the engine&#x27;s own numbers: why the value came out this way, what it means,</p>
+<p>the current signal, honest zeros, and the **TP/SL math with live</p>
+<p>figures** (<code>TP_k = entry + dir × |conf| × ATR × √minutes_k × 0.5</code>,</p>
+<p><code>SL = entry ∓ 1×ATR</code>, dynamic level placement + fractal boundaries).</p>
+<p>Source is the <b>local</b> <code>qwen2.5-coder:3b</code> through Ollama (temperature</p>
+<p>0.1, ≤260 tokens, 10-min cache, <code>scripts/setup_local_llm.sh</code> or automatic</p>
+<p><code>ollama pull</code>); when the model is not up a deterministic fallback</p>
+<p>explains instantly — never a blank panel. <code>GET /api/explain/status</code></p>
+<p>shows which source is active.</p>
+<h5>Contribution ticks (per window)</h5>
+<p><code>/api/systems</code> carries <code>ticks</code> — for **formulas, emotion channels,</p>
+<p>physics mechanisms, hedge legs, news (aggregate + themes) and the brain</p>
+<p>vote**, whether each item <i>actually contributed</i> this window and why not.</p>
+<p>The dashboard shows a <code>✓ CONTRIBUTION TICKS</code> summary, the formula table</p>
+<p>has a tick column, every formula card carries <code>✓ tick / ✗ no tick</code>, and</p>
+<p>emotion/physics cards carry the same in their tooltip/why line.</p>
+<h5>API index (all live endpoints)</h5>
+<table>
+<tr><td>Group</td><td>Endpoints</td></tr>
+<tr><td>core</td><td>`GET /api/health` · `GET /api/snapshot` · `GET /api/ops` · `GET /api/watchdog` · `GET /api/degrade` · `GET /api/secrets/status` · `GET /placeholder`</td></tr>
+<tr><td>analysis</td><td>`POST /api/analyse/{symbol}` · `GET /api/analyse/status` · `POST /api/override/{symbol}/{tf}`</td></tr>
+<tr><td>explain</td><td>`POST /api/explain` · `GET /api/explain/status`</td></tr>
+<tr><td>systems</td><td>`GET /api/systems` · `GET /api/candles` · `GET /api/formula-history` · `GET /api/formula-traces` · `GET /api/forward` · `GET /api/ledger`</td></tr>
+<tr><td>brain</td><td>`GET /api/brain/status` · `GET /api/brain/wiring` · `GET /api/brain/explain` · `POST /api/brain/reconnect` · `GET /api/brain-geometry` · `GET /api/brain-activations`</td></tr>
+<tr><td>news</td><td>`GET /api/news/status` · `GET /api/news/feed` · `GET /api/news/impact` · `GET /api/news/{symbol}` · `POST /api/news/poll` · `POST /api/news/emergency`</td></tr>
+<tr><td>history</td><td>`GET /api/history/days` · `GET /api/history/day` · `GET /api/history/replay` · `GET /api/history/leaderboard`</td></tr>
+<tr><td>learning</td><td>`GET /api/learning` · `POST /api/learning/{reset,macro,deep}` · `GET/PUT /api/settings` · `GET /api/settings/effects`</td></tr>
+<tr><td>agents</td><td>`GET /api/agents/{status,catalog}` · `GET /api/agents/pack/{id}` · `POST /api/agents/{triage,auto,import}` · `POST /api/agents/test/{slot}` · `GET /api/auditor/status`</td></tr>
+<tr><td>genesis</td><td>`GET /api/genesis/{status,domains,formulas}`</td></tr>
+<tr><td>data</td><td>`GET /api/state/export` · `POST /api/state/import` · `GET /api/feeds/diagnose`</td></tr>
+</table>
+<h5>Reports &amp; docs</h5>
+<ul>
+<li><code>docs/NEWS-REPORT.md</code> — docs11 news rebuild (§10 format)</li>
+<li><code>docs/BRAIN-REPORT.md</code> — FlyWire component (§12 format)</li>
+<li><code>docs/UX-ZERO-REPORT.md</code> — 0.00/UX pass (asks → fixes table)</li>
+<li><code>docs.html</code> — self-contained renderer of README + API_SETUP</li>
+</ul>
+<p>  (regenerate: <code>python scripts/make_docs_html.py</code>)</p>
+<h5>Repository rules</h5>
+<ul>
+<li><b>No pull requests, no merges.</b> Work is committed and pushed directly</li>
+</ul>
+<p>  to the working branch; PR/merge operations are never used in this</p>
+<p>  repository.</p>
+<p>Run the detection suite:</p>
+<pre><code>
+.venv/bin/python -m pytest tests/test_advice_guards.py -q
+</code></pre>
+<p>Start under the supervisor (single instance, health loop, exit 75 on a</p>
+<p>hung boot):</p>
+<pre><code>
+./run.sh --supervise
+</code></pre></article><article><h1 class="doc-title">API_SETUP.md</h1><h3>API Setup Guide</h3>
 <h4>1. Gemini API (Primary Agent)</h4>
 <p>1. Go to https://aistudio.google.com/app/apikey</p>
 <p>2. Click &quot;Create API Key&quot;</p>
@@ -530,21 +656,39 @@ tests/             91 tests: parts 1–3 (formulas, brains, emotions,
 <p>5. Paste it into the Settings tab → Gemini API Key field</p>
 <p>6. Free tier: 15 requests per minute, 1 million tokens per day</p>
 <p>7. The app uses approximately 15 requests per hour (one per GRC), well within free tier limits</p>
-<h4>2. neuPrint API (Drosophila Brain Data)</h4>
-<p>1. Go to https://neuprint.janelia.org</p>
-<p>2. Click &quot;Sign In&quot; and create an account (free)</p>
-<p>3. After signing in, go to your profile and copy your API token</p>
-<p>4. Paste it into the Settings tab → neuPrint API Key field</p>
-<p>5. The app uses neuPrint to download the Drosophila hemibrain connectome data on first launch</p>
-<p>6. The connectome data is approximately 500MB and is cached locally after the first download</p>
-<p>7. Subsequent launches use the cached data and do not make API calls to neuPrint</p>
-<p>8. Rate limit: 100 requests per hour (only relevant during initial download)</p>
-<p>Backup options for brain data if neuPrint is unavailable:</p>
+<h4>2. Brain data — FlyWire v783 (automatic, no key) + optional neuPrint</h4>
+<p><b>No key, no action needed.</b> The brain is the real FlyWire v783</p>
+<p>connectome: <code>Connectivity_783.parquet</code> (~96 MB) + neuron annotations</p>
+<p>(~30 MB) are downloaded once from GitHub (with resume, size checks and a</p>
+<p>curl fallback), built into <code>flywire_783.npz</code> in a worker process, and</p>
+<p>cached outside the repo:</p>
+<pre><code>
+~/.cache/drosophila-trader/connectome/     (override: $CONNECTOME_CACHE)
+  Connectivity_783.parquet
+  Supplemental_file1_neuron_annotations.tsv
+  flywire_783.npz          ~192 MB, BUILD_VERSION inside — never committed
+</code></pre>
 <ul>
-<li>Backup 1: FlyWire connectome API (https://flywire.ai) — requires free account</li>
-<li>Backup 2: Pre-downloaded connectome file from GitHub release (the app provides a direct download link)</li>
-<li>Backup 3: Minimal synthetic brain (the app generates a random graph with 10,000 nodes and scale-free topology that approximates Drosophila connectivity patterns — less accurate but functional)</li>
+<li>First boot starts with the brain <b>absent</b> (fusion weight 0, both</li>
 </ul>
+<p>  brain formulas say <code>brain absent</code>) and hot-swaps in when the build</p>
+<p>  finishes — first prediction is never blocked.</p>
+<ul>
+<li><code>POST /api/brain/reconnect</code> re-runs the five-step verification and</li>
+</ul>
+<p>  restarts a failed build; <code>GET /api/brain/status</code> shows each step,</p>
+<p>  durations, counts and the chip.</p>
+<ul>
+<li>If a cached npz is from an older build (<code>BUILD_VERSION</code> mismatch) it</li>
+</ul>
+<p>  is rebuilt automatically (error B-8).</p>
+<p><b>Optional neuPrint</b> (<code>NEUPRINT_URL</code> + <code>NEUPRINT_TOKEN</code>, Settings tab):</p>
+<p>extra queries only — reach/auth/query steps appear in the verification</p>
+<p>table; a 401 reads <code>invalid key</code>, a timeout reads <code>unreachable</code>, and the</p>
+<p>key is held <b>in process memory only</b> (never <code>.env</code>, never a file —</p>
+<p>a lint test greps the repo for token patterns). FlyWire works fully</p>
+<p>without it.</p>
+<p>There is <b>no fallback matrix of any size</b>: absent means absent.</p>
 <h4>3. NewsAPI (Live News Feed)</h4>
 <p>1. Go to https://newsapi.org</p>
 <p>2. Click &quot;Get API Key&quot; and register for a free account</p>
@@ -576,10 +720,41 @@ tests/             91 tests: parts 1–3 (formulas, brains, emotions,
 <li>Backup 3: Coinbase WebSocket (wss://ws-feed.exchange.coinbase.com)</li>
 </ul>
 <p>The app automatically detects which price source has the lowest latency and uses it as primary, with the others as failover.</p>
-<h4>5. Local Model Dependencies</h4>
-<p>No API key required. The app automatically downloads the model on first launch. Required packages are installed via pip:</p>
+<h4>5. Local Model Dependencies (two independent local models)</h4>
+<p>No API key required for either.</p>
+<h5>5a. Response agent — llama-cpp (auto-picked by RAM)</h5>
+<p>Installed by <code>scripts/setup.sh</code> via <code>requirements-agents.txt</code></p>
+<p>(<code>llama-cpp-python</code>, <code>huggingface-hub</code>); the model downloads on first</p>
+<p>launch through <code>scripts/download_models.py</code>:</p>
 <ul>
-<li>llama-cpp-python</li>
-<li>huggingface-hub (for model download)</li>
+<li>≥14 GB RAM → Phi-3-mini-4k-instruct Q4_K_M</li>
+<li>≥7 GB RAM → TinyLlama-1.1B-Chat Q4_K_M</li>
+<li>else → Qwen2-0.5B-Instruct Q4_K_M (~2.5 GB disk, 5–10 min)</li>
 </ul>
-<p>The model download requires approximately 2.5GB of disk space and 5-10 minutes on a typical Codespaces connection.</p></article></body></html>
+<h5>5b. Quant debugger + tab explainer — Ollama <code>qwen2.5-coder:3b</code></h5>
+<p>Used by <code>app/auditor.py</code> (formula exceptions / accuracy audits) and</p>
+<p><code>app/explainer.py</code> (the &quot;WHY — plain-language readout&quot; on every tab,</p>
+<p>including the TP/SL math). One command installs everything:</p>
+<pre><code>
+bash scripts/setup_local_llm.sh          # install Ollama + start + pull
+bash scripts/setup_local_llm.sh --status # check daemon + model
+</code></pre>
+<p>If the daemon is up but the model is missing, the app starts</p>
+<p><code>ollama pull qwen2.5-coder:3b</code> <b>by itself</b> (background, non-blocking).</p>
+<p>While it downloads — or if Ollama is not installed — the explainer falls</p>
+<p>back to a deterministic readout built from the engine&#x27;s own numbers, so</p>
+<p>a tab is never blank. Model/env overrides: <code>OLLAMA_URL</code> (default</p>
+<p><code>http://127.0.0.1:11434</code>), <code>OLLAMA_MODEL</code> (default <code>qwen2.5-coder:3b</code>).</p>
+<p>~2 GB RAM — fits an 8 GB / 4-core Codespace with headroom.</p>
+<h4>6. Environment quick reference</h4>
+<table>
+<tr><td>Variable</td><td>Purpose</td></tr>
+<tr><td>`FEED_MODE`</td><td>`auto` / `binance` / `sim` — tape source</td></tr>
+<tr><td>`PORT`</td><td>HTTP port (default 8000)</td></tr>
+<tr><td>`SKIP_SETUP=1`</td><td>skip bootstrap in `run.sh`</td></tr>
+<tr><td>`OLLAMA_URL` / `OLLAMA_MODEL`</td><td>local qwen endpoint / tag</td></tr>
+<tr><td>`CONNECTOME_CACHE`</td><td>FlyWire download + npz cache dir</td></tr>
+<tr><td>`NEUPRINT_URL` / `NEUPRINT_TOKEN`</td><td>optional extra brain queries (memory only)</td></tr>
+<tr><td>`GEMINI_API_KEY`</td><td>primary agent</td></tr>
+<tr><td>`NEWSAPI_KEY`</td><td>live news (falls back to seeded stream)</td></tr>
+</table></article></body></html>

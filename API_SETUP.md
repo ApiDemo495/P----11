@@ -10,22 +10,38 @@
 6. Free tier: 15 requests per minute, 1 million tokens per day
 7. The app uses approximately 15 requests per hour (one per GRC), well within free tier limits
 
-## 2. neuPrint API (Drosophila Brain Data)
+## 2. Brain data — FlyWire v783 (automatic, no key) + optional neuPrint
 
-1. Go to https://neuprint.janelia.org
-2. Click "Sign In" and create an account (free)
-3. After signing in, go to your profile and copy your API token
-4. Paste it into the Settings tab → neuPrint API Key field
-5. The app uses neuPrint to download the Drosophila hemibrain connectome data on first launch
-6. The connectome data is approximately 500MB and is cached locally after the first download
-7. Subsequent launches use the cached data and do not make API calls to neuPrint
-8. Rate limit: 100 requests per hour (only relevant during initial download)
+**No key, no action needed.** The brain is the real FlyWire v783
+connectome: `Connectivity_783.parquet` (~96 MB) + neuron annotations
+(~30 MB) are downloaded once from GitHub (with resume, size checks and a
+curl fallback), built into `flywire_783.npz` in a worker process, and
+cached outside the repo:
 
-Backup options for brain data if neuPrint is unavailable:
+```
+~/.cache/drosophila-trader/connectome/     (override: $CONNECTOME_CACHE)
+  Connectivity_783.parquet
+  Supplemental_file1_neuron_annotations.tsv
+  flywire_783.npz          ~192 MB, BUILD_VERSION inside — never committed
+```
 
-- Backup 1: FlyWire connectome API (https://flywire.ai) — requires free account
-- Backup 2: Pre-downloaded connectome file from GitHub release (the app provides a direct download link)
-- Backup 3: Minimal synthetic brain (the app generates a random graph with 10,000 nodes and scale-free topology that approximates Drosophila connectivity patterns — less accurate but functional)
+- First boot starts with the brain **absent** (fusion weight 0, both
+  brain formulas say `brain absent`) and hot-swaps in when the build
+  finishes — first prediction is never blocked.
+- `POST /api/brain/reconnect` re-runs the five-step verification and
+  restarts a failed build; `GET /api/brain/status` shows each step,
+  durations, counts and the chip.
+- If a cached npz is from an older build (`BUILD_VERSION` mismatch) it
+  is rebuilt automatically (error B-8).
+
+**Optional neuPrint** (`NEUPRINT_URL` + `NEUPRINT_TOKEN`, Settings tab):
+extra queries only — reach/auth/query steps appear in the verification
+table; a 401 reads `invalid key`, a timeout reads `unreachable`, and the
+key is held **in process memory only** (never `.env`, never a file —
+a lint test greps the repo for token patterns). FlyWire works fully
+without it.
+
+There is **no fallback matrix of any size**: absent means absent.
 
 ## 3. NewsAPI (Live News Feed)
 
@@ -64,11 +80,48 @@ Backup price data sources:
 
 The app automatically detects which price source has the lowest latency and uses it as primary, with the others as failover.
 
-## 5. Local Model Dependencies
+## 5. Local Model Dependencies (two independent local models)
 
-No API key required. The app automatically downloads the model on first launch. Required packages are installed via pip:
+No API key required for either.
 
-- llama-cpp-python
-- huggingface-hub (for model download)
+### 5a. Response agent — llama-cpp (auto-picked by RAM)
 
-The model download requires approximately 2.5GB of disk space and 5-10 minutes on a typical Codespaces connection.
+Installed by `scripts/setup.sh` via `requirements-agents.txt`
+(`llama-cpp-python`, `huggingface-hub`); the model downloads on first
+launch through `scripts/download_models.py`:
+
+- ≥14 GB RAM → Phi-3-mini-4k-instruct Q4_K_M
+- ≥7 GB RAM → TinyLlama-1.1B-Chat Q4_K_M
+- else → Qwen2-0.5B-Instruct Q4_K_M (~2.5 GB disk, 5–10 min)
+
+### 5b. Quant debugger + tab explainer — Ollama `qwen2.5-coder:3b`
+
+Used by `app/auditor.py` (formula exceptions / accuracy audits) and
+`app/explainer.py` (the "WHY — plain-language readout" on every tab,
+including the TP/SL math). One command installs everything:
+
+```bash
+bash scripts/setup_local_llm.sh          # install Ollama + start + pull
+bash scripts/setup_local_llm.sh --status # check daemon + model
+```
+
+If the daemon is up but the model is missing, the app starts
+`ollama pull qwen2.5-coder:3b` **by itself** (background, non-blocking).
+While it downloads — or if Ollama is not installed — the explainer falls
+back to a deterministic readout built from the engine's own numbers, so
+a tab is never blank. Model/env overrides: `OLLAMA_URL` (default
+`http://127.0.0.1:11434`), `OLLAMA_MODEL` (default `qwen2.5-coder:3b`).
+~2 GB RAM — fits an 8 GB / 4-core Codespace with headroom.
+
+## 6. Environment quick reference
+
+| Variable | Purpose |
+|---|---|
+| `FEED_MODE` | `auto` / `binance` / `sim` — tape source |
+| `PORT` | HTTP port (default 8000) |
+| `SKIP_SETUP=1` | skip bootstrap in `run.sh` |
+| `OLLAMA_URL` / `OLLAMA_MODEL` | local qwen endpoint / tag |
+| `CONNECTOME_CACHE` | FlyWire download + npz cache dir |
+| `NEUPRINT_URL` / `NEUPRINT_TOKEN` | optional extra brain queries (memory only) |
+| `GEMINI_API_KEY` | primary agent |
+| `NEWSAPI_KEY` | live news (falls back to seeded stream) |
