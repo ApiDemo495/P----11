@@ -130,12 +130,19 @@ class ChartX {
     this.cv.style.cssText = "width:100%;height:100%;display:block";
     el.innerHTML = ""; el.appendChild(this.cv);
     this.bars = []; this.lines = []; this.markers = [];
+    this._raf = 0; this._lastW = 0; this._lastH = 0;
     if (typeof ResizeObserver !== "undefined")
-      new ResizeObserver(() => this.draw()).observe(el);
+      new ResizeObserver(() => this.schedule()).observe(el);
   }
-  setData(bars) { this.bars = bars.slice(-260); this.draw(); }
-  setLines(l) { this.lines = l || []; this.draw(); }
-  setMarkers(m) { this.markers = m || []; this.draw(); }
+  // coalesce redraws to one per animation frame — 4 charts × 1 Hz ticks ×
+  // full canvas reallocation was the "laggy chart"
+  schedule() {
+    if (this._raf) return;
+    this._raf = requestAnimationFrame(() => { this._raf = 0; this.draw(); });
+  }
+  setData(bars) { this.bars = bars.slice(-260); this.schedule(); }
+  setLines(l) { this.lines = l || []; this.schedule(); }
+  setMarkers(m) { this.markers = m || []; this.schedule(); }
   tick(price) {
     const t = Math.floor(Date.now() / 1000 / 60) * 60;
     const b = this.bars[this.bars.length - 1];
@@ -144,11 +151,16 @@ class ChartX {
     else if (b.time < t) this.bars.push({ time: t, open: b.close, high: Math.max(b.close, price), low: Math.min(b.close, price), close: price });
     else return;
     if (this.bars.length > 280) this.bars.shift();
-    this.draw();
+    this.schedule();
   }
   draw() {
     const w = this.el.clientWidth || 240, h = this.el.clientHeight || 100;
-    const cv = this.cv; cv.width = w * 2; cv.height = h * 2;
+    const cv = this.cv;
+    // resize ONLY when the box actually changed — resizing every frame
+    // reallocates the bitmap and was the main per-tick cost
+    if (cv.width !== w * 2 || cv.height !== h * 2) {
+      cv.width = w * 2; cv.height = h * 2;
+    }
     const g = cv.getContext("2d"); g.setTransform(2, 0, 0, 2, 0, 0);
     g.clearRect(0, 0, w, h);
     if (!this.bars.length) return;
@@ -204,6 +216,7 @@ function buildRail() {
   });
 }
 function setSymbol(sym) {
+  S.lastViewFetch = 0;
   S.symbol = sym;
   $$(".asset-btn").forEach(b => b.classList.toggle("active", b.dataset.sym === sym));
   syncToolbar();
@@ -243,13 +256,17 @@ function syncToolbar() {
   $$("#seg-tf .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.tf === S.focusTf));
 }
 function setFocusTf(tf) {
-  S.focusTf = tf; syncToolbar(); renderWhy(); renderQuads();
+  S.focusTf = tf; syncToolbar(); renderWhy(); renderQuads(); S.lastViewFetch = 0;
   refreshActiveView(true);
 }
 
 function refreshActiveView(force) {
-  if (S.view === "dashboard") { renderWhy(); renderQuads(); }
-  else if (S.view === "formulas") loadFormulas();
+  if (S.view === "dashboard") { renderWhy(); renderQuads(); return; }
+  // non-dashboard views re-FETCH their APIs — throttle snapshot-driven
+  // refreshes to every 30s so the UI never stalls behind repeated loads
+  if (!force && Date.now() - (S.lastViewFetch || 0) < 30000) return;
+  S.lastViewFetch = Date.now();
+  if (S.view === "formulas") loadFormulas();
   else if (S.view === "emotion") loadEmotion();
   else if (S.view === "physics") loadPhysics();
   else if (S.view === "news") loadNews();
@@ -286,7 +303,11 @@ function buildQuads() {
   });
   renderQuads(); loadCandles();
 }
-function renderQuads() {
+function renderQuads(opts = {}) {
+  // heavy=false is the 1 Hz tick path: text cells + chart ticks ONLY.
+  // Tables (calls/ledger/hindsight/meta) rebuild on snapshots/GRCs —
+  // rebuilding them every second was the "laggy chart" complaint.
+  const heavy = opts.heavy !== false;
   const a = S.snap?.assets?.[S.symbol] || {};
   TF.forEach(tf => {
     const cyc = a.tfs?.[tf];
@@ -324,8 +345,9 @@ function renderQuads() {
         dash: t.status !== "locked", hit: t.status === "hit",
       });
     });
-    S.charts[tf]?.setLines(lines);
+    if (heavy) S.charts[tf]?.setLines(lines);
   });
+  if (!heavy) return;
   renderRail();
   try { renderCalls(); } catch (e) { console.error("calls", e); }
   try { renderLedger(); renderHindsight(); renderMeta(); } catch (e) { console.error("ledger", e); }
@@ -614,7 +636,10 @@ async function loadFormulas() {
     const core = fv.raw || {};
     // advice §2.1-2.4: per-formula trace (µs, span, guard, zero reason,
     // double check) from the engine's last traced pass
-    const tr = S.snap?.formula_traces?.[`${S.symbol}|${S.focusTf}`] || {};
+    let tr = {};
+    try {
+      tr = (await api(`/api/formula-traces?symbol=${S.symbol}&tf=${S.focusTf}`)).traces || {};
+    } catch { tr = {}; }
     Object.keys(core).sort((a, b) => a - b).forEach(fid => {
       const raw = core[fid], adj = (fv.adj || {})[fid] ?? raw;
       const name = (fv.names || {})[fid] || `F${fid}`;
@@ -1347,7 +1372,7 @@ function onTick(msg) {
   S.prices = msg.prices || S.prices;
   const p = msg.prices?.[S.symbol];
   if (p != null) TF.forEach(tf => S.charts[tf]?.tick(p));
-  renderQuads();
+  renderQuads({ heavy: false });   // 1 Hz: text only, no table rebuilds
 }
 function handleMessage(msg) {
   S.lastMsgAt = Date.now();

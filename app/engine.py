@@ -1529,6 +1529,12 @@ class PredictionEngine:
                          "note": "Σ exp(−Δt/τ)/τ over boundary events, τ=600s"}
         return out
 
+    def formula_traces_payload(self, symbol: str, tf: str) -> dict:
+        """§2 traces on demand — kept OUT of the broadcast snapshot (the
+        600KB payload was re-parsed on every refresh and lagged the UI)."""
+        t = self.last_traces.get((symbol, tf)) or {}
+        return {str(k): v for k, v in t.items()}
+
     def _flat_payload(self, cap: int = 8) -> dict:
         """§2.9 flat watch: share of the last 50 locks each formula spent
         inside ±0.02, with the zero reason when it had one. Offenders only."""
@@ -2831,9 +2837,6 @@ class PredictionEngine:
                 },
             },
             "brains": self.brains.status(),
-            "formula_traces": {
-                f"{sym}|{tf}": t for (sym, tf), t in self.last_traces.items()
-            },
             "flat_watch": self._flat_payload(),
             # §10.3 status chips: every subsystem's honesty state on top
             "chips": {

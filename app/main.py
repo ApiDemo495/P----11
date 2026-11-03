@@ -214,6 +214,14 @@ async def snapshot() -> JSONResponse:
     return JSONResponse(engine.build_snapshot())
 
 
+@app.get("/api/formula-traces")
+async def formula_traces(symbol: str = "BTC", tf: str = "tf1") -> JSONResponse:
+    """§2 per-formula trace (µs/span/guard/zero reason/double check) —
+    fetched on demand by the formulas view, never broadcast."""
+    return JSONResponse({"ok": True,
+                         "traces": engine.formula_traces_payload(symbol, tf)})
+
+
 @app.get("/api/formula-history")
 async def formula_history(symbol: str = "BTC", tf: str = "tf1") -> JSONResponse:
     """Sparklines + accuracy rings for all 31 core / 22 emotion / 22
