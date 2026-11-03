@@ -2618,6 +2618,15 @@ class PredictionEngine:
                                 if isinstance(res.get("market"), dict) else 0.0)) or 0.0, 5),
             "agent": int(((res.get("agent") or {}).get("direction")) or 0),
         }
+        # docs11 §5 path 4 — LEARNED THEME INPUTS: the per-theme net
+        # contribution from the evaluation layer folds into the news source
+        # column, so meta fitting, the evidence ledger and hindsight all
+        # learn from theme priors (same inputs dict, frozen at lock time).
+        ti = (self.news.last_eval.get(symbol) or {}).get("theme_inputs") or {}
+        if ti:
+            net = sum(float(v) for v in ti.values())
+            inputs["news"] = round(
+                max(-1.0, min(1.0, float(inputs.get("news") or 0.0) + net)), 5)
         for fid, t in tr.items():
             if not isinstance(fid, int) or fid == 20:
                 continue                    # 20 is a confidence gauge, not a vote
