@@ -142,10 +142,30 @@
   <!-- ═══ VIEW: NEWS ═══ -->
   <section class="view" id="view-news">
     <div class="tab-head"><div class="tab-title">NEWS FEED <span class="dim" id="nw-scope"></span></div>
+      <button class="btn" id="nw-drill" title="POST /api/news/emergency — drill, re-locks at today's price">⚡ drill emergency</button>
       <button class="btn" id="nw-refresh">refresh</button></div>
+    <div class="panel">
+      <div class="panel-h">Coverage <span class="dim" id="nw-plan"></span></div>
+      <div id="nw-coverage" class="dim" style="font-size:12px;padding:4px 0">—</div>
+      <div id="nw-sources" class="kv-row"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">Per-horizon indices <span class="dim">impact / NIV / SMD</span></div>
+      <div id="nw-horizons" class="kv-row"></div>
+      <div class="panel-h" style="margin-top:8px">NIV trace (tf1, 90 s)</div>
+      <canvas id="nw-niv" height="54" style="width:100%;display:block"></canvas>
+    </div>
     <div class="panel">
       <div class="panel-h">Aggregate impact per window</div>
       <div id="nw-agg" class="kv-row"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">Relevance gate <span class="dim">dropped topics are counted, never hidden</span></div>
+      <div id="nw-dropped" class="dim" style="font-size:12px;padding:4px 0">0 dropped</div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">Emergency re-lock history <span class="dim">&gt;1/hour = bug (N-8)</span></div>
+      <div id="nw-emerg" class="dim" style="font-size:12px;padding:4px 0">none</div>
     </div>
     <div class="panel">
       <table class="tbl" id="nw-table">

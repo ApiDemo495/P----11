@@ -324,11 +324,11 @@ async def news_status() -> JSONResponse:
 @app.post("/api/news/poll")
 async def news_poll() -> JSONResponse:
     """docs11 §7 — manual poll NOW (rate-limit aware) + evaluate."""
-    n = await engine.news.poll(force=True)
+    engine.news.refresh()          # one honest ingest pass (rate-aware)
     for sym in SYMBOLS:
         engine.news.evaluate(sym)
     return JSONResponse({"ok": True, "items": len(engine.news.items),
-                         "polled": n, "coverage": engine.news.coverage_string(),
+                         "coverage": engine.news.coverage_string(),
                          "stats": engine.news.stats()})
 
 

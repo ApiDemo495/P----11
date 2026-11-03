@@ -2125,12 +2125,7 @@ class PredictionEngine:
                 "detail": f">6 emergency re-locks in 1 h for {symbol} — BUG"})
             return {"ok": False,
                     "error": "N-8: >6 emergency re-locks in one hour — bug, not a signal"}
-        price = 0.0
-        for _tf, bars in (self.feed.tape(symbol) or {}).items():
-            if bars:
-                price = float(bars[-1].close)
-        if price <= 0:
-            price = self.ledger.price(symbol) or self.feed.last(symbol) or 0.0
+        price = float(self.feed.prices().get(symbol) or 0.0)
         lock = self.locks.get((symbol, tf))
         halt = getattr(self, "_halt_until", None)
         if halt is None:
@@ -2163,11 +2158,17 @@ class PredictionEngine:
             self._save_locks()
         except Exception:
             pass
-        self._schedule_broadcast({
-            "type": "news_emergency", "asset": symbol, "tf": tf,
-            "lock_id": lock["lock_id"], "original_id": lock["original_id"],
-            "reason": reason, "old_entry": round(old_entry, 4),
-            "new_entry": round(price, 4), "at": now, "halt_s": 30})
+        try:
+            import asyncio as _a
+            if self.emit is not None:
+                _a.get_event_loop().create_task(self.emit({
+                    "type": "news_emergency", "asset": symbol, "tf": tf,
+                    "lock_id": lock["lock_id"],
+                    "original_id": lock["original_id"],
+                    "reason": reason, "old_entry": round(old_entry, 4),
+                    "new_entry": round(price, 4), "at": now, "halt_s": 30}))
+        except Exception:
+            pass
         return {"ok": True, "drill": False, "lock_id": lock["lock_id"],
                 "original_id": lock["original_id"], "old_entry": old_entry,
                 "new_entry": price, "halt_s": 30, "row": row}

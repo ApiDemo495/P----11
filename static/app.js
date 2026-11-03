@@ -277,6 +277,7 @@ function refreshActiveView(force) {
   else if (S.view === "emotion") loadEmotion();
   else if (S.view === "physics") loadPhysics();
   else if (S.view === "news") loadNews();
+  // (news refresh button wired below)
   else if (S.view === "brains") loadBrains();
   else if (S.view === "agents") loadAgents();
   else if (S.view === "history") loadHistory();
@@ -977,9 +978,49 @@ async function loadPhysics() {
 }
 
 /* ═══════════ NEWS ═══════════ */
+const NIV_HIST = [];          // tf1 NIV ring for the 90 s trace (docs11 §6)
+let NIV_LAST_TS = 0;
+
 async function loadNews() {
   try {
     const d = await api(`/api/news/${S.symbol}`);
+    // docs11: coverage header, source lines, dropped examples, emergencies
+    try {
+      const st = await api("/api/news/status");
+      $("#nw-coverage").textContent = st.coverage || "—";
+      $("#nw-plan").textContent =
+        `plan ${st.plan || "?"} · ${st.keys || 0} key(s) · poll ${st.poll_interval_s || "?"}s`;
+      $("#nw-sources").innerHTML = (st.sources || []).map(x =>
+        `<div class="kv"><span>${esc(x.source)} t${x.tier}</span><b>${x.state}` +
+        `${x.backoff_level ? " L" + x.backoff_level : ""}` +
+        `${x.dropped_429 ? " · 429×" + x.dropped_429 : ""}</b></div>`).join("");
+      const ex = st.filtered_examples || [];
+      $("#nw-dropped").textContent =
+        `${st.filtered || 0} dropped for no crypto relevance` +
+        (ex.length ? " — e.g. " + ex.map(h => `"${h}"`).join("; ") : "");
+      const em = st.emergency_history || [];
+      $("#nw-emerg").innerHTML = em.length
+        ? em.slice().reverse().map(r =>
+            `<div class="kv"><span>${new Date(r.ts * 1000).toLocaleTimeString()} ` +
+            `${esc(r.asset)} ${esc(String(r.lock_id || ""))}</span>` +
+            `<b title="${esc(r.reason || "")}">${fmt(r.old_entry, 2)} → ${fmt(r.new_entry, 2)}</b></div>`).join("")
+        : `<span class="dim">none</span>`;
+      // per-horizon chips from the same status payload
+      const hz = (st.horizons || {})[S.symbol] || {};
+      $("#nw-horizons").innerHTML = TF.map(tf => {
+        const h = hz[tf] || {};
+        // honest empty state: 0.00 only prints when items actually scored
+        if ((h.n_items || 0) === 0)
+          return `<div class="kv"><span>${tf.toUpperCase()}</span>` +
+            `<b class="dim">— <span class="dim">no live items (synthetic never scores)</span></b></div>`;
+        return `<div class="kv"><span>${tf.toUpperCase()} ` +
+          `<span class="dim">½${Math.round(h.half_life_min || 0)}m</span></span>` +
+          `<b style="color:${(h.impact || 0) >= 0 ? "var(--green)" : "var(--red)"}">` +
+          `${fmt(h.impact, 3)} <span class="dim">niv ${fmt(h.niv, 3)} smd ${fmt(h.smd, 3)}</span></b></div>`;
+      }).join("");
+      const h1 = hz.tf1;
+      if (h1 && h1.niv !== undefined) pushNiv(h1.niv);
+    } catch (e) { /* status optional */ }
     $("#nw-scope").textContent = `${S.symbol} · ${d.source || ""} · ${d.count ?? (d.items || []).length} items`;
     const cats = d.categories || {};
     $("#nw-agg").innerHTML = TF.map(tf => {
@@ -1006,6 +1047,73 @@ async function loadNews() {
     });
     if (!(d.items || []).length) tb.innerHTML = `<tr><td colspan="7" class="dim">no items</td></tr>`;
   } catch (e) { toast("news: " + e.message, "err"); }
+}
+
+function onNewsTicker(msg) {
+  // docs11 §6: 4-second publisher — update chips live, feed the NIV trace
+  const a = (msg.assets || {})[S.symbol];
+  if (a && S.view === "news") {
+    const hz = a.horizons || {};
+    $("#nw-horizons").innerHTML = TF.map(tf => {
+      const h = hz[tf] || {};
+      if ((h.n_items || 0) === 0)
+        return `<div class="kv"><span>${tf.toUpperCase()}</span>` +
+          `<b class="dim">— <span class="dim">no live items</span></b></div>`;
+      return `<div class="kv"><span>${tf.toUpperCase()}</span>` +
+        `<b style="color:${(h.impact || 0) >= 0 ? "var(--green)" : "var(--red)"}">` +
+        `${fmt(h.impact, 3)} <span class="dim">niv ${fmt(h.niv, 3)} smd ${fmt(h.smd, 3)}</span></b></div>`;
+    }).join("");
+    if (hz.tf1 && hz.tf1.niv !== undefined) pushNiv(hz.tf1.niv);
+    if (a.emergency) toast("⚡ auto emergency re-lock fired", "err");
+    $("#nw-coverage").textContent = a.coverage || $("#nw-coverage").textContent;
+  }
+}
+
+function pushNiv(v) {
+  const now = Date.now();
+  if (now - NIV_LAST_TS < 500) return;      // coalesce (chart-lag lesson)
+  NIV_LAST_TS = now;
+  NIV_HIST.push({ t: now, v });
+  while (NIV_HIST.length > 60) NIV_HIST.shift();
+  drawNiv();
+}
+
+function drawNiv() {
+  const c = $("#nw-niv"); if (!c) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth || 300, h = 54;
+  if (c.width !== w * dpr || c.height !== h * dpr) {
+    c.width = w * dpr; c.height = h * dpr;
+  }
+  const x = c.getContext("2d");
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  x.clearRect(0, 0, w, h);
+  x.strokeStyle = "rgba(120,140,170,.45)";
+  x.beginPath(); x.moveTo(0, h / 2); x.lineTo(w, h / 2); x.stroke();
+  if (NIV_HIST.length < 2) return;
+  const vs = NIV_HIST.map(p => p.v);
+  const mx = Math.max(0.05, ...vs.map(Math.abs));
+  x.strokeStyle = "#4fd1c5"; x.lineWidth = 1.5; x.beginPath();
+  NIV_HIST.forEach((p, i) => {
+    const px = (i / (NIV_HIST.length - 1)) * w;
+    const py = h / 2 - (p.v / mx) * (h / 2 - 4);
+    i ? x.lineTo(px, py) : x.moveTo(px, py);
+  });
+  x.stroke();
+}
+
+async function drillEmergency() {
+  if (!confirm(`Emergency drill for ${S.symbol}? Re-locks at today's price, ` +
+               `halts new locks 30 s (original entry kept in the reason).`)) return;
+  try {
+    const out = await api("/api/news/emergency", {
+      method: "POST", body: JSON.stringify({
+        asset: S.symbol, tf: S.tf || "tf1",
+        reason: "manual drill from news card" }) });
+    toast(out.ok ? `emergency ok — halt ${out.halt_s}s` :
+          (out.error || "emergency failed"), out.ok ? "ok" : "err");
+    loadNews();
+  } catch (e) { toast("drill: " + e.message, "err"); }
 }
 
 /* ═══════════ BRAINS ═══════════ */
@@ -1463,7 +1571,12 @@ function onTick(msg) {
 }
 function handleMessage(msg) {
   S.lastMsgAt = Date.now();
-  if (msg.type === "snapshot") applySnapshot(msg);
+  if (msg.type === "NEWS") onNewsTicker(msg);
+  else if (msg.type === "news_emergency" || msg.type === "news_emergency_ack") {
+    toast(`⚡ NEWS_EMERGENCY ${msg.asset || ""}: ${msg.reason || ""}`, "err");
+    if (S.view === "news") loadNews();
+  }
+  else if (msg.type === "snapshot") applySnapshot(msg);
   else if (msg.type === "tick") onTick(msg);
   else if (msg.type === "phase") renderBoot({ phase: msg.phase, analysis: msg });
   else if (msg.type === "sl_event") toast(msg.message || msg.kind, msg.kind === "close" ? "err" : "warn");
@@ -1493,6 +1606,7 @@ function connectWS() {
 /* ═══════════ events ═══════════ */
 function bindGlobal() {
   $("#nw-refresh")?.addEventListener("click", loadNews);
+  $("#nw-drill")?.addEventListener("click", drillEmergency);
   $("#hs-reload")?.addEventListener("click", loadHistory);
   $("#ag-reload")?.addEventListener("click", loadAgents);
   $("#ag-save")?.addEventListener("click", async () => {

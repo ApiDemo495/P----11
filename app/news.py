@@ -152,6 +152,7 @@ def relevance(symbol: str, headline: str) -> float:
 # Data, not code: app/themes.json. Whole-word keywords, most specific first.
 import json as _json
 import os as _os
+from pathlib import Path
 
 _THEMES_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
                              "themes.json")
@@ -301,6 +302,12 @@ class NewsSystem:
         self._counted_heads: list[set] = []         # token sets (novelty)
         self.tape_accel: dict[str, float] = {}
         self.last_emergency: dict[str, float] = {}
+        # docs11 §3: NewsAPI plan + key ring (3 slots) + conditional GET
+        self.api_keys: list[str] = []
+        self.key_slot: int = 0
+        self.plan: str = _os.environ.get("NEWSAPI_PLAN", "auto")  # auto/free/paid
+        self._etag: dict[str, tuple[str, str]] = {}   # url -> (etag, last-mod)
+        self._load_keyring()
         self.emergency_history: list[dict] = []
         self.stats_bugs: list[dict] = []      # symbol -> accel (SMD)
         self._niv_hist: dict[str, list] = {}        # symbol -> [(ts, niv)]
@@ -388,7 +395,9 @@ class NewsSystem:
         else:
             item["theme_k"] = 1
         self._counted_heads.append(
-            set(str(item.get("headline") or "").lower().split()))
+            (float(item.get("ts") or now),
+             set(str(item.get("headline") or "").lower().split()),
+             id(item), len(self._counted_heads)))
         if len(self._counted_heads) > 400:
             self._counted_heads = self._counted_heads[-400:]
         self.items.append(item)
@@ -402,7 +411,8 @@ class NewsSystem:
             it for it in self.items
             if (now - it["ts"]) / 60.0 < NEWS_AGGREGATE_WINDOW
         ]
-        if NEWS_API_KEY and now - self._last_poll >= NEWS_POLL_SECONDS:
+        if (self.api_keys or NEWS_API_KEY) and \
+                now - self._last_poll >= self._poll_interval():
             self._last_poll = now
             self._poll_newsapi(now)
         # keep the feed stocked: the UI must never show an empty table
@@ -418,17 +428,139 @@ class NewsSystem:
                 for sym in (self.items[-1].get("symbols", []) if self.items else []):
                     by_sym[sym] = by_sym.get(sym, 0) + 1
 
-    # -- live source (optional) --------------------------------------------
+    # -- live source (docs11 §3 ingest layer) -------------------------------
+    def _load_keyring(self) -> None:
+        """Up to 3 slots: NEWSAPI_KEYS env (comma), then data/keyring.json,
+        then the legacy single NEWS_API_KEY. Slots rotate on 429/401."""
+        keys: list[str] = []
+        env = _os.environ.get("NEWSAPI_KEYS", "")
+        keys += [k.strip() for k in env.split(",") if k.strip()]
+        try:
+            kr = Path(__file__).resolve().parent.parent / "data" / "keyring.json"
+            if kr.exists():
+                data = _json.loads(kr.read_text())
+                if isinstance(data, list):
+                    keys += [str(k) for k in data if k][: 3 - len(keys)]
+        except Exception:
+            pass
+        if not keys and NEWS_API_KEY:
+            keys = [NEWS_API_KEY]
+        self.api_keys = keys[:3]
+
+    def _key(self) -> str:
+        if not self.api_keys:
+            return NEWS_API_KEY or ""
+        return self.api_keys[self.key_slot % len(self.api_keys)]
+
+    def _rotate_key(self) -> None:
+        if len(self.api_keys) > 1:
+            self.key_slot = (self.key_slot + 1) % len(self.api_keys)
+
+    def _backoff(self, name: str, reset_s: float | None = None) -> float:
+        """docs11 §3.3 — exponential 60 s → 3000 s, unless the response
+        carries a rate-limit reset (then honour it exactly)."""
+        st = self.source_stats.setdefault(
+            name, {"ok": 0, "dupes": 0, "errors": 0, "last_ok": 0.0})
+        level = int(st.get("backoff_level") or 0) + 1
+        st["backoff_level"] = level
+        wait = reset_s if reset_s else min(3000.0, 60.0 * (2 ** level))
+        st["cooldown_until"] = time.time() + wait
+        return wait
+
+    def _poll_interval(self) -> float:
+        """Paid = 60 s, free = 900 s (docs11 §3.2); unknown starts at the
+        free cadence and adapts the moment a limit header proves the plan."""
+        if self.plan == "paid":
+            return 60.0
+        if self.plan == "free":
+            return 900.0
+        return float(_os.environ.get("NEWS_POLL_SECONDS", "900"))
+
+    def _http_get(self, url: str, params: dict, name: str):
+        """Named UA + conditional GET + 429/426/401 handling. Returns the
+        httpx response, or None when the source is cooling down."""
+        import httpx
+        headers = {
+            # docs11 §3.4: an honest, identifiable browser-style UA
+            "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
+            "Accept": "application/json",
+        }
+        cached = self._etag.get(url)
+        if cached:
+            if cached[0]:
+                headers["If-None-Match"] = cached[0]
+            if cached[1]:
+                headers["If-Modified-Since"] = cached[1]
+        params = dict(params or {})
+        params["apiKey"] = self._key()
+        try:
+            resp = httpx.get(url, params=params, headers=headers, timeout=8.0)
+        except Exception:
+            st = self.source_stats.setdefault(
+                name, {"ok": 0, "dupes": 0, "errors": 0, "last_ok": 0.0})
+            st["errors"] = int(st.get("errors") or 0) + 1
+            return None
+        st = self.source_stats.setdefault(
+            name, {"ok": 0, "dupes": 0, "errors": 0, "last_ok": 0.0})
+        if resp.status_code == 304:
+            st["not_modified"] = int(st.get("not_modified") or 0) + 1
+            return resp
+        if resp.status_code == 429:
+            st["dropped_429"] = int(st.get("dropped_429") or 0) + 1
+            st["last_429"] = time.time()
+            reset_s = None
+            try:
+                remaining = resp.headers.get("X-RateLimit-Remaining")
+                if remaining is not None and int(remaining) == 0:
+                    if self.plan == "auto":
+                        limit = int(resp.headers.get("X-RateLimit-Limit") or 0)
+                        self.plan = "free" if limit and limit <= 100 else "paid"
+                    reset = resp.headers.get("X-RateLimit-Reset")
+                    if reset and int(reset) > 0:
+                        reset_s = max(0.0, int(reset) - time.time())
+            except Exception:
+                pass
+            self._backoff(name, reset_s)
+            self._rotate_key()
+            return resp
+        if resp.status_code == 426:
+            # plan-limited: the source itself says upgrade required
+            st["plan_limited"] = True
+            st["cooldown_until"] = time.time() + 3600.0
+            return resp
+        if resp.status_code in (401, 403):
+            st["bad_key"] = True
+            self._rotate_key()
+            return resp
+        # remember validators for the next conditional GET
+        self._etag[url] = (resp.headers.get("ETag") or "",
+                           resp.headers.get("Last-Modified") or "")
+        if resp.status_code == 200 and self.plan == "auto":
+            try:
+                limit = int(resp.headers.get("X-RateLimit-Limit") or 0)
+                if limit:
+                    self.plan = "free" if limit <= 100 else "paid"
+            except Exception:
+                pass
+        return resp
+
     def _poll_newsapi(self, now: float) -> None:
         try:                                   # pragma: no cover - external
-            import httpx
-            resp = httpx.get(
+            name = "newsapi"
+            st = self.source_stats.get(name) or {}
+            if float(st.get("cooldown_until") or 0.0) > now:
+                return                          # backing off — no request
+            resp = self._http_get(
                 NEWS_API_URL,
-                params={"q": NEWS_QUERY, "pageSize": 30,
-                        "sortBy": "publishedAt", "language": "en",
-                        "apiKey": NEWS_API_KEY},
-                timeout=8.0,
+                {"q": NEWS_QUERY, "pageSize": 30, "sortBy": "publishedAt",
+                 "language": "en"},
+                name,
             )
+            if resp is None or resp.status_code == 304:
+                return
+            if resp.status_code != 200:
+                return
             data = resp.json()
             if data.get("status") != "ok":
                 return
@@ -451,7 +583,7 @@ class NewsSystem:
                 })
             self.source = "newsapi"
         except Exception:
-            self.source = "sim"
+            self.source = self.source or "sim"
 
     # -- backup source: deterministic simulator -----------------------------
     def _sim_tick(self, now: float, force: bool = False) -> None:
@@ -518,6 +650,15 @@ class NewsSystem:
     _MARKET_TERMS = ("bitcoin", "btc", "eth", "bnb", "gold", "paxg",
                      "exchange", "etf", "fed", "rate", "sec", "binance",
                      "coinbase", "market", "price")
+
+    def critical(self, symbol: str, within_min: float = 30.0) -> list[dict]:
+        """docs11 §4.4 — recent tier-1/2 headlines carrying this asset
+        (recency window in minutes, chosen by the caller)."""
+        now = time.time()
+        return [it for it in self._live_items()
+                if (it.get("reliability") or 0.0) >= 0.8
+                and float((it.get("relevance_by_asset") or {}).get(symbol, 0.0)) > 0
+                and now - float(it.get("ts") or 0) <= within_min * 60.0]
 
     def _critical_check(self, items: list, now: float) -> dict:
         import re
@@ -637,10 +778,18 @@ class NewsSystem:
         distinct headline on a theme weighs 1/k; a theme continuously on
         the wire halves every 2 h and resets after a 90-minute gap."""
         head = set(str(item.get("headline") or "").lower().split())
+        item_ts = float(item.get("ts") or now)
         dup = False
-        for prev in self._counted_heads:
-            if not head or not prev or prev == head:
-                continue                      # never compare with itself
+        # locate my ingestion order by token set (id() can be reused by
+        # GC'd seed items, so identity matching is not safe here)
+        my_seq = max((seq for _t, hset, _pid, seq in self._counted_heads
+                      if hset == head), default=10 ** 9)
+        for prev_ts, prev, prev_id, prev_seq in self._counted_heads:
+            # chronological: only headlines ingested EARLIER can habituate
+            # this one (equal timestamps fall back to ingestion order)
+            if (prev_seq >= my_seq or prev_ts > item_ts
+                    or not head or not prev or prev == head):
+                continue
             j = len(head & prev) / max(1, len(head | prev))
             if j >= 0.6:
                 dup = True
@@ -669,9 +818,12 @@ class NewsSystem:
         accel = float(self.tape_accel.get(symbol, 0.0))
         out: dict[str, Any] = {"symbol": symbol, "evaluated_at": now,
                                "tape_accel": accel, "horizons": {}}
+        # scored layer excludes labelled synthetic/seed items (docs11 §4.7:
+        # synthetic coverage is visible in the feed, never in the drivers)
         relevant = [
             it for it in self._live_items()
-            if float((it.get("relevance_by_asset") or {}).get(symbol, 0.0)) > 0.0
+            if not it.get("synthetic")
+            and float((it.get("relevance_by_asset") or {}).get(symbol, 0.0)) > 0.0
         ]
         for tf in TF_ORDER:
             W = TIMEFRAMES[tf]["minutes"]
@@ -823,6 +975,13 @@ class NewsSystem:
             "horizons": {sym: ev.get("horizons")
                          for sym, ev in self.last_eval.items() if ev},
             "emergency_history": self.emergency_history[-10:],
+            "plan": self.plan,
+            "keys": len(self.api_keys),
+            "poll_interval_s": self._poll_interval(),
+            # pricing reference (docs11 §3.5): free = 100 req/day,
+            # paid ≈ $449/mo — read from the spec at build time, not live
+            "price_note": "free 100 req/day (429 cools the quota window); "
+                          "paid plan unlimited-ish 60s cadence",
         }
 
     # ------------------------------------------------------------- docs11 §3.6
