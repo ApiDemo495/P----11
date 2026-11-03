@@ -271,6 +271,9 @@ class AgentManager:
             "backup3_key": "", "newsapi_key": "", "neuprint_key": "",
             "gemini_enabled": True, "local_enabled": True,
             "theme": "dark", "haptics": True, "sound": True,
+            # AUTO-PREDICT: the staged analysis re-runs by itself so the
+            # views are always fresh; turn OFF for manual-only ▶ ANALYSE
+            "auto_predict": True,
             "assets": list(SYMBOL_ORDER), "timeframes": list(TF_ORDER),
         }
         self.local = LocalModel()

@@ -43,6 +43,7 @@
     <div class="seg" id="seg-tf"><span class="seg-lbl">TIMEFRAME</span></div>
     <div id="feed-chip" class="feed-chip">…</div>
     <div id="status-chips" class="trace-row"></div>
+    <span id="auto-chip" class="chip" title="AUTO-PREDICT: the analysis re-runs by itself so every tab is always fresh. Click to switch to MANUAL (▶ ANALYSE only).">AUTO</span>
     <button id="btn-analyse" class="btn-analyse" title="Run the staged analysis for this asset">▶ ANALYSE <span id="analyse-sym">BTC</span></button>
   </div>
 
@@ -273,7 +274,9 @@
     </div>
     <div class="panel-row">
       <div class="panel"><div class="panel-h">Days</div><div id="hs-days"></div></div>
-      <div class="panel"><div class="panel-h">Leaderboard</div><div id="hs-leader"></div></div>
+      <div class="panel"><div class="panel-h">Leaderboard
+        <button class="btn" id="hs-csv" style="float:right;padding:2px 10px">export CSV</button></div>
+        <div id="hs-leader"></div></div>
     </div>
     <div class="panel">
       <div class="panel-h">Day detail <span class="dim" id="hs-day-label"></span></div>
@@ -290,6 +293,8 @@
         <div class="kv"><span>weight learning rate η</span><b id="st-eta">—</b></div>
         <div class="kv"><span>high-alert mode</span><b id="st-alert">—</b></div>
         <div class="kv"><span>formula shares</span><b id="st-shares">—</b></div>
+        <div class="kv"><span>auto-predict (analysis without pressing ▶)</span>
+          <b id="st-auto" style="cursor:pointer" title="click to toggle">—</b></div>
       </div>
       <div style="margin-top:12px">
         <a class="btn" href="/api/state/export" download="state.json">export state</a>

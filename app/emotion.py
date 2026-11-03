@@ -204,7 +204,11 @@ class EmotionSystem:
         octo_ring = hist.ring(hist.tf_key(ctx.symbol, ctx.tf, "octo"), HIST_EMOTION_LAG)
         octo_lag_v = _lag_value(octo_ring)
         octo_lag = sig(4.0 * octo_lag_v) if octo_lag_v is not None else 0.5
-        emos[5] = 1.0 if (octo_now >= 2.0 * octo_lag and octo_now > 0.5) else 0.0
+        # zeros cause-1: the binary cliff (1.0 / exact 0.0) became a
+        # logistic ramp on the reflex ratio — ordering preserved, never
+        # an exact zero while the inputs are alive
+        _ratio = (octo_now / (2.0 * octo_lag)) if octo_lag > 1e-9 else                  (1.0 if octo_now > 0.5 else 0.0)
+        emos[5] = 1.0 / (1.0 + math.exp(-8.0 * (_ratio - 0.75)))
         dirs[5] = 1 if emos[5] > 0.5 else -1        # fear reflex -> buy bias
 
         # ---- E6 ESI: endorphin session intensity -------------------------

@@ -301,10 +301,19 @@ def finalize_confidence(
     conf *= 0.7 + 0.3 * max(0.0, min(1.0, experience_quality))
     if state_aligned and p_dominant > 0.0:
         conf += 0.1 * p_dominant
+    # zeros cause-1: additive penalties used to clip the score to an
+    # EXACT 0 (a silent zero). Cap the TOTAL penalty at 90% of the
+    # available confidence — normal cases keep their exact arithmetic
+    # (0.5-0.14, 0.5-0.15 in the pinned tests); the collapse case keeps
+    # an honest residue with penalty_capped=True for the UI.
+    avail = conf
+    penalty = 0.0
     if rtp > 0.6:
-        conf -= rtp * 0.2
+        penalty += rtp * 0.2
     if pcv < 0.0:
-        conf -= abs(pcv) * 0.3
+        penalty += abs(pcv) * 0.3
+    conf = avail - min(penalty, 0.9 * avail)
+    penalty_capped = penalty > 0.9 * avail + 1e-12
     # Section 6 physics modifiers (P2/P6/P19)
     conf *= 0.5 + 0.5 * max(0.0, min(1.0, wfcp))
     conf *= 1.0 - max(0.0, min(1.0, drpt))
@@ -313,6 +322,8 @@ def finalize_confidence(
     return {
         "confidence": conf,
         "issued": conf > CONFIDENCE_FLOOR,
+        "penalty_capped": penalty_capped,
+        "penalty": round(penalty, 6),
         "pcv": pcv,
         "conflicting": pcv < 0.0,
         "wfcp": wfcp,

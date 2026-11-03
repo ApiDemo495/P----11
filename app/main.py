@@ -281,6 +281,28 @@ async def formula_history(symbol: str = "BTC", tf: str = "tf1") -> JSONResponse:
                          **engine.formula_history(symbol, tf)})
 
 
+@app.post("/api/explain")
+async def explain_tab(body: dict) -> JSONResponse:
+    """Plain-language readout for a tab (qwen2.5-coder local model,
+    deterministic fallback when the model is not up yet)."""
+    from . import explainer
+    view = str(body.get("view") or "dashboard")
+    symbol = str(body.get("symbol") or "BTC")
+    tf = str(body.get("tf") or "tf1")
+    if symbol not in SYMBOLS:
+        return JSONResponse({"ok": False, "error": "unknown symbol"},
+                            status_code=400)
+    ctx = engine.explain_ctx(view, symbol, tf)
+    out = await explainer.explain(view, symbol, tf, ctx)
+    return JSONResponse(out)
+
+
+@app.get("/api/explain/status")
+async def explain_status() -> JSONResponse:
+    from . import explainer
+    return JSONResponse({"ok": True, **explainer.status()})
+
+
 @app.get("/api/brain/status")
 async def brain_status() -> JSONResponse:
     """§3.4 five-step startup verification with reasons."""

@@ -124,6 +124,25 @@ def acquire() -> dict[str, str]:
                             break
             except Exception as exc:              # try next source
                 _log(f"{name}: {url[:60]}… failed ({exc})")
+            # curl fallback (B-7): some sandboxes intercept TLS in a way
+            # certifi cannot see while curl's system CA bundle can —
+            # the size check below keeps a short/corrupt file a FAILURE
+            if not got:
+                try:
+                    import subprocess
+                    cmd = ["curl", "-sL", "-m", "600", "-o", str(tmp)]
+                    for hk, hv in headers.items():
+                        cmd += ["-H", f"{hk}: {hv}"]
+                    cmd.append(url)
+                    rc = subprocess.call(
+                        cmd,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    if rc == 0 and tmp.exists() and tmp.stat().st_size >= want:
+                        tmp.rename(dest)
+                        out[name] = "downloaded (curl)"
+                        got = True
+                except Exception as exc:
+                    _log(f"{name}: curl fallback failed ({exc})")
         if not got:
             size = dest.stat().st_size if dest.exists() else 0
             out[name] = (f"failed (have {size} of ≥{want} bytes)")

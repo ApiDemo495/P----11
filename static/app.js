@@ -98,6 +98,22 @@ const fmtSig = (v) => {
   if (Math.abs(n) < 0.001) return n.toPrecision(2);
   return n.toFixed(3);
 };
+
+/* zeros-cause-8: a value that is small but REAL must print its first
+   significant digit — up to 6 decimals, then exponent. True zero prints
+   0.00. Use for every human-facing near-zero. */
+function fx(v, d = 2) {
+  if (v == null || Number.isNaN(v)) return "—";
+  if (!isFinite(v)) return v > 0 ? "+∞" : "−∞";
+  const a = Math.abs(v);
+  if (a === 0) return (0).toFixed(d);
+  if (a >= 10 ** -d) return v.toFixed(d);
+  for (let k = d + 1; k <= 6; k++) {
+    const t = v.toFixed(k);
+    if (Math.abs(parseFloat(t)) > 0) return t;
+  }
+  return v.toExponential(2);
+}
 const fmt = (v, d = 2) => v == null || Number.isNaN(Number(v)) ? "—" : Number(v).toFixed(d);
 const px = v => v >= 1000 ? Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 })
   : v >= 10 ? Number(v).toFixed(2) : Number(v).toFixed(4);
@@ -224,10 +240,62 @@ function setSymbol(sym) {
   refreshActiveView(true);
   buildQuads(); loadCandles();
 }
+/* ═══════ tab explainer (qwen2.5-coder local / deterministic) ═══════ */
+function ensureExplainPanel(v) {
+  const sec = $("#view-" + v);
+  if (!sec) return null;
+  let p = $("#ex-panel-" + v);
+  if (!p) {
+    p = document.createElement("div");
+    p.className = "panel"; p.id = "ex-panel-" + v;
+    p.innerHTML = `<div class="panel-h">WHY — PLAIN-LANGUAGE READOUT
+        <span class="dim" id="ex-src-${v}"></span>
+        <button class="btn" id="ex-btn-${v}" style="float:right;padding:2px 10px">re-explain</button></div>
+      <div id="ex-${v}" class="logic" style="white-space:pre-wrap">loading…</div>`;
+    const head = sec.querySelector(".tab-head");
+    if (head && head.nextSibling) sec.insertBefore(p, head.nextSibling);
+    else sec.prepend(p);
+    const b = $("#ex-btn-" + v);
+    if (b) b.addEventListener("click", () => loadExplain(v, true));
+  }
+  return p;
+}
+async function loadExplain(view, force) {
+  const box = view === "dashboard" ? $("#why-explain") : $("#ex-" + view);
+  if (!box) return;
+  try {
+    const out = await api("/api/explain", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ view, symbol: S.symbol, tf: S.focusTf }),
+    });
+    box.textContent = out.text || "(no explanation)";
+    const src = $("#ex-src-" + view);
+    if (src) src.textContent = (out.cached ? "cached · " : "") +
+      (out.source === "qwen2.5-coder" ? "🧠 qwen2.5-coder:3b (local)" :
+       "local fallback · model: " + (out.model_status || "starting…"));
+    return out;
+  } catch (e) {
+    box.textContent = "explain failed: " + e.message;
+  }
+}
+window.toggleWhyExplain = function () {
+  const pre = $("#why-explain");
+  if (!pre) return;
+  const show = pre.style.display === "none";
+  pre.style.display = show ? "block" : "none";
+  if (show && !pre.textContent) loadExplain("dashboard");
+};
+function syncAnalyseButton() {
+  // one ANALYSE button, dashboard only (user request)
+  const b = $("#btn-analyse");
+  if (b) b.style.display = (S.view === "dashboard") ? "" : "none";
+}
 function setView(v) {
   S.view = v; S.lastViewFetch = 0;
   $$(".tab-btn").forEach(x => x.classList.toggle("active", x.dataset.view === v));
   $$(".view").forEach(x => x.classList.toggle("active", x.id === "view-" + v));
+  syncAnalyseButton();
   refreshActiveView(true);
 }
 function buildTabs() {
@@ -235,6 +303,7 @@ function buildTabs() {
     S.view = b.dataset.view;
     $$(".tab-btn").forEach(x => x.classList.toggle("active", x === b));
     $$(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + S.view));
+    syncAnalyseButton();
     refreshActiveView(true);
   }));
 }
@@ -273,10 +342,10 @@ function refreshActiveView(force) {
   // refreshes to every 30s so the UI never stalls behind repeated loads
   if (!force && Date.now() - (S.lastViewFetch || 0) < 30000) return;
   S.lastViewFetch = Date.now();
-  if (S.view === "formulas") loadFormulas();
-  else if (S.view === "emotion") loadEmotion();
-  else if (S.view === "physics") loadPhysics();
-  else if (S.view === "news") loadNews();
+  if (S.view === "formulas") { ensureExplainPanel("formulas"); loadFormulas(); loadExplain("formulas"); }
+  else if (S.view === "emotion") { ensureExplainPanel("emotion"); loadEmotion(); loadExplain("emotion"); }
+  else if (S.view === "physics") { ensureExplainPanel("physics"); loadPhysics(); loadExplain("physics"); }
+  else if (S.view === "news") { ensureExplainPanel("news"); loadNews(); loadExplain("news"); }
   // (news refresh button wired below)
   else if (S.view === "brains") loadBrains();
   else if (S.view === "agents") loadAgents();
@@ -360,6 +429,40 @@ function renderQuads(opts = {}) {
   try { renderCalls(); } catch (e) { console.error("calls", e); }
   try { renderLedger(); renderHindsight(); renderMeta(); } catch (e) { console.error("ledger", e); }
 }
+/* ═══════ AUTO-PREDICT toggle (dashboard chip + settings row) ═══════ */
+async function loadAutoPredict() {
+  try {
+    const st = await api("/api/settings");
+    const on = st?.settings?.auto_predict !== false;
+    S.autoPredict = on;
+    const chip = $("#auto-chip");
+    if (chip) {
+      chip.textContent = on ? "AUTO" : "MANUAL";
+      chip.className = "chip " + (on ? "chip-ok" : "chip-warn");
+      chip.title = on
+        ? "AUTO-PREDICT on — analysis re-runs by itself every ~45 s; every tab is always fresh. Click for MANUAL mode (▶ ANALYSE only)."
+        : "MANUAL mode — press ▶ ANALYSE on the dashboard for a fresh full analysis. Click for AUTO.";
+    }
+    const row = $("#st-auto");
+    if (row) row.textContent = on ? "ON — analysis runs itself (click to toggle)" : "OFF — manual ▶ ANALYSE only (click to toggle)";
+  } catch { /* offline */ }
+}
+function bindAutoChip() {
+  const chip = $("#auto-chip");
+  if (chip) chip.addEventListener("click", async () => {
+    const next = !(S.autoPredict !== false);
+    try {
+      await api("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" },
+                                   body: JSON.stringify({ auto_predict: next }) });
+      toast(next ? "AUTO-PREDICT on — analysis runs itself" : "MANUAL — press ▶ ANALYSE for a fresh run", "ok");
+    } catch (e) { toast("toggle: " + e.message, "err"); }
+    loadAutoPredict();
+  });
+  const row = $("#st-auto");
+  if (row) row.addEventListener("click", () => chip && chip.click());
+  loadAutoPredict();
+}
+
 /* ═══════ staged ANALYSE: button, timeline, result box ═══════ */
 function bindAnalyse() {
   const b = $("#btn-analyse");
@@ -428,7 +531,7 @@ function onAnalyseDone(msg) {
   box.innerHTML = `<div class="an-box">
     <div class="an-signal ${dirCls}">
       <div class="big">${r.signal}</div>
-      <div class="conf">confidence ${fmt(r.confidence, 3)}${r.issued ? " · ISSUED" : " · below floor"}</div>
+      <div class="conf">confidence ${fx(r.confidence, 3)}${r.issued ? " · ISSUED" : " · below floor"}</div>
       <div class="conf">entry ${px(r.price)} · ATR ${fmt(r.atr, 4)}</div>
     </div>
     <div class="an-grid">
@@ -518,13 +621,43 @@ function renderWhy() {
       <div class="dim">subsystem votes (never vote — modulate only):
         ${Object.entries(mass.subsystem_votes || {}).map(([k, v]) => `${esc(k)} ${fmt(v, 4)}`).join(" · ") || "—"}</div>` : ""}
     </div>` : "";
-  el.innerHTML = lockBlock + ladderBlock + `
+  // confidence trend sparkline (last readings, floor0.35 marked by scale)
+  if (!S.confHist) S.confHist = [];
+  const confNow = Number(s.confidence || 0);
+  const lastC = S.confHist[S.confHist.length - 1];
+  if (!lastC || Math.abs(lastC.v - confNow) > 1e-9) S.confHist.push({ v: confNow });
+  S.confHist = S.confHist.slice(-40);
+  const chv = S.confHist.map(pp => pp.v);
+  const cmin = Math.min(0, ...chv), cmax = Math.max(0.35, ...chv);
+  const pts = chv.map((vv, i) =>
+    `${(i / Math.max(1, chv.length - 1)) * 100},${28 - ((vv - cmin) / (cmax - cmin || 1)) * 26}`).join(" ");
+  const sparkHtml = `<div style="text-align:right"><svg viewBox="0 0 100 30" preserveAspectRatio="none" style="width:130px;height:26px;vertical-align:middle"><polyline points="${pts}" fill="none" stroke="${confNow > 0.35 ? "#22c55e" : "#38bdf8"}" stroke-width="1.5"/></svg><span class="dim" style="margin-left:6px">confidence trend</span></div>`;
+  // contribution ticks for this window
+  const tk = s.ticks || {};
+  const cnt = (g) => g ? Object.values(g).filter(x => x.on).length + "/" + Object.values(g).length : "—";
+  const offF = (Object.entries(tk.formulas || {})
+    .filter(([, x]) => !x.on).slice(0, 6)
+    .map(([k, x]) => `${x.name || "F" + k}`).join(" · ")) || "none";
+  const ticksBlock = Object.keys(tk).length ? `
+    <div class="lock-block"><b>✓ CONTRIBUTION TICKS — this window</b>
+      <div class="votes" style="margin-top:4px">
+        <span class="vote ${cnt(tk.formulas).startsWith("0/") ? "" : "pos"}" title="formulas with a non-zero contribution to CCI">formulas ${cnt(tk.formulas)}</span>
+        <span class="vote ${cnt(tk.emotions).startsWith("0/") ? "" : "pos"}" title="emotion channels above 0.01">emotions ${cnt(tk.emotions)}</span>
+        <span class="vote ${cnt(tk.physics).startsWith("0/") ? "" : "pos"}" title="physics mechanisms with coverage">physics ${cnt(tk.physics)}</span>
+        <span class="vote ${cnt(tk.hedge).startsWith("0/") ? "" : "pos"}" title="hedge legs non-zero">hedge ${cnt(tk.hedge)}</span>
+        <span class="vote ${tk.news?.aggregate?.on ? "pos" : ""}" title="news aggregate this window">news ${tk.news?.aggregate?.on ? "✓ on" : "○ off"}</span>
+        <span class="vote ${tk.brain?.flywire?.on ? "pos" : ""}" title="FlyWire connectome vote">brain ${tk.brain?.flywire?.ready ? (tk.brain.flywire.on ? "✓ on" : "○ flat") : "absent"}</span>
+      </div>
+      <div class="dim">formulas ✗ this window: ${esc(offF)} — per-item ticks live in FORMULAS / EMOTION / PHYSICS.</div>
+    </div>` : "";
+  const exBlock = `<div style="margin-top:8px"><button class="btn" id="why-explain-btn" onclick="window.toggleWhyExplain()" style="padding:4px 12px">🧠 explain this + TP/SL math</button><pre id="why-explain" class="logic" style="white-space:pre-wrap;display:none;margin-top:6px"></pre></div>`;
+  el.innerHTML = lockBlock + ladderBlock + sparkHtml + ticksBlock + exBlock + `
     <div class="why-head">
       <div class="why-dir ${dir > 0 ? "up" : dir < 0 ? "down" : "flat"}">
         ${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO TRADE"}<span class="sym">${S.symbol} · ${tf.toUpperCase()} · ${TF_META[tf].mins}m</span></div>
       <div class="why-conf">CONFIDENCE
         <div class="bar"><i class="${s.confidence > 0.35 ? "pos" : "neg"}" style="width:${clamp((s.confidence || 0) * 100, 0, 100)}%"></i></div>
-        <b>${fmt(s.confidence, 3)}</b> / floor ${bd.floor ?? 0.35}</div>
+        <b>${fx(s.confidence, 3)}</b> / floor ${bd.floor ?? 0.35}</div>
       <div class="why-badge ${s.issued ? "ok" : ""}">${s.issued ? "✓ SIGNAL ISSUED" : "NO TRADE · below floor"}</div>
     </div>
     <div class="why-reason">${s.reason || ""}</div>
@@ -543,11 +676,11 @@ function renderWhy() {
       </div>
       <div>
         <h5>CONFIDENCE CHAIN — spec order</h5>
-        <div class="kv"><span>1 · |CCI_adj| × min(1, DRHE ${fmt(m.drhe, 2)})</span><b>${fmt(bd.base_confidence, 4)}</b></div>
+        <div class="kv"><span>1 · |CCI_adj| × min(1, DRHE ${fmt(m.drhe, 2)})</span><b>${fx(bd.base_confidence, 4)}</b></div>
         <div class="kv"><span>2 · × (0.7 + 0.3 × EQ ${fmt(m.eq, 2)})</span><b>brain B2</b></div>
         <div class="kv"><span>3 · state "${m.dominant || "—"}" ${m.state_aligned ? "aligned → +" + fmt(0.1 * (m.p_dominant || 0), 3) : "not aligned"}</span><b>${m.state_aligned ? "aligned" : "—"}</b></div>
-        <div class="kv"><span>4 · RTP ${fmt(m.rtp, 2)}${m.rtp > 0.6 ? " ⚠" : ""} · PCV ${fmt(m.pcv, 2)}${m.pcv < 0 ? " ⚠" : ""}</span><b>penalties</b></div>
-        <div class="kv"><span>5-7 · ×(0.5+0.5·WFCP ${fmt(m.wfcp, 2)}) ×(1−DRPT ${fmt(m.drpt, 2)}) ×(1−GSPI ${fmt(m.gspi, 2)})</span><b>${fmt(bd.final_confidence, 3)}</b></div>
+        <div class="kv"><span>4 · RTP ${fmt(m.rtp, 2)}${m.rtp > 0.6 ? " ⚠" : ""} · PCV ${fx(m.pcv, 3)}${m.pcv < 0 ? " ⚠" : ""} ${(s.breakdown || {}).penalty_capped ? `<span class="acc-warn" title="penalties exceeded the available confidence — residue kept, never an exact 0">capped</span>` : ""}</span><b>penalties</b></div>
+        <div class="kv"><span>5-7 · ×(0.5+0.5·WFCP ${fmt(m.wfcp, 2)}) ×(1−DRPT ${fmt(m.drpt, 2)}) ×(1−GSPI ${fmt(m.gspi, 2)})</span><b>${fx(bd.final_confidence, 4)}</b></div>
         <h5 style="margin-top:12px">SUBSYSTEM VOTES</h5>
         <div class="votes">${Object.entries(votes).map(([k, v]) =>
           `<span class="vote ${v > 0 ? "pos" : v < 0 ? "neg" : ""}">${k} ${v > 0 ? "▲" : v < 0 ? "▼" : "·"}</span>`).join("")}</div>
@@ -754,13 +887,16 @@ async function loadFormulas() {
       const hz = (S.snap?.hindsight?.per || {})[`${S.symbol}|${S.focusTf}|F${fid}`];
       const zeroChip = ft?.zero_reason
         ? `<span class="chip chip-warn" title="why it is 0">0 · ${ft.zero_reason}</span>` : "";
+      const tickOn = contribs[fid] ? Math.abs(contribs[fid].contribution) >= 1e-5 : null;
+      const tickChip = tickOn === null ? "" :
+        `<span class="chip ${tickOn ? "chip-ok" : "chip-err"}" title="${tickOn ? "contributed to this window's CCI" : "did not contribute (flat or zero this window)"}">${tickOn ? "✓ tick" : "✗ no tick"}</span>`;
       const dc = ft?.double_check;
       const dcChip = dc
         ? `<span class="chip ${dc.ok ? "chip-ok" : "chip-err"}" title="${esc(dc.identity || "")}">${dc.label}</span>` : "";
       const traceLine = (ft || hz)
         ? `<span class="dim">${ft ? `${ft.us} µs · span ${ft.span}/${ft.guard_min ?? "–"} bars` : ""}${hz ? ` · z ${hz.z ?? "—"} · ${Math.round((hz.rate ?? 0) * 100)}% (${hz.hits ?? "?"}/${hz.n ?? "?"})` : ""}${ft?.non_directional ? " · non-directional (never votes)" : ""}</span>`
         : "";
-      card.innerHTML = `<h4><span>F${fid} · ${name}</span><span>${contrib >= 0 ? "+" : ""}${contrib != null ? fmt(contrib, 4) : "—"}</span></h4>
+      card.innerHTML = `<h4>${tickChip} <span>F${fid} · ${name}</span><span>${contrib >= 0 ? "+" : ""}${contrib != null ? fmt(contrib, 4) : "—"}</span></h4>
         <div class="kv-row">
           <div class="kv"><span>raw</span><b>${raw >= 0 ? "+" : ""}${fmtSig(raw)}</b></div>
           <div class="kv"><span>Bgn-adj</span><b>${adj >= 0 ? "+" : ""}${fmtSig(adj)}</b></div>
@@ -806,9 +942,10 @@ async function loadFormulas() {
               : `<td class="dim">—</td>`;
           }).join("");
           const cur = (fv.raw?.[fid] ?? core[fid]);
-          return `<tr><td>F${fid} ${(fv.names?.[fid] || "")}</td><td>${fmt(cur, 3)}</td>${tds}</tr>`;
+          const tOn = contribs[fid] ? Math.abs(contribs[fid].contribution) >= 1e-5 : null;
+          return `<tr><td>F${fid} ${(fv.names?.[fid] || "")}</td><td>${fx(cur, 3)}</td><td>${tOn === null ? "—" : (tOn ? "✓" : "✗")}</td>${tds}</tr>`;
         }).join("");
-        fwEl.innerHTML = `<table class="fwd-table"><thead><tr><th>formula</th><th>now</th>
+        fwEl.innerHTML = `<table class="fwd-table"><thead><tr><th>formula</th><th>now</th><th>tick</th>
           <th>tf1 P(up)</th><th>tf2 P(up)</th><th>tf3 P(up)</th><th>tf4 P(up)</th></tr></thead>
           <tbody>${rows}</tbody></table>
           <div class="hint">Forward P(up) is settled strict-sign from this ledger — n≥30 per bucket before it speaks (advice §2.7). Current value beside it: superposition (§2.8).</div>`;
@@ -899,6 +1036,9 @@ async function loadEmotion() {
       const zr = em.zero_reasons?.[String(i)] || em.zero_reasons?.[i];
       cell.title = (v === 0 && zr) ? zr
         : (v === 0 ? "no event this window — channel abstains" : "");
+      const etick = (sys.systems?.[`${S.symbol}|${S.focusTf}`]?.ticks?.emotions || {})[String(i)];
+      if (etick) cell.title = ((cell.title ? cell.title + " · " : "") +
+        (etick.on ? "✓ contributed (|" + etick.v + "| > 0.01)" : "✗ did not contribute this window"));
       const ring = $(".em-ring", cell);
       ring.style.setProperty("--p", `${clamp(Math.abs(v) * 100, 0, 100)}%`);
       $("i", ring).textContent = (v >= 0 ? "+" : "") + (v === 0 ? "0.00" : v.toFixed(Math.abs(v) < 0.001 ? 4 : 2));
@@ -980,10 +1120,14 @@ async function loadPhysics() {
           (aA != null ? `<div class="kv"><span>accuracy</span><b class="${aA >= 0.55 ? "acc-up" : aA <= 0.45 ? "acc-dn" : ""}">${Math.round(aA * 100)}%</b></div>` : "") +
           `</div>`
         : "";
-      card.innerHTML = `<h4><span>P${p} · ${P_NAMES[p] || ""}</span><span>${v >= 0 ? "+" : ""}${fmt(v, 4)}</span></h4>
-        <div class="kv-row"><div class="kv"><span>value</span><b style="color:${v >= 0 ? "var(--green)" : "var(--red)"}">${v >= 0 ? "▲" : "▼"} ${fmt(v, 4)}</b></div></div>
+      const why = (ph.mechanisms || []).find(mm => mm.id === p);
+      const whyLine = why
+        ? `<div class="hint" title="${esc(why.logic?.join(" · ") || "")}">${why.active ? "✓" : "○ why: "}${esc(why.why || "")}</div>`
+        : "";
+      card.innerHTML = `<h4><span>P${p} · ${P_NAMES[p] || ""}</span><span>${v >= 0 ? "+" : ""}${fx(v, 4)}</span></h4>
+        <div class="kv-row"><div class="kv"><span>value</span><b style="color:${v >= 0 ? "var(--green)" : "var(--red)"}">${v >= 0 ? "▲" : "▼"} ${fx(v, 4)}</b></div></div>
         ${accLine}
-        ${extra}<div class="logic">${P_LOGIC[p] || ""}</div>`;
+        ${whyLine}${extra}<div class="logic">${P_LOGIC[p] || ""}</div>`;
       grid.appendChild(card);
     }
   } catch (e) { toast("physics: " + e.message, "err"); }
@@ -1180,7 +1324,7 @@ async function loadBrains() {
         </div>
         <div class="kv-row" style="margin-top:8px">
           ${["dopamine", "serotonin", "octopamine", "tyramine"].map(k =>
-            `<div class="kv"><span>${k.slice(0, 4)}</span><div class="bar"><i class="${(h[k] ?? 0) > 0.5 ? "pos" : "neg"}" style="width:${clamp((h[k] ?? 0) * 100, 0, 100)}%"></i></div></div>`).join("")}
+            `<div class="kv"><span>${k.slice(0, 4)} ${fmt(h[k], 2)}</span><div class="bar"><i class="${(h[k] ?? 0) > 0.5 ? "pos" : "neg"}" style="width:${clamp((h[k] ?? 0) * 100, 0, 100)}%"></i></div></div>`).join("")}
         </div>
         <div class="logic">pattern ${fmt(inst.pattern, 3)} · P(dominant) ${fmt(inst.p_dominant, 2)}</div>`;
       wrap.appendChild(card);
@@ -1462,8 +1606,29 @@ async function loadHistory() {
         </div>`).join("") || `<div class="dim pad">no days yet</div>`;
     $$(".day-row[data-date]").forEach(r => r.addEventListener("click", () => showDay(r.dataset.date)));
     $("#hs-leader").innerHTML = (lb.leaderboard || []).map(r => `
-      <div class="kv"><span>${r.symbol || r.tf}</span><b>${fmt(r.accuracy ?? r.score, 3)}</b></div>`).join("")
+      <div class="kv"><span title="formula F${r.formula ?? ""}">${esc(r.name || r.symbol || r.tf || ("F" + r.formula))}</span>
+      <b class="${(r.accuracy ?? 0) >= 0.55 ? "acc-up" : (r.accuracy ?? 0) <= 0.45 ? "acc-dn" : ""}">${fx(r.accuracy ?? r.score, 4)}</b></div>`).join("")
       || `<div class="dim pad">no resolved predictions yet</div>`;
+    const csvBtn = $("#hs-csv");
+    if (csvBtn && !csvBtn.dataset.wired) {
+      csvBtn.dataset.wired = "1";
+      csvBtn.addEventListener("click", () => {
+        let csv = "kind,key,value\n";
+        (lb.leaderboard || []).forEach(r => {
+          csv += `leaderboard,${r.name || r.formula},${r.accuracy}\n`;
+        });
+        dd.forEach(d2 => {
+          csv += `day,${d2.date},grcs=${d2.grcs};pred=${d2.predictions};hits=${d2.targets_hit};sls=${d2.sls_hit}\n`;
+        });
+        const blob = new Blob([csv], { type: "text/csv" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "history-export.csv";
+        a.click();
+        URL.revokeObjectURL(a.href);
+        toast("history CSV exported", "ok");
+      });
+    }
     if (dd.length && !S.histDay) showDay(dd[0].date);
     else if (S.histDay) showDay(S.histDay);
   } catch (e) { toast("history: " + e.message, "err"); }
@@ -1473,14 +1638,14 @@ async function showDay(date) {
     S.histDay = date;
     $("#hs-day-label").textContent = date;
     const d = await api(`/api/history/day?date=${date}`);
-    const rows = d.rows || d.predictions || [];
+    const rows = d.records || d.rows || d.predictions || [];
     $("#hs-detail").innerHTML = rows.length ? `
       <div class="day-row head"><span>TF</span><span>DIR</span><span>CONF</span><span>RESULT</span><span>TIME</span></div>` +
       rows.slice(-40).reverse().map(r => `
         <div class="day-row">
           <span>${(r.tf || "").toUpperCase()}</span>
           <span style="color:${r.direction > 0 ? "var(--green)" : r.direction < 0 ? "var(--red)" : "var(--dim)"}">${r.direction > 0 ? "▲" : r.direction < 0 ? "▼" : "●"}</span>
-          <span>${fmt(r.confidence, 3)}</span>
+          <span>${fx(r.confidence, 3)}</span>
           <span>${r.result || r.outcome || (r.issued ? "issued" : "no trade")}</span>
           <span class="dim">${r.time ? new Date(r.time * 1000).toLocaleTimeString() : ""}</span>
         </div>`).join("")
@@ -1745,7 +1910,7 @@ window.addEventListener("unhandledrejection", e => {
 
 /* ═══════════ boot ═══════════ */
 (function boot() {
-  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse();
+  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); syncAnalyseButton();
   connectWS();
   api("/api/snapshot").then(applySnapshot).catch(() => {});
   // REST safety net lives in the single master setInterval below (H-2)

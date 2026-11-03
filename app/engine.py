@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import time
 
 import numpy as np
@@ -156,6 +157,7 @@ class PredictionEngine:
         self._agent_cache: dict = {}
         self.agent_deadline_misses = 0     # §12 agents: deadline misses
         self.analyse_job: dict | None = None   # staged ANALYSE flow
+        self._last_auto_analyse: float = 0.0   # AUTO-PREDICT cadence
         self._analyse_task: asyncio.Task | None = None
         self.started_at = time.time()      # §12 ops: uptime
         self.vault_last_write = 0.0        # §12 ops: vault last write
@@ -1190,6 +1192,59 @@ class PredictionEngine:
                         "items": news_agg["items"],
                     },
                     "hedge": phys["hedge"],
+                    # CONTRIBUTION TICKS (user request): which formula /
+                    # emotion / physics mechanism / hedge leg / news theme
+                    # actually contributed to THIS window, and which not
+                    "ticks": {
+                        "formulas": {
+                            str(c["id"]): {
+                                "on": abs(c["contribution"]) >= 1e-5,
+                                "c": c["contribution"],
+                                "name": c["name"],
+                            } for c in _comps
+                        },
+                        "emotions": {
+                            str(i): {"on": abs(float(v)) > 0.01,
+                                     "v": round(float(v), 4)}
+                            for i, v in em["emotions"].items()
+                        },
+                        "physics": {
+                            str(m["id"]): {
+                                "on": bool(m["active"]),
+                                "v": m["score"],
+                                "name": m["name"],
+                                "why": "" if m["active"] else m.get("why", ""),
+                            } for m in phys["mechanisms"]
+                        },
+                        "hedge": {
+                            k: {"on": abs(float((phys["hedge"] or {}).get(k, 0.0) or 0.0)) > 1e-6,
+                                "v": round(float((phys["hedge"] or {}).get(k, 0.0) or 0.0), 5)}
+                            for k in ("ifr", "dpad", "smdi", "combined")
+                            if k in (phys["hedge"] or {})
+                        },
+                        "news": {
+                            "aggregate": {"on": abs(news_agg["value"]) > 1e-9,
+                                          "v": round(news_agg["value"], 5),
+                                          "count": news_agg["count"]},
+                            "themes": {
+                                str(k): {"on": abs(float(v)) > 1e-9,
+                                         "v": round(float(v), 5)}
+                                for k, v in (news_agg.get("impacts") or {}).items()
+                            },
+                        },
+                        "brain": {
+                            "flywire": {
+                                "on": abs(float(
+                                    (brain_res[tf].get("flywire") or {}
+                                     ).get("vote") or 0.0)) > 1e-6,
+                                "v": (brain_res[tf].get("flywire") or {}
+                                      ).get("vote"),
+                                "ready": bool(
+                                    (brain_res[tf].get("flywire") or {}
+                                     ).get("ready")),
+                            },
+                        },
+                    },
                     "drhe": round(drhe, 4),
                     "atr": results[tf]["atr"],
                     "pcv": round(pcv, 5),
@@ -1228,6 +1283,8 @@ class PredictionEngine:
                         },
                         "base_confidence": round(pack["confidence"], 5),
                         "final_confidence": round(fin["confidence"], 5),
+                        "penalty_capped": bool(fin.get("penalty_capped")),
+                        "penalty": fin.get("penalty", 0.0),
                         "floor": 0.35,
                         "votes": {
                             "pcv": 1 if pcv > 0 else (-1 if pcv < 0 else 0),
@@ -2649,6 +2706,78 @@ class PredictionEngine:
         start = math.floor(now / ws) * ws
         return float(start), float(start + ws)
 
+    def explain_ctx(self, view: str, symbol: str, tf: str) -> dict:
+        """Everything the tab explainer needs, built from live state.
+        No computation of its own — it only READS the engine."""
+        res = self.last_result.get((symbol, tf)) or {}
+        disp = self.display_systems.get((symbol, tf)) or {}
+        cyc = self.cycles.get((symbol, tf))
+        price = self.feed.prices().get(symbol, 0.0)
+        atr = float(res.get("atr") or 0.0)
+        bd = res.get("breakdown") or {}
+        ctx: dict = {
+            "phase": "live" if self.phase == "live" else self.phase,
+            "price": price, "atr": atr,
+            "direction": int(res.get("direction") or 0),
+            "direction_label": ("BUY" if (res.get("direction") or 0) > 0
+                                else "SELL" if (res.get("direction") or 0) < 0
+                                else "NO TRADE"),
+            "signal": ("BUY" if (res.get("direction") or 0) > 0
+                       else "SELL" if (res.get("direction") or 0) < 0
+                       else "FLAT"),
+            "confidence": res.get("confidence"),
+            "issued": bool(res.get("issued")),
+            "reason": res.get("reason") or "",
+            "cci_raw": res.get("cci_raw"),
+            "cci_adjusted": res.get("cci_adjusted"),
+            "votes": bd.get("votes") or {},
+            "penalty_capped": bd.get("penalty_capped"),
+            "penalty": bd.get("penalty"),
+            "top": (bd.get("components") or [])[:6],
+            "ratio": getattr(cyc, "ratio", None),
+            "sl": getattr(cyc, "sl", None),
+        }
+        # provisional TP/SL the same way the lock builds them
+        tps = []
+        direction = ctx["direction"] or (1 if cyc is None else
+                                         int(getattr(cyc, "direction", 0) or 0))
+        conf = abs(float(ctx["confidence"] or 0.0))
+        minutes = TIMEFRAMES[tf]["targets"]
+        if price and atr:
+            for k, mins in enumerate(minutes, start=1):
+                tps.append({
+                    "k": k, "minutes": mins,
+                    "level": round(self._project_level(
+                        price, direction or 1, conf, atr, mins), 6)})
+        ctx["tps"] = tps
+        if not ctx.get("sl") and price and direction:
+            ctx["sl"] = round(price - direction * atr, 6)
+        view = (view or "dashboard").lower()
+        if view == "formulas":
+            ctx["zero_reasons"] = (res.get("formula_zero_reasons")
+                                   or disp.get("formula_zero_reasons") or {})
+        elif view == "emotion":
+            em = disp.get("emotion") or {}
+            ctx.update(cerc=em.get("cerc"), aggregate=em.get("aggregate"),
+                       zero_reasons=em.get("zero_reasons") or {},
+                       flow=(em.get("narrative") or {}).get("headline")
+                       if isinstance(em.get("narrative"), dict)
+                       else (em.get("narrative") or ""))
+        elif view == "physics":
+            ph = disp.get("physics") or {}
+            ctx.update(ufp=ph.get("ufp"), wfcp=ph.get("wfcp"),
+                       drpt=ph.get("drpt"), gspi=ph.get("gspi"),
+                       mechanisms=ph.get("mechanisms") or [])
+        elif view == "news":
+            nw = disp.get("news") or {}
+            ctx.update(value=nw.get("value"), polarity=nw.get("polarity"),
+                       count=nw.get("count"), coverage=nw.get("coverage"),
+                       impacts=nw.get("impacts") or {})
+        elif view in ("hedge", "hedgefund"):
+            hf = disp.get("hedge") or {}
+            ctx.update(hedge=hf)
+        return ctx
+
     def brain_fusion_weight(self, symbol: str, tf: str) -> float:
         """brain.md §6: 0.25 start, hindsight moves it, 0 when the
         connectome is absent (absence contributes exactly nothing)."""
@@ -3207,6 +3336,19 @@ class PredictionEngine:
             if self.phase != "live" or not self.locked:
                 continue
             now = time.time()
+            # AUTO-PREDICT (user toggle): keep the full staged analysis
+            # fresh without a click — one run at most every 45 s, never
+            # stacked on a running job (manual ▶ ANALYSE behaves as before)
+            if (self.agents.settings.get("auto_predict", True)
+                    and not os.environ.get("PYTEST_CURRENT_TEST")
+                    and (self.analyse_job is None
+                         or self.analyse_job.get("status") != "running")
+                    and now - self._last_auto_analyse >= 45.0):
+                self._last_auto_analyse = now
+                try:
+                    self.start_analyse(SYMBOL_ORDER[0], "tf1")
+                except Exception:
+                    log.exception("auto-predict analyse failed")
             prices = self.feed.prices()
             for symbol in SYMBOL_ORDER:
                 price = prices.get(symbol, 0.0)

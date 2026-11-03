@@ -6,3 +6,5 @@ pytest==8.3.4
 pytest-asyncio==0.25.0
 numpy==2.4.6
 ripser==0.6.15
+pyarrow==26.0.0
+scipy==1.17.1
