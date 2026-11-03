@@ -198,6 +198,17 @@ class ChartX {
       g.fillStyle = l.color; g.font = "9px monospace"; g.textAlign = "left";
       g.fillText(`${l.title} ${l.price.toFixed(l.price > 1000 ? 0 : 2)}`, 4, Y(l.price) - 3);
     }
+    // real-market zigzag: every bar's high→low wick (the tape is not a
+    // smooth curve — wicks carry the actual movement between closes)
+    if (this.bars.length <= 260) {
+      g.lineWidth = 1;
+      for (let i = 0; i < this.bars.length; i++) {
+        const b = this.bars[i], x = X(i);
+        g.strokeStyle = b.close >= b.open ? "rgba(34,201,138,.55)"
+                                          : "rgba(240,56,90,.55)";
+        g.beginPath(); g.moveTo(x, Y(b.high)); g.lineTo(x, Y(b.low)); g.stroke();
+      }
+    }
     g.beginPath();
     this.bars.forEach((b, i) => { const x = X(i), y = Y(b.close); i ? g.lineTo(x, y) : g.moveTo(x, y); });
     g.strokeStyle = "#00d4f0"; g.lineWidth = 1.3; g.stroke();
@@ -287,9 +298,15 @@ window.toggleWhyExplain = function () {
   if (show && !pre.textContent) loadExplain("dashboard");
 };
 function syncAnalyseButton() {
-  // one ANALYSE button, dashboard only (user request)
+  // dashboard-only chrome (user request): the ANALYSE button AND the
+  // ASSET / TIMEFRAME pickers — other tabs follow the dashboard's
+  // selection and show their scope in the tab title (BTC · TF1 · 22M)
+  const onDash = S.view === "dashboard";
   const b = $("#btn-analyse");
-  if (b) b.style.display = (S.view === "dashboard") ? "" : "none";
+  if (b) b.style.display = onDash ? "" : "none";
+  const sa = $("#seg-assets"), st = $("#seg-tf");
+  if (sa) sa.style.display = onDash ? "" : "none";
+  if (st) st.style.display = onDash ? "" : "none";
 }
 function setView(v) {
   S.view = v; S.lastViewFetch = 0;
@@ -821,8 +838,15 @@ function renderCalls() {
 /* ═══════════ candles (per symbol, per TF) ═══════════ */
 async function loadCandles() {
   try {
+    // ONE dense minute-series fetch drives every TF card chart (the
+    // aggregated 44/130/247-minute bars were only 4-5 points → smooth
+    // fake curves; traders want the real zigzag). TP/lock overlays stay
+    // per-TF below.
+    const md = await api(`/api/candles?symbol=${S.symbol}&tf=tf1&n=260`);
+    const mbars = (md.bars || []).map(x =>
+      ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c }));
     await Promise.all(TF.map(async tf => {
-      const d = await api(`/api/candles?symbol=${S.symbol}&tf=${tf}`);
+      const d = { bars: md.bars };
       const bars = d.bars || [];
       const c = S.charts[tf]; if (!c || !bars.length) return;
       const markers = [];
@@ -1206,12 +1230,16 @@ async function loadNews() {
 }
 
 let NEWS_LAST_COUNT = 0;
+let NEWS_LAST_TS = 0;
 function onNewsTicker(msg) {
   // docs11 §6: 4-second publisher — update chips live, feed the NIV trace,
   // and STREAM new headlines into an open News tab without a manual refresh
-  if (S.view === "news" && msg.count !== undefined &&
-      msg.count !== NEWS_LAST_COUNT) {
-    NEWS_LAST_COUNT = msg.count;
+  const newest = (msg.latest && msg.latest.length)
+    ? Number(msg.latest[0].ts || 0) : 0;
+  if (S.view === "news" &&
+      (msg.count !== NEWS_LAST_COUNT || newest > NEWS_LAST_TS)) {
+    NEWS_LAST_COUNT = msg.count ?? NEWS_LAST_COUNT;
+    NEWS_LAST_TS = Math.max(NEWS_LAST_TS, newest);
     loadNews();
   }
   const a = (msg.assets || {})[S.symbol];

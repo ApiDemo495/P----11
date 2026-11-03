@@ -159,6 +159,37 @@ def test_docs_and_requirements_in_sync():
     assert "FlyWire" in docs and "/api/explain" in docs
 
 
+def test_news_aggregate_rows_carry_ts():
+    """The 'news stuck at 05:30' bug: aggregate() repacks items and used
+    to drop `ts` → the table rendered Date(0) for every row."""
+    from app.news import NewsSystem
+
+    ns = NewsSystem()
+    ns.refresh()
+    agg = ns.aggregate("BTC")
+    rows = agg.get("items") or []
+    assert rows, "aggregate must expose scored items"
+    import time as _t
+    for r in rows[:5]:
+        assert isinstance(r.get("ts"), (int, float)), r
+        assert r["ts"] > _t.time() - 86400 * 2, r.get("ts")  # not epoch
+
+
+def test_dashboard_only_chrome_and_zigzag_chart():
+    js = (ROOT / "static" / "app.js").read_text()
+    # asset/timeframe pickers live on the dashboard only
+    fn = js.split("function syncAnalyseButton")[1].split("\n}")[0]
+    assert "seg-assets" in fn and "seg-tf" in fn
+    # charts draw per-bar high→low wicks (real-market zigzag)
+    assert "Y(b.high)" in js and "Y(b.low)" in js
+    # grid rows must not stretch (the blank-space bug)
+    css = (ROOT / "static" / "style.css").read_text()
+    assert "align-content: start" in css
+    assert "align-self: start" in css
+    # ticker reloads on newest-ts change too
+    assert "NEWS_LAST_TS" in js
+
+
 def test_reports_exist_and_are_linked():
     for name in ("NEWS-REPORT.md", "BRAIN-REPORT.md", "UX-ZERO-REPORT.md"):
         assert (ROOT / "docs" / name).exists(), name

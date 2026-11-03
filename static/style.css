@@ -19,11 +19,15 @@
   --tabs-h: 54px;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { height: 100%; }
+html { height: 100%; }
 body {
   background: var(--bg); color: var(--text);
   font: 13px/1.45 -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
   display: grid; grid-template-columns: var(--rail-w) 1fr;
+  /* rows size to CONTENT — never stretch to the viewport, or every
+     short tab gets a huge blank block under it (user report) */
+  align-content: start;
+  min-height: 100%;
   padding-bottom: var(--tabs-h);
 }
 b, strong { font-weight: 600; }
@@ -72,7 +76,7 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 5px; bo
 #rail-note { margin-top: auto; font-size: 10.5px; color: var(--dim); line-height: 1.5; }
 
 /* ── main area ─────────────────────────────────────────────── */
-#main { min-width: 0; padding: 16px 18px 24px; }
+#main { min-width: 0; padding: 16px 18px 24px; align-self: start; }
 .view { display: none; }
 .view.active { display: block; }
 .tab-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 8px; }

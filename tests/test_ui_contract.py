@@ -61,8 +61,17 @@ def test_app_js_cache_busted():
 
 
 def test_per_tf_candle_endpoints():
-    """Charts load per-timeframe aggregated candles, not one shared series."""
-    assert "/api/candles?symbol=${S.symbol}&tf=${tf}" in APP_JS
+    """Charts load ONE dense minute series for every TF card.
+
+    (Superseded contract: they used to fetch per-TF aggregated candles —
+    tf2/3/4 then had only 4-5 points and rendered as smooth fake curves.
+    The user asked for real-market zigzag precision, so the raw 1-minute
+    tape with high/low wicks drives all four cards; TP/lock overlays
+    remain per-TF. The endpoint itself still accepts tf= aggregation.)"""
+    assert "/api/candles?symbol=${S.symbol}&tf=tf1&n=260" in APP_JS
+    assert "Y(b.high)" in APP_JS          # per-bar wicks (zigzag)
+    # every TF chart still receives data in the loop
+    assert "S.charts[tf].setData" in APP_JS or "c.setData(" in APP_JS
 
 
 def test_emotion_reasoning_and_formula_logic_present():

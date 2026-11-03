@@ -738,6 +738,10 @@ class NewsSystem:
             for tf in TF_ORDER:
                 impacts[tf] += tf_impact(score, dur, tf)
             rows.append({
+                # ts MUST survive the repack — without it the table
+                # renders Date(0) = 05:30 IST for every row and the feed
+                # looks frozen at app-open time (user report)
+                "ts": it["ts"],
                 "headline": it["headline"],
                 "category": it["category"],
                 "sentiment": round(it["sentiment"], 3),
@@ -746,6 +750,7 @@ class NewsSystem:
                 "age_min": round(age, 1),
                 "source": it["source"],
                 "reliability": it["reliability"],
+                "synthetic": bool(it.get("synthetic")),
             })
         # NIV with resting evidence (advice C-3): divide by (sum|w| + W0)
         # so a single stale headline can never pin the aggregate.
