@@ -7,6 +7,7 @@ layer gains a feature and the others silently lag behind.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -188,6 +189,51 @@ def test_dashboard_only_chrome_and_zigzag_chart():
     assert "align-self: start" in css
     # ticker reloads on newest-ts change too
     assert "NEWS_LAST_TS" in js
+
+
+def test_markdown_preview_remap_and_fast_autostart():
+    """The editor error + boot lag guards: preview fix must be
+    backgrounded/only-if-missing, and the keybinding remap is a
+    checked-in helper (idempotent, never clobbers user bindings)."""
+    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
+    setup = (ROOT / "scripts" / "setup.sh").read_text()
+    # backgrounded: spawned, never awaited before boot
+    assert "( ensure_md_preview ) >/dev/null 2>&1" in auto
+    assert "scripts/ensure_md_keybindings.py" in auto
+    # the install lives ONLY inside the backgrounded helper function —
+    # nothing at the top level runs code --install-extension before boot
+    pre_fn = auto.split("ensure_md_preview() {")[0]
+    assert "--install-extension" not in pre_fn, \
+        "preview install must not sit before the health gate"
+    # only-if-missing + niced blocking stages
+    assert "grep -qix" in setup
+    for line in setup.splitlines():
+        if "--install-extension" in line:
+            assert "--force" not in line, f"--force on every boot: {line}"
+    assert "nice -n 10" in setup and "nice -n 10" in auto
+    helper = (ROOT / "scripts" / "ensure_md_keybindings.py").read_text()
+    assert "markdown-preview-enhanced.openPreview" in helper
+    assert "ctrl+shift+v" in helper
+    # and the helper really is idempotent against a real user file
+    import os as _os
+    import subprocess as _sp
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as td:
+        kb = _os.path.join(td, ".config", "Code", "User")
+        _os.makedirs(kb)
+        with open(_os.path.join(kb, "keybindings.json"), "w") as fh:
+            fh.write('[{"key": "ctrl+p", '
+                     '"command": "workbench.action.quickOpen"}]')
+        env = dict(_os.environ, HOME=td)
+        for _ in range(2):
+            r = _sp.run(
+                ["python3", str(ROOT / "scripts" / "ensure_md_keybindings.py")],
+                capture_output=True, text=True, env=env)
+            assert r.returncode == 0
+        data = json.loads(open(_os.path.join(kb, "keybindings.json")).read())
+        cmds = [x.get("command") for x in data]
+        assert "workbench.action.quickOpen" in cmds        # user binding kept
+        assert cmds.count("markdown-preview-enhanced.openPreview") == 2
 
 
 def test_reports_exist_and_are_linked():

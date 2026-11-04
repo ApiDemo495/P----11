@@ -1,8 +1,12 @@
 > **Can't open markdown preview?** Some editors ship without built-in
 > markdown (`markdown.showPreview not found` — no extension can add that
-> command). **Open [`docs.html`](docs.html) instead** — a double-click in
-> any browser renders this file and API_SETUP.md with zero extensions —
-> or visit **http://localhost:8000/docs** while the app runs.
+> command). Three fixes, in order of ease: **1)** press **Ctrl+Shift+V**
+> again — setup/auto-start installs *Markdown Preview Enhanced* in the
+> background and **remaps Ctrl+Shift+V / Ctrl+K V to its preview**
+> (`scripts/ensure_md_keybindings.py`); **2)** open
+> [`docs.html`](docs.html) — a double-click in any browser renders this
+> file and API_SETUP.md with zero extensions; **3)** visit
+> **http://localhost:8000/docs** while the app runs.
 
 # Crypto Prediction 4
 
@@ -449,7 +453,7 @@ automatically:
 |-------------|--------------|
 | `./run.sh` | Foreground start: runs `scripts/setup.sh` if the stamp/venv is stale, then serves on `PORT` (default **8000**). `SKIP_SETUP=1` to bypass. |
 | `scripts/setup.sh` | Idempotent bootstrap: `.venv` → `requirements.txt` (hard) → `requirements-agents.txt` incl. **cmake + llama-cpp-python + huggingface-hub** (best-effort) → `data/`, `data/history/`, `models/` → **`scripts/download_models.py`** (auto-picks Phi-3-mini ≥14 GB / TinyLlama ≥7 GB / Qwen2-0.5B, downloads from the HF Hub) → hourly `learning_cron` crontab entry (best-effort). Fast no-op via `.setup_stamp`; `FORCE=1` re-runs everything. |
-| `scripts/auto_start.sh` | Background supervisor (devcontainer `postStartCommand`): health-check → setup → `nohup` uvicorn → waits for `/api/health`. `--stop` / `--restart` supported. |
+| `scripts/auto_start.sh` | Background supervisor (devcontainer `postStartCommand`): health-check → setup (only when stale, **niced** so the UI stays responsive) → `nohup` uvicorn → waits for `/api/health`. The editor-preview fix (install MPE only if missing + Ctrl+Shift+V remap) runs **in the background and never delays the boot**. `--stop` / `--restart` supported. |
 | devcontainer | `postCreateCommand` = full setup, `postStartCommand` = auto-start — opening the Codespace brings the app up by itself. |
 | In-process hourly loop | `main.py` runs a wall-clock safety net every 10 min: if the macro learning cycle is >60 min old it fires macro + deep + save directly — learning keeps running even without system cron (mirrors `scripts/learning_cron.sh`). |
 

@@ -8,13 +8,6 @@
 #   3. starts uvicorn in the background and waits for /api/health
 # Usage:  bash scripts/auto_start.sh [--stop|--restart]
 # ══════════════════════════════════════════════════════════════════════
-# markdown preview fix (idempotent, silent): the editor's built-in
-# markdown.showPreview may be absent — Markdown Preview Enhanced bundles
-# its own preview engine.
-if command -v code >/dev/null 2>&1; then
-  code --install-extension shd101wyy.markdown-preview-enhanced --force >/dev/null 2>&1 || true
-  code --install-extension yzhang.markdown-all-in-one --force >/dev/null 2>&1 || true
-fi
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -47,6 +40,29 @@ case "$ACTION" in
   --start|start|"") : ;;
 esac
 
+# ── editor markdown preview fix (never blocks startup) ─────────────────
+# "markdown.showPreview not found" = no built-in markdown in the editor.
+# Markdown Preview Enhanced bundles its OWN preview engine; when it is
+# present we also remap Ctrl+Shift+V / Ctrl+K V to MPE's command, so the
+# built-in shortcut no longer errors. Everything below runs in the
+# BACKGROUND — a slow marketplace used to add seconds to EVERY boot.
+ensure_md_preview() {
+  command -v code >/dev/null 2>&1 || return 0
+  _have=$(code --list-extensions 2>/dev/null \
+            | grep -ix "shd101wyy.markdown-preview-enhanced" || true)
+  if [ -z "$_have" ]; then
+    code --install-extension shd101wyy.markdown-preview-enhanced \
+      >/dev/null 2>&1 || true
+    code --list-extensions 2>/dev/null \
+      | grep -qix "shd101wyy.markdown-preview-enhanced" || return 0
+  fi
+  # merge user keybindings idempotently (never clobber what exists)
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 scripts/ensure_md_keybindings.py || true
+}
+# spawn immediately: runs while setup/boot proceed in parallel
+( ensure_md_preview ) >/dev/null 2>&1 || true
+
 if curl -sf -m 3 "$HEALTH_URL" >/dev/null 2>&1; then
   log "app already healthy on :$PORT — nothing to do"
   exit 0
@@ -63,8 +79,8 @@ if [ "${SKIP_SETUP:-0}" != "1" ]; then
     [ "$H" = "$S" ] || need_setup=1
   fi
   if [ "$need_setup" = "1" ]; then
-    log "environment stale — running setup…"
-    bash scripts/setup.sh || { log "setup failed — cannot start"; exit 1; }
+    log "environment stale — running setup… (niced)"
+    nice -n 10 bash scripts/setup.sh || { log "setup failed — cannot start"; exit 1; }
   else
     log "environment fresh — skipping setup"
   fi

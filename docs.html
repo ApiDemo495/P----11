@@ -19,9 +19,13 @@ Live version: <a href="/docs">http://localhost:8000/docs</a> · refresh this fil
 after doc changes with <code>python3 scripts/make_docs_html.py</code></div>
 <a class="back" href="/">← back to app</a><article><h1 class="doc-title">README.md</h1><p>&gt; <b>Can&#x27;t open markdown preview?</b> Some editors ship without built-in</p>
 <p>&gt; markdown (<code>markdown.showPreview not found</code> — no extension can add that</p>
-<p>&gt; command). <b>Open <a href="docs.html"><code>docs.html</code></a> instead</b> — a double-click in</p>
-<p>&gt; any browser renders this file and API_SETUP.md with zero extensions —</p>
-<p>&gt; or visit <b>http://localhost:8000/docs</b> while the app runs.</p>
+<p>&gt; command). Three fixes, in order of ease: <b>1)</b> press <b>Ctrl+Shift+V</b></p>
+<p>&gt; again — setup/auto-start installs <i>Markdown Preview Enhanced</i> in the</p>
+<p>&gt; background and <b>remaps Ctrl+Shift+V / Ctrl+K V to its preview</b></p>
+<p>&gt; (<code>scripts/ensure_md_keybindings.py</code>); <b>2)</b> open</p>
+<p>&gt; <a href="docs.html"><code>docs.html</code></a> — a double-click in any browser renders this</p>
+<p>&gt; file and API_SETUP.md with zero extensions; <b>3)</b> visit</p>
+<p>&gt; <b>http://localhost:8000/docs</b> while the app runs.</p>
 <h3>Crypto Prediction 4</h3>
 <p>Production-grade real-time cryptocurrency prediction web application targeting</p>
 <p><b>BTC, PAXG, ETH and BNB</b>. Built for GitHub Codespaces (4-core) as a</p>
@@ -502,7 +506,7 @@ pytest.ini         pytest 9 + pytest-asyncio 1, strict asyncio mode,
 <tr><td>Entry point</td><td>What it does</td></tr>
 <tr><td>`./run.sh`</td><td>Foreground start: runs `scripts/setup.sh` if the stamp/venv is stale, then serves on `PORT` (default **8000**). `SKIP_SETUP=1` to bypass.</td></tr>
 <tr><td>`scripts/setup.sh`</td><td>Idempotent bootstrap: `.venv` → `requirements.txt` (hard) → `requirements-agents.txt` incl. **cmake + llama-cpp-python + huggingface-hub** (best-effort) → `data/`, `data/history/`, `models/` → **`scripts/download_models.py`** (auto-picks Phi-3-mini ≥14 GB / TinyLlama ≥7 GB / Qwen2-0.5B, downloads from the HF Hub) → hourly `learning_cron` crontab entry (best-effort). Fast no-op via `.setup_stamp`; `FORCE=1` re-runs everything.</td></tr>
-<tr><td>`scripts/auto_start.sh`</td><td>Background supervisor (devcontainer `postStartCommand`): health-check → setup → `nohup` uvicorn → waits for `/api/health`. `--stop` / `--restart` supported.</td></tr>
+<tr><td>`scripts/auto_start.sh`</td><td>Background supervisor (devcontainer `postStartCommand`): health-check → setup (only when stale, **niced** so the UI stays responsive) → `nohup` uvicorn → waits for `/api/health`. The editor-preview fix (install MPE only if missing + Ctrl+Shift+V remap) runs **in the background and never delays the boot**. `--stop` / `--restart` supported.</td></tr>
 <tr><td>devcontainer</td><td>`postCreateCommand` = full setup, `postStartCommand` = auto-start — opening the Codespace brings the app up by itself.</td></tr>
 <tr><td>In-process hourly loop</td><td>`main.py` runs a wall-clock safety net every 10 min: if the macro learning cycle is >60 min old it fires macro + deep + save directly — learning keeps running even without system cron (mirrors `scripts/learning_cron.sh`).</td></tr>
 </table>

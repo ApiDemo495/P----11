@@ -20,20 +20,35 @@ STAMP=".setup_stamp"
 FORCE="${FORCE:-0}"
 BLOCKING="${BLOCKING:-0}"
 T0=$(date +%s)
-# ── VS Code / Codespaces markdown preview ──────────────────────────────
-# The editor error "markdown.showPreview not found" means the editor has
-# NO built-in markdown. Markdown Preview Enhanced ships its OWN preview
-# engine — install it whenever the code CLI is available (idempotent).
-if command -v code >/dev/null 2>&1; then
-  for ext in shd101wyy.markdown-preview-enhanced yzhang.markdown-all-in-one; do
-    code --install-extension "$ext" --force >/dev/null 2>&1 \
-      && log "editor extension installed: $ext" \
-      || warn "could not install $ext (install from the Extensions panel)"
-  done
-fi
 
 log()  { printf '[setup %4ss] %s\n' "$(( $(date +%s) - T0 ))" "$*"; }
 warn() { printf '[setup %4ss] WARN: %s\n' "$(( $(date +%s) - T0 ))" "$*"; }
+
+# ── VS Code / Codespaces markdown preview ──────────────────────────────
+# The editor error "markdown.showPreview not found" means the editor has
+# NO built-in markdown. Markdown Preview Enhanced ships its OWN preview
+# engine — install it ONLY when missing (a --force install on every boot
+# was adding marketplace round-trips to each start).
+if command -v code >/dev/null 2>&1; then
+  EXT_LIST="$(code --list-extensions 2>/dev/null || true)"
+  for ext in shd101wyy.markdown-preview-enhanced yzhang.markdown-all-in-one; do
+    if printf '%s\n' "$EXT_LIST" | grep -qix "$ext"; then
+      : # already present — zero network, zero lag
+    elif code --install-extension "$ext" >/dev/null 2>&1; then
+      log "editor extension installed: $ext"
+    else
+      warn "could not install $ext (install from the Extensions panel)"
+    fi
+  done
+  # remap Ctrl+Shift+V / Ctrl+K V to MPE's preview so the missing
+  # built-in markdown.showPreview shortcut stops erroring (idempotent,
+  # only when MPE is actually installed)
+  if code --list-extensions 2>/dev/null \
+       | grep -qix "shd101wyy.markdown-preview-enhanced"; then
+    "$PYTHON_BIN" scripts/ensure_md_keybindings.py >/dev/null 2>&1 \
+      || python3 scripts/ensure_md_keybindings.py >/dev/null 2>&1 || true
+  fi
+fi
 
 req_hash() {
   # raw sha256 of the file contents (must match `sha256sum | cut` in
@@ -67,8 +82,8 @@ if [ "$FORCE" != "1" ] && [ -x .venv/bin/python ] \
    && [ "$CORE_HASH" = "$PREV_CORE" ]; then
   log "core requirements up to date — skipping pip"
 else
-  log "installing core requirements…"
-  if ! "$VENV_PY" -m pip install -q -r requirements.txt; then
+  log "installing core requirements… (niced — keeps the UI responsive)"
+  if ! nice -n 10 "$VENV_PY" -m pip install -q -r requirements.txt; then
     warn "core dependency install FAILED — cannot start the app"
     exit 1
   fi
