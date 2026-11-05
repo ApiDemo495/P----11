@@ -161,7 +161,7 @@ class ChartX {
     if (this._raf) return;
     this._raf = requestAnimationFrame(() => { this._raf = 0; this.draw(); });
   }
-  setData(bars) { this.bars = bars.slice(-260); this.schedule(); }
+  setData(bars) { this.bars = bars.slice(-150); this.schedule(); }
   setLines(l) { this.lines = l || []; this.schedule(); }
   setMarkers(m) { this.markers = m || []; this.schedule(); }
   tick(price) {
@@ -205,12 +205,12 @@ class ChartX {
     }
     // real-market zigzag: every bar's high→low wick (the tape is not a
     // smooth curve — wicks carry the actual movement between closes)
-    if (this.bars.length <= 260) {
-      g.lineWidth = 1;
+    if (this.bars.length <= 150) {
+      g.lineWidth = 1.2;
       for (let i = 0; i < this.bars.length; i++) {
         const b = this.bars[i], x = X(i);
-        g.strokeStyle = b.close >= b.open ? "rgba(34,201,138,.55)"
-                                          : "rgba(240,56,90,.55)";
+        g.strokeStyle = b.close >= b.open ? "rgba(34,201,138,.9)"
+                                          : "rgba(240,56,90,.9)";
         g.beginPath(); g.moveTo(x, Y(b.high)); g.lineTo(x, Y(b.low)); g.stroke();
       }
     }
@@ -712,7 +712,7 @@ function renderWhy() {
           const tip = (f.top_channels || []).map(c => `F${c.fid} ${c.value >= 0 ? "+" : ""}${fmt(c.value, 3)}`).join(" · ");
           return f.ready
             ? `<div class="kv" style="margin-top:6px"><span title="${esc(tip)}">brain +${fmt(f.vote, 3)} <span class="dim">(FlyWire v783 · conf ${fmt(f.conf, 2)}${tip ? " · hover for top channels" : ""})</span></span><b class="${f.vote >= 0 ? "up" : "down"}">${f.vote >= 0 ? "approach" : "avoid"}</b></div>`
-            : `<div class="kv" style="margin-top:6px"><span>brain</span><b class="down" title="${esc(f.reason || "")}">absent — vote withheld, weight 0</b></div>`;
+            : `<div class="kv" style="margin-top:6px"><span>brain</span><b class="down" title="${esc(f.reason || "")}">absent (${esc(f.reason || "vote withheld")}) — weight 0</b></div>`;
         })()}
         <div class="hint">4-vote double-check: PCV + agent + brain (+ emotion/physics here) must agree to issue.</div>
       </div>
@@ -819,7 +819,7 @@ function renderCalls() {
         : t.status === "locked" ? '<i class="st lock">LOCK</i>' : '<i class="st open">open</i>';
       return `<td class="tp-cell">${t.level ? px(t.level) : "—"}<br/><span class="tp-min">TP${i + 1} · ${m.tps[i]}m</span> ${st}</td>`;
     }).join("");
-    const sl = cyc?.sl ? `${px(cyc.sl)}` : "—";
+    const sl = cyc?.sl ? `${px(cyc.sl)}${cyc.sl_provisional ? ' <span class="dim" style="font-size:9px">prov</span>' : ""}` : "—";
     return `<tr class="${tf === S.focusTf ? "focus-row" : ""}">
       <td class="mono">${tf.toUpperCase()}</td>
       <td class="mono">${m.mins}m</td>
@@ -1698,10 +1698,37 @@ async function loadHistory() {
           <span>${d.targets_hit ?? 0}/${d.sls_hit ?? 0}</span>
         </div>`).join("") || `<div class="dim pad">no days yet</div>`;
     $$(".day-row[data-date]").forEach(r => r.addEventListener("click", () => showDay(r.dataset.date)));
-    $("#hs-leader").innerHTML = (lb.leaderboard || []).map(r => `
-      <div class="kv"><span title="formula F${r.formula ?? ""}">${esc(r.name || r.symbol || r.tf || ("F" + r.formula))}</span>
-      <b class="${(r.accuracy ?? 0) >= 0.55 ? "acc-up" : (r.accuracy ?? 0) <= 0.45 ? "acc-dn" : ""}">${fx(r.accuracy ?? r.score, 4)}</b></div>`).join("")
+    $("#hs-leader").innerHTML = (lb.leaderboard || []).map(r => {
+      const nn = r.n ?? 0;
+      const enough = nn >= 8;
+      return `<div class="kv"><span title="formula F${r.formula ?? ""}">${esc(r.name || r.symbol || r.tf || ("F" + r.formula))}</span>` +
+        (enough
+          ? `<b class="${(r.accuracy ?? 0) >= 0.55 ? "acc-up" : (r.accuracy ?? 0) <= 0.45 ? "acc-dn" : ""}">${fx(r.accuracy ?? r.score, 4)} <span class="dim" style="font-weight:400">n=${nn}</span></b>`
+          : `<b class="dim">— n=${nn} (needs ≥8)</b>`) + `</div>`;
+    }).join("")
       || `<div class="dim pad">no resolved predictions yet</div>`;
+    // confidence calibration (stated vs realised)
+    try {
+      const cal = await api("/api/history/calibration");
+      $("#calib-meta").textContent = `n=${cal.n} · brier ${cal.brier ?? "—"} · hit ${cal.hit_rate != null ? Math.round(cal.hit_rate * 100) + "%" : "—"}`;
+      const box = $("#hs-calib");
+      if (!cal.n) {
+        box.innerHTML = `<div class="dim pad">needs settled windows with a locked confidence — n=0 / ${cal.min_n} (honest: nothing to calibrate yet)</div>`;
+      } else {
+        const rows = (cal.bins || []).map(b => {
+          const w = Math.min(100, (b.hit_rate ?? 0) * 100);
+          const exp = Math.round(b.conf * 100);
+          return `<div class="contrib" style="grid-template-columns:64px 1fr 96px">
+            <span class="cname">${Math.round(b.conf * 100)}% conf</span>
+            <div class="bar" title="realised hit-rate"><i class="${(b.hit_rate ?? 0) >= b.conf - 0.1 ? "pos" : "neg"}" style="width:${Math.max(2, w)}%"></i>
+              <u style="position:absolute;left:${exp}%;top:0;bottom:0;width:1px;background:var(--gold)"></u></div>
+            <span class="val">${b.hit_rate != null ? Math.round(b.hit_rate * 100) + "%" : "—"} <span class="dim">n${b.n}</span></span>
+          </div>`;
+        }).join("");
+        box.innerHTML = rows +
+          `<div class="hint">gold tick = the confidence the engine STATED; bar = how often that bucket actually hit (strict sign, tie=loss). ${esc(cal.note || "")} ${cal.enough ? "" : `<b class="acc-warn">preliminary — needs n≥${cal.min_n}</b>`}</div>`;
+      }
+    } catch { /* panel optional */ }
     const csvBtn = $("#hs-csv");
     if (csvBtn && !csvBtn.dataset.wired) {
       csvBtn.dataset.wired = "1";
@@ -1731,15 +1758,31 @@ async function showDay(date) {
     S.histDay = date;
     $("#hs-day-label").textContent = date;
     const d = await api(`/api/history/day?date=${date}`);
-    const rows = d.records || d.rows || d.predictions || [];
+    // records are per-GRC: {timestamp, predictions:{tf:{...}}, outcomes:{tf:{...}}}
+    const recs = d.records || d.rows || [];
+    const rows = [];
+    recs.forEach(rc => {
+      const preds = rc.predictions || {};
+      Object.keys(preds).forEach(tf => {
+        const pr = preds[tf] || {};
+        const oc = (rc.outcomes || {})[[tf]] || {};
+        rows.push({
+          tf, direction: pr.direction ?? 0,
+          confidence: pr.confidence, issued: pr.issued,
+          result: oc.target_hit ? "target ✓" : oc.sl_hit ? "SL ✗"
+            : (pr.issued ? "open / no close" : "no trade"),
+          time: Date.parse(rc.timestamp || "") / 1000 || null,
+        });
+      });
+    });
     $("#hs-detail").innerHTML = rows.length ? `
       <div class="day-row head"><span>TF</span><span>DIR</span><span>CONF</span><span>RESULT</span><span>TIME</span></div>` +
       rows.slice(-40).reverse().map(r => `
         <div class="day-row">
           <span>${(r.tf || "").toUpperCase()}</span>
           <span style="color:${r.direction > 0 ? "var(--green)" : r.direction < 0 ? "var(--red)" : "var(--dim)"}">${r.direction > 0 ? "▲" : r.direction < 0 ? "▼" : "●"}</span>
-          <span>${fx(r.confidence, 3)}</span>
-          <span>${r.result || r.outcome || (r.issued ? "issued" : "no trade")}</span>
+          <span>${r.confidence != null ? fx(r.confidence, 3) : "—"}</span>
+          <span>${r.result}</span>
           <span class="dim">${r.time ? new Date(r.time * 1000).toLocaleTimeString() : ""}</span>
         </div>`).join("")
       : `<div class="dim pad">no prediction rows for this day</div>`;

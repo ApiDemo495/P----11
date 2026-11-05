@@ -102,6 +102,10 @@ def test_settings_endpoint_roundtrip():
 
     from app.main import app
 
+    # NOTE: the file's ONLY `with TestClient(app)` — a second lifespan in
+    # the same pytest process re-binds engine asyncio primitives to a new
+    # loop and crashes shutdown (RuntimeError: Event bound to a different
+    # event loop). Every app-level HTTP contract in this file lives here.
     with TestClient(app) as c:
         before = c.get("/api/settings").json()["settings"]
         assert "auto_predict" in before
@@ -110,6 +114,14 @@ def test_settings_endpoint_roundtrip():
             assert r.json()["settings"]["auto_predict"] is False
         finally:
             c.put("/api/settings", json={"auto_predict": True})
+        # confidence calibration (stated vs realised) — honest cold start
+        cal = c.get("/api/history/calibration").json()
+        for k in ("n", "enough", "min_n", "bins", "brier", "note"):
+            assert k in cal, k
+        assert cal["enough"] is False and cal["n"] == 0
+        # leaderboard carries n so the UI can refuse to speak below 8
+        lb = c.get("/api/history/leaderboard").json()
+        assert all("n" in r for r in (lb.get("leaderboard") or []))
 
 
 # ------------------------------------------------------------- UI contracts
@@ -131,7 +143,7 @@ def test_fx_formatter_and_explain_panels_present():
     assert "CONTRIBUTION TICKS" in js
     # leaderboard/day field fixes (the UNDEFINED / empty-day bugs)
     assert "r.name || r.symbol || r.tf" in js
-    assert "d.records || d.rows || d.predictions" in js
+    assert "d.records || d.rows" in js            # flattened per-GRC rows
 
 
 def test_docs_and_requirements_in_sync():
@@ -278,6 +290,51 @@ def test_autostart_docs_off_critical_path():
     # the tracked stats file short-circuits the network fetch
     assert "! -f assets/brain_real.json" in auto
     assert "! -f assets/brain_real.json" in setup
+
+
+def test_brain_display_refresh_and_provisional_sl():
+    """Dashboard must not LIE about the brain between GRC passes (user
+    saw absent+weight0 while the brain tab was ready), and below the
+    confidence floor the calls table must still show a SEEDED SL/ratio."""
+    import asyncio
+    from tests.test_engine import make_engine, run, _boot
+    eng, _f, _e = make_engine()
+    run(_boot(eng))
+    # force the component ready with raws available, stale display says absent
+    saved = eng.brains.fw.state
+    try:
+        eng.brains.fw.state = "ready"
+        eng._last_raws[("BTC", "tf1")] = {i: 0.4 for i in range(1, 32)}
+        eng.display_systems[("BTC", "tf1")] = {
+            "brain": {"flywire": {"ready": False, "vote": None}},
+            "ticks": {"brain": {"flywire": {"ready": False, "on": False}}},
+        }
+        eng._refresh_flywire_display()
+        f = eng.display_systems[("BTC", "tf1")]["brain"]["flywire"]
+        assert f["ready"] is True, f
+        tk = eng.display_systems[("BTC", "tf1")]["ticks"]["brain"]["flywire"]
+        assert tk["ready"] is True
+        # snapshot path invokes the refresh itself
+        eng.display_systems[("BTC", "tf1")]["brain"]["flywire"]["ready"] = False
+        eng.build_snapshot()
+        f2 = eng.display_systems[("BTC", "tf1")]["brain"]["flywire"]
+        assert f2["ready"] is True
+        # provisional SL/ratio code present + calibration stash wired
+        src = (ROOT / "app" / "engine.py").read_text()
+        assert "sl_provisional" in src and "_calib_pending" in src
+    finally:
+        eng.brains.fw.state = saved
+        run(eng.stop())
+
+
+def test_calibration_and_day_flatten_ui_contract():
+    js = (ROOT / "static" / "app.js").read_text()
+    assert "needs ≥8" in js
+    assert "rc.predictions" in js        # day detail flattens per-GRC records
+    assert "hs-calib" in (ROOT / "static" / "index.html").read_text()
+    assert "sl_provisional" in js
+    # chart: denser window + strong wicks
+    assert "bars.slice(-150)" in js and "rgba(34,201,138,.9)" in js
 
 
 def test_reports_exist_and_are_linked():

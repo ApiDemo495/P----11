@@ -550,6 +550,45 @@ async def history_day(date: str) -> JSONResponse:
     return JSONResponse({"ok": True, "date": date, "records": rows})
 
 
+@app.get("/api/history/calibration")
+async def history_calibration() -> JSONResponse:
+    """Confidence calibration: for every settled window, the LOCKED
+    confidence bucket vs the realised strict-sign hit. A well-calibrated
+    engine's hit-rate rises with the stated confidence — the single
+    best accuracy audit. Honest 'needs n' below MIN_N."""
+    MIN_N = 40
+    pairs: list[tuple[float, float]] = []
+    for symbol in SYMBOLS:
+        for tf in TF_ORDER:
+            ps = list(engine.hist.ring(
+                engine.hist.tf_key(symbol, tf, "calib_p"), 400))
+            hs = list(engine.hist.ring(
+                engine.hist.tf_key(symbol, tf, "calib_h"), 400))
+            n = min(len(ps), len(hs))
+            pairs.extend((float(ps[i]), float(hs[i])) for i in range(n))
+    buckets = {}
+    for b, h in pairs:
+        e = buckets.setdefault(int(round(b * 20)),
+                               {"p": round(b, 2), "n": 0, "hits": 0})
+        e["n"] += 1
+        e["hits"] += h
+    out = []
+    for k in sorted(buckets):
+        e = buckets[k]
+        out.append({"conf": e["p"], "n": e["n"],
+                    "hit_rate": round(e["hits"] / e["n"], 4)
+                    if e["n"] else None})
+    n = len(pairs)
+    brier = (round(sum((b - h) ** 2 for b, h in pairs) / n, 4)
+             if n else None)
+    hit_all = (round(sum(h for _b, h in pairs) / n, 4) if n else None)
+    return JSONResponse({
+        "ok": True, "n": n, "enough": n >= MIN_N, "min_n": MIN_N,
+        "bins": out, "brier": brier, "hit_rate": hit_all,
+        "note": ("hit-rate should RISE with stated confidence; "
+                 "brier → 0 is perfect, 0.25 is a coin flip")})
+
+
 @app.get("/api/history/replay")
 async def history_replay(date: str, i: int = 0) -> JSONResponse:
     rows = engine.historydb.day(date)
@@ -567,11 +606,16 @@ async def history_leaderboard() -> JSONResponse:
     rows = []
     for fid in _WIDS:
         acc = engine.learning.formula_accuracy(fid)
-        if acc is not None:
-            rows.append({"formula": fid,
-                         "name": FORMULA_NAMES.get(fid, f"F{fid}"),
-                         "accuracy": round(acc, 4)})
-    rows.sort(key=lambda r: -r["accuracy"])
+        n = len(engine.learning.acc500.get(fid) or [])
+        # always list every formula — the UI renders accuracy=None as an
+        # honest "— n=<n> (needs ≥8)" instead of a scary red 0.0000
+        rows.append({"formula": fid,
+                     "name": FORMULA_NAMES.get(fid, f"F{fid}"),
+                     "accuracy": round(acc, 4) if acc is not None else None,
+                     "n": n})
+    # undecided (accuracy=None, n<8) sink to the bottom — never crash sort
+    rows.sort(key=lambda r: -(r["accuracy"]
+                              if r["accuracy"] is not None else -1.0))
     return JSONResponse({"ok": True, "leaderboard": rows})
 
 

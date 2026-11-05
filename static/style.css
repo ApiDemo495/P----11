@@ -88,7 +88,7 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 5px; bo
 .kv { background: var(--panel2); border-radius: 7px; padding: 8px 11px; display: flex; flex-direction: column; gap: 3px; }
 .kv span { font-size: 10px; color: var(--dim); letter-spacing: .8px; text-transform: uppercase; }
 .kv b { font: 500 13px/1.2 var(--mono); }
-.bar { height: 6px; background: #1a1a2c; border-radius: 3px; overflow: hidden; flex: 1; min-width: 60px; }
+.bar { position: relative; height: 6px; background: #1a1a2c; border-radius: 3px; overflow: hidden; flex: 1; min-width: 60px; }
 .bar i { display: block; height: 100%; background: var(--cyan); border-radius: 3px; transition: width .4s; }
 .bar i.pos { background: var(--green); } .bar i.neg { background: var(--red); }
 .btn {

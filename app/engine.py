@@ -204,6 +204,8 @@ class PredictionEngine:
         # multiplier clip(1 + 0.25·z, 0.25, 1.5); 0 when absent
         self._fw_hindsight: dict[tuple[str, str], float] = {}
         self._fw_last_vote: dict[tuple[str, str], float] = {}
+        self._last_raws: dict[tuple[str, str], dict] = {}
+        self._calib_pending: dict[tuple[str, str], float] = {}
         self.news_polarity: deque[float] = deque(maxlen=30)
         self._market_cache: dict[str, dict] = {}
         self._market_cache_ts: float = 0.0
@@ -554,6 +556,7 @@ class PredictionEngine:
             _anoms: list = []
             raws[tf], _traces = traced_compute(ctx, record=record,
                                                anomalies=_anoms)
+            self._last_raws[(symbol, tf)] = raws[tf]
             self.last_traces[(symbol, tf)] = _traces
             if _anoms:
                 self.auditor.report_anomalies(symbol, tf, _anoms, raws[tf])
@@ -682,8 +685,20 @@ class PredictionEngine:
                         self.hist.ring(
                             self.hist.tf_key(symbol, tf, "facc_agent"), 50
                         ).append(1.0 if _ok else -1.0)
-                # consecutive-correct running ratio (0..1, last 10)
+                # calibration rings (paired): this window's LOCKED
+                # confidence bucket + its realised strict-sign hit — the
+                # calibration panel plots hit-rate vs stated confidence
+                _cb = self._calib_pending.pop((symbol, tf), None)
                 pdir = self.prev_cci_dir.get((symbol, tf), 0)
+                if move != 0 and pdir != 0 and _cb is not None and _cb > 0:
+                    _bucket = round(min(1.0, max(0.0, _cb)) * 20) / 20.0
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, "calib_p"), 400
+                    ).append(_bucket)
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, "calib_h"), 400
+                    ).append(1.0 if pdir == _sign(move) else 0.0)
+                # consecutive-correct running ratio (0..1, last 10)
                 if move != 0 and pdir != 0:
                     self.hist.commit_win_streak(symbol, pdir == _sign(move))
                     # F21 (CCI) panel accuracy: sign of the previous pass'
@@ -2885,6 +2900,10 @@ class PredictionEngine:
             "inputs": inputs,
             "genesis_values": dict(self._genesis_values.get((symbol, tf)) or {}),
         }
+        # calibration: remember this window's confidence for the settle
+        # pass at the NEXT boundary (paired with the realised move)
+        self._calib_pending[(symbol, tf)] = round(
+            float(res.get("confidence") or 0.0), 4)
         self._maybe_review_hindsight(symbol, tf, now)   # cadence-gated §8.3
         self._save_locks()
 
@@ -3428,8 +3447,40 @@ class PredictionEngine:
     # ==================================================================
     # snapshots / broadcast
     # ==================================================================
+    def _refresh_flywire_display(self) -> None:
+        """Display must never LIE about the brain: the connectome can
+        hot-swap in BETWEEN GRC passes, and the user saw 'brain absent'
+        on the dashboard while the brain tab showed ready. On every
+        snapshot read, any display entry whose flywire state disagrees
+        with the live component is re-evaluated (a vote costs ~5 ms)."""
+        fw = self.brains.fw
+        ready_now = fw.state == "ready"
+        for (sym, tf), disp in self.display_systems.items():
+            brain = disp.get("brain")
+            if brain is None:
+                continue
+            f = brain.get("flywire")
+            cur = bool(f and f.get("ready"))
+            if cur == ready_now:
+                continue
+            fresh = self.brains._flywire_eval(
+                sym, tf, self._last_raws.get((sym, tf)))
+            brain["flywire"] = fresh
+            self._fw_last_vote[(sym, tf)] = float(fresh.get("vote") or 0.0)
+            tk = (disp.get("ticks") or {}).get("brain")
+            if tk is not None:
+                tk["flywire"] = {
+                    "on": abs(float(fresh.get("vote") or 0.0)) > 1e-6,
+                    "v": fresh.get("vote"),
+                    "ready": bool(fresh.get("ready")),
+                }
+
     def build_snapshot(self) -> dict[str, Any]:
         now = time.time()
+        try:
+            self._refresh_flywire_display()
+        except Exception:
+            log.exception("flywire display refresh failed")
         assets: dict[str, Any] = {}
         prices = self.feed.prices()
         for symbol in SYMBOL_ORDER:
@@ -3439,7 +3490,50 @@ class PredictionEngine:
             tfs: dict[str, Any] = {}
             for tf in TF_ORDER:
                 cyc = self.cycles.get((symbol, tf))
-                tfs[tf] = cyc.to_dict(now) if cyc else None
+                d = cyc.to_dict(now) if cyc else None
+                # PROVISIONAL TP/SL: below the confidence floor the DLP
+                # never runs (no trade — correct), but the user still
+                # needs a SEEDED stop and a TP:SL ratio to judge the call.
+                # Provisional = entry ∓ 1×ATR; tagged so the UI can label
+                # it, replaced by the locked values as soon as issued.
+                if d and not d.get("sl") and price > 0:
+                    dirn = int(d.get("direction") or 0)
+                    if dirn:
+                        lr = self.last_result.get((symbol, tf)) or {}
+                        atr = float(lr.get("atr") or 0.0)
+                        if atr <= 0:
+                            try:
+                                atr = self._atr(self.build_ctx(symbol, tf))
+                            except Exception:
+                                atr = 0.0
+                        if atr > 0:
+                            d["sl"] = round(price - dirn * atr, 6)
+                            d["sl_provisional"] = True
+                            # ratio from a FRESH TP1 projection (a stale
+                            # locked target could be hundreds away and
+                            # pinned the band at the 9.99 cap)
+                            # prefer the F28 ARC band (the designed
+                            # TP:SL ratio) — a raw projection with a
+                            # near-zero confidence collapses to ~0
+                            lr2 = self.last_result.get((symbol, tf)) or {}
+                            arc_r = (lr2.get("arc") or {}).get("ratio")
+                            band = 0.0
+                            if arc_r:
+                                band = float(arc_r)
+                            else:
+                                mins0 = (TIMEFRAMES.get(tf, {})
+                                         .get("targets") or [5])[0]
+                                conf_p = abs(float(d.get("confidence") or 0.0))
+                                tp1 = self._project_level(
+                                    price, dirn, conf_p, atr, mins0)
+                                dist = abs(float(tp1) - price)
+                                if dist > 0:
+                                    band = dist / max(atr, 1e-9)
+                            # only speak when the band is meaningful —
+                            # below 0.1 the UI shows an honest '—'
+                            if band >= 0.1:
+                                d["ratio"] = round(min(9.99, band), 2)
+                tfs[tf] = d
             assets[symbol] = {
                 "price": price,
                 "window_change_pct": round(
