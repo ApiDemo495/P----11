@@ -402,6 +402,13 @@ def test_visibility_sync_and_flat_fixes():
     assert "m.cause" in js and "[${esc(m.cause)}]" in js
     # depth pass exists (flatty fix)
     assert "DEPTH PASS" in css and "box-shadow" in css.split("DEPTH PASS")[0][-4000:]
+    # formulas charts: never overflow the screen + never flat-by-scaling
+    assert ".spark { display: block; width: 100%" in css          # was: default300px canvas
+    assert "#fl-forward, #fl-genesis" in css and "overflow-x: auto" in css
+    assert ".card { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; min-width: 0;" in css
+    assert "<th>tick</th>" not in js                 # tick merged into the name cell
+    assert "S.fvRings" in js and "percentile" in js   # live rings + robust spark range
+    assert "cv.height = h * 2" in js                 # HiDPI sparks (x AND y)
 
 
 def test_reports_exist_and_are_linked():

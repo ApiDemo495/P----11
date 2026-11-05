@@ -377,11 +377,29 @@ function renderBranches() {
 
 /* ═══════ formula live-value ticker (raw → new) ═══════ */
 function tickFormulaValues() {
-  const box = $("#fl-ticker");
   const fv = S.snap?.formula_values?.[`${S.symbol}|${S.focusTf}`];
   const cur = fv?.raw || {};
   const prev = S.prevFV;
   S.prevFV = { ...cur };
+  // keep the LIVE sample rings fed (15 s snapshots + analyse runs) so the
+  // formula charts keep moving between GRCs
+  try {
+    if (Object.keys(cur).length) {
+      if (!S.fvRings || S.fvRingKey !== `${S.symbol}|${S.focusTf}`) {
+        S.fvRingKey = `${S.symbol}|${S.focusTf}`;
+        S.fvRings = {};
+        for (const k of Object.keys(S.fvBackfill || {})) {
+          S.fvRings[k] = (S.fvBackfill[k] || []).slice(-100);
+        }
+      }
+      for (const k of Object.keys(cur)) {
+        if (!S.fvRings[k]) S.fvRings[k] = [];
+        S.fvRings[k].push(cur[k]);
+        if (S.fvRings[k].length > 140) S.fvRings[k] = S.fvRings[k].slice(-140);
+      }
+    }
+  } catch (e) { /* rings optional */ }
+  const box = $("#fl-ticker");
   if (!box || !prev) return;
   const names = fv?.names || {};
   const lines = [];
@@ -1176,9 +1194,10 @@ async function loadFormulas() {
           }).join("");
           const cur = (fv.raw?.[fid] ?? core[fid]);
           const tOn = contribs[fid] ? Math.abs(contribs[fid].contribution) >= 1e-5 : null;
-          return `<tr><td>F${fid} ${(fv.names?.[fid] || "")}</td><td>${fx(cur, 3)}</td><td>${tOn === null ? "—" : (tOn ? "✓" : "✗")}</td>${tds}</tr>`;
+          const tk = tOn === null ? "–" : tOn ? "✓" : "✗";
+          return `<tr><td title="${tOn ? "contributed this window" : tOn === null ? "no reading" : "did not contribute"}">${tk} F${fid} ${(fv.names?.[fid] || "")}</td><td>${fx(cur, 3)}</td>${tds}</tr>`;
         }).join("");
-        fwEl.innerHTML = `<table class="fwd-table"><thead><tr><th>formula</th><th>now</th><th>tick</th>
+        fwEl.innerHTML = `<table class="fwd-table"><thead><tr><th>formula ✓/✗</th><th>now</th>
           <th>tf1 P(up)</th><th>tf2 P(up)</th><th>tf3 P(up)</th><th>tf4 P(up)</th></tr></thead>
           <tbody>${rows}</tbody></table>
           <div class="hint">Forward P(up) is settled strict-sign from this ledger — n≥30 per bucket before it speaks (advice §2.7). Current value beside it: superposition (§2.8).</div>`;
@@ -1213,23 +1232,67 @@ async function loadFormulas() {
         <div class="hint">${esc(gs.rules || "")}</div>`;
       }
     } catch (e) { console.warn("genesis:", e); }
-    drawSparks(fh.core || {});
+    // live series rings: backfill from the GRC history, then every
+    // snapshot pushes the current raw — charts read a LONG, live series
+    // instead of6 stale points (old-app style jagged tiles)
+    S.fvBackfill = fh.core || {};
+    if (!S.fvRings || S.fvRingKey !== `${S.symbol}|${S.focusTf}`) {
+      S.fvRingKey = `${S.symbol}|${S.focusTf}`;
+      S.fvRings = {};
+      for (const k of Object.keys(S.fvBackfill)) {
+        S.fvRings[k] = (S.fvBackfill[k] || []).slice(-100);
+      }
+    }
+    drawSparks(S.fvBackfill);
   } catch (e) { toast("formulas: " + e.message, "err"); }
 }
 function drawSparks(core) {
   $$("#fl-cards canvas.spark").forEach(cv => {
     const fid = cv.dataset.f;
-    const series = core[fid] || [];
+    // live ring first (keeps moving between GRCs), history as fallback
+    const series = (S.fvRings?.[fid]?.length >= 3 ? S.fvRings[fid] : null)
+      || core[fid] || [];
     if (series.length < 3) return;
-    const w = cv.clientWidth || 220; cv.width = w * 2;
-    const g = cv.getContext("2d"); g.scale(2, 1);
-    const mn = Math.min(...series), mx = Math.max(...series), rng = (mx - mn) || 1;
-    g.strokeStyle = "#c9a227"; g.lineWidth = 1.3; g.beginPath();
-    series.slice(-120).forEach((v, i, arr) => {
-      const x = (i / (arr.length - 1)) * w, y = 42 - ((v - mn) / rng) * 38;
-      i ? g.lineTo(x, y) : g.moveTo(x, y);
-    });
-    g.stroke();
+    const w = cv.clientWidth || 220, h = 46;
+    cv.width = w * 2; cv.height = h * 2;         // HiDPI (was: stretched x only)
+    const g = cv.getContext("2d");
+    g.setTransform(2, 0, 0, 2, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const win = series.slice(-120);
+    // robust range: an outlier must not flatten the trace (user: 'too flat')
+    const sorted = [...win].sort((a2, b2) => a2 - b2);
+    let mn = sorted[0], mx = sorted[sorted.length - 1];
+    if (sorted.length >= 8) {
+      mn = sorted[Math.floor(sorted.length * 0.05)];
+      mx = sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)];
+    }
+    if (mx - mn < 1e-12) { mn -= 0.5; mx += 0.5; }   // dead-flat series: centre it
+    const rng = (mx - mn) || 1;
+    const pad = rng * 0.08;
+    mn -= pad; mx += pad;
+    const X = i => (i / (win.length - 1)) * (w - 2) + 1;
+    const Y = v => h - 3 - ((v - mn) / (mx - mn)) * (h - 6);
+    // zero baseline (dotted) — amplitude context
+    if (mn < 0 && mx > 0) {
+      g.strokeStyle = "rgba(216,216,232,.25)";
+      g.setLineDash([3, 3]); g.lineWidth = 1;
+      g.beginPath(); g.moveTo(0, Y(0)); g.lineTo(w, Y(0)); g.stroke();
+      g.setLineDash([]);
+    }
+    const rising = win[win.length - 1] >= win[0];
+    const col = Math.abs(win[win.length - 1]) < 1e-12 ? "#6e6e8c"
+      : rising ? "#22c98a" : "#f0385a";
+    // area + line (straight segments — no smoothing)
+    g.beginPath();
+    win.forEach((v, i) => { i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)); });
+    g.strokeStyle = col; g.lineWidth = 1.4; g.stroke();
+    g.lineTo(X(win.length - 1), h - 1); g.lineTo(X(0), h - 1); g.closePath();
+    g.fillStyle = rising ? "rgba(34,201,138,.10)" : "rgba(240,56,90,.10)";
+    g.fill();
+    // last value dot
+    const lv = win[win.length - 1];
+    g.fillStyle = col;
+    g.beginPath(); g.arc(X(win.length - 1), Y(lv), 2.1, 0, Math.PI * 2); g.fill();
   });
 }
 
@@ -2231,6 +2294,10 @@ function applySnapshot(snap) {
   try { renderQuads(); renderWhy(); renderRail(); } catch (e) { console.error("render", e); }
   try { renderBranches(); } catch (e) { console.error("branches", e); }
   try { tickFormulaValues(); } catch (e) { /* ticker optional */ }
+  // live formula charts keep redrawing from the ring while the tab is open
+  if (S.view === "formulas") {
+    try { drawSparks(S.fvBackfill || {}); } catch (e) { /* sparks optional */ }
+  }
   // honesty: tape chip AFTER content render (feed stats carry source/label)
   const fchip = $("#feed-chip");
   if (fchip && snap.feed) {

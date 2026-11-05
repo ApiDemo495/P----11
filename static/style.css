@@ -102,7 +102,14 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 5px; bo
 .tbl td { padding: 7px 8px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 11.5px; }
 .tbl tr:hover td { background: var(--panel2); }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-bottom: 14px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; }
+/* min-width:0 lets cards SHRINK below their content — without it the
+   default-300px spark canvas forced cards past the screen edge */
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; min-width: 0; }
+/* formula sparklines: never wider than the card (was: canvas default
+   width300px → chart went out of the screen on mobile) */
+.spark { display: block; width: 100%; max-width: 100%; height: 46px; }
+/* wide tables scroll INSIDE their panel instead of stretching the page */
+#fl-forward, #fl-genesis, #ph-mech, .blk-matrix-wrap { overflow-x: auto; }
 .card h4 { font: 600 11px/1 var(--mono); letter-spacing: 1px; color: var(--gold); margin-bottom: 8px; display: flex; justify-content: space-between; }
 .card .logic { font-size: 10.5px; color: var(--dim); line-height: 1.45; margin-top: 6px; }
 
