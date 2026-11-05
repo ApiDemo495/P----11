@@ -698,6 +698,20 @@ class PredictionEngine:
                     self.hist.ring(
                         self.hist.tf_key(symbol, tf, "calib_h"), 400
                     ).append(1.0 if pdir == _sign(move) else 0.0)
+                # exchange-physics direction ring: net forced-flow sign
+                # graded against the realised move (hindsight 'micro')
+                try:
+                    _mfl = self.feed.micro_flow(symbol)
+                    if move != 0 and _mfl is not None:
+                        _mdir = (1 if _mfl > 0.05 else
+                                 (-1 if _mfl < -0.05 else 0))
+                        if _mdir:
+                            self.hist.ring(
+                                self.hist.tf_key(symbol, tf,
+                                                 "facc_micro"), 50
+                            ).append(1.0 if _mdir == _sign(move) else -1.0)
+                except Exception:
+                    pass
                 # consecutive-correct running ratio (0..1, last 10)
                 if move != 0 and pdir != 0:
                     self.hist.commit_win_streak(symbol, pdir == _sign(move))
@@ -860,6 +874,22 @@ class PredictionEngine:
                     1.0, float(fin["confidence"]) * (1.0 + _band)))
                 fin["issued"] = fin["confidence"] > CONFIDENCE_FLOOR
                 fin["emotion_band"] = round(_band, 4)
+            # exchange-physics micro band (Chrono-Sieve-inspired gauges):
+            # net forced-flow share ±10 % on confidence, SAME doctrine as
+            # the emotion band — never the direction; silent (0) whenever
+            # the tape has no live microstructure (sim)
+            try:
+                _mflow = self.feed.micro_flow(symbol)
+                if _mflow:
+                    _mb = 0.10 * float(_mflow) * _dir0
+                    if _mb:
+                        fin = dict(fin)
+                        fin["confidence"] = max(0.0, min(
+                            1.0, float(fin["confidence"]) * (1.0 + _mb)))
+                        fin["issued"] = fin["confidence"] > CONFIDENCE_FLOOR
+                        fin["micro_band"] = round(_mb, 4)
+            except Exception:
+                pass
 
             # F28 inputs: volatility state vs baseline (same measure as F20)
             window_rets = [
@@ -1262,6 +1292,9 @@ class PredictionEngine:
                             },
                         },
                     },
+                    # exchange-server physics gauges (clock-skew z, gap z,
+                    # liquidation clusters) — honest absence on the sim tape
+                    "micro": self.feed.micro_status(symbol),
                     "drhe": round(drhe, 4),
                     "atr": results[tf]["atr"],
                     "pcv": round(pcv, 5),
@@ -2433,15 +2466,18 @@ class PredictionEngine:
         per: dict[str, dict] = {}
         for symbol in SYMBOL_ORDER:
             for tf in TF_ORDER:
-                for fid in list(WEIGHT_IDS) + ["agent", "brain"]:
+                for fid in list(WEIGHT_IDS) + ["agent", "brain", "micro"]:
                     if fid == "brain":
                         key_name = "facc_brain"
+                    elif fid == "micro":
+                        key_name = "facc_micro"
                     else:
                         key_name = (f"facc{fid}" if fid != "agent"
                                     else "facc_agent")
                     key = self.hist.tf_key(symbol, tf, key_name)
                     ring = list(self.hist.ring(key, 50))
-                    label = (f"F{fid}" if fid not in ("agent", "brain")
+                    label = (f"F{fid}"
+                             if fid not in ("agent", "brain", "micro")
                              else fid)
                     if len(ring) < self.HINDSIGHT_MIN_DECIDED:
                         entry = {"label": label, "n": len(ring),
@@ -2494,8 +2530,8 @@ class PredictionEngine:
             if not entry.get("enough"):
                 continue
             sym, t, label = key.rsplit("|", 2)
-            if label == "agent":
-                continue                     # agents have no weight slot
+            if label in ("agent", "micro"):
+                continue                     # watch-only: no weight slot
             if label == "brain":
                 # brain.md §6: the brain's own hindsight multiplier
                 old_b = self._fw_hindsight.get((sym, t), 1.0)

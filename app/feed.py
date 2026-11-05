@@ -162,6 +162,10 @@ class MarketFeed:
         # simulator internal price memory for continuity across minute bars
         self._sim_price = dict(SIM_BASE_PRICES)
         self._sim_regime: dict[str, dict] = {}   # live drift regimes (sim)
+        # exchange-server physics telemetry (Chrono-Sieve-inspired gauges)
+        from .micro import MicroPhysics
+        self.micro = MicroPhysics()
+        self._fo_task: asyncio.Task | None = None   # forceOrder listener
 
     # ------------------------------------------------------------------ API
     def state(self, symbol: str) -> SymbolState:
@@ -423,9 +427,16 @@ class MarketFeed:
             self.ready.set()
 
         self._tasks.append(asyncio.create_task(self._binance_ws_loop()))
+        if self._fo_task is None or self._fo_task.done():
+            self._fo_task = asyncio.create_task(self._forceorder_loop())
+            self._tasks.append(self._fo_task)
 
     async def _binance_ws_loop(self) -> None:  # pragma: no cover - network
-        streams = "/".join(f"{ex.lower()}@kline_1m" for ex in SYMBOLS.values())
+        # kline (tape) + aggTrade (micro telemetry: T/E clocks + trade-id
+        # gaps — the clock-skew tomography input). aggTrade never writes
+        # the tape; it only feeds the gauges.
+        streams = "/".join(f"{ex.lower()}@kline_1m/{ex.lower()}@aggTrade"
+                           for ex in SYMBOLS.values())
         urls = [f"{BINANCE_WS}?streams={streams}",
                 f"{BINANCE_WS_VISION}?streams={streams}"]   # D-3 rotation
         import websockets
@@ -438,7 +449,23 @@ class MarketFeed:
                     async for raw in ws:
                         msg = json.loads(raw)
                         data = msg.get("data", msg)
-                        if data.get("e") != "kline":
+                        ev = data.get("e")
+                        if ev == "aggTrade":
+                            # exchange physics: T (engine) vs E (gateway)
+                            _sym = reverse.get(str(data.get("s") or "").lower())
+                            if _sym:
+                                try:
+                                    self.micro.on_aggtrade(
+                                        _sym,
+                                        int(data.get("T") or 0),
+                                        int(data.get("E") or 0),
+                                        int(data.get("a") or 0),
+                                        float(data.get("p") or 0),
+                                        float(data.get("q") or 0))
+                                except Exception:
+                                    pass
+                            continue
+                        if ev != "kline":
                             continue
                         k = data["k"]
                         ex = k["s"].lower()
@@ -468,6 +495,68 @@ class MarketFeed:
                 log.warning("feed: ws reconnect (%s)", exc)
                 url_i = (url_i + 1) % len(urls) if FEED_MODE == "auto" else url_i
                 await asyncio.sleep(2.0)
+
+    async def _forceorder_loop(self) -> None:  # pragma: no cover - network
+        """Public USDⓈ-M futures liquidation prints (@forceOrder) —
+        telemetry only: never touches the tape or its honesty gates."""
+        import websockets
+        url = ("wss://fstream.binance.com/stream"
+               "?streams=!forceOrder@arr")
+        reverse = {v.lower(): k for k, v in SYMBOLS.items()}
+        while not self._stop.is_set():
+            try:
+                async with websockets.connect(url, ping_interval=20) as ws:
+                    async for raw in ws:
+                        msg = json.loads(raw)
+                        data = msg.get("data", msg)
+                        if data.get("e") != "forceOrder":
+                            continue
+                        o = data.get("o") or {}
+                        sym = reverse.get(str(o.get("s") or "").lower())
+                        if not sym:
+                            continue
+                        px = float(o.get("ap") or o.get("p") or 0)
+                        qty = float(o.get("q") or 0)
+                        self.micro.on_forceorder(sym, str(o.get("S") or ""),
+                                                 px, qty)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.debug("feed: forceOrder stream reconnect (%s)", exc)
+                await asyncio.sleep(10.0)
+
+    def micro_status(self, symbol: str) -> dict:
+        """Clock-skew / gap / liquidation gauges for one asset — honest
+        absence when the tape has no live exchange packets (sim)."""
+        try:
+            out = self.micro.status(symbol,
+                                    self.prices().get(symbol, 0.0))
+            if not out.get("agg_count") and not out.get("liq_count"):
+                sim = self.mode == "sim" or not str(self.source).startswith(
+                    "binance")
+                out.update({
+                    "available": False,
+                    "reason": ("sim tape — exchange microstructure "
+                               "(clock-skew, forceOrder) does not exist "
+                               "in the simulator" if sim else
+                               "waiting for the first live micro packet "
+                               "(aggTrade / forceOrder)"),
+                    "mode": self.mode,
+                })
+            else:
+                out.update({"available": True, "reason": "",
+                            "mode": self.mode})
+            return out
+        except Exception as exc:
+            return {"available": False, "reason": f"error: {exc}",
+                    "mode": self.mode}
+
+    def micro_flow(self, symbol: str) -> float | None:
+        """Net forced-flow share in [-1,1] or None (no data) — feeds the
+        confidence micro-band; never sets a direction on its own."""
+        if not self.micro.agg_count and not self.micro.liq_count:
+            return None
+        return self.micro.flow(symbol)
 
     # ---------------------------------------------------------- Simulator
     async def _start_sim(self) -> None:

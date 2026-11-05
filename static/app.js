@@ -272,6 +272,50 @@ function setSymbol(sym) {
   refreshActiveView(true);
   buildQuads(); loadCandles();
 }
+/* ═══════ EXCHANGE PHYSICS panel (Chrono-Sieve-inspired, measured only) ═ */
+function renderMicro() {
+  const box = $("#micro-panel");
+  if (!box) return;
+  const m = S.snap?.systems?.[`${S.symbol}|${S.focusTf}`]?.micro;
+  $("#micro-meta").textContent = `${S.symbol} · ${m?.mode || "—"}`;
+  if (!m) {
+    box.innerHTML = `<div class="dim pad">loading…</div>`;
+    return;
+  }
+  if (!m.available) {
+    box.innerHTML = `
+      <div class="hint" style="color:var(--gold)">○ ${esc(m.reason || "no micro data")}</div>
+      <div class="hint">gauges turn on with the live Binance feed: τ = E−T clock-skew z, Δa trade-gap z, and @forceOrder liquidation clusters (measured prints — no synthetic margin particles on this box).</div>`;
+    return;
+  }
+  if (!S.microHist) S.microHist = [];
+  if (m.stress != null) S.microHist.push(m.stress);
+  S.microHist = S.microHist.slice(-60);
+  const spark = S.microHist.length > 2
+    ? `<svg viewBox="0 0 100 26" preserveAspectRatio="none" style="width:120px;height:24px;vertical-align:middle"><polyline points="${
+        S.microHist.map((v2, i) =>
+          `${(i / Math.max(1, S.microHist.length - 1)) * 100},${24 - v2 * 22}`).join(" ")}"
+        fill="none" stroke="#00d4f0" stroke-width="1.5"/></svg>` : "";
+  const zline = (v2, n2, name2) => v2 == null
+    ? `<div class="kv"><span>${name2}</span><b class="dim">needs ${m.min_samples} packets (had ${n2})</b></div>`
+    : `<div class="kv"><span>${name2}</span><b class="${Math.abs(v2) >= 3 ? "acc-warn" : ""}">z ${v2}${Math.abs(v2) >= 3 ? " ⚠>3" : ""} <span class="dim">n=${n2}</span></b></div>`;
+  const clu = (c2, arrow) => c2
+    ? `<div class="kv"><span>cluster ${arrow}</span><b>${px(c2.price)} <span class="dim">${c2.bps} bps · ${c2.bias} · mass ${c2.mass}</span></b></div>`
+    : `<div class="kv"><span>cluster ${arrow}</span><b class="dim">none ≥8% of flow</b></div>`;
+  box.innerHTML = `
+    <div class="kv-row">
+      <div class="kv" style="min-width:180px"><span>queue stress (τ, Δa)</span>
+        <div class="bar" style="margin-top:4px"><i class="${(m.stress || 0) > 0.5 ? "neg" : "pos"}" style="width:${Math.max(2, Math.round((m.stress || 0) * 100))}%"></i></div>
+        <b>${m.stress != null ? Math.round(m.stress * 100) + "%" : "—"}</b></div>
+      ${zline(m.z_tau, m.n_tau, "z clock-skew (E−T, ms)")}
+      ${zline(m.z_gap, m.n_gap, "z trade-id gap (Δa)")}
+      <div class="kv"><span>net forced flow (15m)</span><b class="${(m.net_flow || 0) >= 0 ? "acc-up" : "acc-dn"}">${m.net_flow != null ? (m.net_flow >= 0 ? "+" : "") + Math.round(m.net_flow * 100) + "% BUY-share" : "—"}</b></div>
+      <div class="kv"><span>forceOrder prints</span><b>${m.liq_events} <span class="dim">${spark ? "· stress trace" : ""}</span></b></div>
+    </div>
+    <div class="kv-row">${clu(m.nearest_up, "↑ above")}${clu(m.nearest_down, "↓ below")}</div>
+    <div class="hint">stress = |z| of this box's OWN packet baseline (60 s) — congestion flag, not a prediction · clusters decay with a10-min half-life over the last30 min of real @forceOrder prints (25 bp buckets).</div>`;
+}
+
 /* ═══════ SYSTEM panel (old-app inspiration): one glance at what runs ═ */
 async function loadSystemPanel() {
   const box = $("#sys-panel"); if (!box) return;
@@ -527,6 +571,7 @@ function refreshActiveView(force) {
   if (S.view === "dashboard") {
     renderWhy(); renderQuads();
     try { renderBranches(); } catch (e) { console.error("branches", e); }
+    try { renderMicro(); } catch (e) { console.error("micro", e); }
     if (!force || !S._sysLoaded || Date.now() - S._sysLoaded > 30000) {
       S._sysLoaded = Date.now();
       loadSystemPanel().catch(() => {});
@@ -609,6 +654,16 @@ function renderQuads(opts = {}) {
     // TP/SL overlay lines on the chart
     const lines = [];
     if (cyc?.sl) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL" });
+    // liquidation clusters (measured @forceOrder buckets) as purple overlays
+    const mgi = S.snap?.systems?.[`${S.symbol}|${tf}`]?.micro;
+    if (mgi?.available) {
+      if (mgi.nearest_up?.price)
+        lines.push({ price: mgi.nearest_up.price, color: "#a855f7",
+                     title: `LIQ↑ ${Math.round(mgi.nearest_up.bps)}bp`, dash: true });
+      if (mgi.nearest_down?.price)
+        lines.push({ price: mgi.nearest_down.price, color: "#a855f7",
+                     title: `LIQ↓ ${Math.round(mgi.nearest_down.bps)}bp`, dash: true });
+    }
     (cyc?.targets || []).forEach((t, i) => {
       if (t.level) lines.push({
         price: t.level,
@@ -2307,6 +2362,9 @@ function applySnapshot(snap) {
   renderAlert(snap);
   try { renderQuads(); renderWhy(); renderRail(); } catch (e) { console.error("render", e); }
   try { renderBranches(); } catch (e) { console.error("branches", e); }
+  if (S.view === "dashboard") {
+    try { renderMicro(); } catch (e) { console.error("micro", e); }
+  }
   try { tickFormulaValues(); } catch (e) { /* ticker optional */ }
   // live formula charts keep redrawing from the ring while the tab is open
   if (S.view === "formulas") {
