@@ -759,6 +759,9 @@ class NewsSystem:
                                     it["reliability"])) for it in mine) or 0.0
         niv = max(-1.0, min(1.0, total / (wsum + 0.5))) if mine else 0.0
         total = max(-1.0, min(1.0, total))
+        # newest FIRST — the table used to render oldest-on-top so fresh
+        # headlines appeared at the bottom (user: 'tilt it')
+        rows.sort(key=lambda r: float(r.get("ts") or 0.0), reverse=True)
         agg = {
             # signed Section-7 aggregate (component 100 / override / brains)
             "value": round(total, 4),

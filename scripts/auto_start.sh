@@ -87,11 +87,14 @@ if [ "${SKIP_SETUP:-0}" != "1" ]; then
 fi
 
 # fast self-heal: missing real-brain data or docs.html (background, ~2s)
-if [ ! -f data/brain_real.json ] && [ -x .venv/bin/python ]; then
+# stats already ship in assets/ (tracked) — only fetch when BOTH missing
+if [ ! -f data/brain_real.json ] && [ ! -f assets/brain_real.json ] \
+   && [ -x .venv/bin/python ]; then
   nohup .venv/bin/python scripts/fetch_real_brain.py >> data/setup.log 2>&1 &
 fi
+# docs.html regen is NOT on the boot path (background, best-effort)
 if [ -x .venv/bin/python ]; then
-  .venv/bin/python scripts/make_docs_html.py >> data/setup.log 2>&1 || true
+  ( .venv/bin/python scripts/make_docs_html.py >> data/setup.log 2>&1 || true ) &
 fi
 
 VENV_PY=".venv/bin/python"

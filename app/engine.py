@@ -893,6 +893,7 @@ class PredictionEngine:
                 # advice §5: measured features + print accounting (D-7)
                 "features": em.get("features") or {},
                 "zero_reasons": em.get("zero_reasons") or {},
+                        "zero_causes": em.get("zero_causes") or {},
                 "prints": {"quote_prints": self.feed.quote_prints,
                            "note": "quote prints excluded from volume/side stats"},
             }
@@ -1149,6 +1150,7 @@ class PredictionEngine:
                         "cerc": em["cerc"],
                         "features": em.get("features") or {},
                         "zero_reasons": em.get("zero_reasons") or {},
+                        "zero_causes": em.get("zero_causes") or {},
                         "emotions": em["emotions"],
                         "directions": em["directions"],
                         "rtp": round(em["rtp"], 4),

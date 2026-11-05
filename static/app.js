@@ -102,6 +102,11 @@ const fmtSig = (v) => {
 /* zeros-cause-8: a value that is small but REAL must print its first
    significant digit — up to 6 decimals, then exponent. True zero prints
    0.00. Use for every human-facing near-zero. */
+const ZCAUSE = {
+  error: "✗ error", equal: "＝ both sides equal", input: "input missing",
+  history: "needs history", materiality: "materiality gate",
+  flat: "computed flat",
+};
 function fx(v, d = 2) {
   if (v == null || Number.isNaN(v)) return "—";
   if (!isFinite(v)) return v > 0 ? "+∞" : "−∞";
@@ -910,7 +915,7 @@ async function loadFormulas() {
       const ft = tr[fid] || null;
       const hz = (S.snap?.hindsight?.per || {})[`${S.symbol}|${S.focusTf}|F${fid}`];
       const zeroChip = ft?.zero_reason
-        ? `<span class="chip chip-warn" title="why it is 0">0 · ${ft.zero_reason}</span>` : "";
+        ? `<span class="chip chip-warn" title="why it is 0">${ft.zero_cause ? (ZCAUSE[ft.zero_cause] || ft.zero_cause) + " · " : ""}0 · ${ft.zero_reason}</span>` : "";
       const tickOn = contribs[fid] ? Math.abs(contribs[fid].contribution) >= 1e-5 : null;
       const tickChip = tickOn === null ? "" :
         `<span class="chip ${tickOn ? "chip-ok" : "chip-err"}" title="${tickOn ? "contributed to this window's CCI" : "did not contribute (flat or zero this window)"}">${tickOn ? "✓ tick" : "✗ no tick"}</span>`;
@@ -927,6 +932,7 @@ async function loadFormulas() {
           <div class="kv"><span>weight ω</span><b>${fmt(w, 4)}</b></div>
         </div>
         <div class="kv-row trace-row">${zeroChip}${dcChip}${traceLine}</div>
+        <div class="hint">how it came: raw <b>${fx(raw)}</b> → bgn <b>${fx(adj)}</b> → ω <b>${fx(w, 3)}</b> → contribution <b>${contrib != null ? (contrib >= 0 ? "+" : "") + fx(contrib, 4) : "—"}</b></div>
         ${hist.length > 2 ? `<canvas class="spark" height="46" data-f="${fid}"></canvas>
         <div class="kv-row"><div class="kv"><span>min/mean/max (100 GRC)</span><b>${fmt(mn, 3)} / ${fmt(mean, 3)} / ${fmt(mx, 3)}</b></div></div>` : ""}
         <div class="logic">${dc?.identity ? esc(dc.identity) + " · " : ""}${FORMULA_LOGIC[fid] || ""}</div>`;
@@ -1063,6 +1069,14 @@ async function loadEmotion() {
       const etick = (sys.systems?.[`${S.symbol}|${S.focusTf}`]?.ticks?.emotions || {})[String(i)];
       if (etick) cell.title = ((cell.title ? cell.title + " · " : "") +
         (etick.on ? "✓ contributed (|" + etick.v + "| > 0.01)" : "✗ did not contribute this window"));
+      // visible reason + cause for every 0.00 (hover does not exist on mobile)
+      let ew = cell.querySelector(".em-why");
+      const ecause = (em.zero_causes || {})[String(i)];
+      if (v === 0) {
+        if (!ew) { ew = document.createElement("div"); ew.className = "em-why"; cell.appendChild(ew); }
+        ew.textContent = (ecause ? (ZCAUSE[ecause] || ecause) + " · " : "") +
+          (zr || "computed — exactly 0.0 this window");
+      } else if (ew) ew.remove();
       const ring = $(".em-ring", cell);
       ring.style.setProperty("--p", `${clamp(Math.abs(v) * 100, 0, 100)}%`);
       $("i", ring).textContent = (v >= 0 ? "+" : "") + (v === 0 ? "0.00" : v.toFixed(Math.abs(v) < 0.001 ? 4 : 2));
@@ -1146,7 +1160,7 @@ async function loadPhysics() {
         : "";
       const why = (ph.mechanisms || []).find(mm => mm.id === p);
       const whyLine = why
-        ? `<div class="hint" title="${esc(why.logic?.join(" · ") || "")}">${why.active ? "✓" : "○ why: "}${esc(why.why || "")}</div>`
+        ? `<div class="hint" title="${esc(why.logic?.join(" · ") || "")}">${why.active ? "✓" : "○ why: "}${why.cause ? `<b class="acc-warn">[${ZCAUSE[why.cause] || why.cause}]</b> ` : ""}${esc(why.why || "")}</div>`
         : "";
       card.innerHTML = `<h4><span>P${p} · ${P_NAMES[p] || ""}</span><span>${v >= 0 ? "+" : ""}${fx(v, 4)}</span></h4>
         <div class="kv-row"><div class="kv"><span>value</span><b style="color:${v >= 0 ? "var(--green)" : "var(--red)"}">${v >= 0 ? "▲" : "▼"} ${fx(v, 4)}</b></div></div>
@@ -1397,6 +1411,57 @@ async function loadBrains() {
       };
       $("#br-fw-formulas").innerHTML =
         cell("CCSv2 circuit consensus", fm.ccsv2) + cell("KCAE stability", fm.kcae);
+      // ── full connectome anatomy: neurons · cells · synapses · matrix
+      const an = fw.anatomy || {};
+      const anEl = $("#br-anatomy");
+      if (anEl) {
+        if (an.state === "ready") {
+          const cls = Object.entries(an.classes || {})
+            .sort((a, b2) => b2[1] - a[1]);
+          const top = cls.slice(0, 12);
+          const mx = (an.block?.matrix || []).flat();
+          const mmax = Math.max(1e-9, ...mx);
+          const bclasses = (an.block?.classes || []);
+          const keep = cls.slice(0, 10).map(c => c[0]);
+          const ki = keep.map(c => bclasses.indexOf(c)).filter(x => x >= 0);
+          const matrix = (an.block?.matrix || []).filter((_, r) => ki.includes(r))
+            .map(row => ki.map(ci => row[ci]));
+          const cellv = v2 => {
+            const a2 = v2 > 0 ? (Math.log1p(v2) / Math.log1p(mmax)) * 0.7 : 0;
+            return `<td style="background:rgba(0,212,240,${a2.toFixed(3)});text-align:right;font-family:var(--mono);font-size:10px" title="${v2}">${v2 > 0 ? (v2 < 0.01 ? v2.toExponential(1) : v2.toFixed(2)) : "·"}</td>`;
+          };
+          const ntc = Object.entries(an.nt_census || an.mbon_nt || {})
+            .filter(([k]) => k && k !== "?").slice(0, 6);
+          anEl.innerHTML = `
+            <div class="kv-row">
+              <div class="kv"><span>neurons (cells)</span><b>${(an.neurons || 0).toLocaleString()}</b></div>
+              <div class="kv"><span>connections (≥5 syn)</span><b>${(an.connections || 0).toLocaleString()}</b></div>
+              <div class="kv"><span>synapses (Σ)</span><b>${an.synapses != null ? an.synapses.toLocaleString() : "computing…"}</b></div>
+              <div class="kv"><span>mean degree</span><b>${an.mean_degree ?? "—"}</b></div>
+              <div class="kv"><span>density</span><b>${an.density ?? "—"}</b></div>
+            </div>
+            <div class="hub-list" style="margin-top:8px">${top.map(([c, n]) =>
+              `<span class="hub">${esc(c)} <i>${n.toLocaleString()}</i></span>`).join("")}</div>
+            <div class="kv-row" style="margin-top:8px">
+              ${ntc.map(([k, n]) => `<div class="kv"><span>nt ${esc(k)}</span><b>${n.toLocaleString()}</b></div>`).join("")}
+              ${Object.entries(an.sides || {}).filter(([k]) => k && k !== "?").slice(0, 3)
+                .map(([k, n]) => `<div class="kv"><span>side ${esc(k)}</span><b>${n.toLocaleString()}</b></div>`).join("")}
+            </div>
+            <div class="hint">cell_class × cell_class summed |W| (log colour) — top10 classes</div>
+            <div style="overflow-x:auto"><table class="blk-matrix"><tr><th></th>${keep.map(c => `<th title="${esc(c)}">${esc(c).slice(0, 8)}</th>`).join("")}</tr>
+              ${matrix.map((row, r) => `<tr><th title="${esc(keep[r])}">${esc(keep[r]).slice(0, 8)}</th>${row.map(cellv).join("")}</tr>`).join("")}
+            </table></div>
+            ${an.top_cell_types && Object.keys(an.top_cell_types).length ? `<div class="hint">top cell types: ${Object.entries(an.top_cell_types).slice(0, 8).map(([t, n]) => `${esc(t)} (${n})`).join(" · ")}</div>` : ""}`;
+        } else if (an.state === "computing") {
+          anEl.innerHTML = `<div class="dim pad">anatomy pass running — full neurons/cells/synapses census in a few seconds…</div>`;
+          if (!anEl.dataset.retry) {
+            anEl.dataset.retry = "1";
+            setTimeout(() => { delete anEl.dataset.retry; loadBrains(); }, 4000);
+          }
+        } else {
+          anEl.innerHTML = `<div class="dim pad">${an.state === "absent" ? "connectome absent — anatomy withheld" : esc(an.error || "unavailable")}</div>`;
+        }
+      }
       $("#br-fw-note").textContent =
         fw.state === "ready"
           ? `connectome ${fw.meta?.neurons?.toLocaleString?.() ?? "?"} neurons · ${fw.meta?.edges?.toLocaleString?.() ?? "?"} connections · build v${fw.build_version} · vote enters fusion at weight 0.25 × hindsight, never hand-signed`

@@ -101,6 +101,8 @@ def brain(tmp_path_factory) -> FlyWireBrain:
     b = FlyWireBrain()
     # load directly from the synthetic npz (cache path swapped)
     b.npz_path = lambda: npz            # type: ignore[assignment]
+    b._parquet_path = pq_path            # anatomy reads the real parquet
+    b._ann_path = ann_path
     b._load(npz)
     b.state = "ready"
     b.load_ms = 1.0
@@ -268,6 +270,25 @@ def test_pass_timing_and_threads(brain):
     assert seen.get("name") == "flywire-pass"
     assert seen.get("main") is False
     assert brain.last_pass_ms is not None and brain.last_pass_ms < 1000.0
+
+
+def test_anatomy_full_census(brain):
+    """'full neurons, cells, synapses and others': class histogram,
+    cell_class × cell_class weight matrix, synapse total, NT census."""
+    brain._build_anatomy()               # run the heavy pass synchronously
+    an = brain.anatomy()
+    assert an["state"] == "ready"
+    assert an["neurons"] == sum(an["classes"].values())
+    assert an["connections"] > 0
+    assert an["synapses"] and an["synapses"] >= an["connections"]
+    m = an["block"]["matrix"]
+    k = len(an["block"]["classes"])
+    assert len(m) == k and all(len(row) == k for row in m)
+    assert any(any(v > 0 for v in row) for row in m)
+    assert "Kenyon_Cell" in an["classes"]
+    # status carries it too (the brain page renders from there)
+    st = brain.status()
+    assert st["anatomy"]["state"] == "ready"
 
 
 def test_no_token_in_repo():

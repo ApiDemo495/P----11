@@ -354,6 +354,9 @@ class FlyWireBrain:
         self._rollback_snapshot: dict | None = None
         self._kcae_ring: list[float] = []
         self._last_values: list[float] | None = None
+        self._anatomy: dict | None = None
+        self._anatomy_state = "idle"      # idle | computing | ready | error
+        self._anatomy_error = ""
         self._last_active_kc: np.ndarray | None = None
         self._base_kc_mbon: np.ndarray | None = None
         self._proc: mp.Process | None = None
@@ -521,6 +524,14 @@ class FlyWireBrain:
             self.calibrate()
         # base KC->MBON slice for RPE updates
         self._base_kc_mbon = self._extract_kc_mbon()
+        # warm the pyarrow import HERE, on the main thread: the anatomy
+        # thread also imports it, and a first-import race between two
+        # threads surfaces as "partially initialized module pyarrow"
+        try:
+            import pyarrow.csv    # noqa: F401
+            import pyarrow.parquet  # noqa: F401
+        except Exception:
+            pass
         # apply a vault restore that arrived before the matrices existed
         pend = getattr(self, "_pending_state", None)
         if pend:
@@ -1049,6 +1060,138 @@ class FlyWireBrain:
             self._kcae_ring.append(min(1.0, H / Hmax))
         self._kcae_ring = self._kcae_ring[-10:]
 
+    # ------------------------------------------------------ anatomy
+    def anatomy(self) -> dict:
+        """Full connectome census (user: 'full neurons, cells, synapses
+        and others'): class histogram, cell_class × cell_class weight
+        matrix, synapse total, NT/side/cell-type breakdowns.
+
+        Cheap parts (class counts) answer instantly from the npz; the
+        heavy passes (15 M-edge matrix, parquet/TSV reads) run ONCE in a
+        background thread — the first call answers 'computing…'.
+        """
+        if self.state != "ready":
+            return {"state": "absent"}
+        if self._anatomy is not None:
+            return {"state": "ready", **self._anatomy}
+        if self._anatomy_state == "idle":
+            self._anatomy_state = "computing"
+            threading.Thread(target=self._build_anatomy, name="flywire-anatomy",
+                             daemon=True).start()
+        if self._anatomy_state == "error":
+            return {"state": "error", "error": self._anatomy_error}
+        # instant part while the heavy pass runs
+        classes, counts = np.unique(self.cls, return_counts=True)
+        return {"state": "computing",
+                "neurons": int(len(self.roots)),
+                "classes": {str(c): int(n)
+                            for c, n in zip(classes, counts)}}
+
+    def _build_anatomy(self) -> None:      # pragma: no cover - thread
+        try:
+            # ── class histogram (cheap, already in hand)
+            classes, counts = np.unique(self.cls, return_counts=True)
+            class_names = [str(c) for c in classes]
+            k = len(class_names)
+            cls_code = np.searchsorted(classes, self.cls).astype(np.int32)
+
+            # ── cell_class × cell_class summed |W| (the brain.md §9
+            #    block matrix) over ALL 15 M edges, chunked by row band
+            W = self.W
+            M = np.zeros((k, k), dtype=np.float64)
+            indptr, indices, data = W.indptr, W.indices, np.abs(W.data)
+            n = len(indptr) - 1
+            band = 8192
+            for r0 in range(0, n, band):
+                r1 = min(n, r0 + band)
+                rows = np.repeat(cls_code[r0:r1],
+                                 np.diff(indptr[r0:r1 + 1]))
+                cols = cls_code[indices[indptr[r0]:indptr[r1]]]
+                M += np.bincount(rows * k + cols,
+                                 weights=data[indptr[r0]:indptr[r1]],
+                                 minlength=k * k).reshape(k, k)
+
+            # ── synapse total + annotation census (parquet/TSV, once)
+            synapses = None
+            top_types: dict[str, int] = {}
+            sides: dict[str, int] = {}
+            nt_census: dict[str, int] = {}
+            try:
+                import pyarrow.parquet as pq
+                pq_path = getattr(self, "_parquet_path",
+                                  CACHE_DIR / PARQUET)
+                col = pq.read_table(pq_path,
+                                    columns=["Connectivity"]).column(0)
+                synapses = int(np.asarray(col.to_numpy(),
+                                          dtype=np.int64).sum())
+                del col
+            except Exception:
+                synapses = None      # honest: unknown, never invented
+            try:
+                import pyarrow.csv as pcsv
+                tsv_path = getattr(self, "_ann_path",
+                                   CACHE_DIR / ANNOTATIONS)
+                hdr = open(tsv_path, encoding="utf-8").readline()
+                have = hdr.rstrip("\n").split("\t")
+                want = [c for c in ("cell_type", "side", "top_nt")
+                        if c in have]
+                tbl = pcsv.read_csv(
+                    tsv_path,
+                    parse_options=pcsv.ParseOptions(delimiter="\t"),
+                    convert_options=pcsv.ConvertOptions(
+                        include_columns=want))
+                if "cell_type" in want:
+                    tc: dict[str, int] = {}
+                    for v in tbl.column("cell_type").to_pylist():
+                        v = str(v or "?")
+                        tc[v] = tc.get(v, 0) + 1
+                    top_types = dict(sorted(tc.items(),
+                                            key=lambda kv: -kv[1])[:14])
+                if "side" in want:
+                    sd: dict[str, int] = {}
+                    for v in tbl.column("side").to_pylist():
+                        v = str(v or "?")
+                        sd[v] = sd.get(v, 0) + 1
+                    sides = sd
+                if "top_nt" in want:
+                    nt: dict[str, int] = {}
+                    for v in tbl.column("top_nt").to_pylist():
+                        v = str(v or "?")
+                        nt[v] = nt.get(v, 0) + 1
+                    nt_census = dict(sorted(nt.items(),
+                                            key=lambda kv: -kv[1]))
+            except Exception:
+                pass                # optional enrichment only
+
+            # ── derived stats
+            edges = int(W.nnz)
+            neurons = int(len(self.roots))
+            mbon_nt: dict[str, int] = {}
+            for t in self.mbon_nt.tolist():
+                mbon_nt[t] = mbon_nt.get(t, 0) + 1
+
+            self._anatomy = {
+                "neurons": neurons,
+                "connections": edges,
+                "synapses": synapses,
+                "mean_degree": round(edges / neurons, 2) if neurons else 0,
+                "density": round(edges / (neurons * max(1, neurons - 1)), 6),
+                "classes": {c: int(n) for c, n in
+                            zip(class_names, counts.tolist())},
+                "block": {"classes": class_names,
+                          "matrix": [[round(float(v), 4) for v in row]
+                                     for row in M]},
+                "mbon_nt": mbon_nt,
+                "top_cell_types": top_types,
+                "sides": sides,
+                "nt_census": nt_census,
+                "built_at": time.time(),
+            }
+            self._anatomy_state = "ready"
+        except Exception as exc:
+            self._anatomy_state = "error"
+            self._anatomy_error = repr(exc)
+
     # -------------------------------------------------------- status
     def status(self) -> dict:
         return {
@@ -1077,5 +1220,6 @@ class FlyWireBrain:
                          "phasic": round(self.phasic, 4),
                          "history": self.rpe_history[-5:]},
             "formulas": {"ccsv2": self.ccsv2(), "kcae": self.kcae()},
+            "anatomy": self.anatomy(),
             "build_version": BUILD_VERSION,
         }

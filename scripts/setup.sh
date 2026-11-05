@@ -83,7 +83,8 @@ if [ "$FORCE" != "1" ] && [ -x .venv/bin/python ] \
   log "core requirements up to date — skipping pip"
 else
   log "installing core requirements… (niced — keeps the UI responsive)"
-  if ! nice -n 10 "$VENV_PY" -m pip install -q -r requirements.txt; then
+  if ! nice -n 10 "$VENV_PY" -m pip install -q --disable-pip-version-check \
+       --no-input -r requirements.txt; then
     warn "core dependency install FAILED — cannot start the app"
     exit 1
   fi
@@ -91,7 +92,9 @@ else
 fi
 
 # ── 2b) REAL Drosophila brain data + docs.html (foreground, ~2s) ──────
-if [ ! -f data/brain_real.json ]; then
+# stats file already ships in assets/ (tracked) — only fetch when BOTH
+# are missing (saves a network round-trip on every fresh workspace)
+if [ ! -f data/brain_real.json ] && [ ! -f assets/brain_real.json ]; then
   log "fetching real hemibrain connectome data…"
   "$VENV_PY" scripts/fetch_real_brain.py >> data/setup.log 2>&1 \
     || warn "stats fetch failed (legacy instance display only — the FlyWire vote builds separately at first boot)"

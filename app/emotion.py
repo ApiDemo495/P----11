@@ -85,6 +85,12 @@ def _atr5(ohlc: dict | None, closes: list[float]) -> float:
     return max(1e-9, sum(trs) / 5)
 
 
+
+def _causes(zero_reasons: dict) -> dict:
+    """Cause bucket per zero (error / both sides equal / input / …)."""
+    from .formulas.trace import classify_zero
+    return {k: classify_zero(v) for k, v in zero_reasons.items()}
+
 class EmotionSystem:
     """Holds the 21 CERC weights per (symbol, timeframe) and computes E1..E22."""
 
@@ -420,9 +426,18 @@ class EmotionSystem:
             zero_reasons["9"] = "no down closes in the last 10 minutes (all-up tape)"
         if emos.get(18, 1.0) == 0.0:
             zero_reasons["18"] = "lag comparator flat — index unchanged vs the lag ring"
+        # EVERY zero needs a reason (zeros rule): channels that computed
+        # to exactly 0 with no specific trigger get an honest generic one
+        for _eid in range(1, 23):
+            if float(emos.get(_eid, 0.0)) == 0.0 \
+                    and str(_eid) not in zero_reasons:
+                zero_reasons[str(_eid)] = (
+                    "computed — channel exactly 0.0 this window "
+                    "(no trigger, both sides balanced)")
         return {
             "emotions": {k: round(v, 5) for k, v in emos.items()},
             "zero_reasons": zero_reasons,
+            "zero_causes": _causes(zero_reasons),
             "directions": dirs,
             "cerc": round(cerc, 5),
             "rtp": emos[9],

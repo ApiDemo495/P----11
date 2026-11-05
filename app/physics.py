@@ -225,12 +225,16 @@ def mechanism_table(values: dict[int, float], details: dict,
         d = details.get(f"p{pid}") or {}
         logic = [f"{k} = {v2}" for k, v2 in list(d.items())[:6]]
         active = abs(v) > 1e-9
+        why = ("active — mechanism sees coverage on this tape"
+               if active else _inactive_reason(sc, d))
+        from .formulas.trace import classify_zero
         rows.append({
             "id": pid, "name": P_NAMES.get(pid, f"P{pid}"),
             "covered": bool(active), "active": active,
             "score": round(v, 6),
-            "why": ("active — mechanism sees coverage on this tape"
-                    if active else _inactive_reason(sc, d)),
+            "why": why,
+            # cause bucket for 0.00 — same classifier as the formulas
+            "cause": None if active else classify_zero(why),
             "logic": logic,
         })
     return rows

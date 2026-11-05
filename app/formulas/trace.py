@@ -114,6 +114,49 @@ def zero_reason(fid: int, value: float, w_eff: int, hit_exception: bool = False)
     return "computed, genuinely flat (inputs sufficient, reading ~ 0)"
 
 
+# Cause buckets the user asks about for every 0.00: is it a miscalc/
+# error, both sides equal, missing input, too little history, a
+# materiality gate, or an honestly-flat reading?
+CAUSE_LABELS = {
+    "error": "error (exception/failed)",
+    "equal": "both sides equal",
+    "input": "input missing/thin",
+    "history": "not enough history",
+    "materiality": "below materiality gate",
+    "flat": "computed flat (genuinely ~0)",
+}
+
+
+def classify_zero(reason: str | None) -> str | None:
+    """Bucket a zero_reason string into one of CAUSE_LABELS.
+
+    Deterministic keyword mapping — never invents a cause: anything
+    unrecognised falls back to 'flat' (the honest computed-zero case).
+    """
+    if not reason:
+        return None
+    r = reason.lower()
+    if any(k in r for k in ("exception", "failed", "nan", "mismatch",
+                            "error")):
+        return "error"
+    if any(k in r for k in ("equal polarities", "exactly 0",
+                            "both sides", "cancel", "sums to exactly",
+                            "unchanged", "equal across", "balanced")):
+        return "equal"
+    # history BEFORE input: "baseline rings cold — first windows abstain"
+    # must read as history, not as a missing-window input
+    if any(k in r for k in ("cold", "first window", "history",
+                            "needs ≥", "rings", "n <", "not enough")):
+        return "history"
+    if any(k in r for k in ("tape too thin", "bars, had")) \
+            or ("needs" in r and "bar" in r):
+        return "input"
+    if any(k in r for k in ("materiality", "inner gate", "gate:",
+                            "below ", "reduced=")):
+        return "materiality"
+    return "flat"
+
+
 def run_double_check(fid: int, value: float, replay_value: float) -> dict[str, Any]:
     """Automated double check: replay determinism + range + declared identity."""
     identity = DOUBLE_CHECK.get(fid, "")   # already carries the acronym
@@ -172,6 +215,8 @@ def traced_compute(ctx, record: bool = False,
             "guard_min": PRIMARY_GUARD.get(fid, 0),
             "non_directional": fid in NON_DIRECTIONAL,
             "zero_reason": zero_reason(fid, value, w_eff, hit_exc),
+            "zero_cause": classify_zero(
+                zero_reason(fid, value, w_eff, hit_exc)),
             "double_check": run_double_check(
                 fid, value,
                 replay.get(fid, replay_one) if replay_one == replay_one else float("nan")),
