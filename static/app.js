@@ -136,7 +136,7 @@ async function api(path, opts) {
 
 /* ── state ──────────────────────────────────────────────────── */
 const S = {
-  symbol: "BTC", focusTf: "tf1", view: "dashboard",
+  symbol: "BTC", focusTf: "tf1", tfFocus: false, view: "dashboard",
   snap: null, prices: {}, lastMsgAt: 0, wsRetry: 0,
   cycles: {}, grcFlash: {}, lastSec: {},
   charts: {}, spark: {},
@@ -151,6 +151,7 @@ class ChartX {
     this.cv.style.cssText = "width:100%;height:100%;display:block";
     el.innerHTML = ""; el.appendChild(this.cv);
     this.bars = []; this.lines = []; this.markers = [];
+    this.maxBars = opts.maxBars || 150;
     this._raf = 0; this._lastW = 0; this._lastH = 0;
     if (typeof ResizeObserver !== "undefined")
       new ResizeObserver(() => this.schedule()).observe(el);
@@ -161,7 +162,7 @@ class ChartX {
     if (this._raf) return;
     this._raf = requestAnimationFrame(() => { this._raf = 0; this.draw(); });
   }
-  setData(bars) { this.bars = bars.slice(-150); this.schedule(); }
+  setData(bars) { this.bars = bars.slice(-this.maxBars); this.schedule(); }
   setLines(l) { this.lines = l || []; this.schedule(); }
   setMarkers(m) { this.markers = m || []; this.schedule(); }
   tick(price) {
@@ -199,8 +200,12 @@ class ChartX {
       const p5 = ex[Math.floor(ex.length * 0.05)];
       const p95 = ex[Math.min(ex.length - 1, Math.ceil(ex.length * 0.95) - 1)];
       if (p95 > p5) { lo = p5; hi = p95; }
-      // keep TP/SL/entry lines' VALUES known — they may sit outside;
-      // the last price must stay representable (label clamped at draw)
+      // outliers can't flatten the view — BUT TP/SL/LIQ levels must stay
+      // visible, so widen the robust range to include the overlay lines
+      for (const l of this.lines) {
+        if (l.price > hi) hi = l.price;
+        if (l.price < lo) lo = l.price;
+      }
     }
     const pad = (hi - lo) * 0.08 || Math.max(hi * 1e-4, 0.01); hi += pad; lo -= pad;
     const rw = this.spark ? 2 : 48;
@@ -218,22 +223,35 @@ class ChartX {
       const ly2 = Math.max(10, Math.min(h - 4, Y(l.price)));
       g.fillText(`${l.title} ${l.price.toFixed(l.price > 1000 ? 0 : 2)}`, 4, ly2 - 3);
     }
-    // real-market zigzag: every bar's high→low wick (the tape is not a
-    // smooth curve — wicks carry the actual movement between closes)
-    if (this.bars.length <= 150) {
-      g.lineWidth = 1.2;
-      for (let i = 0; i < this.bars.length; i++) {
-        const b = this.bars[i], x = X(i);
-        g.strokeStyle = b.close >= b.open ? "rgba(34,201,138,.9)"
-                                          : "rgba(240,56,90,.9)";
-        g.beginPath(); g.moveTo(x, Y(b.high)); g.lineTo(x, Y(b.low)); g.stroke();
-      }
+    // ── price grid + right-hand scale (reads like a real chart) ──
+    g.font = "9px monospace"; g.textAlign = "left";
+    for (let gi = 0; gi <= 4; gi++) {
+      const val = lo + (hi - lo) * gi / 4;
+      const gy = Y(val);
+      g.strokeStyle = "rgba(216,216,232,.07)"; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(0, gy); g.lineTo(w - rw, gy); g.stroke();
+      g.fillStyle = "#6e6e8c";
+      g.fillText(val >= 1000 ? val.toFixed(0) : val.toFixed(2),
+                 w - rw + 4, Math.max(8, Math.min(h - 4, gy + 3)));
     }
-    g.beginPath();
-    this.bars.forEach((b, i) => { const x = X(i), y = Y(b.close); i ? g.lineTo(x, y) : g.moveTo(x, y); });
-    g.strokeStyle = "#00d4f0"; g.lineWidth = 1.3; g.stroke();
-    g.lineTo(X(this.bars.length - 1), h - 3); g.lineTo(X(0), h - 3); g.closePath();
-    g.fillStyle = "rgba(0,212,240,.07)"; g.fill();
+    // ── CANDLES (the rewrite): bodies + wicks — a flat line was hiding
+    //    the actual two-sided structure of every bar ──
+    const plotW = w - rw;
+    const stepN = plotW / Math.max(1, this.bars.length);
+    const bw = Math.max(1, Math.min(stepN * 0.68, 13));
+    for (let i = 0; i < this.bars.length; i++) {
+      const b = this.bars[i];
+      const x = X(i);
+      const up = b.close >= b.open;
+      const col = up ? "#22c98a" : "#f0385a";
+      g.strokeStyle = col; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(x, Y(b.high)); g.lineTo(x, Y(b.low)); g.stroke();
+      const yO = Y(b.open), yC = Y(b.close);
+      const top = Math.min(yO, yC);
+      const bh = Math.max(1, Math.abs(yO - yC));
+      g.fillStyle = col;
+      g.fillRect(x - bw / 2, top, bw, bh);
+    }
     for (const m of this.markers) {
       const i = this.bars.findIndex(b => b.time === m.time); if (i < 0) continue;
       g.fillStyle = m.color; g.font = "9px sans-serif"; g.textAlign = "center";
@@ -587,13 +605,111 @@ function syncToolbar() {
   $$("#seg-tf .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.tf === S.focusTf));
 }
 function setFocusTf(tf) {
-  S.focusTf = tf; syncToolbar(); renderWhy(); renderQuads(); S.lastViewFetch = 0;
+  S.focusTf = tf;
+  // choosing a timeframe switches the DASHBOARD to focus mode:
+  // that window + its sub-timeframe TPs only (⊞ all timeframes reverts)
+  S.tfFocus = true;
+  try { localStorage.setItem("tfFocus", "1"); } catch (e) { /* private mode */ }
+  syncToolbar(); renderWhy(); renderQuads(); S.lastViewFetch = 0;
+  loadCandles().catch(() => {});
   refreshActiveView(true);
+}
+
+function renderDashboardMode() {
+  const hero = $("#tf-hero"), grid = $("#quad-grid");
+  if (!hero || !grid) return;
+  if (S.tfFocus) {
+    hero.classList.remove("hidden");
+    grid.style.display = "none";
+    renderHero();
+  } else {
+    hero.classList.add("hidden");
+    grid.style.display = "";
+  }
+}
+
+function renderHero() {
+  const tf = S.focusTf;
+  const a = S.snap?.assets?.[S.symbol] || {};
+  const cyc = a.tfs?.[tf];
+  const res = S.snap?.systems?.[`${S.symbol}|${tf}`] || {};
+  const m = TF_META[tf];
+  const dir = cyc?.direction ?? res.direction ?? 0;
+  const weak = String(res?.ladder?.source || "").includes("inside noise floor")
+    || Number(res?.confidence ?? 0) < 0.05;
+  const ttl = $("#hero-title");
+  if (ttl) {
+    ttl.innerHTML = `${tf.toUpperCase()} · <b style="color:var(--cyan)">${m.mins}m</b> window
+      <span class="dim">${S.symbol} · sub-timeframes ${m.tps.join(" / ")}m</span>`;
+  }
+  const stats = $("#hero-stats");
+  if (stats) {
+    stats.innerHTML = `
+      <div class="kv"><span>call</span><b class="${dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat"}">${dir > 0 ? "▲ BULL" : dir < 0 ? "▼ BEAR" : "● FLAT"}${weak && dir ? "*" : ""}</b></div>
+      <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} ${cyc?.issued ? "· ISSUED" : "· below floor"}</b></div>
+      <div class="kv"><span>cci adj</span><b>${fx(res.cci_adjusted ?? 0, 4)}</b></div>
+      <div class="kv"><span>countdown</span><b>${cyc?.countdown_s != null ? `${Math.floor(cyc.countdown_s / 60)}m ${cyc.countdown_s % 60}s` : "—"}</b></div>
+      <div class="kv"><span>stop loss</span><b class="acc-dn">${cyc?.sl ? px(cyc.sl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:9px">prov</span>' : ""}</b></div>
+      <div class="kv"><span>ratio</span><b>${cyc?.ratio ? "1:" + cyc.ratio : "—"}</b></div>`;
+  }
+  // TP ladder — the TF's own horizon ALWAYS first (user rule)
+  const tg = cyc?.targets || [];
+  const order = tg.map((_, i) => i);
+  if (tg.length >= 4) order.unshift(order.pop());   // [3,0,1,2]
+  const strip = $("#subtf-strip");
+  if (strip) {
+    strip.innerHTML = order.map(i => {
+      const t = tg[i];
+      if (!t) return "";
+      const isTf = i === tg.length - 1;
+      const st = t.status === "hit" ? "HIT ✓" : t.status === "locked" ? "LOCK 🔒" : "open";
+      const cls = t.status === "hit" ? "acc-up" : t.status === "locked" ? "acc-warn" : "dim";
+      return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${t.level ? px(t.level) : "—"} <span class="dim">${st}</span></b></div>`;
+    }).join("") || `<div class="dim pad">waiting for the first lock…</div>`;
+  }
+  // chart overlays: SL, TP ladder (horizon first), liquidation clusters
+  const lines = [];
+  if (cyc?.sl) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL" });
+  const mgi = res.micro;
+  if (mgi?.available) {
+    if (mgi.nearest_up?.price)
+      lines.push({ price: mgi.nearest_up.price, color: "#a855f7",
+                   title: `LIQ↑ ${Math.round(mgi.nearest_up.bps)}bp`, dash: true });
+    if (mgi.nearest_dn?.price)
+      lines.push({ price: mgi.nearest_dn.price, color: "#a855f7",
+                   title: `LIQ↓ ${Math.round(mgi.nearest_dn.bps)}bp`, dash: true });
+  }
+  order.forEach(i => {
+    const t = tg[i];
+    if (!t || !t.level) return;
+    const isTf = i === tg.length - 1;
+    lines.push({
+      price: t.level,
+      color: t.status === "hit" ? "#22c98a" : t.status === "locked" ? "#c9a227" : "#00d4f0",
+      title: isTf ? `TF${t.minutes}m` : `TP${i + 1}${t.status === "hit" ? " ✓" : t.status === "locked" ? " 🔒" : ""}`,
+      dash: t.status !== "locked",
+    });
+  });
+  S.charts.hero?.setLines(lines);
+}
+
+function bindAllTf() {
+  const b = $("#btn-all-tf");
+  if (b && !b.dataset.wired) {
+    b.dataset.wired = "1";
+    b.addEventListener("click", () => {
+      S.tfFocus = false;
+      try { localStorage.setItem("tfFocus", "0"); } catch (e) { /* private */ }
+      renderDashboardMode();
+      toast("all four timeframes shown", "ok");
+    });
+  }
 }
 
 function refreshActiveView(force) {
   if (S.view === "dashboard") {
     renderWhy(); renderQuads();
+    try { renderDashboardMode(); } catch (e) { console.error("mode", e); }
     try { renderBranches(); } catch (e) { console.error("branches", e); }
     try { renderMicro(); } catch (e) { console.error("micro", e); }
     if (!force || !S._sysLoaded || Date.now() - S._sysLoaded > 30000) {
@@ -642,6 +758,10 @@ function buildQuads() {
     S.charts[tf] = new ChartX($("#qc-" + tf));
     S.spark[tf] = new ChartX($("#qs-" + tf), { spark: true });
   });
+  // hero chart (TF-focus mode): denser series, candles
+  if ($("#hero-chart") && !S.charts.hero) {
+    S.charts.hero = new ChartX($("#hero-chart"), { maxBars: 260 });
+  }
   renderQuads(); loadCandles();
 }
 function renderQuads(opts = {}) {
@@ -666,9 +786,16 @@ function renderQuads(opts = {}) {
       ? `AI ${ag.direction > 0 ? "+" : ag.direction < 0 ? "−" : "0"} (${ag.source})` : "AI —";
     const tp = $("#qt-" + tf);
     if (tp) {
-      tp.innerHTML = (cyc?.targets || []).map((t, i) =>
-        `<span class="tp ${t.status === "hit" ? "hit" : t.status === "locked" ? "locked" : ""}">TP${i + 1}${t.status === "hit" ? " ✓" : t.status === "locked" ? " 🔒" : ""} ${t.level ? px(t.level) : ""}</span>`
-      ).join("") + (cyc?.sl ? `<span class="tp sl">SL ${px(cyc.sl)}</span>` : "");
+      const _qtg = cyc?.targets || [];
+      const _qord = _qtg.map((_, i) => i);
+      if (_qtg.length >= 4) _qord.unshift(_qord.pop());
+      tp.innerHTML = _qord.map(i => {
+        const t = _qtg[i];
+        if (!t) return "";
+        const isTf = i === _qtg.length - 1;
+        const lbl = isTf ? `TF${t.minutes}m` : `TP${i + 1}`;
+        return `<span class="tp ${t.status === "hit" ? "hit" : t.status === "locked" ? "locked" : ""}${isTf ? " tp-horizon" : ""}">${lbl}${t.status === "hit" ? " ✓" : t.status === "locked" ? " 🔒" : ""} ${t.level ? px(t.level) : ""}</span>`;
+      }).join("") + (cyc?.sl ? `<span class="tp sl">SL ${px(cyc.sl)}</span>` : "");
     }
     // price line
     const pr = S.prices[S.symbol] ?? a.price;
@@ -1122,13 +1249,15 @@ function renderCalls() {
   const el = $("#calls-panel"); if (!el) return;
   const a = S.snap?.assets?.[S.symbol] || {};
   $("#calls-scope").textContent = `${S.symbol} · every main timeframe (sub-windows are TF targets, no separate toggle)`;
-  const rows = TF.map(tf => {
+  // TF-FOCUS: once the user picks a timeframe the calls table shows ONLY
+  // that window (all-TF mode until then, toggle in the hero)
+  const rows = TF.filter(tf => !S.tfFocus || tf === S.focusTf).map(tf => {
     const cyc = a.tfs?.[tf];
     const res = S.snap?.systems?.[`${S.symbol}|${tf}`];
     const m = TF_META[tf];
     const dir = cyc?.direction ?? res?.direction ?? 0;
-    const _weak = String((s?.ladder?.source) || "").includes("inside noise floor")
-      || Number(s?.confidence || 0) < 0.05;
+    const _weak = String(res?.ladder?.source || "").includes("inside noise floor")
+      || Number(res?.confidence || 0) < 0.05;
     const dirTxt = dir > 0
       ? `<b class="${_weak ? "flat" : "up"}">▲ BULL${_weak ? "*" : ""}</b>`
       : dir < 0
@@ -1136,10 +1265,18 @@ function renderCalls() {
         : '<b class="flat">● FLAT</b>';
     const _leanNote = _weak
       ? `<br/><span class="dim" style="font-size:9.5px">* weak lean inside noise floor — never issued</span>` : "";
-    const tps = (cyc?.targets || []).map((t, i) => {
+    // TP4 = THIS timeframe's own horizon → ALWAYS shown/calc-first
+    const _tg = cyc?.targets || [];
+    const _ord = _tg.map((_, i) => i);
+    if (_tg.length >= 4) _ord.unshift(_ord.pop());   // [3,0,1,2]
+    const tps = _ord.map(i => {
+      const t = _tg[i];
+      if (!t) return "";
       const st = t.status === "hit" ? '<i class="st hit">HIT</i>'
         : t.status === "locked" ? '<i class="st lock">LOCK</i>' : '<i class="st open">open</i>';
-      return `<td class="tp-cell">${t.level ? px(t.level) : "—"}<br/><span class="tp-min">TP${i + 1} · ${m.tps[i]}m</span> ${st}</td>`;
+      const isTf = i === _tg.length - 1;
+      const lbl = isTf ? `TF ${m.mins}m` : `TP${i + 1} · ${m.tps[i]}m`;
+      return `<td class="tp-cell">${t.level ? px(t.level) : "—"}<br/><span class="tp-min${isTf ? " tp-horizon" : ""}">${lbl}</span> ${st}</td>`;
     }).join("");
     const sl = cyc?.sl ? `${px(cyc.sl)}${cyc.sl_provisional ? ' <span class="dim" style="font-size:9px">prov</span>' : ""}` : "—";
     return `<tr class="${tf === S.focusTf ? "focus-row" : ""}">
@@ -1154,12 +1291,9 @@ function renderCalls() {
   }).join("");
   el.innerHTML = `<table class="tbl calls-tbl">
     <thead><tr><th>TF</th><th>WINDOW</th><th>CALL</th><th>CONF</th>
-      <th>TP1 ${px(0)}</th><th>TP2</th><th>TP3</th><th>TP4</th><th>SL</th><th>RATIO</th></tr></thead>
+      <th>TF-TP (horizon)</th><th>TP1</th><th>TP2</th><th>TP3</th><th>SL</th><th>RATIO</th></tr></thead>
     <tbody>${rows}</tbody></table>
-    <div class="hint">Each main timeframe issues its own call with 4 sub-targets (the "sub timeframes" — TP minutes per window) and one stop-loss. Levels come from the engine's ATR projection at every GRC; status updates live.</div>`;
-  // fix header TP labels with real first-target context (keep simple labels)
-  const ths = $$(".calls-tbl th");
-  if (ths.length >= 8) { ths[4].textContent = "TP1"; ths[5].textContent = "TP2"; ths[6].textContent = "TP3"; ths[7].textContent = "TP4"; }
+    <div class="hint">The TF's own horizon TP (the window itself) is always calculated first and shown first; TP1–TP3 are its sub-timeframes (one stop-loss, one ratio). Levels come from the engine's ATR projection at every GRC.${S.tfFocus ? " Focused: only " + S.focusTf.toUpperCase() + " shown — use ⊞ all timeframes." : ""}</div>`;
 }
 
 /* ═══════════ candles (per symbol, per TF) ═══════════ */
@@ -1189,8 +1323,13 @@ async function loadCandles() {
         if (t.status === "hit" && t.hit_ts)
           markers.push({ time: Math.floor(t.hit_ts / 60) * 60, above: true, color: "#22c98a", glyph: "▲" });
       });
-      c.setData(bars.map(x => ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c })));
+      const mapped = bars.map(x => ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c }));
+      c.setData(mapped);
       c.setMarkers(markers.slice(-36));
+      if (tf === S.focusTf) {
+        S.charts.hero?.setData(mapped);
+        S.charts.hero?.setMarkers(markers.slice(-36));
+      }
       S.spark[tf]?.setData(bars.slice(-90).map(x => ({ time: x.t, open: 0, high: x.v || 0, low: 0, close: x.v || 0 })));
     }));
   } catch { /* first GRC may not be ready */ }
@@ -2541,7 +2680,8 @@ window.addEventListener("unhandledrejection", e => {
 
 /* ═══════════ boot ═══════════ */
 (function boot() {
-  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); syncAnalyseButton();
+  try { S.tfFocus = localStorage.getItem("tfFocus") === "1"; } catch (e) { S.tfFocus = false; }
+  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); syncAnalyseButton(); bindAllTf(); renderDashboardMode();
   connectWS();
   api("/api/snapshot").then(applySnapshot).catch(() => {});
   // REST safety net lives in the single master setInterval below (H-2)

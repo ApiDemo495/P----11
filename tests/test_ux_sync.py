@@ -347,7 +347,7 @@ def test_calibration_and_day_flatten_ui_contract():
     assert "hs-calib" in (ROOT / "static" / "index.html").read_text()
     assert "sl_provisional" in js
     # chart: denser window + strong wicks
-    assert "bars.slice(-150)" in js and "rgba(34,201,138,.9)" in js
+    assert "bars.slice(-this.maxBars)" in js and "g.fillRect(x - bw / 2" in js
 
 
 def test_old_app_inspiration_bundle():
@@ -448,6 +448,32 @@ def test_settle_halt_and_curl_and_gap_fixes():
     assert "minmax(112px, 1fr)" in css       # fills wide stat rows (physics gap)
     js = (ROOT / "static" / "app.js").read_text()
     assert "weak lean inside noise floor" in js   # tf3-style lean honesty
+
+
+def test_dashboard_rewrite_tf_focus_candles_and_tp_first():
+    """User: rewrite the dashboard — focus mode (chosen TF + its
+    sub-timeframe TPs only), candle charts instead of flat lines, and the
+    TF-horizon TP always calculated & shown first."""
+    html = (ROOT / "static" / "index.html").read_text()
+    js = (ROOT / "static" / "app.js").read_text()
+    eng = (ROOT / "app" / "engine.py").read_text()
+    # focus-mode hero + revert button + sub-timeframe strip
+    for token in ("tf-hero", "hero-chart", "subtf-strip", "btn-all-tf"):
+        assert token in html, token
+    assert "tfFocus" in js and 'localStorage.setItem("tfFocus"' in js
+    assert "function renderHero" in js and "renderDashboardMode" in js
+    # calls table follows focus + TF-horizon TP first
+    assert 'TF.filter(tf => !S.tfFocus || tf === S.focusTf)' in js
+    assert "TF-TP (horizon)" in js
+    assert "_ord.unshift(_ord.pop())" in js        # [3,0,1,2] order
+    # engine precomputes the horizon target first
+    assert "ALWAYS calculated FIRST" in eng
+    # charts: CANDLES + grid scale + configurable depth (hero260)
+    assert "g.fillRect(x - bw / 2" in js
+    assert "price grid + right-hand scale" in js
+    assert "maxBars: 260" in js
+    # the stray `s` reference in renderCalls is gone (would throw)
+    assert "(s?.ladder" not in js and " s?.ladder" not in js
 
 
 def test_reports_exist_and_are_linked():

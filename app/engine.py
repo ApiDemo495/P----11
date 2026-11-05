@@ -3152,15 +3152,32 @@ class PredictionEngine:
             if not (prev_cyc.safe_events or prev_cyc.close_alert):
                 self.hist.record_no_sl_hit(symbol)
         targets = []
-        for k, minutes in enumerate(TIMEFRAMES[tf]["targets"], start=1):
-            if k in (1, 4):
-                level = self._project_level(
-                    res.get("_price", 0.0) or self.feed.prices().get(symbol, 0.0),
-                    res["direction"] or 1,
-                    res["confidence"],
-                    res["atr"],
-                    minutes,
+        _mins = TIMEFRAMES[tf]["targets"]
+        _price0 = res.get("_price", 0.0) or self.feed.prices().get(symbol, 0.0)
+        # USER RULE: the timeframe's own horizon TP (the LAST target = the
+        # window itself, e.g.22m for tf1) is ALWAYS calculated FIRST —
+        # precomputed before any sub-frame level.
+        _horizon_level = self._project_level(
+            _price0, res["direction"] or 1, res["confidence"],
+            res["atr"], _mins[-1])
+        for k, minutes in enumerate(_mins, start=1):
+            if k == len(_mins):
+                level = _horizon_level          # precomputed first — always
+                targets.append(
+                    TargetState(
+                        k=k,
+                        minutes=minutes,
+                        level=level,
+                        status="locked",
+                        direction=res["direction"] or 1,
+                        locked_at=now,
+                        locked_cci=res["cci_adjusted"],
+                    )
                 )
+            elif k == 1:
+                level = self._project_level(
+                    _price0, res["direction"] or 1, res["confidence"],
+                    res["atr"], minutes)
                 targets.append(
                     TargetState(
                         k=k,
