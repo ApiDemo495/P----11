@@ -1,6 +1,9 @@
 """Formula registry — signal formulas that feed the CCI sum.
 
   F1..F19, F22..F27, F31 : direct [-1,1] signals (weighted summands)
+  F32..F35               : live order-book / liquidation layer (DBI depth
+                           imbalance, MPD micro-price, CWA cancel
+                           elasticity, LNP liquidation pressure)
   F20 (DRHE)             : confidence multiplier only (not a signal)
   F28 (ARC), F29 (DLP)   : risk layer in app/risk.py (price-level outputs)
   F30 (PCV)              : post-CCI validator (needs the CCI as input)
@@ -43,6 +46,7 @@ from .f22_f31 import (
     f27_vcdp,
     f31_clre,
 )
+from .f32_f35 import f32_dbi, f33_mpd, f34_cwa, f35_lnp
 
 FORMULA_NAMES: dict[int, str] = {
     1: "RPIC", 2: "CDIF", 3: "PEM", 4: "SATD", 5: "IRKG",
@@ -51,6 +55,7 @@ FORMULA_NAMES: dict[int, str] = {
     16: "ISA", 17: "VAD", 18: "CCMDR", 19: "PMTL", 20: "DRHE",
     21: "CCI", 22: "BAPR", 23: "SARD", 24: "FBPS", 25: "TMDM",
     26: "IFDS", 27: "VCDP", 28: "ARC", 29: "DLP", 30: "PCV", 31: "CLRE",
+    32: "DBI", 33: "MPD", 34: "CWA", 35: "LNP",
 }
 
 FORMULA_FUNCTIONS = {
@@ -60,6 +65,8 @@ FORMULA_FUNCTIONS = {
     16: f16_isa, 17: f17_vad, 18: f18_ccmdr, 19: f19_pmtl, 20: f20_drhe,
     22: f22_bapr, 23: f23_sard, 24: f24_fbps, 25: f25_tmdm,
     26: f26_ifds, 27: f27_vcdp, 31: f31_clre,
+    # order-book / liquidation layer (user-authorized extension):
+    32: f32_dbi, 33: f33_mpd, 34: f34_cwa, 35: f35_lnp,
 }
 
 # Formulas bounded to [-1, +1] (DRHE is the documented exception)

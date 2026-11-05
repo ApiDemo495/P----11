@@ -114,7 +114,11 @@ def test_e12_midwindow_refash_never_relocks():
     eng, _f, _e = make_engine()
     run(_boot(eng))
     res = eng._event_result("BTC", "tf1")
-    now = _t.time()
+    # mid-window timestamp: 'now' and 'now+60' must stay inside the SAME
+    # grid window — near a boundary the second fresh_cycle legitimately
+    # re-locks and the test fails ~4% of the day (flaky, not a bug)
+    _s, _e = eng._grid_window("tf1", _t.time())
+    now = _s + int((_e - _s) // 2)
     eng.fresh_cycle("BTC", "tf1", now, res, reason="initial_lock")
     lock1 = dict(eng.locks[("BTC", "tf1")])
     # same grid window, later time, different res — lock must hold

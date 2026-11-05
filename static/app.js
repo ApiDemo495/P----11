@@ -67,7 +67,7 @@ const FORMULA_LOGIC = {
   18:"entropy of return signs → trendiness",
   19:"price acceleration ΔΔclose → momentum of momentum",
   20:"DRHE trend durability — confidence gate ×min(1,DRHE)",
-  21:"CCI master aggregate: 31 weighted components",
+  21:"CCI master aggregate: 35 weighted components",
   22:"breakout age since level break → early/late",
   23:"round-number liquidity cluster pressure",
   24:"session-open positioning vs prior close",
@@ -276,44 +276,68 @@ function setSymbol(sym) {
 function renderMicro() {
   const box = $("#micro-panel");
   if (!box) return;
-  const m = S.snap?.systems?.[`${S.symbol}|${S.focusTf}`]?.micro;
+  const sys = S.snap?.systems?.[`${S.symbol}|${S.focusTf}`] || {};
+  const m = sys.micro;
+  const bk = sys.book || {};
   $("#micro-meta").textContent = `${S.symbol} · ${m?.mode || "—"}`;
-  if (!m) {
+  if (!m && !bk.book) {
     box.innerHTML = `<div class="dim pad">loading…</div>`;
     return;
   }
-  if (!m.available) {
+  if (!m?.available && !bk.book) {
     box.innerHTML = `
-      <div class="hint" style="color:var(--gold)">○ ${esc(m.reason || "no micro data")}</div>
-      <div class="hint">gauges turn on with the live Binance feed: τ = E−T clock-skew z, Δa trade-gap z, and @forceOrder liquidation clusters (measured prints — no synthetic margin particles on this box).</div>`;
+      <div class="hint" style="color:var(--gold)">○ ${esc(m?.reason || "no exchange micro data")}</div>
+      <div class="hint">gauges turn on with the live Binance feed: depth20 book (DBI, micro-price, Λ cancel elasticity, walls), τ = E−T clock-skew z, and @forceOrder liquidation clusters — measured prints only, no synthetic particles.</div>`;
     return;
   }
-  if (!S.microHist) S.microHist = [];
-  if (m.stress != null) S.microHist.push(m.stress);
-  S.microHist = S.microHist.slice(-60);
-  const spark = S.microHist.length > 2
-    ? `<svg viewBox="0 0 100 26" preserveAspectRatio="none" style="width:120px;height:24px;vertical-align:middle"><polyline points="${
-        S.microHist.map((v2, i) =>
-          `${(i / Math.max(1, S.microHist.length - 1)) * 100},${24 - v2 * 22}`).join(" ")}"
-        fill="none" stroke="#00d4f0" stroke-width="1.5"/></svg>` : "";
-  const zline = (v2, n2, name2) => v2 == null
-    ? `<div class="kv"><span>${name2}</span><b class="dim">needs ${m.min_samples} packets (had ${n2})</b></div>`
-    : `<div class="kv"><span>${name2}</span><b class="${Math.abs(v2) >= 3 ? "acc-warn" : ""}">z ${v2}${Math.abs(v2) >= 3 ? " ⚠>3" : ""} <span class="dim">n=${n2}</span></b></div>`;
-  const clu = (c2, arrow) => c2
-    ? `<div class="kv"><span>cluster ${arrow}</span><b>${px(c2.price)} <span class="dim">${c2.bps} bps · ${c2.bias} · mass ${c2.mass}</span></b></div>`
-    : `<div class="kv"><span>cluster ${arrow}</span><b class="dim">none ≥8% of flow</b></div>`;
-  box.innerHTML = `
-    <div class="kv-row">
-      <div class="kv" style="min-width:180px"><span>queue stress (τ, Δa)</span>
-        <div class="bar" style="margin-top:4px"><i class="${(m.stress || 0) > 0.5 ? "neg" : "pos"}" style="width:${Math.max(2, Math.round((m.stress || 0) * 100))}%"></i></div>
-        <b>${m.stress != null ? Math.round(m.stress * 100) + "%" : "—"}</b></div>
-      ${zline(m.z_tau, m.n_tau, "z clock-skew (E−T, ms)")}
-      ${zline(m.z_gap, m.n_gap, "z trade-id gap (Δa)")}
-      <div class="kv"><span>net forced flow (session-decayed)</span><b class="${(m.net_flow || 0) >= 0 ? "acc-up" : "acc-dn"}">${m.net_flow != null ? (m.net_flow >= 0 ? "+" : "") + Math.round(m.net_flow * 100) + "% BUY-share" : "—"}</b></div>
-      <div class="kv"><span>forceOrder prints</span><b>${m.liq_events} <span class="dim">${spark ? "· stress trace" : ""}</span></b></div>
+  // ---- clock-skew / liquidation block ----
+  let microBlock;
+  if (!m?.available) {
+    microBlock = `<div class="hint" style="color:var(--gold)">○ clock-skew / forceOrder: ${esc(m?.reason || "unavailable")}</div>`;
+  } else {
+    if (!S.microHist) S.microHist = [];
+    if (m.stress != null) S.microHist.push(m.stress);
+    S.microHist = S.microHist.slice(-60);
+    const spark = S.microHist.length > 2
+      ? `<svg viewBox="0 0 100 26" preserveAspectRatio="none" style="width:120px;height:24px;vertical-align:middle"><polyline points="${
+          S.microHist.map((v2, i) =>
+            `${(i / Math.max(1, S.microHist.length - 1)) * 100},${24 - v2 * 22}`).join(" ")}"
+          fill="none" stroke="#00d4f0" stroke-width="1.5"/></svg>` : "";
+    const zline = (v2, n2, name2) => v2 == null
+      ? `<div class="kv"><span>${name2}</span><b class="dim">needs ${m.min_samples} packets (had ${n2})</b></div>`
+      : `<div class="kv"><span>${name2}</span><b class="${Math.abs(v2) >= 3 ? "acc-warn" : ""}">z ${v2}${Math.abs(v2) >= 3 ? " ⚠>3" : ""} <span class="dim">n=${n2}</span></b></div>`;
+    const clu = (c2, arrow) => c2
+      ? `<div class="kv"><span>cluster ${arrow}</span><b>${px(c2.price)} <span class="dim">${c2.bps} bps · ${c2.bias} · mass ${c2.mass}</span></b></div>`
+      : `<div class="kv"><span>cluster ${arrow}</span><b class="dim">none ≥8% of flow</b></div>`;
+    microBlock = `
+      <div class="kv-row">
+        <div class="kv" style="min-width:180px"><span>queue stress (τ, Δa)</span>
+          <div class="bar" style="margin-top:4px"><i class="${(m.stress || 0) > 0.5 ? "neg" : "pos"}" style="width:${Math.max(2, Math.round((m.stress || 0) * 100))}%"></i></div>
+          <b>${m.stress != null ? Math.round(m.stress * 100) + "%" : "—"}</b></div>
+        ${zline(m.z_tau, m.n_tau, "z clock-skew (E−T, ms)")}
+        ${zline(m.z_gap, m.n_gap, "z trade-id gap (Δa)")}
+        <div class="kv"><span>net forced flow (session-decayed)</span><b class="${(m.net_flow || 0) >= 0 ? "acc-up" : "acc-dn"}">${m.net_flow != null ? (m.net_flow >= 0 ? "+" : "") + Math.round(m.net_flow * 100) + "% BUY-share" : "—"}</b></div>
+        <div class="kv"><span>forceOrder prints</span><b>${m.liq_events} <span class="dim">${spark ? "· stress trace" : ""}</span></b></div>
+      </div>
+      <div class="kv-row">${clu(m.nearest_up, "↑ above")}${clu(m.nearest_dn, "↓ below")}</div>
+      <div class="hint">stress = |z| of this box's OWN60-s measurement baseline (ms-level instrumentation — not a trading window) · clusters keep a full intraday session:6 h horizon,2 h half-life over real @forceOrder prints (25 bp buckets).</div>`;
+  }
+  // ---- live order book block (DepthBook) ----
+  const bookBlock = bk.book ? `
+    <div class="kv-row" style="margin-top:6px">
+      <div class="kv"><span>depth imbalance DBI20</span><b class="${(bk.dbi || 0) >= 0 ? "acc-up" : "acc-dn"}">${bk.dbi != null ? (bk.dbi >= 0 ? "+" : "") + fx(bk.dbi, 3) : "—"}</b></div>
+      <div class="kv"><span>micro-price pos (spread)</span><b class="${(bk.micro_pos || 0) >= 0 ? "acc-up" : "acc-dn"}">${bk.micro_pos != null ? (bk.micro_pos >= 0 ? "+" : "") + fx(bk.micro_pos, 3) : "—"}</b></div>
+      <div class="kv"><span>spread</span><b>${bk.spread_bps != null ? bk.spread_bps + " bp" : "—"} <span class="dim">bid ${px(bk.bid)} × ask ${px(bk.ask)}</span></b></div>
+      <div class="kv"><span>cancel elasticity Λ</span><b class="${Math.abs(bk.lambda || 0) >= 1.8 ? "acc-warn" : ""}">${bk.lambda != null ? fx(bk.lambda, 3) : "—"} <span class="dim">${esc(bk.lambda_reason || "")}</span></b></div>
+      <div class="kv"><span>snapshots</span><b>${bk.snapshots} <span class="dim">${bk.age_s}s ago</span></b></div>
     </div>
-    <div class="kv-row">${clu(m.nearest_up, "↑ above")}${clu(m.nearest_down, "↓ below")}</div>
-    <div class="hint">stress = |z| of this box's OWN60-s measurement baseline (ms-level instrumentation — not a trading window) · clusters keep a full intraday session:6 h horizon,2 h half-life over real @forceOrder prints (25 bp buckets).</div>`;
+    <div class="kv-row">
+      ${bk.wall_bid ? `<div class="kv"><span>wall bid</span><b>${px(bk.wall_bid.price)} <span class="dim">${bk.wall_bid.bps}bp · qty ${bk.wall_bid.qty}</span></b></div>` : ""}
+      ${bk.wall_ask ? `<div class="kv"><span>wall ask</span><b>${px(bk.wall_ask.price)} <span class="dim">${bk.wall_ask.bps}bp · qty ${bk.wall_ask.qty}</span></b></div>` : ""}
+    </div>
+    <div class="hint">DBI/micro/Λ measured from the live top-20 book (100 ms snapshots); Λ>+1.8 = makers pulling asks ~6× faster than bids (bullish vacuum), <−1.8 the reverse — feeds F34 as a weighted, hindsight-graded signal.</div>`
+    : `<div class="hint" style="color:var(--gold)">○ ${esc(bk.reason || "no live order book yet")}</div>`;
+  box.innerHTML = microBlock + bookBlock;
 }
 
 /* ═══════ SYSTEM panel (old-app inspiration): one glance at what runs ═ */
@@ -1997,7 +2021,7 @@ async function loadAgents() {
     const banner = $("#ag-mode");
     banner.className = "mode-banner mode-" + mode;
     banner.innerHTML = mode === "drosophila"
-      ? `<b>DROSOPHILA MODE</b> — no keys needed. The 4-instance brain, 31 formulas, math & physics run everything. Paste any key below for an optional cloud second opinion.`
+      ? `<b>DROSOPHILA MODE</b> — no keys needed. The 4-instance brain, every core formula, math & physics run everything. Paste any key below for an optional cloud second opinion.`
       : mode === "local" ? `<b>LOCAL MODEL</b> — on-device inference. Cloud keys optional.`
       : `<b>CLOUD AGENTS</b> — ${ (a.slots || []).filter(s => s.status === "connected").length } slot(s) live. Drosophila core still runs every GRC.`;
     // ── local auditor (Ollama) ──

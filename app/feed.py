@@ -164,7 +164,9 @@ class MarketFeed:
         self._sim_regime: dict[str, dict] = {}   # live drift regimes (sim)
         # exchange-server physics telemetry (Chrono-Sieve-inspired gauges)
         from .micro import MicroPhysics
+        from .book import DepthBook
         self.micro = MicroPhysics()
+        self.book = DepthBook()                    # live top-20 L2 book
         self._fo_task: asyncio.Task | None = None   # forceOrder listener
 
     # ------------------------------------------------------------------ API
@@ -435,8 +437,10 @@ class MarketFeed:
         # kline (tape) + aggTrade (micro telemetry: T/E clocks + trade-id
         # gaps — the clock-skew tomography input). aggTrade never writes
         # the tape; it only feeds the gauges.
-        streams = "/".join(f"{ex.lower()}@kline_1m/{ex.lower()}@aggTrade"
-                           for ex in SYMBOLS.values())
+        streams = "/".join(
+            f"{ex.lower()}@kline_1m/{ex.lower()}@aggTrade"
+            f"/{ex.lower()}@depth20@100ms"
+            for ex in SYMBOLS.values())
         urls = [f"{BINANCE_WS}?streams={streams}",
                 f"{BINANCE_WS_VISION}?streams={streams}"]   # D-3 rotation
         import websockets
@@ -450,6 +454,20 @@ class MarketFeed:
                         msg = json.loads(raw)
                         data = msg.get("data", msg)
                         ev = data.get("e")
+                        # partial book: b/a are LIST of levels (full top-20
+                        # replacement each100 ms — aggTrade's `a` is an int)
+                        if (isinstance(data.get("b"), list)
+                                and isinstance(data.get("a"), list)):
+                            _bs = reverse.get(str(data.get("s") or "").lower())
+                            if _bs:
+                                try:
+                                    self.book.on_depth(
+                                        _bs, data.get("b") or [],
+                                        data.get("a") or [],
+                                        int(data.get("E") or 0))
+                                except Exception:
+                                    pass
+                            continue
                         if ev == "aggTrade":
                             # exchange physics: T (engine) vs E (gateway)
                             _sym = reverse.get(str(data.get("s") or "").lower())
@@ -462,6 +480,11 @@ class MarketFeed:
                                         int(data.get("a") or 0),
                                         float(data.get("p") or 0),
                                         float(data.get("q") or 0))
+                                    self.book.on_aggtrade(
+                                        _sym,
+                                        int(data.get("T") or 0),
+                                        float(data.get("q") or 0),
+                                        bool(data.get("m")))
                                 except Exception:
                                     pass
                             continue
@@ -550,6 +573,22 @@ class MarketFeed:
         except Exception as exc:
             return {"available": False, "reason": f"error: {exc}",
                     "mode": self.mode}
+
+    def book_status(self, symbol: str) -> dict:
+        """Live depth physics for the systems payload (honest cold state)."""
+        try:
+            return self.book.status(symbol,
+                                    self.prices().get(symbol, 0.0))
+        except Exception as exc:
+            return {"book": False, "reason": f"error: {exc}"}
+
+    def book_view(self, symbol: str) -> dict:
+        """Rings handed to FormulaContext (F32/F33/F35 read these)."""
+        try:
+            return self.book.view(symbol)
+        except Exception:
+            return {"dbi_ring": [], "dev_ring": [], "lambda_ring": [],
+                    "latest": {"book": False}}
 
     def micro_flow(self, symbol: str) -> float | None:
         """Net forced-flow share in [-1,1] or None (no data) — feeds the

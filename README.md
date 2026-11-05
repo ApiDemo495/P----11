@@ -36,7 +36,7 @@ provided), then run `./run.sh` and forward port **8000**.
 Run the test suite:
 
 ```bash
-.venv/bin/python -m pytest -q    # 231 tests (honesty, parts 1-4, news, brain, UX sync)
+.venv/bin/python -m pytest -q    # 253 tests (honesty, parts 1-4, news, brain, order-book, UX sync)
 ```
 
 Environment:
@@ -62,6 +62,25 @@ restarts verification/build. neuPrint is an optional extra, not a
 requirement.
 
 ---
+
+### Live microstructure feeds (order-book layer)
+
+Alongside the 1-minute klines the app consumes three telemetry streams
+(telemetry never writes the tape):
+
+| stream | purpose |
+|---|---|
+| `<sym>@aggTrade` | millisecond `T`/`E` clocks (clock-skew z), trade-id gaps, aggressor side for fill-vs-cancel accounting |
+| `<sym>@depth20@100ms` | top-20 partial book → DBI imbalance, micro-price position, spread, cancel elasticity Λ, resting walls (`app/book.py`) |
+| `!forceOrder@arr` (futures) | real liquidation prints → decaying cluster map + net forced flow |
+
+These feed four weighted formulas — **F32 DBI**, **F33 MPD**,
+**F34 CWA**, **F35 LNP** — plus the EXCHANGE PHYSICS gauges and the
+±10 % confidence micro-band. On the simulator the rings stay empty and
+the formulas trace *"no live book / no live forceOrder prints"*
+(cause-6 honesty — no synthetic depth is ever invented). Confidence is
+additionally shrunk toward the **realised calibration hit-rate** once
+n ≥ 40 settled pairs exist (`calibration_factor`, clipped0.6–1.4).
 
 ## Architecture
 
@@ -158,9 +177,11 @@ in `f22_f31.py`):
 
 `RPIC · CDIF · PEM · SATD · IRKG · SSBD · WRPP · RTDI · CLDF · DVDI ·
 MSRC · RMET · DIQ · TCI · ARSI · ISA · VAD · CCMDR · PMTL · DRHE · CCI ·
-BAPR · SARD · FBPS · TMDM · IFDS · VCDP · ARC · DLP · PCV · CLRE`
+BAPR · SARD · FBPS · TMDM · IFDS · VCDP · ARC · DLP · PCV · CLRE ·
+DBI · MPD · CWA · LNP  *(F32–F35: live order-book layer)*
 
-**The 31 weighted CCI components** = F1–F19, F22–F27, F31 (26 signals) +
+**The 35 weighted CCI components** = F1–F19, F22–F27, F31, F32–F35
+(30 signals) +
 brain consensus (id 97) + CERC composite (id 98) + physics UFP (id 99) +
 news impact (id 100) + hedge-fund/dark-pool combined (id 101).  Excluded
 from the sum:
@@ -322,8 +343,8 @@ static/
                    contribution ticks, AUTO chip, gauges, news stream
   brains3d.js      Three.js 2×2 instanced brain visualization
   vendor/          three.module.js v0.160.1 (MIT, vendored — no CDN)
-tests/             231 tests: parts 1–4, honesty guards, news (docs11),
-                   FlyWire brain (10 acceptance), UX sync, visualization
+tests/             253 tests: parts 1–4, honesty guards, news (docs11),
+                   FlyWire brain (10), order-book layer (6), UX sync
 pytest.ini         pytest 9 + pytest-asyncio 1, strict asyncio mode,
                    plain `pytest` works (no cache plugin dependency)
 ```

@@ -88,10 +88,29 @@ EVENT_REASON: dict[int, str] = {
     18: "streak state from GRC history (cold start returns 0)",
     19: "aligned other-asset series not ready for this window",
     27: "volatility-cluster history needs ≥3 clusters before it speaks",
+    # order-book / liquidation layer — cold feed reads as flat (cause 6)
+    32: "flat this pass — no live depth book (or imbalance net-zero)",
+    33: "flat this pass — no live depth book (or micro-price centred)",
+    34: "flat this pass — no live cancel flow measured (quiet book)",
+    35: "flat this pass — no live forceOrder prints (liq flow net-zero)",
+}
+
+# F32..F35 identities (selftest contract) — order-book / liquidation
+DOUBLE_CHECK_EXTRA: dict[int, str] = {
+    32: "DBI: order-book depth imbalance (Σbid−Σask)/(Σbid+Σask), top20",
+    33: "MPD: micro-price position inside the spread (inventory-weighted)",
+    34: "CWA: cancellation elasticity ln(Vcancel_ask/Vcancel_bid)/3",
+    35: "LNP: liquidation net forced-flow share (real @forceOrder prints)",
 }
 
 # Formulas whose honest 0 can be "genuinely flat" (no inner gate fired).
 # Non-directional (never vote — advice §2.10) live in formulas/__init__.
+
+# merge the new identities/guards into the contract dicts at import time
+DOUBLE_CHECK.update(DOUBLE_CHECK_EXTRA)
+for _fid in (32, 33, 34, 35):
+    # bar-count floor (cold tape); the live-feed gate lives in EVENT_REASON
+    PRIMARY_GUARD.setdefault(_fid, 5)
 
 NON_DIRECTIONAL = {20}   # DRHE: regime/confidence, never a direction vote
 
@@ -140,8 +159,9 @@ def classify_zero(reason: str | None) -> str | None:
                             "error")):
         return "error"
     if any(k in r for k in ("equal polarities", "exactly 0",
-                            "both sides", "cancel", "sums to exactly",
-                            "unchanged", "equal across", "balanced")):
+                            "both sides", "cancel each other",
+                            "sums to exactly", "unchanged",
+                            "equal across", "balanced")):
         return "equal"
     # history BEFORE input: "baseline rings cold — first windows abstain"
     # must read as history, not as a missing-window input

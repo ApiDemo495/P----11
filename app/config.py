@@ -185,7 +185,11 @@ STATE_FILE = "data/state.json"
 #   F29 (DLP)      -> level placement (price outputs, not [-1,1])
 #   F30 (PCV)      -> validator: needs CCI as input (post-CCI layer)
 #   F21 (CCI)      -> the aggregator itself
-CORE_SIGNAL_IDS: list[int] = list(range(1, 20)) + [22, 23, 24, 25, 26, 27, 31]
+# F32..F35 (order-book/liquidation layer) join the weighted core on
+# explicit user authorization — total components:35 (30 signals +5 subs)
+CORE_SIGNAL_IDS: list[int] = (list(range(1, 20))
+                              + [22, 23, 24, 25, 26, 27, 31,
+                                 32, 33, 34, 35])
 BRAIN_COMPONENT_ID = 97        # brain_consensus weighted input to CCI
 EMOTION_COMPONENT_ID = 98      # CERC weighted input to CCI
 PHYSICS_COMPONENT_ID = 99      # P22 Unified Field Prediction (Bgn-synced)
@@ -196,7 +200,7 @@ WEIGHT_IDS: list[int] = (
     + [BRAIN_COMPONENT_ID, EMOTION_COMPONENT_ID,
        PHYSICS_COMPONENT_ID, NEWS_COMPONENT_ID, HEDGE_COMPONENT_ID]
 )
-N_WEIGHT_COMPONENTS = len(WEIGHT_IDS)   # 31
+N_WEIGHT_COMPONENTS = len(WEIGHT_IDS)   # 35 (30 signals +5 subsystems)
 # Section 8: "Their initial combined weight is 0.08 (8% of total CCI)."
 HEDGE_INITIAL_WEIGHT = 0.08
 # P22: physics layer's total contribution weighted by TME (P9):

@@ -60,7 +60,7 @@ _POP_ORDER = ["PAM", "SE", "OA", "TA", "MBON", "KC", "LH", "CC", "FSB", "EB", "D
 _NAMED_TOTAL = sum(POP_SIZES[p] for p in _POP_ORDER)          # 4,780
 _GENERIC_START = _NAMED_TOTAL                                   # 4,780..5,000
 _AFFINITY_START = BRAIN_INDIVIDUAL_UNITS
-_AFFINITY_CELLS = 310          # 31 formulas x 10 neurons
+_AFFINITY_CELLS = 350          #35 formulas ×10 neurons (F1..F35 layer)
 
 
 def _sigmoid(x: float) -> float:
@@ -476,9 +476,9 @@ class BrainSystem:
             # --- brain-formula affinity coupling (|F_f| > 0.7) ----------
             # Section 10 deep-cycle inhibitory input (247-minute window)
             aff_list = list(conn.pop["AFF"])
-            per_formula = _AFFINITY_CELLS // 31
+            per_formula = _AFFINITY_CELLS // 35
             now_ts = time.time()
-            for f_pos, fid in enumerate(range(1, 32)):
+            for f_pos, fid in enumerate(range(1, 36)):
                 if fid in affinity:
                     factor = 1.0
                     until = self._inhibited.get((tf, fid), 0.0)

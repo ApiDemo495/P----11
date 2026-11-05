@@ -315,6 +315,7 @@ class PredictionEngine:
                             H=highs[start:end + 1],
                             L=lows[start:end + 1],
                         )
+                        self._attach_flow(ctx)
                         compute_all(ctx, record=True)
                     except Exception:
                         log.exception("warm-up %s/%s pass %d failed",
@@ -366,7 +367,7 @@ class PredictionEngine:
         if len(P) and live:
             H[-1] = max(H[-1], live)
             L[-1] = min(L[-1], live)
-        return FormulaContext(
+        ctx = FormulaContext(
             symbol=symbol,
             tf=tf,
             W=W,
@@ -379,6 +380,24 @@ class PredictionEngine:
             H=H,
             L=L,
         )
+        self._attach_flow(ctx)
+        return ctx
+
+    def _attach_flow(self, ctx) -> None:
+        """Live order-book rings + liquidation flow for F32–F35.
+
+        Cause-6 honesty: with no live feed the rings are empty and the
+        flow is None → the formulas read0 and trace.py prints the
+        'no live book / no live forceOrder' reason."""
+        try:
+            ctx.book = self.feed.book_view(ctx.symbol)
+        except Exception:
+            ctx.book = {"dbi_ring": [], "dev_ring": [],
+                        "lambda_ring": [], "latest": {"book": False}}
+        try:
+            ctx.liq_flow = self.feed.micro_flow(ctx.symbol)
+        except Exception:
+            ctx.liq_flow = None
 
     def _atr(self, ctx: FormulaContext) -> float:
         if ctx.W_eff < 1:
@@ -816,7 +835,7 @@ class PredictionEngine:
             matrix, {tf: news_agg["value"] for tf in TF_ORDER}
         )
 
-        # 7) Formula 21 per timeframe: 31 weighted components + confidence
+        # 7) Formula 21 per timeframe: 35 weighted components + confidence
         for tf in TF_ORDER:
             atr_tf = self._atr(ctxs[tf])        # per-tf ATR (fixes leak from step 5)
             drhe = adj[tf].get(20, 1.0)
@@ -888,6 +907,21 @@ class PredictionEngine:
                             1.0, float(fin["confidence"]) * (1.0 + _mb)))
                         fin["issued"] = fin["confidence"] > CONFIDENCE_FLOOR
                         fin["micro_band"] = round(_mb, 4)
+            except Exception:
+                pass
+
+            # CALIBRATION shrinkage: once enough settled pairs exist,
+            # scale confidence by realised/stated hit-rate (clipped —
+            # a learned multiplier, same family as hindsight; silent
+            # below n=40 or when stated confidence is noise)
+            try:
+                cf = self.calibration_factor()
+                if cf is not None and abs(cf - 1.0) > 0.01:
+                    fin = dict(fin)
+                    fin["confidence"] = max(0.0, min(
+                        1.0, float(fin["confidence"]) * cf))
+                    fin["issued"] = fin["confidence"] > CONFIDENCE_FLOOR
+                    fin["calibration_factor"] = round(cf, 3)
             except Exception:
                 pass
 
@@ -1295,6 +1329,8 @@ class PredictionEngine:
                     # exchange-server physics gauges (clock-skew z, gap z,
                     # liquidation clusters) — honest absence on the sim tape
                     "micro": self.feed.micro_status(symbol),
+                    # live order book: DBI, micro-price, spread, Λ, walls
+                    "book": self.feed.book_status(symbol),
                     "drhe": round(drhe, 4),
                     "atr": results[tf]["atr"],
                     "pcv": round(pcv, 5),
@@ -2110,7 +2146,7 @@ class PredictionEngine:
             return [round(x, 5) for x in
                     self.hist.ring(self.hist.tf_key(symbol, tf, name), n)]
 
-        core_ids = list(range(1, 32))              # F1..F31 panels (31)
+        core_ids = list(range(1, 36))              # F1..F35 panels (35)
         core = {str(f): r(f"fspark{f}", 100) for f in core_ids}
         core_acc = {str(f): r(f"facc{f}", 50)
                     for f in list(FORMULA_FUNCTIONS) + [20, 28, 30]}
@@ -2871,6 +2907,35 @@ class PredictionEngine:
             hf = disp.get("hedge") or {}
             ctx.update(hedge=hf)
         return ctx
+
+    def calibration_factor(self) -> float | None:
+        """Realised/stated hit-rate ratio from the calibration rings.
+
+        Guards: needs n≥40 settled pairs (same floor as the panel) and a
+        mean stated confidence ≥0.15 (below that the ratio is noise);
+        clipped to [0.6, 1.4] so a bad sample can never wreck confidence.
+        """
+        try:
+            ps: list[float] = []
+            hs: list[float] = []
+            for symbol in SYMBOL_ORDER:
+                for tf in TF_ORDER:
+                    pp = list(self.hist.ring(
+                        self.hist.tf_key(symbol, tf, "calib_p"), 400))
+                    hh = list(self.hist.ring(
+                        self.hist.tf_key(symbol, tf, "calib_h"), 400))
+                    n = min(len(pp), len(hh))
+                    ps.extend(float(x) for x in pp[:n])
+                    hs.extend(float(x) for x in hh[:n])
+            if len(ps) < 40:
+                return None
+            stated = sum(ps) / len(ps)
+            if stated < 0.15:
+                return None
+            realised = sum(hs) / len(hs)
+            return round(max(0.6, min(1.4, realised / max(stated, 1e-9))), 3)
+        except Exception:
+            return None
 
     def branch_stats(self, d: dict, price: float, now: float,
                      tf: str) -> dict | None:

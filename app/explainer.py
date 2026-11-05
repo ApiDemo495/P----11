@@ -158,7 +158,7 @@ def fallback(view: str, symbol: str, tf: str, ctx: dict) -> str:
             f"(raw {_fmt(ctx.get('cci_raw'))}), direction "
             f"{ctx.get('direction_label', '—')}, confidence "
             f"{_fmt(ctx.get('confidence'))}.",
-            "WHAT IT MEANS: CCI is the weighted sum of all 31 formula "
+            "WHAT IT MEANS: CCI is the weighted sum of every core formula "
             "outputs (ω × F adjusted); its sign is the lean, |CCI| vs the "
             "noise floor decides if the lean is real.",
             "TOP CONTRIBUTORS (why this value): " +

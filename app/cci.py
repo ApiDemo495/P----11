@@ -1,6 +1,6 @@
 """Formula 21 — Composite Confidence Index (CCI).
 
-Master aggregation.  The 31 weighted components (config.WEIGHT_IDS):
+Master aggregation.  The 35 weighted components (config.WEIGHT_IDS):
 
   * signals F1..F19, F22..F27, F31           (Bgn-adjusted, [-1,+1])
   * brain consensus                           (id 97, Bgn-adjusted)
@@ -87,6 +87,17 @@ class CCIEngine:
         if w is None:
             w = uniform_prior()
             self.weights[key] = w
+        elif any(fid not in w for fid in WEIGHT_IDS):
+            # state saved before F32..F35 existed: extend with the
+            # uniform prior value for the missing signals, then keep the
+            # total mass at1 (the system's own normalisation rule)
+            prior = uniform_prior()
+            for fid in WEIGHT_IDS:
+                if fid not in w:
+                    w[fid] = prior[fid]
+            total = sum(w.values()) or 1.0
+            for fid in w:
+                w[fid] = w[fid] / total
         return w
 
     def update_weights(self, symbol: str, tf: str, current_price: float,
