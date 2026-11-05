@@ -84,7 +84,9 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 5px; bo
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
 .panel-h { font-size: 10.5px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin-bottom: 12px; display: flex; justify-content: space-between; }
 .panel-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.kv-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+/*112px lets six stat tiles fill a wide row — at160px the last row
+   stranded items and left a 'huge gap on the side' (physics panel) */
+.kv-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 8px; }
 .kv { background: var(--panel2); border-radius: 7px; padding: 8px 11px; display: flex; flex-direction: column; gap: 3px; }
 .kv span { font-size: 10px; color: var(--dim); letter-spacing: .8px; text-transform: uppercase; }
 .kv b { font: 500 13px/1.2 var(--mono); }

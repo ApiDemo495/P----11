@@ -436,6 +436,20 @@ def test_history_not_updating_guards():
     assert "last_settle_ago_s" in js
 
 
+def test_settle_halt_and_curl_and_gap_fixes():
+    fw = (ROOT / "app" / "flywire.py").read_text()
+    # curl-fallback states count as success (a full download was being
+    # marked failed → brain stayed absent)
+    assert 'str(v).startswith("downloaded")' in fw
+    eng = (ROOT / "app" / "engine.py").read_text()
+    # halt gates only the new lock — settlement writes first
+    assert "halt gates ONLY the new lock" in eng
+    css = (ROOT / "static" / "style.css").read_text()
+    assert "minmax(112px, 1fr)" in css       # fills wide stat rows (physics gap)
+    js = (ROOT / "static" / "app.js").read_text()
+    assert "weak lean inside noise floor" in js   # tf3-style lean honesty
+
+
 def test_reports_exist_and_are_linked():
     for name in ("NEWS-REPORT.md", "BRAIN-REPORT.md", "UX-ZERO-REPORT.md"):
         assert (ROOT / "docs" / name).exists(), name

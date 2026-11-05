@@ -140,6 +140,36 @@ def test_acc6_emergency_relock():
     assert dr["ok"] and dr["drill"] and dr["halt_s"] == 30
 
 
+def test_halt_never_loses_settlement():
+    """The settlement-history root cause: a boundary inside the30s
+    emergency halt used to return BEFORE the ledger write — the window
+    was lost forever (user: 'history is still all zero'). Settlement must
+    always run; the halt gates only the NEW lock."""
+    from app.engine import PredictionEngine
+    from app.feed import MarketFeed
+    eng = PredictionEngine(MarketFeed(), emit=lambda m: None)
+    now = time.time()
+    eng.locks[("BTC", "tf1")] = {
+        "symbol": "BTC", "tf": "tf1", "side": 1, "confidence": 0.9,
+        "price": 50000.0, "locked_at": now - 600,
+        "window_start": now - 600, "window_end": now + 600,
+        "relocks": 0}
+    eng._halt_until = {"BTC": now + 300}          # emergency halt active
+    out = eng._settle_and_lock(
+        "BTC", "tf1", now + 700,                  # a NEW grid window
+        {"direction": 1, "confidence": 0.9, "cci_adjusted": 0.0})
+    assert out is None                            # no NEW lock while halted
+    st = eng.ledger.stats("BTC", "tf1")
+    assert st["skipped"] + st["n"] >= 1, st       # window WAS graded
+    assert ("BTC", "tf1") not in eng.locks        # popped — no double grade
+    # after the halt expires the next pass locks normally
+    eng._halt_until = {"BTC": now}
+    out2 = eng._settle_and_lock(
+        "BTC", "tf1", now + 700,
+        {"direction": 1, "confidence": 0.9, "cci_adjusted": 0.0})
+    assert out2 is None                           # still returns None (docstring)
+
+
 # 7. Relevance gate: dropped item is counted and shown with an example.
 def test_acc7_relevance_gate_counted():
     ns = NewsSystem(); ns.initialize(); ns.items = []

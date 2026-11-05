@@ -3017,11 +3017,12 @@ class PredictionEngine:
     def _settle_and_lock(self, symbol: str, tf: str, now: float,
                          res: dict) -> None:
         """Settle the previous window in the ledger, then freeze the new
-        signal. Mid-window refashes (same grid window) keep the lock."""
-        # docs11 §4.9: a 30-second halt after an emergency re-lock
-        if time.time() < float(getattr(self, "_halt_until", {})
-                               .get(symbol, 0.0)):
-            return
+        signal. Mid-window refashes (same grid window) keep the lock.
+
+        docs11 §4.9 halt = 'no NEW locks for30 s after an emergency
+        re-lock' — it must NEVER block settling: a boundary landing
+        inside the halt used to return before the ledger was written and
+        that window was lost forever (the all-zero settlement history)."""
         prev = self.locks.get((symbol, tf))
         start, end = self._grid_window(tf, now)
         if prev is not None:
@@ -3061,6 +3062,18 @@ class PredictionEngine:
                     self.meta.record(symbol, tf, prev["inputs"], up)
                 except Exception:
                     pass
+            # graded exactly once — drop it so a halted pass below (or a
+            # later GRC) can never double-grade the same window
+            self.locks.pop((symbol, tf), None)
+            try:
+                self._save_locks()
+            except Exception:
+                pass
+        # docs11 §4.9: halt gates ONLY the new lock — history above is
+        # always written first (settlement must never be skipped)
+        if time.time() < float(getattr(self, "_halt_until", {})
+                               .get(symbol, 0.0)):
+            return
         dom = ((res.get("emotion") or {}).get("dominant")
                or (res.get("brain") or {}).get("dominant"))
         # freeze the formula readings with the lock (forward tables +

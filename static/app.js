@@ -1127,7 +1127,15 @@ function renderCalls() {
     const res = S.snap?.systems?.[`${S.symbol}|${tf}`];
     const m = TF_META[tf];
     const dir = cyc?.direction ?? res?.direction ?? 0;
-    const dirTxt = dir > 0 ? '<b class="up">▲ BULL</b>' : dir < 0 ? '<b class="down">▼ BEAR</b>' : '<b class="flat">● FLAT</b>';
+    const _weak = String((s?.ladder?.source) || "").includes("inside noise floor")
+      || Number(s?.confidence || 0) < 0.05;
+    const dirTxt = dir > 0
+      ? `<b class="${_weak ? "flat" : "up"}">▲ BULL${_weak ? "*" : ""}</b>`
+      : dir < 0
+        ? `<b class="${_weak ? "flat" : "down"}">▼ BEAR${_weak ? "*" : ""}</b>`
+        : '<b class="flat">● FLAT</b>';
+    const _leanNote = _weak
+      ? `<br/><span class="dim" style="font-size:9.5px">* weak lean inside noise floor — never issued</span>` : "";
     const tps = (cyc?.targets || []).map((t, i) => {
       const st = t.status === "hit" ? '<i class="st hit">HIT</i>'
         : t.status === "locked" ? '<i class="st lock">LOCK</i>' : '<i class="st open">open</i>';
@@ -1137,7 +1145,7 @@ function renderCalls() {
     return `<tr class="${tf === S.focusTf ? "focus-row" : ""}">
       <td class="mono">${tf.toUpperCase()}</td>
       <td class="mono">${m.mins}m</td>
-      <td>${dirTxt} <span class="dim">${cyc?.issued ? "· issued" : "· no trade"}</span></td>
+      <td>${dirTxt} <span class="dim">${cyc?.issued ? "· issued" : "· no trade"}</span>${_leanNote}</td>
       <td class="mono">${fmt(res?.confidence, 3)}</td>
       ${tps}
       <td class="mono sl-cell">${sl}</td>

@@ -423,8 +423,11 @@ class FlyWireBrain:
         try:
             self.progress = {"stage": "downloading", "pct": 1.0}
             states = acquire()
+            # curl fallback returns "downloaded (curl)" — anything that
+            # actually landed counts as success (was marking a FULL
+            # download as failed → brain stayed absent)
             bad = {k: v for k, v in states.items()
-                   if not v in ("cached", "downloaded")}
+                   if not (v == "cached" or str(v).startswith("downloaded"))}
             if bad:
                 self.state = "absent"
                 self.last_error = ("download failed: "
