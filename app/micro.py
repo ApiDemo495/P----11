@@ -11,12 +11,20 @@ inferred that we did not observe on the wire:
      same engine queue). Both need >= 20 samples or they print a reason
      instead of a number (zeros rule / cause 5).
   2. Force-order liquidation map: public @forceOrder events (futures)
-     are kept with exponential half-life decay and folded into 25-bp
-     buckets against the live price, giving the nearest liquidation
-     cluster above/below and the net forced flow share — MEASURED
-     liquidation prints, not a simulated margin cohort (the GPU
-     particle-filter idea needs CUDA this app does not assume; skipped
-     on purpose, see report).
+     are kept for a full INTRADAY session (6 h horizon,2 h half-life —
+     sized for our22/44/130/247-min windows, not the original spec's
+     scalping clock) and folded into25-bp buckets against the live
+     price, giving the nearest liquidation cluster above/below and the
+     net forced-flow share — MEASURED liquidation prints, not a
+     simulated margin cohort (the GPU particle-filter idea needs CUDA
+     this app does not assume; skipped on purpose, see report).
+
+Why the τ baseline stays at60 s: clock-skew is millisecond-level
+instrumentation (E−T per packet). The baseline answers "is THIS
+minute's engine/gateway behaviour abnormal vs the minutes around it" —
+it is a measurement window for a sub-second anomaly, not a trading
+horizon. Stretching it to22+ minutes would bury ms spikes under regime
+change, which is the opposite of what tomography needs.
 
 The simulator tape has no matching engine, so when no live packets have
 ever arrived the caller reports available=False with a reason.
@@ -29,10 +37,18 @@ from typing import Any
 
 
 class MicroPhysics:
-    WINDOW_S = 60.0              # baseline window for the z-scores
+    WINDOW_S = 60.0              # τ baseline (measurement, see below)
     MIN_SAMPLES = 20             # below this: reason, never a number
-    LIQ_HALFLIFE_S = 600.0       # force-order mass decays with a10-min half-life
-    LIQ_HORIZON_S = 1800.0       # only the last30 min of prints count
+    # Intraday horizons (windows are22/44/130/247 min — NOT scalping):
+    # a liquidation zone printed2 hours ago is still live context for a
+    # TF3/TF4 window, so the map remembers far longer than the original
+    # Chrono-Sieve scalping spec (its10-min decay +1.5 s kill were for
+    # sub-minute trades). Horizon =6h ≈15× the longest window; half-life
+    # =2h keeps old flushes fading gently instead of vanishing.
+    # Horizon6h ≈1.5× the longest (247-min) window — comfortably past
+    # every window's maturity, unlike the original30-min scalping lookback.
+    LIQ_HALFLIFE_S = 2 * 3600.0  # gentle intraday fade
+    LIQ_HORIZON_S = 6 * 3600.0   # keep a full session of prints
     BUCKET_BP = 25.0             # cluster buckets in basis points of price
 
     def __init__(self) -> None:

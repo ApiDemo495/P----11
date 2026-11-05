@@ -309,11 +309,11 @@ function renderMicro() {
         <b>${m.stress != null ? Math.round(m.stress * 100) + "%" : "—"}</b></div>
       ${zline(m.z_tau, m.n_tau, "z clock-skew (E−T, ms)")}
       ${zline(m.z_gap, m.n_gap, "z trade-id gap (Δa)")}
-      <div class="kv"><span>net forced flow (15m)</span><b class="${(m.net_flow || 0) >= 0 ? "acc-up" : "acc-dn"}">${m.net_flow != null ? (m.net_flow >= 0 ? "+" : "") + Math.round(m.net_flow * 100) + "% BUY-share" : "—"}</b></div>
+      <div class="kv"><span>net forced flow (session-decayed)</span><b class="${(m.net_flow || 0) >= 0 ? "acc-up" : "acc-dn"}">${m.net_flow != null ? (m.net_flow >= 0 ? "+" : "") + Math.round(m.net_flow * 100) + "% BUY-share" : "—"}</b></div>
       <div class="kv"><span>forceOrder prints</span><b>${m.liq_events} <span class="dim">${spark ? "· stress trace" : ""}</span></b></div>
     </div>
     <div class="kv-row">${clu(m.nearest_up, "↑ above")}${clu(m.nearest_down, "↓ below")}</div>
-    <div class="hint">stress = |z| of this box's OWN packet baseline (60 s) — congestion flag, not a prediction · clusters decay with a10-min half-life over the last30 min of real @forceOrder prints (25 bp buckets).</div>`;
+    <div class="hint">stress = |z| of this box's OWN60-s measurement baseline (ms-level instrumentation — not a trading window) · clusters keep a full intraday session:6 h horizon,2 h half-life over real @forceOrder prints (25 bp buckets).</div>`;
 }
 
 /* ═══════ SYSTEM panel (old-app inspiration): one glance at what runs ═ */

@@ -63,12 +63,23 @@ def test_forceorder_clusters_and_flow():
 
 
 def test_forceorder_half_life_decay():
+    # intraday horizons (user call: our windows are22–247 min — the
+    # original scalping decay was wrong for this app)
+    assert MicroPhysics.LIQ_HORIZON_S >= 247 * 60         # > longest window
+    assert MicroPhysics.LIQ_HALFLIFE_S >= 2 * 60 * 60     # ≥2h gentle fade
     m = MicroPhysics()
-    # force an old event into the past by rewriting timestamps
     m.on_forceorder("BTC", "BUY", 80000.0, 10.0)
     old = m._liq[-1]
-    m._liq[-1] = (time.time() - 1801,) + tuple(old[1:])  # beyond horizon
+    m._liq[-1] = (time.time() - MicroPhysics.LIQ_HORIZON_S - 1,) + tuple(old[1:])
     assert m.status("BTC", 80000.0)["liq_events"] == 0    # expired
+    # a print3h old (inside the6h horizon) still counts, just decayed
+    m2 = MicroPhysics()
+    m2.on_forceorder("BTC", "BUY", 80000.0 * 1.003, 10.0)   # +30 bp → bucket +1
+    m2._liq[-1] = (time.time() - 3 * 3600,) + tuple(m2._liq[-1][1:])
+    st = m2.status("BTC", 80000.0)
+    assert st["liq_events"] == 1
+    #3h =1.5 half-lives → mass ≈10 * 0.5^1.5 ≈3.5
+    assert st["nearest_up"] and 2.0 < st["nearest_up"]["mass"] < 6.0
 
 
 def test_feed_micro_status_honest_on_sim():
