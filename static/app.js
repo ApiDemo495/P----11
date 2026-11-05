@@ -188,6 +188,20 @@ class ChartX {
     let hi = -Infinity, lo = Infinity;
     for (const b of this.bars) { hi = Math.max(hi, b.high); lo = Math.min(lo, b.low); }
     if (!this.spark) for (const l of this.lines) { hi = Math.max(hi, l.price); lo = Math.min(lo, l.price); }
+    // robust range: a single pump/wick must not flatten everything else
+    // (user: 'charts are flat'). Use the5–95th percentile of the bar
+    // extremes when the view is long enough; off-range lines clamp to
+    // the edges WITH their real labels (canvas clips the rest).
+    if (!this.spark && this.bars.length >= 10) {
+      const ex = [];
+      for (const b of this.bars) { ex.push(b.high, b.low); }
+      ex.sort((a2, b2) => a2 - b2);
+      const p5 = ex[Math.floor(ex.length * 0.05)];
+      const p95 = ex[Math.min(ex.length - 1, Math.ceil(ex.length * 0.95) - 1)];
+      if (p95 > p5) { lo = p5; hi = p95; }
+      // keep TP/SL/entry lines' VALUES known — they may sit outside;
+      // the last price must stay representable (label clamped at draw)
+    }
     const pad = (hi - lo) * 0.08 || Math.max(hi * 1e-4, 0.01); hi += pad; lo -= pad;
     const rw = this.spark ? 2 : 48;
     const X = i => (i / Math.max(1, this.bars.length - 1)) * (w - rw) + 1;
@@ -201,7 +215,8 @@ class ChartX {
       g.strokeStyle = l.color; g.setLineDash(l.dash === false ? [] : [5, 4]); g.lineWidth = l.hit ? 1.8 : 1;
       g.beginPath(); g.moveTo(0, Y(l.price)); g.lineTo(w - rw, Y(l.price)); g.stroke(); g.setLineDash([]);
       g.fillStyle = l.color; g.font = "9px monospace"; g.textAlign = "left";
-      g.fillText(`${l.title} ${l.price.toFixed(l.price > 1000 ? 0 : 2)}`, 4, Y(l.price) - 3);
+      const ly2 = Math.max(10, Math.min(h - 4, Y(l.price)));
+      g.fillText(`${l.title} ${l.price.toFixed(l.price > 1000 ? 0 : 2)}`, 4, ly2 - 3);
     }
     // real-market zigzag: every bar's high→low wick (the tape is not a
     // smooth curve — wicks carry the actual movement between closes)
@@ -224,7 +239,8 @@ class ChartX {
       g.fillStyle = m.color; g.font = "9px sans-serif"; g.textAlign = "center";
       g.fillText(m.glyph || "•", X(i), m.above ? Y(this.bars[i].high) - 3 : Y(this.bars[i].low) + 10);
     }
-    const last = this.bars[this.bars.length - 1], ly = Y(last.close);
+    const last = this.bars[this.bars.length - 1];
+    let ly = Y(last.close); ly = Math.max(8, Math.min(h - 8, ly));
     g.fillStyle = last.close >= last.open ? "#00d4f0" : "#f0385a";
     g.fillRect(w - rw + 1, ly - 7, rw - 2, 14);
     g.fillStyle = "#04040c"; g.font = "bold 9px monospace"; g.textAlign = "left";
@@ -731,6 +747,25 @@ function renderRail() {
   };
   led("#led-stream", S.lastMsgAt && Date.now() - S.lastMsgAt < 5000);
   led("#led-learn", true, S.snap?.learning?.high_alert);
+  // brain connection — same component the brain tab shows, mirrored here
+  // so the dashboard can never say "nothing" while the brain is green
+  try {
+    const fly = S.snap?.systems?.[`${S.symbol || "BTC"}|${S.focusTf || "tf1"}`]?.brain?.flywire;
+    const bc = fly?.chip
+      || (fly?.ready ? { kind: "ok", text: "FlyWire v783 · live" }
+        : { kind: "absent", text: "brain — " + (fly?.reason || "absent") });
+    led("#led-brain", bc.kind === "ok", bc.kind === "build");
+    if (bc.kind === "absent") led("#led-brain", false, false);
+    const bchip = $("#brain-chip");
+    if (bchip) {
+      bchip.textContent = "🧠 " + bc.text;
+      const cc = bc.kind === "ok" ? "var(--green)"
+        : bc.kind === "build" ? "var(--gold)" : "var(--red)";
+      bchip.style.color = cc;
+      bchip.style.borderColor = cc;
+      bchip.classList.add("live");
+    }
+  } catch (e) { /* chip optional */ }
   led("#led-agent", (S.snap?.agents?.slots || []).some(s => s.status === "connected"));
   const chip = $("#mode-chip");
   const mode = S.snap?.agents?.mode || "drosophila";
@@ -1271,7 +1306,8 @@ async function loadEmotion() {
       } else if (ew) ew.remove();
       const ring = $(".em-ring", cell);
       ring.style.setProperty("--p", `${clamp(Math.abs(v) * 100, 0, 100)}%`);
-      $("i", ring).textContent = (v >= 0 ? "+" : "") + (v === 0 ? "0.00" : v.toFixed(Math.abs(v) < 0.001 ? 4 : 2));
+      $("i", ring).textContent = (v >= 0 ? "+" : "") +
+        (v === 0 ? "0.00" : fx(v, 2));   //0.004 must print0.004, not 0.00
       const tag = $(".em-tag", cell);
       let label = "NEUTRAL";
       if (Math.abs(v) > 0.7) label = "EXTREME"; else if (Math.abs(v) > 0.45) label = "ELEVATED";
@@ -1316,10 +1352,10 @@ async function loadPhysics() {
     if (mechEl && mech.length) {
       mechEl.innerHTML = `<div class="kv-row">` + mech.map(m =>
         `<span class="chip ${m.active ? "chip-ok" : "chip-warn"}"
-          title="${esc((m.logic || []).join(" · "))}"
-          >P${m.id} ${m.active ? "●" : "○"} ${fmt(m.score, 3)}</span>`).join("") +
+          title="${m.active ? esc((m.logic || []).join(" · ")) : esc((m.cause ? "[" + m.cause + "] " : "") + (m.why || ""))}"
+          >P${m.id} ${m.active ? "●" : "○"} ${fx(m.score, 3)}</span>`).join("") +
         `</div><div class="hint">${mech.filter(m => !m.active).slice(0, 4).map(m =>
-          `P${m.id}: ${esc(m.why)}`).join(" · ") || "all mechanisms active"}</div>`;
+          `P${m.id} ${m.cause ? `<b class="acc-warn">[${esc(m.cause)}]</b>` : ""}: ${esc(m.why)}`).join(" · ") || "all mechanisms active"}</div>`;
     }
     // §6.1 estimators print their derivation
     const est = ph.estimators || {};

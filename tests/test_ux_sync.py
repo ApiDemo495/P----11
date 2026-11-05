@@ -122,6 +122,10 @@ def test_settings_endpoint_roundtrip():
         # leaderboard carries n so the UI can refuse to speak below 8
         lb = c.get("/api/history/leaderboard").json()
         assert all("n" in r for r in (lb.get("leaderboard") or []))
+        # ids97-101 are subsystem components — never mislabeled F97…
+        subs = [r for r in lb.get("leaderboard") or [] if r["formula"] >= 97]
+        assert subs and all(r.get("subsystem") and "subsystem" in r["name"]
+                            for r in subs), subs
 
 
 # ------------------------------------------------------------- UI contracts
@@ -379,6 +383,25 @@ def test_old_app_inspiration_bundle():
     for anchor in ("sys-panel", "branch-canvas", "fl-ticker",
                    "br-readout", "em-dominant"):
         assert anchor in html, anchor
+
+
+def test_visibility_sync_and_flat_fixes():
+    """User round: 'brain not connected to dashboard / charts flat /
+    zeros without reason / app looks flatty'."""
+    html = (ROOT / "static" / "index.html").read_text()
+    js = (ROOT / "static" / "app.js").read_text()
+    css = (ROOT / "static" / "style.css").read_text()
+    # brain connection visible on EVERY tab (rail LED + toolbar chip)
+    assert 'id="led-brain"' in html and 'id="brain-chip"' in html
+    assert 'led("#led-brain"' in js and 'brain-chip' in js
+    # robust chart range (percentile) + clamped labels
+    assert "percentile" in js and "Math.min(h - 4, Y(l.price))" in js
+    # emotion cells print small-but-real values (0.004 ≠ 0.00)
+    assert "fx(v, 2)" in js
+    # physics strip: cause tag + why in title/hint
+    assert "m.cause" in js and "[${esc(m.cause)}]" in js
+    # depth pass exists (flatty fix)
+    assert "DEPTH PASS" in css and "box-shadow" in css.split("DEPTH PASS")[0][-4000:]
 
 
 def test_reports_exist_and_are_linked():

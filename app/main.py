@@ -741,7 +741,18 @@ async def history_replay(date: str, i: int = 0) -> JSONResponse:
 async def history_leaderboard() -> JSONResponse:
     """Formula accuracy leaderboard (rolling 500, Section 13)."""
     from .formulas import FORMULA_NAMES
-    from .config import WEIGHT_IDS as _WIDS
+    from .config import (WEIGHT_IDS as _WIDS, BRAIN_COMPONENT_ID,
+                         EMOTION_COMPONENT_ID, PHYSICS_COMPONENT_ID,
+                         NEWS_COMPONENT_ID, HEDGE_COMPONENT_ID)
+    # ids97-101 are SUBSYSTEM components (not formulas) — never label
+    # them F97…; show what they actually are
+    SUBSYS_NAMES = {
+        BRAIN_COMPONENT_ID: "brain vote (subsystem)",
+        EMOTION_COMPONENT_ID: "emotion CERC (subsystem)",
+        PHYSICS_COMPONENT_ID: "physics UFP (subsystem)",
+        NEWS_COMPONENT_ID: "news impact (subsystem)",
+        HEDGE_COMPONENT_ID: "hedge HF (subsystem)",
+    }
     rows = []
     for fid in _WIDS:
         acc = engine.learning.formula_accuracy(fid)
@@ -749,7 +760,9 @@ async def history_leaderboard() -> JSONResponse:
         # always list every formula — the UI renders accuracy=None as an
         # honest "— n=<n> (needs ≥8)" instead of a scary red 0.0000
         rows.append({"formula": fid,
-                     "name": FORMULA_NAMES.get(fid, f"F{fid}"),
+                     "name": FORMULA_NAMES.get(fid)
+                             or SUBSYS_NAMES.get(fid, f"F{fid}"),
+                     "subsystem": fid in SUBSYS_NAMES,
                      "accuracy": round(acc, 4) if acc is not None else None,
                      "n": n})
     # undecided (accuracy=None, n<8) sink to the bottom — never crash sort
