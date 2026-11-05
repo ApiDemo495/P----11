@@ -119,6 +119,15 @@ def test_settings_endpoint_roundtrip():
         for k in ("n", "enough", "min_n", "bins", "brier", "note"):
             assert k in cal, k
         assert cal["enough"] is False and cal["n"] == 0
+        # settlement liveness — the zero-wall must explain itself
+        led = c.get("/api/ledger").json()
+        for k in ("settle_calls", "last_settle_ago_s", "totals",
+                  "rows_total"):
+            assert k in led, k
+        # system status: history + code-freshness rows exist
+        st = c.get("/api/system/status").json()
+        labels = [r["label"] for r in st.get("rows") or []]
+        assert "history" in labels and "code" in labels, labels
         # leaderboard carries n so the UI can refuse to speak below 8
         lb = c.get("/api/history/leaderboard").json()
         assert all("n" in r for r in (lb.get("leaderboard") or []))
@@ -409,6 +418,22 @@ def test_visibility_sync_and_flat_fixes():
     assert "<th>tick</th>" not in js                 # tick merged into the name cell
     assert "S.fvRings" in js and "percentile" in js   # live rings + robust spark range
     assert "cv.height = h * 2" in js                 # HiDPI sparks (x AND y)
+
+
+def test_history_not_updating_guards():
+    """User: 'app not updating + history all zero'. Guards: locks never
+    store entry0 (boot race → skip), emergency refuses price0, and the
+    UI header must surface settlement liveness."""
+    eng_src = (ROOT / "app" / "engine.py").read_text()
+    assert "LAST CLOSE on the tape" in eng_src          # lock price fallback
+    assert "emergency re-lock refused" in eng_src       # no price0 clobber
+    led_src = (ROOT / "app" / "ledger.py").read_text()
+    assert "settle_calls" in led_src and "last_settle_ts" in led_src
+    html = (ROOT / "static" / "index.html").read_text()
+    assert 'id="led-live"' in html
+    js = (ROOT / "static" / "app.js").read_text()
+    assert "no window settled yet" in js                # honest empty state
+    assert "last_settle_ago_s" in js
 
 
 def test_reports_exist_and_are_linked():

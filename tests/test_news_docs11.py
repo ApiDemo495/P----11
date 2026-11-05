@@ -109,12 +109,23 @@ def test_acc6_emergency_relock():
     feed = MarketFeed()
     eng = PredictionEngine(feed, emit=lambda m: None)
     now = time.time()
+    # tape has a close (the engine falls back to the last close when the
+    # feed has no live price yet — a re-lock must NEVER clobber a real
+    # entry with price0, that forced every settlement into 'skip')
+    feed.state("BTC").closes.append(50000.0)
     eng.locks[("BTC", "tf1")] = {
         "symbol": "BTC", "tf": "tf1", "side": 1, "confidence": 0.9,
         "price": 50000.0, "reason": "old", "locked_at": now - 600,
         "window_start": now - 600, "window_end": now + 600, "relocks": 0}
     out = eng.emergency_relock("BTC", "tf1", "war headline + NIV swing")
     assert out["ok"] and not out["drill"]
+    # refusal: a REAL entry + no price anywhere → refuse, never price0
+    eng.locks[("BNB", "tf1")] = {
+        "symbol": "BNB", "tf": "tf1", "side": 1, "confidence": 0.9,
+        "price": 600.0, "locked_at": now, "window_end": now + 600,
+        "relocks": 0}
+    ref = eng.emergency_relock("BNB", "tf1", "event")
+    assert not ref["ok"] and "refused" in ref["error"]
     lock = eng.locks[("BTC", "tf1")]
     assert "original entry 50000" in lock["reason"]
     assert lock["original_price"] == 50000.0

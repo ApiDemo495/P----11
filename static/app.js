@@ -961,6 +961,20 @@ function renderLedger() {
   }).join("");
   const pooled = Object.entries(led.pooled || {}).map(([tf, st]) =>
     `<div class="kv"><span>${tf.toUpperCase()} pooled (all assets)</span><b>${st.n} settled · ${st.rate != null ? Math.round(st.rate * 100) + "%" : "—"}${st.enough ? "" : " · n&lt;" + led.min_n}</b></div>`).join("");
+  // settlement liveness — a wall of zeros must explain ITSELF
+  const ll = $("#led-live");
+  if (ll) {
+    if (led.last_settle_ago_s != null) {
+      ll.textContent =
+        `${led.settle_calls} settles · last ${led.last_settle_ago_s}s ago` +
+        ` (${led.last_settle?.tf || ""} ${led.last_settle?.result || ""})` +
+        ` · totals ${led.totals?.win ?? 0}W/${led.totals?.loss ?? 0}L/${led.totals?.skip ?? 0}skip` +
+        ` · rows ${led.rows_total ?? 0}`;
+    } else {
+      ll.textContent =
+        "no window settled yet — windows are epoch-aligned: tf1 fills at :00/:22/:44, tf2 at :00/:44 (needs n≥20 to speak a rate)";
+    }
+  }
   el.innerHTML = `<table class="tbl">
     <thead><tr><th>ASSET</th><th>TF</th><th>n</th><th>W</th><th>L</th><th>SKIP</th><th>STRICT-SIGN</th><th>STREAK/BEST</th><th>LAST 20</th></tr></thead>
     <tbody>${rows}</tbody></table>

@@ -2308,7 +2308,15 @@ class PredictionEngine:
             return {"ok": False,
                     "error": "N-8: >6 emergency re-locks in one hour — bug, not a signal"}
         price = float(self.feed.prices().get(symbol) or 0.0)
+        if price <= 0:
+            st0 = self.feed.state(symbol)
+            price = float(st0.closes[-1] if st0.closes else 0.0)
         lock = self.locks.get((symbol, tf))
+        _old_entry = float((lock or {}).get("price") or 0.0)
+        if price <= 0 and _old_entry > 0:
+            # never overwrite a REAL entry with0 (it would force a skip)
+            return {"ok": False,
+                    "error": "no price yet — emergency re-lock refused"}
         halt = getattr(self, "_halt_until", None)
         if halt is None:
             halt = self._halt_until = {}
@@ -2991,7 +2999,13 @@ class PredictionEngine:
             "symbol": symbol, "tf": tf,
             "side": int(res.get("direction") or 0),
             "confidence": round(float(res.get("confidence") or 0.0), 4),
-            "price": round(self.feed.prices().get(symbol, 0.0), 6),
+            # entry price: live price, else the LAST CLOSE on the tape —
+            # a lock created before the first tick had price0 and every
+            # settlement of that window graded as 'skip' (entry missing)
+            "price": round(
+                self.feed.prices().get(symbol, 0.0)
+                or (self.feed.state(symbol).closes[-1]
+                    if self.feed.state(symbol).closes else 0.0), 6),
             "reason": str(res.get("reason") or "")[:500],
             "emotion": str(dom or ""),
             "locked_at": now, "computed_at": now,

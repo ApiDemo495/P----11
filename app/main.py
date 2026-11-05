@@ -429,6 +429,42 @@ async def system_status() -> JSONResponse:
             else "idle")
     except Exception as exc:
         row("hindsight", False, f"error: {exc}", "err")
+    # HISTORY / SETTLEMENT — is the ledger actually grading windows?
+    try:
+        led = eng.ledger
+        ago = (round(time.time() - led.last_settle_ts, 1)
+               if led.last_settle_ts else None)
+        tot = led.totals
+        ls = led.last_settle or {}
+        last_txt = (f"last {ago}s ago ({ls.get('tf', '')} "
+                    f"{ls.get('result', '')})" if ago is not None
+                    else "none yet — the first window boundary fills it "
+                         "(tf1 ≤22 m, windows are epoch-aligned)")
+        row("history", led.settle_calls > 0,
+            f"{tot.get('win', 0)}W/{tot.get('loss', 0)}L/"
+            f"{tot.get('skip', 0)}skip · {led.settle_calls} settles · "
+            f"{last_txt}",
+            "ok" if led.last_settle_ts else "idle")
+    except Exception as exc:
+        row("history", False, f"error: {exc}", "err")
+    # CODE — answers 'why is the app not updating': stale checkout?
+    try:
+        build = eng.ops_status().get("build_id", "?")
+        upd = ""
+        try:
+            import subprocess as _sp
+            cnt = _sp.check_output(
+                ["git", "rev-list", "--count", "HEAD..@{u}"],
+                stderr=_sp.DEVNULL, timeout=2).decode().strip()
+            if cnt.isdigit() and int(cnt) > 0:
+                upd = (f" · UPDATE PENDING — {cnt} commit(s) behind "
+                       f"(pull, then bash scripts/auto_start.sh --restart)")
+        except Exception:
+            pass
+        row("code", not upd, f"build {build}{upd or ' · up to date'}",
+            "warn" if upd else "ok")
+    except Exception as exc:
+        row("code", False, f"error: {exc}", "err")
     # OPS / WATCHDOG
     try:
         ops = eng.ops_status()

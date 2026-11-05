@@ -20,8 +20,20 @@ MIN_N_RATE = 20           # below this the UI must print "not enough windows"
 
 class SettlementLedger:
     def __init__(self, path: str | None = None) -> None:
+        # tests must never write rows into the production ledger file
+        # (a settled test row would poison real accuracy stats)
+        if path is None and os.environ.get("PYTEST_CURRENT_TEST"):
+            import tempfile
+            path = os.path.join(tempfile.gettempdir(),
+                                "predict4_test_ledger.json")
         self.path = path or LEDGER_FILE
         self.rows: dict[str, list[dict]] = {}   # "SYM|tf" -> settled rows
+        # settlement visibility: is the ledger ALIVE? (user: 'history is
+        # all zero' — the panel now says when the last settle happened)
+        self.settle_calls = 0
+        self.last_settle_ts = 0.0
+        self.last_settle: dict = {}
+        self.totals = {"win": 0, "loss": 0, "skip": 0}
         self.load()
 
     # ---------------- persistence ----------------
@@ -32,6 +44,24 @@ class SettlementLedger:
             self.rows = {k: list(v) for k, v in (data.get("rows") or {}).items()}
         except (OSError, ValueError):
             self.rows = {}
+        # derive the liveness counters from PERSISTED rows too — otherwise
+        # a fresh process prints "0 settles" while24 rows sit in the file
+        last_ts, last_row, last_key = 0.0, {}, ""
+        for k, v in self.rows.items():
+            for r in v:
+                res = r.get("result", "skip")
+                self.totals[res] = self.totals.get(res, 0) + 1
+                self.settle_calls += 1
+                if float(r.get("ts") or 0) >= last_ts:
+                    last_ts = float(r.get("ts") or 0)
+                    last_row, last_key = r, k
+        if last_row:
+            self.last_settle_ts = last_ts
+            sym, tf = (last_key.split("|") + [""])[:2]
+            self.last_settle = {"symbol": sym, "tf": tf,
+                                "result": last_row.get("result"),
+                                "side": last_row.get("side"),
+                                "entry": last_row.get("entry")}
 
     def save(self) -> None:
         try:
@@ -66,6 +96,12 @@ class SettlementLedger:
         key = self._key(symbol, tf)
         self.rows.setdefault(key, []).append(row)
         del self.rows[key][:-500]              # keep last 500 per pair
+        self.settle_calls += 1
+        self.last_settle_ts = row["ts"]
+        self.last_settle = {"symbol": symbol, "tf": tf,
+                            "result": result, "side": int(side),
+                            "entry": row["entry"]}
+        self.totals[result] = self.totals.get(result, 0) + 1
         self.save()
         return row
 
@@ -117,5 +153,14 @@ class SettlementLedger:
     def api_payload(self, symbols: list[str], tfs: list[str]) -> dict:
         per = {f"{s}|{tf}": self.stats(s, tf) for s in symbols for tf in tfs}
         pooled = {tf: self.pooled(tf) for tf in tfs}
+        import time as _t
         return {"per": per, "pooled": pooled, "min_n": MIN_N_RATE,
-                "rule": "strict sign · tie = loss · skips never count as wins"}
+                "rule": "strict sign · tie = loss · skips never count as wins",
+                # liveness: proves settlement is running (or how long it
+                # has been quiet) instead of a wall of honest zeros
+                "settle_calls": self.settle_calls,
+                "last_settle_ago_s": (round(_t.time() - self.last_settle_ts, 1)
+                                      if self.last_settle_ts else None),
+                "last_settle": self.last_settle,
+                "totals": dict(self.totals),
+                "rows_total": sum(len(v) for v in self.rows.values())}
