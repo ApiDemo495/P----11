@@ -34,12 +34,14 @@ def test_config_part4_constants():
 
 def test_subsystem_shares_sum_one():
     assert abs(sum(config.SUBSYSTEM_SHARES_INIT.values()) - 1.0) < 1e-12
-    assert config.SUBSYSTEM_SHARES_INIT["core"] == 0.45
-    assert config.SUBSYSTEM_SHARES_INIT["emotion"] == 0.15
-    assert config.SUBSYSTEM_SHARES_INIT["physics"] == 0.15
-    assert config.SUBSYSTEM_SHARES_INIT["brain"] == 0.10
+    assert config.SUBSYSTEM_SHARES_INIT["core"] == 0.42
+    assert config.SUBSYSTEM_SHARES_INIT["emotion"] == 0.14
+    assert config.SUBSYSTEM_SHARES_INIT["physics"] == 0.14
+    assert config.SUBSYSTEM_SHARES_INIT["brain"] == 0.09
     assert config.SUBSYSTEM_SHARES_INIT["news"] == 0.07
     assert config.SUBSYSTEM_SHARES_INIT["hf"] == 0.08
+    # NEW: hedge-flow tracer takes6% (real-time rotation signal)
+    assert config.SUBSYSTEM_SHARES_INIT["tracer"] == 0.06
 
 
 def test_learning_rates_adaptive_high_alert():
@@ -346,6 +348,7 @@ def test_effective_weights_two_tier():
     assert eff[config.PHYSICS_COMPONENT_ID] == shares["physics"]
     assert eff[config.NEWS_COMPONENT_ID] == shares["news"]
     assert eff[config.HEDGE_COMPONENT_ID] == shares["hf"]
+    assert eff[config.TRACER_COMPONENT_ID] == shares["tracer"]
     core_sum = sum(v for k, v in eff.items() if k in config.CORE_SIGNAL_IDS)
     assert core_sum == pytest.approx(shares["core"], abs=1e-9)
     assert abs(sum(eff.values()) - 1.0) < 1e-9
@@ -392,7 +395,7 @@ def test_engine_learning_wiring():
     assert eng.learning is not None
     assert eng.agents is not None
     assert eng.historydb is not None
-    assert eng.learning.subsystem_shares["core"] == pytest.approx(0.45)
+    assert eng.learning.subsystem_shares["core"] == pytest.approx(0.42)
     # double-check + agents hooks exist
     assert hasattr(eng, "_apply_agents")
     assert hasattr(eng, "_record_learning")

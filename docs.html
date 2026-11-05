@@ -199,11 +199,13 @@ pip install -r requirements.txt
 <p>MSRC · RMET · DIQ · TCI · ARSI · ISA · VAD · CCMDR · PMTL · DRHE · CCI ·</p>
 <p>BAPR · SARD · FBPS · TMDM · IFDS · VCDP · ARC · DLP · PCV · CLRE ·</p>
 <p>DBI · MPD · CWA · LNP  <i>(F32–F35: live order-book layer)</i></p>
-<p><b>The 35 weighted CCI components</b> = F1–F19, F22–F27, F31, F32–F35</p>
+<p><b>The36 weighted CCI components</b> = F1–F19, F22–F27, F31, F32–F35</p>
 <p>(30 signals) +</p>
 <p>brain consensus (id 97) + CERC composite (id 98) + physics UFP (id 99) +</p>
-<p>news impact (id 100) + hedge-fund/dark-pool combined (id 101).  Excluded</p>
-<p>from the sum:</p>
+<p>news impact (id 100) + hedge-fund/dark-pool combined (id 101) + the new</p>
+<p><b>Hedge-Flow Tracer (id 102)</b> — cross-asset volume-share rotation ×</p>
+<p>relative return, a measured real-time &quot;where is the money rotating&quot;</p>
+<p>signal with its own6 % subsystem share.  Excluded from the sum:</p>
 <ul>
 <li><b>F20 (DRHE)</b> — not bounded to [−1, +1], enters as the multiplier</li>
 </ul>
@@ -644,6 +646,7 @@ curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&
 <tr><td>core</td><td>`GET /api/health` · `GET /api/snapshot` · `GET /api/ops` · `GET /api/watchdog` · `GET /api/degrade` · `GET /api/secrets/status` · `GET /placeholder`</td></tr>
 <tr><td>analysis</td><td>`POST /api/analyse/{symbol}` · `GET /api/analyse/status` · `POST /api/override/{symbol}/{tf}`</td></tr>
 <tr><td>explain</td><td>`POST /api/explain` · `GET /api/explain/status`</td></tr>
+<tr><td>rl</td><td>`GET /api/rl/status`</td></tr>
 <tr><td>systems</td><td>`GET /api/systems` · `GET /api/candles` · `GET /api/formula-history` · `GET /api/formula-traces` · `GET /api/forward` · `GET /api/ledger`</td></tr>
 <tr><td>brain</td><td>`GET /api/brain/status` · `GET /api/brain/wiring` · `GET /api/brain/explain` · `POST /api/brain/reconnect` · `GET /api/brain-geometry` · `GET /api/brain-activations`</td></tr>
 <tr><td>news</td><td>`GET /api/news/status` · `GET /api/news/feed` · `GET /api/news/impact` · `GET /api/news/{symbol}` · `POST /api/news/poll` · `POST /api/news/emergency`</td></tr>
@@ -661,6 +664,20 @@ curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&
 <li><code>docs.html</code> — self-contained renderer of README + API_SETUP</li>
 </ul>
 <p>  (regenerate: <code>python scripts/make_docs_html.py</code>)</p>
+<h5>Reinforcement-learning console</h5>
+<p><code>GET /api/rl/status</code> + the SETTINGS tab panel expose three controllers:</p>
+<p>1. <b>Error-finder</b> — every graded ring (<code>facc/eacc/pacc</code>, brain,</p>
+<p>   tracer) is monitored; reward &lt; 0.40 over n≥8 windows DAMPS that</p>
+<p>   component&#x27;s effective weight (×0.75, floor0.4), recovery (≥0.50)</p>
+<p>   RESTORES it, sustained failure deepens it — every action logged and</p>
+<p>   reversible, never invisible.</p>
+<p>2. <b>Issue bandit</b> — a4-armed bandit over the confidence threshold</p>
+<p>   {0.25…0.45} commits for8 settled windows, scores ±1/0 by realised</p>
+<p>   strict-sign outcome and re-picks argmax +15 % exploration. Fresh</p>
+<p>   state =0.35 (identical to the legacy floor).</p>
+<p>3. <b>Honest target tracker</b> — prints the measured pooled accuracy vs</p>
+<p>   the90 % target with n and gap: *RL climbs with real settlements; the</p>
+<p>   number is never rewritten.*</p>
 <h5>Repository rules</h5>
 <ul>
 <li><b>No pull requests, no merges.</b> Work is committed and pushed directly</li>

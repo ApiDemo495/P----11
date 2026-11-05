@@ -96,12 +96,17 @@ ACCURACY_ROLLING = 100            # per-timeframe rolling window
 
 # Section 14 Level 1 — subsystem weightages of the CCI
 SUBSYSTEM_SHARES_INIT: dict[str, float] = {
-    "core": 0.45, "brain": 0.10, "emotion": 0.15,
-    "physics": 0.15, "news": 0.07, "hf": 0.08,
+    # shares carved for the new Hedge-Flow Tracer (real-time rotation
+    # effect): every entry re-normalised so the six legacy shares keep
+    # their RELATIVE size (core42.3% →42 etc, tracer gets6%)
+    "core": 0.42, "brain": 0.09, "emotion": 0.14,
+    "physics": 0.14, "news": 0.07, "hf": 0.08,
+    "tracer": 0.06,
 }
 SUBSYSTEM_BEARINGS: dict[str, tuple[float, float]] = {
     "core": (0.05, 0.60), "brain": (0.05, 0.25), "emotion": (0.05, 0.25),
     "physics": (0.05, 0.25), "news": (0.03, 0.15), "hf": (0.03, 0.12),
+    "tracer": (0.03, 0.15),
 }
 SUBSYSTEM_STEP = 0.02             # Level-1 adjustment step (Section 14)
 
@@ -195,12 +200,17 @@ EMOTION_COMPONENT_ID = 98      # CERC weighted input to CCI
 PHYSICS_COMPONENT_ID = 99      # P22 Unified Field Prediction (Bgn-synced)
 NEWS_COMPONENT_ID = 100        # News Impact Aggregate (Bgn-synced)
 HEDGE_COMPONENT_ID = 101       # HF1+HF2+HF3 combined (Bgn-synced)
+# NEW (user request): Hedge-Flow Tracer — cross-asset rotation effect
+# (volume-share delta + relative return) = real-time 'where is the
+# money rotating' signal with its own CCI weightage
+TRACER_COMPONENT_ID = 102
 WEIGHT_IDS: list[int] = (
     CORE_SIGNAL_IDS
     + [BRAIN_COMPONENT_ID, EMOTION_COMPONENT_ID,
-       PHYSICS_COMPONENT_ID, NEWS_COMPONENT_ID, HEDGE_COMPONENT_ID]
+       PHYSICS_COMPONENT_ID, NEWS_COMPONENT_ID, HEDGE_COMPONENT_ID,
+       TRACER_COMPONENT_ID]
 )
-N_WEIGHT_COMPONENTS = len(WEIGHT_IDS)   # 35 (30 signals +5 subsystems)
+N_WEIGHT_COMPONENTS = len(WEIGHT_IDS)   # 36 (30 signals +6 subsystems)
 # Section 8: "Their initial combined weight is 0.08 (8% of total CCI)."
 HEDGE_INITIAL_WEIGHT = 0.08
 # P22: physics layer's total contribution weighted by TME (P9):

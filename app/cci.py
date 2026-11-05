@@ -46,6 +46,7 @@ from .config import (
     EMOTION_COMPONENT_ID,
     ETA_MICRO,
     HEDGE_COMPONENT_ID,
+    TRACER_COMPONENT_ID,
     HEDGE_INITIAL_WEIGHT,
     LEARNING_RATE_ETA,
     NEWS_COMPONENT_ID,
@@ -149,6 +150,7 @@ class CCIEngine:
         eff[PHYSICS_COMPONENT_ID] = shares["physics"]
         eff[NEWS_COMPONENT_ID] = shares["news"]
         eff[HEDGE_COMPONENT_ID] = shares["hf"]
+        eff[TRACER_COMPONENT_ID] = shares.get("tracer", 0.0)
         return eff
 
     def compute(
@@ -162,7 +164,10 @@ class CCIEngine:
         shares: dict[str, float] | None = None,
         raw_weights: dict[int, float] | None = None,
     ) -> dict:
-        raw_w = raw_weights or self.get_weights(symbol, tf)
+        from .rlsys import damp_all
+        # RL error-finder: broken components contribute with a learned
+        # damp factor (default1.0 = untouched legacy behaviour)
+        raw_w = damp_all(raw_weights or self.get_weights(symbol, tf))
         # two-tier weighting (Section 14) applies when the engine supplies
         # the live subsystem shares; plain calls keep the flat ω semantics
         w = self.effective_weights(raw_w, shares) if shares else raw_w

@@ -67,7 +67,7 @@ const FORMULA_LOGIC = {
   18:"entropy of return signs → trendiness",
   19:"price acceleration ΔΔclose → momentum of momentum",
   20:"DRHE trend durability — confidence gate ×min(1,DRHE)",
-  21:"CCI master aggregate: 35 weighted components",
+  21:"CCI master aggregate: 36 weighted components",
   22:"breakout age since level break → early/late",
   23:"round-number liquidity cluster pressure",
   24:"session-open positioning vs prior close",
@@ -2406,8 +2406,44 @@ async function showDay(date) {
 }
 
 /* ═══════════ SETTINGS ═══════════ */
+async function loadRL() {
+  const box = $("#rl-panel"); if (!box) return;
+  try {
+    const rl = await api("/api/rl/status");
+    $("#rl-meta").textContent = `threshold ${fmt(rl.threshold, 2)} · build v${rl.version}`;
+    const bandit = rl.bandit || {};
+    const bstats = Object.entries(bandit.stats || {}).map(([k, v]) =>
+      `<div class="kv"><span>threshold ${fmt(parseFloat(k), 2)}</span><b>${v.n} settled · Σr ${fmt(v.reward, 1)}</b></div>`).join("");
+    const damps = Object.entries(rl.damp || {});
+    const fixes = (rl.active_fixes || []).map(a =>
+      `<div class="kv"><span>${esc(a.kind)} F${a.id}</span><b class="acc-warn">${esc(a.action)} <span class="dim">reward ${fmt(a.reward, 2)} n=${a.n}</span></b></div>`).join("");
+    const acts = (rl.recent_actions || []).map(a =>
+      `<div class="dim">${new Date(a.at * 1000).toLocaleTimeString()} · ${esc(a.kind)} ${a.id ? "F" + a.id : ""} · ${esc(a.action || "")}${a.reward != null ? " · r " + fmt(a.reward, 2) : ""}</div>`).join("");
+    const t = rl.target || {};
+    box.innerHTML = `
+      <div class="kv-row">
+        <div class="kv"><span>issue threshold (bandit)</span><b>${fmt(rl.threshold, 2)}</b></div>
+        <div class="kv"><span>committed</span><b>${bandit.committed ?? 0}/${bandit.commit_n ?? 8} windows</b></div>
+        <div class="kv"><span>accuracy TARGET</span><b>${Math.round((t.target ?? 0.9) * 100)}%</b></div>
+        <div class="kv"><span>measured now</span><b class="${t.current != null && t.current >= (t.target ?? 0.9) ? "acc-up" : "acc-warn"}">${t.current != null ? Math.round(t.current * 100) + "%" : "—"} <span class="dim">n=${t.n ?? 0}${t.gap_pp != null ? " · gap " + t.gap_pp + "pp" : ""}</span></b></div>
+      </div>
+      <div class="hint" style="${t.status && String(t.status).includes("NOT MET") ? "color:var(--gold)" : ""}">${esc(t.status || "")} — RL climbs with real settlements; the number is never rewritten.</div>
+      <div class="panel-h" style="margin-top:8px">ACTIVE WEIGHT DAMPS (error-finder)</div>
+      <div class="kv-row">${damps.length ? damps.map(([id, v]) =>
+        `<div class="kv"><span>F${id}</span><b class="acc-warn">×${fmt(v, 2)}</b></div>`).join("")
+        : `<div class="dim">none — every graded component's reward ≥0.40</div>`}</div>
+      ${fixes ? `<div class="kv-row">${fixes}</div>` : ""}
+      <div class="panel-h" style="margin-top:8px">ISSUE-BANDIT SCOREBOARD</div>
+      <div class="kv-row">${bstats}</div>
+      ${acts ? `<div class="hint" style="margin-top:6px">recent RL actions:<br/>${acts}</div>` : ""}`;
+  } catch (e) {
+    box.innerHTML = `<div class="dim pad">rl console: ${esc(e.message)}</div>`;
+  }
+}
+
 async function loadSettings() {
   try {
+    loadRL().catch(() => {});
     const l = await api("/api/learning");
     const lr = l.learning || {};
     $("#st-eta").textContent = fmt(lr.eta ?? lr.rates?.eta ?? 0.02, 3);

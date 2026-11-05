@@ -180,11 +180,13 @@ MSRC · RMET · DIQ · TCI · ARSI · ISA · VAD · CCMDR · PMTL · DRHE · CCI
 BAPR · SARD · FBPS · TMDM · IFDS · VCDP · ARC · DLP · PCV · CLRE ·
 DBI · MPD · CWA · LNP  *(F32–F35: live order-book layer)*
 
-**The 35 weighted CCI components** = F1–F19, F22–F27, F31, F32–F35
+**The36 weighted CCI components** = F1–F19, F22–F27, F31, F32–F35
 (30 signals) +
 brain consensus (id 97) + CERC composite (id 98) + physics UFP (id 99) +
-news impact (id 100) + hedge-fund/dark-pool combined (id 101).  Excluded
-from the sum:
+news impact (id 100) + hedge-fund/dark-pool combined (id 101) + the new
+**Hedge-Flow Tracer (id 102)** — cross-asset volume-share rotation ×
+relative return, a measured real-time "where is the money rotating"
+signal with its own6 % subsystem share.  Excluded from the sum:
 
 * **F20 (DRHE)** — not bounded to [−1, +1], enters as the multiplier
   `min(1, DRHE)` on confidence;
@@ -622,6 +624,7 @@ emotion/physics cards carry the same in their tooltip/why line.
 | core | `GET /api/health` · `GET /api/snapshot` · `GET /api/ops` · `GET /api/watchdog` · `GET /api/degrade` · `GET /api/secrets/status` · `GET /placeholder` |
 | analysis | `POST /api/analyse/{symbol}` · `GET /api/analyse/status` · `POST /api/override/{symbol}/{tf}` |
 | explain | `POST /api/explain` · `GET /api/explain/status` |
+| rl | `GET /api/rl/status` |
 | systems | `GET /api/systems` · `GET /api/candles` · `GET /api/formula-history` · `GET /api/formula-traces` · `GET /api/forward` · `GET /api/ledger` |
 | brain | `GET /api/brain/status` · `GET /api/brain/wiring` · `GET /api/brain/explain` · `POST /api/brain/reconnect` · `GET /api/brain-geometry` · `GET /api/brain-activations` |
 | news | `GET /api/news/status` · `GET /api/news/feed` · `GET /api/news/impact` · `GET /api/news/{symbol}` · `POST /api/news/poll` · `POST /api/news/emergency` |
@@ -638,6 +641,23 @@ emotion/physics cards carry the same in their tooltip/why line.
 * `docs/UX-ZERO-REPORT.md` — 0.00/UX pass (asks → fixes table)
 * `docs.html` — self-contained renderer of README + API_SETUP
   (regenerate: `python scripts/make_docs_html.py`)
+
+### Reinforcement-learning console
+
+`GET /api/rl/status` + the SETTINGS tab panel expose three controllers:
+
+1. **Error-finder** — every graded ring (`facc/eacc/pacc`, brain,
+   tracer) is monitored; reward < 0.40 over n≥8 windows DAMPS that
+   component's effective weight (×0.75, floor0.4), recovery (≥0.50)
+   RESTORES it, sustained failure deepens it — every action logged and
+   reversible, never invisible.
+2. **Issue bandit** — a4-armed bandit over the confidence threshold
+   {0.25…0.45} commits for8 settled windows, scores ±1/0 by realised
+   strict-sign outcome and re-picks argmax +15 % exploration. Fresh
+   state =0.35 (identical to the legacy floor).
+3. **Honest target tracker** — prints the measured pooled accuracy vs
+   the90 % target with n and gap: *RL climbs with real settlements; the
+   number is never rewritten.*
 
 ### Repository rules
 

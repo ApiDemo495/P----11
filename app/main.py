@@ -281,6 +281,27 @@ async def formula_history(symbol: str = "BTC", tf: str = "tf1") -> JSONResponse:
                          **engine.formula_history(symbol, tf)})
 
 
+@app.get("/api/rl/status")
+async def rl_status() -> JSONResponse:
+    """Reinforcement-learning console: error-finder actions, active
+    weight dampers, issue-threshold bandit, and the HONEST accuracy
+    target tracker (real number + gap — never a faked90%)."""
+    from .rlsys import get_rl
+    rl = get_rl()
+    payload = rl.status()
+    try:
+        payload["target"] = rl.target_status(engine.ledger)
+    except Exception:
+        payload["target"] = {"target": 0.90, "current": None, "n": 0,
+                             "status": "ledger unavailable"}
+    try:
+        payload["settled_rows"] = sum(len(v) for v in
+                                      (engine.ledger.rows or {}).values())
+    except Exception:
+        payload["settled_rows"] = 0
+    return JSONResponse({"ok": True, **payload})
+
+
 @app.post("/api/explain")
 async def explain_tab(body: dict) -> JSONResponse:
     """Plain-language readout for a tab (qwen2.5-coder local model,
@@ -782,7 +803,9 @@ async def history_leaderboard() -> JSONResponse:
                          NEWS_COMPONENT_ID, HEDGE_COMPONENT_ID)
     # ids97-101 are SUBSYSTEM components (not formulas) — never label
     # them F97…; show what they actually are
+    from .config import TRACER_COMPONENT_ID
     SUBSYS_NAMES = {
+        TRACER_COMPONENT_ID: "hedge-flow tracer (subsystem)",
         BRAIN_COMPONENT_ID: "brain vote (subsystem)",
         EMOTION_COMPONENT_ID: "emotion CERC (subsystem)",
         PHYSICS_COMPONENT_ID: "physics UFP (subsystem)",

@@ -36,6 +36,7 @@ from .config import (
     EXTREME_OVERRIDE_CCI,
     EXTREME_OVERRIDE_NEWS,
     HEDGE_COMPONENT_ID,
+    TRACER_COMPONENT_ID,
     HIST_COMPOSITE_EMOTION,
     HIST_EMOTION_LAG,
     HIST_STD_R,
@@ -57,6 +58,7 @@ from .config import (
     WEIGHT_IDS,
 )
 from .brain import BrainSystem
+from .rlsys import damp_all, damp_shares
 from .emotion import EmotionSystem
 from .feed import MarketFeed
 from .formulas import FORMULA_FUNCTIONS, FORMULA_NAMES, compute_all
@@ -206,6 +208,10 @@ class PredictionEngine:
         self._fw_last_vote: dict[tuple[str, str], float] = {}
         self._last_raws: dict[tuple[str, str], dict] = {}
         self._calib_pending: dict[tuple[str, str], float] = {}
+        # RL controllers (error-finder + issue bandit) + tracer last value
+        from .rlsys import get_rl
+        self.rl = get_rl()
+        self._tracer_last: dict[tuple[str, str], float] = {}
         self.news_polarity: deque[float] = deque(maxlen=30)
         self._market_cache: dict[str, dict] = {}
         self._market_cache_ts: float = 0.0
@@ -784,6 +790,8 @@ class PredictionEngine:
         # HF3 needs this pass' brain consensus (retail_flow = -H_signal).
         phys_raw: dict[str, dict] = {}
         hedge_raw: dict[str, float] = {}
+        tracer_raw: dict[str, float] = {}
+        tracer_detail: dict = {}
 
         def _recompute(g: FormulaContext) -> dict[int, float]:
             # P19 gauge recomputes: full formula pass on transformed prices,
@@ -792,9 +800,19 @@ class PredictionEngine:
 
         for tf in TF_ORDER:
             drhe = adj[tf].get(20, 1.0)
+            # Hedge-Flow Tracer (id102): real-time cross-asset rotation
+            # effect — measured volume-share delta + relative return
+            from .tracer import hedge_flow_tracer
+            try:
+                tracer_raw[tf], tracer_detail = hedge_flow_tracer(
+                    self.feed, symbol)
+            except Exception:
+                tracer_raw[tf], tracer_detail = 0.0, {"reason": "tracer error"}
+            self._tracer_last[(symbol, tf)] = tracer_raw[tf]
             comp_core: dict[int, float] = {fid: adj[tf][fid] for fid in FORMULA_FUNCTIONS}
             comp_core[BRAIN_COMPONENT_ID] = brain_sync[tf]
             comp_core[EMOTION_COMPONENT_ID] = cerc_sync[tf]
+            comp_core[TRACER_COMPONENT_ID] = tracer_raw[tf]
             w = self.cci.get_weights(symbol, tf)
             wsum = sum(w.get(fid, 0.0) for fid in comp_core)
             cci_ref = (
@@ -824,6 +842,8 @@ class PredictionEngine:
                 "events": ifr["events"],
                 "prints": dpad["prints"],
                 "combined": round(hedge_raw[tf], 6),
+                "tracer": round(tracer_raw.get(tf, 0.0), 6),
+                "tracer_detail": tracer_detail,
             }
 
         # 7b) Bgn synchronization of the part-3 signals across timeframes
@@ -845,6 +865,7 @@ class PredictionEngine:
             comp[PHYSICS_COMPONENT_ID] = physics_sync[tf]
             comp[NEWS_COMPONENT_ID] = news_sync[tf]
             comp[HEDGE_COMPONENT_ID] = hedge_sync[tf]
+            comp[TRACER_COMPONENT_ID] = tracer_raw.get(tf, 0.0)
             phys = phys_raw[tf]
             # Section 14 Level 3/4: performance-scaled raw weights
             base_w = self.cci.get_weights(symbol, tf)
@@ -857,7 +878,7 @@ class PredictionEngine:
             }
             pack = self.cci.compute(
                 symbol, tf, comp, drhe, tme=phys["tme"],
-                shares=self.learning.subsystem_shares,
+                shares=damp_shares(self.learning.subsystem_shares),
                 raw_weights=raw_mod,
             )
 
@@ -922,6 +943,14 @@ class PredictionEngine:
                         1.0, float(fin["confidence"]) * cf))
                     fin["issued"] = fin["confidence"] > CONFIDENCE_FLOOR
                     fin["calibration_factor"] = round(cf, 3)
+            except Exception:
+                pass
+
+            # RL ISSUE BANDIT: learned confidence threshold (fresh state
+            # =0.35 → identical to the legacy floor until data moves it)
+            try:
+                fin["issued"] = (float(fin["confidence"])
+                                 > self.rl.issue_threshold())
             except Exception:
                 pass
 
@@ -1149,12 +1178,13 @@ class PredictionEngine:
                 _comp_names = {
                     **{str(f): FORMULA_NAMES[f] for f in FORMULA_FUNCTIONS},
                     str(BRAIN_COMPONENT_ID): "Drosophila brain consensus",
+                    str(TRACER_COMPONENT_ID): "Hedge-flow tracer (rotation)",
                     str(EMOTION_COMPONENT_ID): "CERC emotion flow",
                     str(PHYSICS_COMPONENT_ID): "Physics UFP (P22)",
                     str(NEWS_COMPONENT_ID): "News impact aggregate",
                     str(HEDGE_COMPONENT_ID): "HF institutional flow",
                 }
-                _ew = pack.get("weights") or base_w
+                _ew = damp_all(pack.get("weights") or base_w)
                 _comps = sorted(
                     ({
                         "id": str(fid),
@@ -1397,6 +1427,11 @@ class PredictionEngine:
                             "hedge": round(sum(
                                 abs(c["contribution"]) for c in _comps
                                 if c["id"] == str(HEDGE_COMPONENT_ID)) / (
+                                sum(abs(c["contribution"])
+                                    for c in _comps) or 1.0), 4),
+                        "tracer": round(sum(
+                                abs(c["contribution"]) for c in _comps
+                                if c["id"] == str(TRACER_COMPONENT_ID)) / (
                                 sum(abs(c["contribution"])
                                     for c in _comps) or 1.0), 4),
                         },
@@ -1826,7 +1861,7 @@ class PredictionEngine:
             elif direction != 0:
                 sl = price - direction * atr * 1.0
             # per-asset weightage — every asset runs its OWN weights
-            wts = self.cci.get_weights(symbol, tf)
+            wts = damp_all(self.cci.get_weights(symbol, tf))
             top_w = sorted(wts.items(), key=lambda kv: -abs(kv[1]))[:8]
             ai = job.get("ai") or {}
             final = {
@@ -2163,8 +2198,8 @@ class PredictionEngine:
                 "core": {str(f): FORMULA_NAMES[f] for f in core_ids},
                 "physics": {str(p): _P_NAMES[p] for p in range(1, 23)},
             },
-            "weights": {str(fid): round(self.cci.get_weights(symbol, tf)
-                                        .get(fid, 0.0), 5)
+            "weights": {str(fid): round(damp_all(
+                self.cci.get_weights(symbol, tf)).get(fid, 0.0), 5)
                         for fid in WEIGHT_IDS},
             "alpha": ({p: round(w, 5) for p, w in
                        self.physics._weights(symbol, tf).items()}
@@ -3030,10 +3065,36 @@ class PredictionEngine:
             if same_window:
                 return                      # lock holds for the whole window
             price = self.feed.prices().get(symbol, 0.0)
-            self.ledger.settle(symbol, tf,
-                               float(prev.get("price") or 0.0),
-                               price, int(prev.get("side") or 0),
-                               window_end=float(prev.get("window_end") or 0))
+            _row = self.ledger.settle(
+                symbol, tf,
+                float(prev.get("price") or 0.0),
+                price, int(prev.get("side") or 0),
+                window_end=float(prev.get("window_end") or 0))
+            # REINFORCEMENT loop on a settled window: score the issue
+            # bandit, then run the error-finder over every reward ring
+            try:
+                was_issued = (float(prev.get("confidence") or 0.0)
+                              > self.rl.issue_threshold())
+                self.rl.on_settle(
+                    issued=was_issued,
+                    won=(_row.get("result") == "win"
+                         if _row.get("result") in ("win", "loss")
+                         else None))
+                self.rl.audit(self)
+            except Exception:
+                log.exception("rl settle loop failed")
+            # Hedge-Flow Tracer direction ring (grades component102 like
+            # every other input: sign vs realised move)
+            try:
+                _tv = self._tracer_last.get((symbol, tf))
+                if move_ok := (float(prev.get("price") or 0.0) > 0):
+                    _move = price - float(prev.get("price") or 0.0)
+                    if _tv is not None and abs(_tv) > 0.02 and _move != 0:
+                        self.hist.ring(
+                            self.hist.tf_key(symbol, tf, "facc_tracer"), 50
+                        ).append(1.0 if ((_tv > 0) == (_move > 0)) else -1.0)
+            except Exception:
+                pass
             # forward table: settle the PREVIOUS lock's frozen readings
             if prev.get("fv"):
                 try:

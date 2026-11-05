@@ -261,7 +261,7 @@ def test_smdi_formula_and_combined_mean():
 def test_hedge_initial_weight_is_0_08():
     eng = CCIEngine()
     w = eng.get_weights("ETH", "tf2")
-    assert len(WEIGHT_IDS) == 35
+    assert len(WEIGHT_IDS) == 36
     assert w[HEDGE_COMPONENT_ID] == pytest.approx(HEDGE_INITIAL_WEIGHT)
     assert sum(w.values()) == pytest.approx(1.0, abs=1e-12)
 
@@ -613,7 +613,7 @@ def test_snapshot_ships_part3_meta():
         assert snap["physics"]["formulas"] == 22
         assert len(snap["news_meta"]["categories"]) == 7
         assert set(snap["weights"]) == {str(f) for f in WEIGHT_IDS}
-        assert len(snap["weights"]) == 35
+        assert len(snap["weights"]) == 36
         assert snap["analysis"]["readiness"].get("physics") is True
     finally:
         run(engine.stop())
