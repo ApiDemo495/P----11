@@ -337,6 +337,50 @@ def test_calibration_and_day_flatten_ui_contract():
     assert "bars.slice(-150)" in js and "rgba(34,201,138,.9)" in js
 
 
+def test_old_app_inspiration_bundle():
+    """The old-agent-app inspiration pass: SYSTEM panel, probability
+    branches, who-decided share, conviction note, brain read-out/pathways
+    /channel matrix, dominant emotion, live-value ticker — all wired."""
+    # server surface
+    main = (ROOT / "app" / "main.py").read_text()
+    assert "/api/system/status" in main
+    assert "channel_map" in main
+    eng = (ROOT / "app" / "engine.py").read_text()
+    assert "def branch_stats" in eng and '"who": {' in eng
+    fw = (ROOT / "app" / "flywire.py").read_text()
+    for token in ("_last_whole", "_last_mb", "channel_matrix",
+                  "pathways", "hop_counts", "top_mbons"):
+        assert token in fw, token
+    # branch math is sane: closer target → higher P(target), probs sum to1
+    from tests.test_engine import make_engine, run, _boot
+    import asyncio
+    e2, _ff, _ee = make_engine()
+    run(_boot(e2))
+    try:
+        d = {"symbol": "BTC", "direction": 1, "sl": 90.0,
+             "countdown_s": 600, "targets": [{"level": 110.0}]}
+        bs = e2.branch_stats(d, 100.0, __import__("time").time(), "tf1")
+        # parts are4-decimal display values — sum within rounding
+        assert bs and abs(bs["p_target"] + bs["p_stop"] +
+                          bs["p_between"] - 1.0) < 1e-3
+        assert 0.0 <= bs["p_target"] <= 1.0 and len(bs["bands"]) == 5
+        d2 = dict(d, targets=[{"level": 101.0}])
+        bs2 = e2.branch_stats(d2, 100.0, __import__("time").time(), "tf1")
+        assert bs2["p_target"] > bs["p_target"]   # nearer target wins
+    finally:
+        run(e2.stop())
+    # UI surface
+    js = (ROOT / "static" / "app.js").read_text()
+    html = (ROOT / "static" / "index.html").read_text()
+    for token in ("loadSystemPanel", "renderBranches", "tickFormulaValues",
+                  "WHO DECIDED", "CONVICTION", "em-dominant",
+                  "br-readout", "br-pathways", "br-chan-matrix"):
+        assert token in js or token in html, token
+    for anchor in ("sys-panel", "branch-canvas", "fl-ticker",
+                   "br-readout", "em-dominant"):
+        assert anchor in html, anchor
+
+
 def test_reports_exist_and_are_linked():
     for name in ("NEWS-REPORT.md", "BRAIN-REPORT.md", "UX-ZERO-REPORT.md"):
         assert (ROOT / "docs" / name).exists(), name

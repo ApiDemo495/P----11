@@ -256,6 +256,137 @@ function setSymbol(sym) {
   refreshActiveView(true);
   buildQuads(); loadCandles();
 }
+/* ═══════ SYSTEM panel (old-app inspiration): one glance at what runs ═ */
+async function loadSystemPanel() {
+  const box = $("#sys-panel"); if (!box) return;
+  try {
+    const d = await api("/api/system/status");
+    $("#sys-meta").textContent =
+      new Date((d.ts || Date.now() / 1000) * 1000).toLocaleTimeString();
+    const cls = st => st === "ok" ? "acc-up"
+      : st === "warn" ? "acc-warn"
+      : st === "err" ? "acc-dn" : "dim";
+    box.innerHTML = (d.rows || []).map(r =>
+      `<div class="kv"><span>${esc(r.label)}</span>` +
+      `<b class="${cls(r.state)}" title="${esc(r.detail)}">${esc(r.detail)}</b></div>`
+    ).join("") || `<div class="dim pad">no status</div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="dim pad">status: ${esc(e.message)}</div>`;
+  }
+}
+
+/* ═══════ PROBABILITY BRANCHES chart (own canvas — no chart lib) ═══════ */
+function renderBranches() {
+  const stats = $("#branch-stats"), cvHost = $("#branch-canvas");
+  if (!stats || !cvHost) return;
+  const a = S.snap?.assets?.[S.symbol];
+  const d = a?.tfs?.[S.focusTf];
+  const b = d?.branches;
+  $("#branch-scope").textContent = `${S.symbol} · ${S.focusTf.toUpperCase()} · approx (driftless)`;
+  if (!b || !a) {
+    stats.innerHTML = "";
+    cvHost.innerHTML = `<div class="dim pad" style="font-size:11px">waiting for a direction + TP/SL on ${S.focusTf.toUpperCase()}…</div>`;
+    $("#branch-note").textContent =
+      "bands appear once the window has a direction and a seeded stop";
+    return;
+  }
+  stats.innerHTML = `
+    <div class="kv"><span>P(target before stop)</span><b class="acc-up">${Math.round(b.p_target * 100)}%</b></div>
+    <div class="kv"><span>P(stop first)</span><b class="acc-dn">${Math.round(b.p_stop * 100)}%</b></div>
+    <div class="kv"><span>P(close between)</span><b>${Math.round(b.p_between * 100)}%</b></div>
+    <div class="kv"><span>P(close down)</span><b>${Math.round(b.p_close_down * 100)}%</b></div>
+    <div class="kv"><span>σ (remaining)</span><b>${px(b.sigma)}</b></div>
+    <div class="kv"><span>time left</span><b>${Math.round(b.rem_s / 60)}m ${Math.round(b.rem_s % 60)}s</b></div>`;
+  $("#branch-note").textContent =
+    "bands = quantiles of the remaining-window walk (driftless Brownian approximation, not a forecast) · realised path in white";
+  // ---- canvas ----
+  const w = cvHost.clientWidth || 300, h = cvHost.clientHeight || 170;
+  let cv = cvHost.querySelector("canvas");
+  if (!cv) {
+    cvHost.innerHTML = "";
+    cv = document.createElement("canvas");
+    cv.style.cssText = "width:100%;height:100%;display:block";
+    cvHost.appendChild(cv);
+  }
+  cv.width = w * 2; cv.height = h * 2;
+  const g = cv.getContext("2d");
+  g.setTransform(2, 0, 0, 2, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const t0 = d.cycle_start || (Date.now() / 1000 - 60);
+  const t1 = d.cycle_end || (Date.now() / 1000 + b.rem_s);
+  const levels = [b.entry, b.tp, b.sl, ...b.bands.map(x => x.level)];
+  let lo = Math.min(...levels), hi = Math.max(...levels);
+  const pad = (hi - lo) * 0.12 || Math.abs(b.entry * 1e-3) || 1;
+  lo -= pad; hi += pad;
+  const X = t => ((t - t0) / Math.max(1, t1 - t0)) * (w - 42) + 1;
+  const Y = p2 => h - 14 - ((p2 - lo) / (hi - lo || 1)) * (h - 20);
+  // shaded quantile fan (5→95)
+  const upper = b.bands.filter(x => x.f >= 0.5);
+  const lower = b.bands.filter(x => x.f <= 0.5);
+  g.beginPath();
+  upper.forEach((x, i) => { const xx = X(t0 + (t1 - t0) * x.f); i ? g.lineTo(xx, Y(x.level)) : g.moveTo(xx, Y(x.level)); });
+  for (let i = lower.length - 1; i >= 0; i--) { const x = lower[i]; g.lineTo(X(t0 + (t1 - t0) * x.f), Y(x.level)); }
+  g.closePath();
+  g.fillStyle = "rgba(240,56,90,.08)"; g.fill();
+  // median band line
+  const med = b.bands.find(x => x.f === 0.5);
+  if (med) {
+    g.beginPath(); g.moveTo(X(t0), Y(b.entry)); g.lineTo(X(t0 + (t1 - t0) * med.f), Y(med.level));
+    g.strokeStyle = "rgba(216,216,232,.5)"; g.setLineDash([3, 3]); g.lineWidth = 1; g.stroke(); g.setLineDash([]);
+  }
+  // TP / SL / entry
+  const hline = (lv, color, label, dash) => {
+    g.beginPath(); g.moveTo(X(t0), Y(lv)); g.lineTo(X(t1), Y(lv));
+    g.strokeStyle = color; g.lineWidth = 1.2; g.setLineDash(dash || [6, 4]); g.stroke(); g.setLineDash([]);
+    g.fillStyle = color; g.font = "9px monospace"; g.textAlign = "left";
+    g.fillText(`${label} ${px(lv)}`, X(t0) + 3, Y(lv) - 3);
+  };
+  hline(b.tp, "#22c98a", "TP", [6, 4]);
+  hline(b.sl, "#f0385a", "SL", [6, 4]);
+  hline(b.entry, "#d8d8e8", "entry", [2, 3]);
+  // realised path (white)
+  const hist = (S.priceHist || []).filter(pp => pp.t >= t0 - 1 && pp.p > 0);
+  if (hist.length > 1) {
+    g.beginPath();
+    hist.forEach((pp, i) => { const xx = X(pp.t), yy = Y(pp.p); i ? g.lineTo(xx, yy) : g.moveTo(xx, yy); });
+    g.strokeStyle = "#ffffff"; g.lineWidth = 1.3; g.stroke();
+  }
+  // now marker
+  const nowX = X(Math.min(Date.now() / 1000, t1));
+  g.beginPath(); g.moveTo(nowX, 4); g.lineTo(nowX, h - 12);
+  g.strokeStyle = "rgba(201,162,39,.7)"; g.lineWidth = 1; g.stroke();
+  g.fillStyle = "#c9a227"; g.font = "9px monospace"; g.textAlign = "right";
+  g.fillText("now", nowX - 3, 12);
+}
+
+/* ═══════ formula live-value ticker (raw → new) ═══════ */
+function tickFormulaValues() {
+  const box = $("#fl-ticker");
+  const fv = S.snap?.formula_values?.[`${S.symbol}|${S.focusTf}`];
+  const cur = fv?.raw || {};
+  const prev = S.prevFV;
+  S.prevFV = { ...cur };
+  if (!box || !prev) return;
+  const names = fv?.names || {};
+  const lines = [];
+  const nowT = new Date().toLocaleTimeString();
+  for (const k of Object.keys(cur)) {
+    const a2 = prev[k], b2 = cur[k];
+    if (a2 == null || b2 == null) continue;
+    if (Math.abs(a2 - b2) < 1e-9) continue;
+    const up = b2 > a2;
+    lines.push(`${nowT} F${k} ${names[k] || ""} ${fx(a2, 4)} → ${up ? "▲" : "▼"} ${fx(b2, 4)}`);
+    if (lines.length >= 6) break;
+  }
+  if (!lines.length) return;
+  box.innerHTML = lines.map(l =>
+    `<div style="color:${l.includes("▲") ? "var(--green)" : "var(--red)"}">${esc(l)}</div>`
+  ).join("") + box.innerHTML;
+  // cap the log at ~40 lines
+  const kids = box.children;
+  for (let i = 40; i < kids.length; i++) kids[i].remove();
+}
+
 /* ═══════ tab explainer (qwen2.5-coder local / deterministic) ═══════ */
 function ensureExplainPanel(v) {
   const sec = $("#view-" + v);
@@ -359,7 +490,15 @@ function setFocusTf(tf) {
 }
 
 function refreshActiveView(force) {
-  if (S.view === "dashboard") { renderWhy(); renderQuads(); return; }
+  if (S.view === "dashboard") {
+    renderWhy(); renderQuads();
+    try { renderBranches(); } catch (e) { console.error("branches", e); }
+    if (!force || !S._sysLoaded || Date.now() - S._sysLoaded > 30000) {
+      S._sysLoaded = Date.now();
+      loadSystemPanel().catch(() => {});
+    }
+    return;
+  }
   // non-dashboard views re-FETCH their APIs — throttle snapshot-driven
   // refreshes to every 30s so the UI never stalls behind repeated loads
   if (!force && Date.now() - (S.lastViewFetch || 0) < 30000) return;
@@ -673,7 +812,36 @@ function renderWhy() {
       <div class="dim">formulas ✗ this window: ${esc(offF)} — per-item ticks live in FORMULAS / EMOTION / PHYSICS.</div>
     </div>` : "";
   const exBlock = `<div style="margin-top:8px"><button class="btn" id="why-explain-btn" onclick="window.toggleWhyExplain()" style="padding:4px 12px">🧠 explain this + TP/SL math</button><pre id="why-explain" class="logic" style="white-space:pre-wrap;display:none;margin-top:6px"></pre></div>`;
-  el.innerHTML = lockBlock + ladderBlock + sparkHtml + ticksBlock + exBlock + `
+  // WHO DECIDED — subsystem share of |contribution| (old-app inspiration)
+  const who = bd.who || {};
+  const whoTotal = Object.values(who).reduce((x2, y) => x2 + (Number(y) || 0), 0);
+  const whoBlock = whoTotal > 0 ? `
+    <div class="lock-block"><b>WHO DECIDED — share of |contribution|</b>
+      <div class="votes" style="margin-top:4px">
+        ${Object.entries(who).map(([k, v]) =>
+          `<span class="vote ${(v || 0) > 0.05 ? "pos" : ""}">${esc(k)} ${Math.round((v || 0) * 100)}%</span>`).join("")}
+      </div>
+      <div class="dim">the money-weight share each subsystem had in the fused score this window (subsystem votes still only modulate — never set — the direction).</div>
+    </div>` : "";
+  // CONVICTION — edge vs noise floor + size advice (old-app inspiration)
+  const _score = Number(lad?.score ?? bd.sum_contributions ?? 0);
+  const _nf = Number(lad?.noise_floor ?? 0.02);
+  const _edge = Math.abs(_score) - _nf;
+  const _conf = Number(s.confidence || 0);
+  const _neutral = _edge <= 0;
+  const _size = !s.issued
+    ? "call: NO TRADE until signals align"
+    : (_neutral || _conf < 0.5)
+      ? "size: half or less — thin edge, keep the stop tight"
+      : "size: normal — edge and confidence both speak";
+  const convBlock = `
+    <div class="lock-block" style="border-color:var(--gold)">
+      ⚠ CONVICTION — ${_neutral ? "inside the neutral band" : "decisive edge"} ·
+      edge <b>${fx(_edge)}</b> over noise floor ${fx(_nf)} ·
+      confidence <b>${fx(_conf)}</b>
+      <div class="dim">${_size} · fused score ${fx(_score)} · window ${esc(String(s.ladder?.source || "—").slice(0, 60))}</div>
+    </div>`;
+  el.innerHTML = lockBlock + ladderBlock + sparkHtml + ticksBlock + whoBlock + convBlock + exBlock + `
     <div class="why-head">
       <div class="why-dir ${dir > 0 ? "up" : dir < 0 ? "down" : "flat"}">
         ${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO TRADE"}<span class="sym">${S.symbol} · ${tf.toUpperCase()} · ${TF_META[tf].mins}m</span></div>
@@ -1035,6 +1203,30 @@ async function loadEmotion() {
   try {
     const sys = await api(`/api/systems?symbol=${S.symbol}`);
     const em = sys.systems?.[`${S.symbol}|${S.focusTf}`]?.emotion || {};
+    // DOMINANT NOW — biggest channel intensity + how long it held
+    try {
+      const dom = $("#em-dominant");
+      const ev = em.emotions || {};
+      let best = -1, bi = 0, ri = 0, second = -1;
+      for (let i = 1; i <= 22; i++) {
+        const v = Number(ev[i] ?? 0);
+        if (v > best) { second = best; ri = bi; best = v; bi = i; }
+        else if (v > second) { second = v; ri = i; }
+      }
+      if (dom && bi) {
+        const nowMs = Date.now();
+        if (!S.domEm || S.domEm.i !== bi) S.domEm = { i: bi, since: nowMs };
+        const heldS = Math.max(0, Math.round((nowMs - S.domEm.since) / 1000));
+        const pct = Math.round(best * 100);
+        dom.innerHTML = `
+          <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+            <div style="font:700 26px/1 var(--mono);color:var(--gold)">${esc((typeof EMO !== "undefined" && EMO[bi - 1]) || ("E" + bi))}</div>
+            <div class="dim">E${bi} · <b style="color:var(--text)">${pct}%</b> intensity · held ${heldS}s · runner-up ${esc((typeof EMO !== "undefined" && EMO[ri - 1]) || ("E" + ri))} ${Math.round(second * 100)}%</div>
+          </div>
+          <div class="bar" style="margin-top:8px;max-width:420px"><i class="pos" style="width:${clamp(pct, 2, 100)}%"></i></div>
+          <div class="hint">confidence modifier only — never the direction (advice §5.1)</div>`;
+      }
+    } catch (e) { /* dominant header optional */ }
     $("#em-scope").textContent = `${S.symbol} · ${S.focusTf.toUpperCase()}`;
     $("#em-narrative").innerHTML = `
       <div class="why-reason">${em.narrative || "waiting for the first emotion pass…"}</div>
@@ -1462,6 +1654,91 @@ async function loadBrains() {
           anEl.innerHTML = `<div class="dim pad">${an.state === "absent" ? "connectome absent — anatomy withheld" : esc(an.error || "unavailable")}</div>`;
         }
       }
+      // ── LATEST READ-OUT (the pass the engine used)
+      const ro = fw.readout || {};
+      const wo = ro.whole, mo = ro.mb;
+      const roEl = $("#br-readout");
+      if (roEl) {
+        if (ro.whole || ro.mb) {
+          roEl.innerHTML = `
+            <div class="kv-row">
+              <div class="kv"><span>whole-brain balance</span><b>${wo ? fx(wo.balance, 4) : "—"}</b></div>
+              <div class="kv"><span>approach / avoid (MBON)</span><b>${wo ? fx(wo.approach, 4) : "—"} / ${wo ? fx(wo.avoid, 4) : "—"}</b></div>
+              <div class="kv"><span>active Kenyon cells</span><b>${wo ? `${wo.kc_active} / ${fw.anatomy?.classes?.Kenyon_Cell ?? "?"}` : "—"}</b></div>
+              <div class="kv"><span>active per hop</span><b>${wo?.hop_counts ? wo.hop_counts.join(" → ") : "—"}</b></div>
+              <div class="kv"><span>pass</span><b>${wo?.ms ?? mo?.ms ?? "—"} ms</b></div>
+            </div>
+            <div class="kv-row">
+              <div class="kv"><span>MB balance</span><b>${mo ? fx(mo.balance, 4) : "—"}</b></div>
+              <div class="kv"><span>LH (lateral horn)</span><b>${mo ? fx(mo.lh, 4) : "—"}</b></div>
+              <div class="kv"><span>MB active KC</span><b>${mo ? `${mo.kc_active} / ${mo.kc_total}` : "—"}</b></div>
+              <div class="kv"><span>top MBONs</span><b>${(wo?.top_mbons || []).map(t => `${esc(t.mbon)} ${t.h >= 0 ? "+" : ""}${t.h} (${t.nt.slice(0, 3)})`).join(" · ") || "—"}</b></div>
+            </div>`;
+        } else {
+          roEl.innerHTML = `<div class="dim pad">first whole-brain pass running — read-out in seconds…</div>`;
+          if (!roEl.dataset.retry) {
+            roEl.dataset.retry = "1";
+            setTimeout(() => { delete roEl.dataset.retry; loadBrains(); }, 5000);
+          }
+        }
+      }
+      // ── PATHWAYS + CHANNEL MATRIX (from the anatomy pass)
+      if (an.state === "ready") {
+        const pw = (an.pathways || []).slice(0, 10);
+        const pwEl = $("#br-pathways");
+        if (pwEl) {
+          pwEl.innerHTML = pw.length ? `<div class="logic" style="display:grid;grid-template-columns:1fr auto auto;gap:4px 12px">` +
+            pw.map(x => `<span>${esc(x.frm)} → ${esc(x.to)}</span>` +
+              `<span style="color:${x.drive >= 0 ? "var(--green)" : "var(--red)"};text-align:right">${x.drive >= 0 ? "+" : ""}${fx(x.drive, 3)}</span>` +
+              `<span class="dim">${x.sign}</span>`).join("") + `</div>`
+            : `<div class="dim pad">no signed pathways yet</div>`;
+        }
+        const cm = an.channel_matrix;
+        const cmEl = $("#br-chan-matrix");
+        if (cm && cmEl) {
+          const cmap = bst.channel_map || [];
+          // columns: top classes by total |drive|
+          const kx = cm.classes.map((c2, ci) => ci)
+            .sort((a2, b2) =>
+              Math.abs(cm.matrix.reduce((s2, r) => s2 + Math.abs(r[b2] || 0), 0)) -
+              Math.abs(cm.matrix.reduce((s2, r) => s2 + Math.abs(r[a2] || 0), 0)))
+            .slice(0, 9);
+          const mmax = Math.max(1e-9, ...cm.matrix.flat().map(Math.abs));
+          const cellv = v2 => {
+            const al2 = v2 !== 0 ? Math.min(0.85, (Math.log1p(Math.abs(v2)) / Math.log1p(mmax)) * 0.85) : 0;
+            const bg = v2 >= 0 ? `rgba(34,201,138,${al2.toFixed(3)})` : `rgba(240,56,90,${al2.toFixed(3)})`;
+            return `<td style="background:${bg};text-align:right;font-family:var(--mono);font-size:9.5px" title="${v2}">${v2 !== 0 ? (Math.abs(v2) < 0.01 ? v2.toExponential(1) : v2.toFixed(3)) : "·"}</td>`;
+          };
+          cmEl.innerHTML = `<div style="overflow-x:auto"><table class="blk-matrix">
+            <tr><th>channel</th>${kx.map(ci => `<th title="${esc(cm.classes[ci])}">${esc(cm.classes[ci]).slice(0, 8)}</th>`).join("")}</tr>
+            ${cm.matrix.slice(0, 30).map((row, ci) =>
+              `<tr><th title="${esc(cmap[ci]?.name || ("ch" + (ci + 1)))}">${esc(cmap[ci]?.name || ("ch" + (ci + 1)))}</th>${kx.map(cki => cellv(row[cki])).join("")}</tr>`).join("")}
+          </table></div>
+          <div class="hint">${esc(cm.note || "")} — green = net excitatory push, red = inhibitory.</div>`;
+        }
+      }
+      // ── WHERE THE FLY BRAIN IS USED (live wiring explainer)
+      const wx = $("#br-explainer");
+      if (wx) {
+        const raws = (S.snap?.formula_values?.[`${S.symbol}|${S.focusTf}`]?.raw) || {};
+        const topIn = Object.entries(raws)
+          .filter(([fid]) => Number(fid) !== 20)
+          .sort((a2, b2) => Math.abs(b2[1]) - Math.abs(a2[1]))
+          .slice(0, 3)
+          .map(([fid, v]) => `F${fid} ${v >= 0 ? "+" : ""}${fx(v, 3)}`)
+          .join(" · ") || "—";
+        const dop = fw.dopamine || {};
+        const fo = fw.formulas || {};
+        wx.innerHTML = `
+          <div class="logic" style="line-height:1.7">
+            <b>1 · Projection (0–29)</b> — each formula's signed value is written onto its ON/OFF antennal-lobe channels (685 ALPNs, sorted groups). Dominant inputs now: <b>${esc(topIn)}</b><br/>
+            <b>2 · Kenyon cells (≈5,177)</b> — sparse ReLU code, top 5 % survive every hop (APL). Active now: <b>${wo?.kc_active ?? "—"}</b><br/>
+            <b>3 · Dopamine gates</b> — PAM up with +drg, PPL1 up with −drg; RPE learning only. Now: <b>drg ${fx(dop.drg, 3)} · E ${fx(dop.E, 3)} · α ${fx(dop.alpha, 3)}</b><br/>
+            <b>4 · MBON outputs</b> — approach {ACh,GABA} vs avoid {Glu}: <b>${wo ? `${fx(wo.approach, 4)} vs ${fx(wo.avoid, 4)}` : "—"}</b><br/>
+            <b>5 · Lateral horn + read-out</b> — CCSv2 <b>${fo.ccsv2?.zero_reasons ? "brain absent" : fx(fo.ccsv2?.value, 4)}</b> · KCAE <b>${fx(fo.kcae?.value, 4)}</b> (gauge) · whole-brain balance <b>${wo ? fx(wo.balance, 4) : "—"}</b>
+          </div>
+          <div class="hint">fusion: CCI × (1 + ${fw.state === "ready" ? "0.25 × hindsight × vote × base_conf" : "weight 0 — absent"}); the vote's sign is never hand-edited (B-10).</div>`;
+      }
       $("#br-fw-note").textContent =
         fw.state === "ready"
           ? `connectome ${fw.meta?.neurons?.toLocaleString?.() ?? "?"} neurons · ${fw.meta?.edges?.toLocaleString?.() ?? "?"} connections · build v${fw.build_version} · vote enters fusion at weight 0.25 × hindsight, never hand-signed`
@@ -1824,6 +2101,15 @@ function renderBoot(snap) {
 let _tickN = 0;
 setInterval(() => {
   _tickN++;
+  // realised-path ring for the probability-branches chart (1 Hz, capped)
+  try {
+    const _pp = S.prices?.[S.symbol];
+    if (_pp > 0) {
+      if (!S.priceHist) S.priceHist = [];
+      S.priceHist.push({ t: Date.now() / 1000, p: _pp });
+      if (S.priceHist.length > 900) S.priceHist = S.priceHist.slice(-900);
+    }
+  } catch (e2) { /* ring optional */ }
   // 1) boot countdown
   const ov = $("#boot-overlay");
   if (ov && !ov.classList.contains("gone") && bootDeadline) {
@@ -1907,6 +2193,8 @@ function applySnapshot(snap) {
   renderBoot(snap);               // overlay FIRST — contract test guard
   renderAlert(snap);
   try { renderQuads(); renderWhy(); renderRail(); } catch (e) { console.error("render", e); }
+  try { renderBranches(); } catch (e) { console.error("branches", e); }
+  try { tickFormulaValues(); } catch (e) { /* ticker optional */ }
   // honesty: tape chip AFTER content render (feed stats carry source/label)
   const fchip = $("#feed-chip");
   if (fchip && snap.feed) {

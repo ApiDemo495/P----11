@@ -356,6 +356,8 @@ class FlyWireBrain:
         self._last_values: list[float] | None = None
         self._anatomy: dict | None = None
         self._anatomy_state = "idle"      # idle | computing | ready | error
+        self._last_mb: dict | None = None
+        self._last_whole: dict | None = None
         self._anatomy_error = ""
         self._last_active_kc: np.ndarray | None = None
         self._base_kc_mbon: np.ndarray | None = None
@@ -759,6 +761,15 @@ class FlyWireBrain:
         balance = math.tanh(2.0 * (approach - avoid) / denom)
         ms = round((time.perf_counter() - t0) * 1000, 2)
         kc_active = int(np.count_nonzero(h[kc_l])) if kc_l is not None else 0
+        self._last_mb = {
+            "circuit": "FlyWire v783 mushroom body + lateral horn",
+            "approach": round(approach, 6), "avoid": round(avoid, 6),
+            "balance": round(balance, 6),
+            "lh": round(lh_act, 6),
+            "kc_active": int(np.count_nonzero(kc_act)) if kc_act is not None else 0,
+            "kc_total": int(len(self.kc)),
+            "ms": ms,
+        }
         # hop-1 sparsity is what APL enforces; report both
         hop1_active = int(np.count_nonzero(kc_act)) if kc_act is not None else 0
         return {"ok": True, "ms": ms, "balance": balance,
@@ -863,12 +874,48 @@ class FlyWireBrain:
                         rates = self.encode(values)
                         if rates is not None:
                             h = self._inject_whole(rates)
+                            hop_counts = []
                             for _ in range(VALENCE_HOPS):
                                 h = self.W @ h
                                 np.maximum(h, 0.0, out=h)
+                                hop_counts.append(int(np.count_nonzero(h)))
                             dn = float(h[self.dn_mask].sum())
                             tot = float(h.sum()) + 1e-9
                             share = dn / tot
+                            # full read-out (brain.md §12): approach vs
+                            # avoid at the MBON rows, active KCs, top
+                            # MBONs — measured on the SAME pass
+                            try:
+                                acts = h[self.mbon]
+                                app_w = float(acts[self._mbon_approach].sum())
+                                av_w = float(acts[self._mbon_avoid].sum())
+                                bal = math.tanh(
+                                    2.0 * (app_w - av_w)
+                                    / (abs(app_w) + abs(av_w) + 1e-9))
+                                top_idx = np.argsort(acts)[-3:][::-1]
+                                names = getattr(self, "_mbon_names", None)
+                                tops = []
+                                for ti in top_idx:
+                                    root = int(self.mbon[ti])
+                                    nm = (names[ti] if names and ti < len(names)
+                                          and names[ti] else None)
+                                    tops.append({"mbon": nm or f"#{str(root)[-6:]}",
+                                                 "h": round(float(acts[ti]), 5),
+                                                 "nt": str(self.mbon_nt[ti])})
+                                self._last_whole = {
+                                    "balance": round(bal, 6),
+                                    "approach": round(app_w, 6),
+                                    "avoid": round(av_w, 6),
+                                    "kc_active": int(np.count_nonzero(
+                                        h[self.kc])),
+                                    "hop_counts": hop_counts,
+                                    "dn_drive": float(
+                                        getattr(self, "last_conf", 0) or 0),
+                                    "top_mbons": tops,
+                                    "ms": self.last_pass_ms,
+                                }
+                            except Exception:
+                                pass
                             self.last_dn_share = share
                             # confidence: activity reaching DNs relative to
                             # their population baseline, clamped 0.2..1.0
@@ -1099,7 +1146,8 @@ class FlyWireBrain:
             #    block matrix) over ALL 15 M edges, chunked by row band
             W = self.W
             M = np.zeros((k, k), dtype=np.float64)
-            indptr, indices, data = W.indptr, W.indices, np.abs(W.data)
+            M_signed = np.zeros((k, k), dtype=np.float64)
+            indptr, indices, data = W.indptr, W.indices, W.data
             n = len(indptr) - 1
             band = 8192
             for r0 in range(0, n, band):
@@ -1107,9 +1155,39 @@ class FlyWireBrain:
                 rows = np.repeat(cls_code[r0:r1],
                                  np.diff(indptr[r0:r1 + 1]))
                 cols = cls_code[indices[indptr[r0]:indptr[r1]]]
+                w = data[indptr[r0]:indptr[r1]]
                 M += np.bincount(rows * k + cols,
-                                 weights=data[indptr[r0]:indptr[r1]],
+                                 weights=np.abs(w),
                                  minlength=k * k).reshape(k, k)
+                # signed sum → excitatory (positive) vs inhibitory (negative)
+                M_signed += np.bincount(rows * k + cols,
+                                        weights=w,
+                                        minlength=k * k).reshape(k, k)
+
+            # ── formula-channel × population net drive (the old app's
+            #    'brain matrix': one row per input channel, signed)
+            n_ch = self.n_channels()
+            M_ch = np.zeros((n_ch, k), dtype=np.float64)
+            try:
+                csc = W.tocsc()
+                cp = csc.indptr
+                bounds = np.linspace(0, len(self.alpn), 2 * n_ch + 1
+                                     ).astype(int)
+                for gi in range(2 * n_ch):
+                    ch = gi if gi < n_ch else gi - n_ch
+                    sign_side = 1.0 if gi < n_ch else -1.0
+                    for a in self.alpn[bounds[gi]:bounds[gi + 1]]:
+                        a = int(a)
+                        seg_rows = csc.indices[cp[a]:cp[a + 1]]
+                        seg_vals = csc.data[cp[a]:cp[a + 1]]
+                        if not len(seg_rows):
+                            continue
+                        M_ch[ch] += sign_side * np.bincount(
+                            cls_code[seg_rows], weights=seg_vals,
+                            minlength=k)
+                del csc
+            except Exception:
+                M_ch = np.zeros((n_ch, k), dtype=np.float64)
 
             # ── synapse total + annotation census (parquet/TSV, once)
             synapses = None
@@ -1169,6 +1247,41 @@ class FlyWireBrain:
             mbon_nt: dict[str, int] = {}
             for t in self.mbon_nt.tolist():
                 mbon_nt[t] = mbon_nt.get(t, 0) + 1
+            # strongest population → population pathways (signed |W| sum)
+            pathways = []
+            flat = [(i, j, float(M_signed[i, j]))
+                    for i in range(k) for j in range(k)
+                    if M_signed[i, j] != 0.0]
+            flat.sort(key=lambda t: -abs(t[2]))
+            for i, j, v in flat[:12]:
+                pathways.append({
+                    "frm": class_names[i], "to": class_names[j],
+                    "drive": round(v, 4),
+                    "sign": "excitatory" if v >= 0 else "inhibitory",
+                })
+            # MBON display names from the annotations (cell_type)
+            mbon_names: list[str | None] = []
+            try:
+                import pyarrow.csv as pcsv2
+                tsv2 = getattr(self, "_ann_path", CACHE_DIR / ANNOTATIONS)
+                at = pcsv2.read_csv(
+                    tsv2,
+                    parse_options=pcsv2.ParseOptions(delimiter="\t"),
+                    convert_options=pcsv2.ConvertOptions(
+                        include_columns=["root_id", "cell_type"]))
+                rts = at.column("root_id").to_numpy().astype(np.int64)
+                cts = [str(v or "") for v in at.column("cell_type")]
+                order2 = np.argsort(rts, kind="stable")
+                rts, cts = rts[order2], [cts[i] for i in order2]
+                pos2 = np.searchsorted(rts, self.mbon)
+                pos2[pos2 >= len(rts)] = 0
+                mbon_names = [
+                    (cts[p] if rts[p] == int(root) and cts[p] else None)
+                    for p, root in zip(pos2, self.mbon)
+                ]
+                self._mbon_names = mbon_names
+            except Exception:
+                mbon_names = [None] * len(self.mbon)
 
             self._anatomy = {
                 "neurons": neurons,
@@ -1185,6 +1298,18 @@ class FlyWireBrain:
                 "top_cell_types": top_types,
                 "sides": sides,
                 "nt_census": nt_census,
+                "block_signed": [[round(float(v), 5) for v in row]
+                                 for row in M_signed],
+                "pathways": pathways,
+                "channel_matrix": {
+                    "channels": int(n_ch),
+                    "classes": class_names,
+                    "matrix": [[round(float(v), 5) for v in row]
+                               for row in M_ch],
+                    "note": ("net drive of formula channel c into "
+                             "population class (ON − OFF at x=+1)"),
+                },
+                "mbon_names": [m for m in mbon_names if m] or None,
                 "built_at": time.time(),
             }
             self._anatomy_state = "ready"
@@ -1221,5 +1346,6 @@ class FlyWireBrain:
                          "history": self.rpe_history[-5:]},
             "formulas": {"ccsv2": self.ccsv2(), "kcae": self.kcae()},
             "anatomy": self.anatomy(),
+            "readout": {"whole": self._last_whole, "mb": self._last_mb},
             "build_version": BUILD_VERSION,
         }

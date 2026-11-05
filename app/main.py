@@ -306,7 +306,146 @@ async def explain_status() -> JSONResponse:
 @app.get("/api/brain/status")
 async def brain_status() -> JSONResponse:
     """§3.4 five-step startup verification with reasons."""
-    return JSONResponse({"ok": True, **engine.brains.status()})
+    out = dict(engine.brains.status())
+    # brain.md: label the odour channels with the formulas they carry
+    try:
+        from .formulas import FORMULA_FUNCTIONS, FORMULA_NAMES
+        fids = [f for f in sorted(FORMULA_FUNCTIONS) if f != 20]
+        out.setdefault("flywire", {})["channel_map"] = [
+            {"ch": i, "fid": fid,
+             "name": FORMULA_NAMES.get(fid, f"F{fid}")}
+            for i, fid in enumerate(fids)
+        ]
+    except Exception:
+        pass
+    return JSONResponse({"ok": True, **out})
+
+
+@app.get("/api/system/status")
+async def system_status() -> JSONResponse:
+    """One glance: what is running, what is waiting, and why
+    (old-app inspiration) — assembled from the subsystems' own state,
+    never from configuration."""
+    eng = engine
+    rows: list[dict] = []
+
+    def row(label, ok, detail, state="ok"):
+        rows.append({"label": label, "ok": bool(ok), "state": state,
+                     "detail": str(detail)[:220]})
+
+    # TAPE
+    try:
+        st = eng.feed.state("BTC")
+        age = int(time.time() - (st.times[-1] if st.times else 0)) \
+            if st.times else -1
+        bars = len(st.closes)
+        row("tape", bars >= 30,
+            f"{eng.feed.mode} · {bars} BTC bars · last tick {age}s ago"
+            + (" · live" if bars >= 30 else " · warming up"),
+            "ok" if bars >= 30 else "warn")
+    except Exception as exc:
+        row("tape", False, f"error: {exc}", "err")
+    # FORMULAS
+    try:
+        tr = eng.last_traces.get(("BTC", "tf1")) or {}
+        vals = [t for k, t in tr.items()
+                if isinstance(t, dict) and "value" in t]
+        nz = sum(1 for t in vals if abs(t.get("value") or 0) > 1e-9)
+        us = tr.get("_pass_us")
+        row("formulas", nz > 0,
+            f"{nz}/{len(vals)} non-zero this pass"
+            + (f" · {us} µs" if us else ""),
+            "ok" if nz else "warn")
+    except Exception as exc:
+        row("formulas", False, f"error: {exc}", "err")
+    # EMOTIONS / PHYSICS (display systems)
+    try:
+        disp = eng.display_systems.get(("BTC", "tf1")) or {}
+        em = disp.get("emotion") or {}
+        row("emotions", eng.emotions.ready,
+            f"CERC {em.get('cerc', '—')} · aggregate "
+            f"{em.get('aggregate', '—')} · "
+            f"{len(em.get('emotions') or {})} channels",
+            "ok" if eng.emotions.ready else "warn")
+        ph = disp.get("physics") or {}
+        mechs = ph.get("mechanisms") or []
+        act = sum(1 for m in mechs if m.get("active"))
+        row("physics", eng.physics.ready,
+            f"{act}/{len(mechs)} mechanisms active · UFP "
+            f"{ph.get('ufp', '—')}",
+            "ok" if act else "warn")
+    except Exception as exc:
+        row("emotions/physics", False, f"error: {exc}", "err")
+    # NEWS
+    try:
+        ns = eng.news.status()
+        row("news", bool(ns.get("items")),
+            f"{ns.get('items', 0)} items · source {ns.get('source')} · "
+            f"dropped {ns.get('relevance_dropped', 0)}",
+            "ok" if ns.get("items") else "warn")
+    except Exception as exc:
+        row("news", False, f"error: {exc}", "err")
+    # BRAIN
+    try:
+        chip = eng.brains.status().get("chip") or {}
+        row("brain", chip.get("kind") == "ok",
+            chip.get("text", "—"),
+            "ok" if chip.get("kind") == "ok" else
+            ("warn" if chip.get("kind") == "build" else "err"))
+    except Exception as exc:
+        row("brain", False, f"error: {exc}", "err")
+    # AGENTS (optional — keyless is fine)
+    try:
+        ag = eng.agents.status()
+        slots = ag.get("slots") or []
+        if isinstance(slots, dict):
+            slot_list = list(slots.values())
+        else:
+            slot_list = list(slots)          # list-of-slots shape
+        nconn = sum(1 for v in slot_list
+                    if isinstance(v, dict) and v.get("status") == "connected")
+        row("agents", True,
+            "keyless mode — brain + formulas carry every vote"
+            if not nconn else f"{nconn} slot(s) connected · "
+            f"deadline {ag.get('deadline_s', '—')}s",
+            "ok")
+    except Exception as exc:
+        row("agents", False, f"error: {exc}", "err")
+    # HINDSIGHT / AUTO
+    try:
+        changes = eng.hindsight_changes[-1] if eng.hindsight_changes             else None
+        row("hindsight", bool(changes),
+            (f"last change: {changes.get('formula')} "
+             f"{changes.get('from')}→{changes.get('to')}"
+             if changes else
+             "waiting for enough graded windows (n≥8)"),
+            "ok" if changes else "idle")
+        row("auto-predict",
+            eng.agents.settings.get("auto_predict", True),
+            "on — analysis re-runs itself every ≥45 s"
+            if eng.agents.settings.get("auto_predict", True)
+            else "off — manual ▶ ANALYSE only",
+            "ok" if eng.agents.settings.get("auto_predict", True)
+            else "idle")
+    except Exception as exc:
+        row("hindsight", False, f"error: {exc}", "err")
+    # OPS / WATCHDOG
+    try:
+        ops = eng.ops_status()
+        wd = ops.get("watchdog") or {}
+        alert = bool(wd.get("alert"))
+        sw = wd.get("seconds_since_window")
+        vw = ops.get("vault_last_write_ago_s")
+        row("watchdog", not alert,
+            f"last window {f'{sw}s ago' if sw is not None else '—'} · "
+            f"uptime {int(ops.get('uptime_s') or 0)}s · "
+            f"build {ops.get('build_id')} · "
+            f"vault {f'{vw}s' if vw is not None else '—'}",
+            "warn" if alert else "ok")
+    except Exception as exc:
+        row("watchdog", False, f"error: {exc}", "err")
+    return JSONResponse({"ok": True, "rows": rows,
+                         "ts": time.time()})
 
 
 @app.get("/api/brain/wiring")

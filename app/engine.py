@@ -1298,6 +1298,39 @@ class PredictionEngine:
                             "drpt": round(phys["drpt"], 4),
                             "gspi": round(phys["gspi"], 4),
                         },
+                        "who": {
+                            "formulas": round(sum(
+                                abs(c["contribution"]) for c in _comps
+                                if c["id"].isdigit()
+                                and int(c["id"]) <= 31) / (
+                                sum(abs(c["contribution"])
+                                    for c in _comps) or 1.0), 4),
+                            "brain": round(sum(
+                                abs(c["contribution"]) for c in _comps
+                                if c["id"] == str(BRAIN_COMPONENT_ID)) / (
+                                sum(abs(c["contribution"])
+                                    for c in _comps) or 1.0), 4),
+                            "emotion": round(sum(
+                                abs(c["contribution"]) for c in _comps
+                                if c["id"] == str(EMOTION_COMPONENT_ID)) / (
+                                sum(abs(c["contribution"])
+                                    for c in _comps) or 1.0), 4),
+                            "physics": round(sum(
+                                abs(c["contribution"]) for c in _comps
+                                if c["id"] == str(PHYSICS_COMPONENT_ID)) / (
+                                sum(abs(c["contribution"])
+                                    for c in _comps) or 1.0), 4),
+                            "news": round(sum(
+                                abs(c["contribution"]) for c in _comps
+                                if c["id"] == str(NEWS_COMPONENT_ID)) / (
+                                sum(abs(c["contribution"])
+                                    for c in _comps) or 1.0), 4),
+                            "hedge": round(sum(
+                                abs(c["contribution"]) for c in _comps
+                                if c["id"] == str(HEDGE_COMPONENT_ID)) / (
+                                sum(abs(c["contribution"])
+                                    for c in _comps) or 1.0), 4),
+                        },
                         "base_confidence": round(pack["confidence"], 5),
                         "final_confidence": round(fin["confidence"], 5),
                         "penalty_capped": bool(fin.get("penalty_capped")),
@@ -2795,6 +2828,74 @@ class PredictionEngine:
             ctx.update(hedge=hf)
         return ctx
 
+    def branch_stats(self, d: dict, price: float, now: float,
+                     tf: str) -> dict | None:
+        """PROBABILITY BRANCHES (old-app inspiration): where price can go
+        inside this window — quantile bands, P(target before stop),
+        P(close down). Driftless-Brownian approximations on the remaining
+        window (labelled `approx`); never presented as measurements."""
+        try:
+            dirn = int(d.get("direction") or 0)
+            sl = float(d.get("sl") or 0.0)
+            targets = d.get("targets") or []
+            tp1 = float((targets[0] or {}).get("level") or 0.0) \
+                if targets else 0.0
+            if not dirn or price <= 0 or sl <= 0 or tp1 <= 0:
+                return None
+            rem_s = float(d.get("countdown_s") or 0)
+            if rem_s <= 0:
+                rem_s = max(1.0, float(d.get("cycle_end") or 0) - now)
+            candle_min = float(
+                (TIMEFRAMES.get(tf) or {}).get("minutes", 1) or 1)
+            lr = self.last_result.get((d.get("symbol") or "BTC",
+                                       tf)) or {}
+            atr = float(lr.get("atr") or 0.0)
+            if atr <= 0:
+                atr = abs(price) * 1e-3
+            # sigma over the remaining time (per-candle ATR → sqrt time)
+            t_min = max(rem_s / 60.0, 1e-3)
+            sigma = atr * math.sqrt(max(t_min, 1e-3) / max(candle_min, 1.0))
+            up = (tp1 - price) * dirn          # room to target (dir side)
+            down = (price - sl) * dirn          # room to stop (against)
+            if up <= 0 or down <= 0:
+                up, down = max(up, 1e-9), max(down, 1e-9)
+            # driftless: per-barrier reach-by-T (erfc marginal) decides
+            # how much probability mass can hit ANYTHING; the distance
+            # share decides WHICH barrier comes first. This keeps the
+            # monotonic intuition: nearer target → higher P(target).
+            sq2 = math.sqrt(2.0)
+            hit_up = math.erfc(up / (max(sigma, 1e-12) * sq2))
+            hit_dn = math.erfc(down / (max(sigma, 1e-12) * sq2))
+            hit_mass = min(1.0, hit_up + hit_dn - hit_up * hit_dn)
+            p_first = down / (up + down)        # P(target first), no drift
+            p_target = p_first * hit_mass
+            p_stop = (1.0 - p_first) * hit_mass
+            p_between = 1.0 - hit_mass
+            # quantile bands over the remaining window (approx)
+            z = {0.05: -1.6449, 0.25: -0.6745, 0.5: 0.0,
+                 0.75: 0.6745, 0.95: 1.6449}
+            bands = []
+            for f, qv in z.items():
+                sig_f = atr * math.sqrt(max(t_min * f, 1e-4)
+                                        / max(candle_min, 1.0))
+                bands.append({"f": f, "level": round(price + qv * sig_f, 6)})
+            return {
+                "approx": True,
+                "p_target": round(p_target, 4),
+                "p_stop": round(p_stop, 4),
+                "p_between": round(p_between, 4),
+                "p_close_down": 0.5,           # driftless: honest coin flip
+                "sigma": round(sigma, 4),
+                "rem_s": int(rem_s),
+                "entry": round(price, 6),
+                "tp": round(tp1, 6),
+                "sl": round(sl, 6),
+                "direction": dirn,
+                "bands": bands,
+            }
+        except Exception:
+            return None
+
     def brain_fusion_weight(self, symbol: str, tf: str) -> float:
         """brain.md §6: 0.25 start, hindsight moves it, 0 when the
         connectome is absent (absence contributes exactly nothing)."""
@@ -3533,6 +3634,10 @@ class PredictionEngine:
                             # below 0.1 the UI shows an honest '—'
                             if band >= 0.1:
                                 d["ratio"] = round(min(9.99, band), 2)
+                if d and price > 0:
+                    bs = self.branch_stats(d, price, now, tf)
+                    if bs:
+                        d["branches"] = bs
                 tfs[tf] = d
             assets[symbol] = {
                 "price": price,
