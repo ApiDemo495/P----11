@@ -3048,6 +3048,7 @@ class PredictionEngine:
                 "p_close_down": 0.5,           # driftless: honest coin flip
                 "sigma": round(sigma, 4),
                 "rem_s": int(rem_s),
+                "now": round(now, 3),
                 "entry": round(price, 6),
                 "tp": round(tp1, 6),
                 "sl": round(sl, 6),
@@ -3180,8 +3181,14 @@ class PredictionEngine:
         if time.time() < float(getattr(self, "_halt_until", {})
                                .get(symbol, 0.0)):
             return
-        dom = ((res.get("emotion") or {}).get("dominant")
-               or (res.get("brain") or {}).get("dominant"))
+        _dom = ((res.get("emotion") or {}).get("dominant")
+                or (res.get("brain") or {}).get("dominant"))
+        # dominant is a dict since the deviation-ranking fix — format
+        # it for humans; str(dict) leaked a raw Python repr into the
+        # LOCKED banner on the dashboard
+        dom = (f"E{_dom['id']} · {float(_dom.get('intensity') or 0):.0%} intensity"
+               if isinstance(_dom, dict) and _dom.get("id")
+               else str(_dom or ""))
         # freeze the formula readings with the lock (forward tables +
         # flat watch read these; the lock never repaints them)
         tr = self.last_traces.get((symbol, tf)) or {}
@@ -3640,6 +3647,14 @@ class PredictionEngine:
         res = self._event_result(symbol, tf)
         self.last_result[(symbol, tf)] = res
         new_direction = res["direction"]
+        # a recalc whose fused score sits INSIDE the noise floor has not
+        # actually reversed — its side is a weak lean (the ladder says
+        # so). Closing a position on a coin-flip recalc is wrong: treat
+        # a sub-floor recalc as "no reversal" (SAFE branch).
+        _floor = float((res.get("ladder") or {}).get("noise_floor") or 0.02)
+        if new_direction != original_direction and \
+                abs(float(res.get("cci_adjusted") or 0.0)) <= _floor:
+            new_direction = original_direction
 
         if new_direction == original_direction:
             # SAFE — BE CAUTIOUS (amber): prediction stays active,
@@ -3757,6 +3772,32 @@ class PredictionEngine:
                                     {"ts": now, "type": "tp_hit", "tp": cyc.tp}
                                 )
                                 cyc.tp = None      # one-shot marker
+                    elif not cyc.issued:
+                        # NOT issued (below the confidence floor): the
+                        # locked TP/SL levels are still displayed, so
+                        # track them observationally — price crossing
+                        # TP1 while the card still said LOCK/open is
+                        # exactly the "TP/SL in air" the user reported.
+                        for t in cyc.targets:
+                            if t.status == "locked" and t.level is not None:
+                                d = t.direction or cyc.direction
+                                if (d > 0 and price >= t.level) or (
+                                        d < 0 and price <= t.level):
+                                    t.status = "hit"
+                                    cyc.events.append(
+                                        {"ts": now, "type": "target_hit",
+                                         "k": t.k, "level": t.level,
+                                         "observed": True})
+                        if cyc.sl is not None and cyc.direction:
+                            against = (price <= cyc.sl
+                                       and cyc.direction > 0) or (
+                                           price >= cyc.sl
+                                           and cyc.direction < 0)
+                            if against and not cyc.sl_observed:
+                                cyc.sl_observed = True
+                                cyc.events.append(
+                                    {"ts": now, "type": "sl_crossed",
+                                     "sl": cyc.sl, "observed": True})
                     # countdown reached zero -> immediate fresh cycle
                     if cyc.cycle_end and now >= cyc.cycle_end and not cyc.pending_reset:
                         self.last_window_ts = time.time()

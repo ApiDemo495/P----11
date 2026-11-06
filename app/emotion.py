@@ -194,7 +194,13 @@ class EmotionSystem:
         p_hit = hist.p_hit(ctx.symbol)
         p_min60 = min(mc[-min(60, len(mc)):])
         atr5 = _atr5(market.get("ohlc"), mc)
-        pen = p_hit + (open_ - p_min60) / atr5
+        # BUG (Greed pegged for days): pen mixed horizons — the SESSION
+        # open (day-scale, tape start) minus the last-60m low. In any
+        # up day open_ sits far BELOW p_min60, pen went hugely negative
+        # and sig() pinned E2 at exactly 1.00 all day. Measure the dip
+        # within the SAME 60m window the low comes from.
+        open60 = mc[-min(60, len(mc))]
+        pen = p_hit + (open60 - p_min60) / atr5 if atr5 > 0 else p_hit
         emos[2] = sig(-4.0 * (pen - 1.0))
         dirs[2] = 1 if emos[2] > 0.5 else -1
 

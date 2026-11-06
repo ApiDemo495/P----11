@@ -219,9 +219,11 @@ class ChartX {
     for (const l of this.lines) {
       g.strokeStyle = l.color; g.setLineDash(l.dash === false ? [] : [5, 4]); g.lineWidth = l.hit ? 1.8 : 1;
       g.beginPath(); g.moveTo(0, Y(l.price)); g.lineTo(w - rw, Y(l.price)); g.stroke(); g.setLineDash([]);
-      g.fillStyle = l.color; g.font = "9px monospace"; g.textAlign = "left";
+      // label chip at the RIGHT edge (next to the price scale): the old
+      // left-edge labels stacked on top of the candles and each other
+      g.fillStyle = l.color; g.font = "9px monospace"; g.textAlign = "right";
       const ly2 = Math.max(10, Math.min(h - 4, Y(l.price)));
-      g.fillText(`${l.title} ${l.price.toFixed(l.price > 1000 ? 0 : 2)}`, 4, ly2 - 3);
+      g.fillText(`${l.title} ${l.price.toFixed(l.price > 1000 ? 0 : 2)}`, w - rw - 3, ly2 - 3);
     }
     // ── price grid + right-hand scale (reads like a real chart) ──
     g.font = "9px monospace"; g.textAlign = "left";
@@ -416,36 +418,43 @@ function renderBranches() {
   g.clearRect(0, 0, w, h);
   const t0 = d.cycle_start || (Date.now() / 1000 - 60);
   const t1 = d.cycle_end || (Date.now() / 1000 + b.rem_s);
+  // the fan is anchored at NOW (bands are quantiles of the REMAINING
+  // window from the current price) — the old code spread them across
+  // the whole cycle, so the cone floated away from the realised path
+  const tN = b.now || (Date.now() / 1000);
   const levels = [b.entry, b.tp, b.sl, ...b.bands.map(x => x.level)];
   let lo = Math.min(...levels), hi = Math.max(...levels);
   const pad = (hi - lo) * 0.12 || Math.abs(b.entry * 1e-3) || 1;
   lo -= pad; hi += pad;
   const X = t => ((t - t0) / Math.max(1, t1 - t0)) * (w - 42) + 1;
   const Y = p2 => h - 14 - ((p2 - lo) / (hi - lo || 1)) * (h - 20);
-  // shaded quantile fan (5→95)
+  const XF = f => X(tN + f * Math.max(1, t1 - tN));   // fan x at fraction f
+  // shaded quantile fan (5→95), rooted at (now, current price)
   const upper = b.bands.filter(x => x.f >= 0.5);
   const lower = b.bands.filter(x => x.f <= 0.5);
   g.beginPath();
-  upper.forEach((x, i) => { const xx = X(t0 + (t1 - t0) * x.f); i ? g.lineTo(xx, Y(x.level)) : g.moveTo(xx, Y(x.level)); });
-  for (let i = lower.length - 1; i >= 0; i--) { const x = lower[i]; g.lineTo(X(t0 + (t1 - t0) * x.f), Y(x.level)); }
+  g.moveTo(X(tN), Y(b.entry));
+  upper.forEach(x => g.lineTo(XF(x.f), Y(x.level)));
+  for (let i = lower.length - 1; i >= 0; i--) g.lineTo(XF(lower[i].f), Y(lower[i].level));
   g.closePath();
   g.fillStyle = "rgba(240,56,90,.08)"; g.fill();
   // median band line
   const med = b.bands.find(x => x.f === 0.5);
   if (med) {
-    g.beginPath(); g.moveTo(X(t0), Y(b.entry)); g.lineTo(X(t0 + (t1 - t0) * med.f), Y(med.level));
+    g.beginPath(); g.moveTo(X(tN), Y(b.entry)); g.lineTo(XF(med.f), Y(med.level));
     g.strokeStyle = "rgba(216,216,232,.5)"; g.setLineDash([3, 3]); g.lineWidth = 1; g.stroke(); g.setLineDash([]);
   }
-  // TP / SL / entry
-  const hline = (lv, color, label, dash) => {
-    g.beginPath(); g.moveTo(X(t0), Y(lv)); g.lineTo(X(t1), Y(lv));
+  // TP / SL / entry — TP and SL are FUTURE barriers: draw them from
+  // the now-line to the window end, not across the realised past
+  const hline = (lv, color, label, dash, fromX) => {
+    g.beginPath(); g.moveTo(fromX ?? X(t0), Y(lv)); g.lineTo(X(t1), Y(lv));
     g.strokeStyle = color; g.lineWidth = 1.2; g.setLineDash(dash || [6, 4]); g.stroke(); g.setLineDash([]);
     g.fillStyle = color; g.font = "9px monospace"; g.textAlign = "left";
-    g.fillText(`${label} ${px(lv)}`, X(t0) + 3, Y(lv) - 3);
+    g.fillText(`${label} ${px(lv)}`, (fromX ?? X(t0)) + 3, Y(lv) - 3);
   };
-  hline(b.tp, "#22c98a", "TP", [6, 4]);
-  hline(b.sl, "#f0385a", "SL", [6, 4]);
-  hline(b.entry, "#d8d8e8", "entry", [2, 3]);
+  hline(b.tp, "#22c98a", "TP →", [6, 4], X(tN));
+  hline(b.sl, "#f0385a", "SL →", [6, 4], X(tN));
+  hline(b.entry, "#d8d8e8", "now", [2, 3]);
   // realised path (white)
   const hist = (S.priceHist || []).filter(pp => pp.t >= t0 - 1 && pp.p > 0);
   if (hist.length > 1) {
@@ -653,6 +662,8 @@ function renderHero() {
       <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} ${cyc?.issued ? "· ISSUED" : "· below floor"}</b></div>
       <div class="kv"><span>cci adj</span><b>${fx(res.cci_adjusted ?? 0, 4)}</b></div>
       <div class="kv"><span>countdown</span><b>${cyc?.countdown_s != null ? `${Math.floor(cyc.countdown_s / 60)}m ${cyc.countdown_s % 60}s` : "—"}</b></div>
+      <div class="kv"><span>entry (locked)</span><b>${res.lock?.price ? px(res.lock.price) : "—"}</b></div>
+      <div class="kv"><span>price now</span><b>${a.price ? px(a.price) : "—"}</b></div>
       <div class="kv"><span>stop loss</span><b class="acc-dn">${cyc?.sl ? px(cyc.sl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:9px">prov</span>' : ""}</b></div>
       <div class="kv"><span>ratio</span><b>${cyc?.ratio ? "1:" + cyc.ratio : "—"}</b></div>`;
   }
@@ -668,7 +679,9 @@ function renderHero() {
       const isTf = i === tg.length - 1;
       const st = t.status === "hit" ? "HIT ✓" : t.status === "locked" ? "LOCK 🔒" : "open";
       const cls = t.status === "hit" ? "acc-up" : t.status === "locked" ? "acc-warn" : "dim";
-      return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${t.level ? px(t.level) : "—"} <span class="dim">${st}</span></b></div>`;
+      const _entry = res.lock?.price || a.price || 0;
+      const _rel = (t.level && _entry) ? ` <span class="dim">${((t.level / _entry - 1) * 100).toFixed(2)}% from entry</span>` : "";
+      return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${t.level ? px(t.level) : "—"} <span class="dim">${st}</span>${_rel}</b></div>`;
     }).join("") || `<div class="dim pad">waiting for the first lock…</div>`;
   }
   // chart overlays: SL, TP ladder (horizon first), liquidation clusters
@@ -676,10 +689,14 @@ function renderHero() {
   if (cyc?.sl) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL" });
   const mgi = res.micro;
   if (mgi?.available) {
-    if (mgi.nearest_up?.price)
+    // only clusters within ±2% of price: a far cluster used to widen
+    // the chart range and squash the candles + TP/SL into a corner
+    const _ref = a.price || cyc?.price || 0;
+    const near = p => _ref > 0 && Math.abs(p - _ref) / _ref <= 0.02;
+    if (mgi.nearest_up?.price && near(mgi.nearest_up.price))
       lines.push({ price: mgi.nearest_up.price, color: "#a855f7",
                    title: `LIQ↑ ${Math.round(mgi.nearest_up.bps)}bp`, dash: true });
-    if (mgi.nearest_dn?.price)
+    if (mgi.nearest_dn?.price && near(mgi.nearest_dn.price))
       lines.push({ price: mgi.nearest_dn.price, color: "#a855f7",
                    title: `LIQ↓ ${Math.round(mgi.nearest_dn.bps)}bp`, dash: true });
   }

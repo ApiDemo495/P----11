@@ -96,6 +96,7 @@ class TFCycle:
     ratio: float | None = None       # 1.0 / 1.5 / 3.0
     sl_tighten: float = 1.0
     safe_events: int = 0
+    sl_observed: bool = False        # unissued cycle: SL crossed (one-shot event)
     pending_reset: bool = False      # CLOSE POSITION -> fresh cycle at next GRC
     close_alert: bool = False        # one-shot UI flag
     safe_alert: bool = False         # one-shot UI flag
