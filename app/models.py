@@ -133,8 +133,12 @@ class TFCycle:
             "tp": self.tp,
             "sl": self.sl,
             "risk": self.risk,
-            "sl_provisional": (not self.issued) or bool(
-                (self.risk or {}).get("provisional")),
+            # the LOCKED entry every level is anchored to (app/levels.py)
+            "entry": (self.risk or {}).get("entry"),
+            "levels_ok": None,   # filled by the snapshot levels gate
+            # PROV now means only: the frozen block itself is the
+            # small-sample ATR fallback — never "seeded from spot"
+            "sl_provisional": bool((self.risk or {}).get("provisional")),
             "ratio": self.ratio,
             "safe_events": self.safe_events,
             "pending_reset": self.pending_reset,

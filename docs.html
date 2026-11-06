@@ -725,7 +725,27 @@ curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&
 <p>hung boot):</p>
 <pre><code>
 ./run.sh --supervise
-</code></pre></article><article><h1 class="doc-title">API_SETUP.md</h1><h3>API Setup Guide</h3>
+</code></pre>
+<h4>TP/SL levels rewrite — one locked anchor</h4>
+<p><code>app/levels.py</code> is the single source of truth for displayed TP/SL. A</p>
+<p>level belongs to the prediction that created it, anchored at that</p>
+<p>prediction&#x27;s LOCKED entry and frozen: BUY <code>TP &gt; entry &gt; SL</code>, SELL</p>
+<p>mirrored — at issue, in every snapshot, in every panel (hero, calls</p>
+<p>table, quad cards, chart lines all read the same gated snapshot dict).</p>
+<p>Live bug this replaced: a BUY locked at 75,460 displayed SL 75,606 —</p>
+<p>above its entry. Cause chain: the NO-TRADE GRC branch nulled</p>
+<p><code>cyc.tp/sl</code> every 4 minutes, and the snapshot then re-seeded a</p>
+<p>&quot;provisional&quot; stop from the CURRENT price (<code>spot - dir*ATR</code>), which</p>
+<p>drifts with spot and crosses the entry whenever price runs. Both halves</p>
+<p>are gone: NO-TRADE cycles keep their frozen block (a flipped/flat call</p>
+<p>re-predicts from now via a fresh cycle), <code>_apply_risk</code> never overwrites</p>
+<p>an unissued cycle, and the snapshot passes every level pair through</p>
+<p><code>levels.guard</code> — valid pairs pass untouched, wrong-side/missing pairs</p>
+<p>are repaired from the frozen block at the locked entry or withheld</p>
+<p>(&quot;levels pending&quot;), never invented from spot. The hero&#x27;s &quot;entry</p>
+<p>(locked)&quot;, ladder percentages, TP and SL now all share the one anchor</p>
+<p>(<code>cyc.entry</code> = the risk block&#x27;s lock entry). Regression-pinned live:</p>
+<p>16/16 cycles across 4 assets x 4 TFs satisfy the invariant.</p></article><article><h1 class="doc-title">API_SETUP.md</h1><h3>API Setup Guide</h3>
 <h4>1. Gemini API (Primary Agent)</h4>
 <p>1. Go to https://aistudio.google.com/app/apikey</p>
 <p>2. Click &quot;Create API Key&quot;</p>

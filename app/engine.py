@@ -106,6 +106,7 @@ from .news import NewsSystem
 from . import hedgefund, orderflow
 from .physics import PhysicsSystem
 from .risk import arc_ratio, dynamic_level_placement
+from . import levels as _levels
 from .learning import LearningSystem
 from .agents import AgentManager
 from .historydb import HistoryDB, empty_record
@@ -2878,6 +2879,10 @@ class PredictionEngine:
         return tp, sl, tp_dist, sl_dist, ratio
 
     def _apply_risk(self, symbol: str, tf: str, cyc: TFCycle, res: dict) -> None:
+        if not cyc.issued:
+            return          # unissued: the frozen measured-moves block
+                            # set at the lock IS the level set — never
+                            # overwritten (with None or anything else)
         tp, sl, tp_dist, sl_dist, ratio = self._risk_pack(symbol, tf, cyc, res)
         if ratio is None and cyc.issued and cyc.active_k is None:
             return          # all sub-targets completed — keep last placement
@@ -3577,14 +3582,21 @@ class PredictionEngine:
                 cyc.events.append({"ts": now, "type": "extreme_override"})
 
         if not res["issued"]:
-            # NO TRADE — insufficient confidence
+            # NO TRADE — insufficient confidence. Levels are NEVER nulled
+            # or re-derived from spot here (that nulling + snapshot
+            # re-seeding is what put a BUY stop above its entry).
+            # A flipped/flat call re-predicts FROM NOW with a fresh
+            # frozen block; same side keeps its frozen lock levels.
+            new_dir = int(res.get("direction") or 0)
+            if new_dir == 0 or new_dir != int(cyc.direction or 0):
+                self.fresh_cycle(symbol, tf, now, res,
+                                 reason="retake_direction")
+                return
             cyc.issued = False
             cyc.confidence = res["confidence"]
             cyc.cci = res["cci_adjusted"]
             cyc.drhe = res["drhe"]
             cyc.active_k = None
-            cyc.tp = cyc.sl = None
-            cyc.ratio = None
             cyc.refreshed_at = now
             return
 
@@ -3945,48 +3957,27 @@ class PredictionEngine:
             for tf in TF_ORDER:
                 cyc = self.cycles.get((symbol, tf))
                 d = cyc.to_dict(now) if cyc else None
-                # PROVISIONAL TP/SL: below the confidence floor the DLP
-                # never runs (no trade — correct), but the user still
-                # needs a SEEDED stop and a TP:SL ratio to judge the call.
-                # Provisional = entry ∓ 1×ATR; tagged so the UI can label
-                # it, replaced by the locked values as soon as issued.
-                if d and not d.get("sl") and price > 0:
-                    dirn = int(d.get("direction") or 0)
-                    if dirn:
-                        lr = self.last_result.get((symbol, tf)) or {}
-                        atr = float(lr.get("atr") or 0.0)
-                        if atr <= 0:
-                            try:
-                                atr = self._atr(self.build_ctx(symbol, tf))
-                            except Exception:
-                                atr = 0.0
-                        if atr > 0:
-                            d["sl"] = round(price - dirn * atr, 6)
-                            d["sl_provisional"] = True
-                            # ratio from a FRESH TP1 projection (a stale
-                            # locked target could be hundreds away and
-                            # pinned the band at the 9.99 cap)
-                            # prefer the F28 ARC band (the designed
-                            # TP:SL ratio) — a raw projection with a
-                            # near-zero confidence collapses to ~0
-                            lr2 = self.last_result.get((symbol, tf)) or {}
-                            arc_r = (lr2.get("arc") or {}).get("ratio")
-                            band = 0.0
-                            if arc_r:
-                                band = float(arc_r)
-                            else:
-                                mins0 = (TIMEFRAMES.get(tf, {})
-                                         .get("targets") or [5])[0]
-                                conf_p = abs(float(d.get("confidence") or 0.0))
-                                tp1 = self._project_level(
-                                    price, dirn, conf_p, atr, mins0)
-                                dist = abs(float(tp1) - price)
-                                if dist > 0:
-                                    band = dist / max(atr, 1e-9)
-                            # only speak when the band is meaningful —
-                            # below 0.1 the UI shows an honest '—'
-                            if band >= 0.1:
-                                d["ratio"] = round(min(9.99, band), 2)
+                # LEVELS GATE (rewrite): the snapshot NEVER invents a
+                # level from the current price. Levels come only from
+                # the cycle's frozen block anchored at the LOCKED entry
+                # (app/levels.py). Valid levels pass untouched; a
+                # wrong-side/missing pair is repaired from the frozen
+                # block at the locked entry or withheld (UI shows
+                # "levels pending") — a BUY stop above its entry can
+                # never reach the screen again.
+                if d and cyc is not None:
+                    lv = _levels.from_cycle(cyc)
+                    if lv:
+                        d["tp"], d["sl"] = lv["tp"], lv["sl"]
+                        d["tp_dist"], d["sl_dist"] = lv["tp_dist"], lv["sl_dist"]
+                        d["ratio"] = lv["ratio"]
+                        d["entry"] = lv["entry"]
+                        d["levels_ok"] = True
+                        d["sl_provisional"] = bool(
+                            (cyc.risk or {}).get("provisional"))
+                    else:
+                        d["tp"] = d["sl"] = None
+                        d["levels_ok"] = False
                 if d and price > 0:
                     bs = self.branch_stats(d, price, now, tf)
                     if bs:

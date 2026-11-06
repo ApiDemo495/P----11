@@ -662,7 +662,7 @@ function renderHero() {
       <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} ${cyc?.issued ? "· ISSUED" : "· below floor"}</b></div>
       <div class="kv"><span>cci adj</span><b>${fx(res.cci_adjusted ?? 0, 4)}</b></div>
       <div class="kv"><span>countdown</span><b>${cyc?.countdown_s != null ? `${Math.floor(cyc.countdown_s / 60)}m ${cyc.countdown_s % 60}s` : "—"}</b></div>
-      <div class="kv"><span>entry (locked)</span><b>${res.lock?.price ? px(res.lock.price) : "—"}</b></div>
+      <div class="kv"><span>entry (locked)</span><b>${cyc?.entry ? px(cyc.entry) : (res.lock?.price ? px(res.lock.price) : "—")}</b></div>
       <div class="kv"><span>price now</span><b>${a.price ? px(a.price) : "—"}</b></div>
       <div class="kv"><span>stop loss</span><b class="acc-dn">${cyc?.sl ? px(cyc.sl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:9px">prov</span>' : ""}</b></div>
       <div class="kv"><span>ratio</span><b>${cyc?.ratio ? "1:" + cyc.ratio : "—"}</b></div>`;
@@ -679,7 +679,7 @@ function renderHero() {
       const isTf = i === tg.length - 1;
       const st = t.status === "hit" ? "HIT ✓" : t.status === "locked" ? "LOCK 🔒" : "open";
       const cls = t.status === "hit" ? "acc-up" : t.status === "locked" ? "acc-warn" : "dim";
-      const _entry = res.lock?.price || a.price || 0;
+      const _entry = cyc?.entry || res.lock?.price || a.price || 0;
       const _rel = (t.level && _entry) ? ` <span class="dim">${((t.level / _entry - 1) * 100).toFixed(2)}% from entry</span>` : "";
       return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${t.level ? px(t.level) : "—"} <span class="dim">${st}</span>${_rel}</b></div>`;
     }).join("") || `<div class="dim pad">waiting for the first lock…</div>`;

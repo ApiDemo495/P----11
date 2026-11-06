@@ -712,3 +712,26 @@ hung boot):
 ```bash
 ./run.sh --supervise
 ```
+
+## TP/SL levels rewrite — one locked anchor
+
+`app/levels.py` is the single source of truth for displayed TP/SL. A
+level belongs to the prediction that created it, anchored at that
+prediction's LOCKED entry and frozen: BUY `TP > entry > SL`, SELL
+mirrored — at issue, in every snapshot, in every panel (hero, calls
+table, quad cards, chart lines all read the same gated snapshot dict).
+
+Live bug this replaced: a BUY locked at 75,460 displayed SL 75,606 —
+above its entry. Cause chain: the NO-TRADE GRC branch nulled
+`cyc.tp/sl` every 4 minutes, and the snapshot then re-seeded a
+"provisional" stop from the CURRENT price (`spot - dir*ATR`), which
+drifts with spot and crosses the entry whenever price runs. Both halves
+are gone: NO-TRADE cycles keep their frozen block (a flipped/flat call
+re-predicts from now via a fresh cycle), `_apply_risk` never overwrites
+an unissued cycle, and the snapshot passes every level pair through
+`levels.guard` — valid pairs pass untouched, wrong-side/missing pairs
+are repaired from the frozen block at the locked entry or withheld
+("levels pending"), never invented from spot. The hero's "entry
+(locked)", ladder percentages, TP and SL now all share the one anchor
+(`cyc.entry` = the risk block's lock entry). Regression-pinned live:
+16/16 cycles across 4 assets x 4 TFs satisfy the invariant.
