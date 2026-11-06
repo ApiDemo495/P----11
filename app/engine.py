@@ -988,6 +988,28 @@ class PredictionEngine:
             if float(fin["confidence"]) <= fin["asset_floor"]:
                 fin["issued"] = False
 
+            # PER-ASSET PREDICTION BEHAVIOUR (asset_behavior.py): the
+            # asset's nature tempers the SIGNAL ITSELF — gold amplified
+            # in trends / damped in chop, ETH damped in vol blow-offs,
+            # BNB pulled toward reversion when stretched. Direction
+            # speaks only above the asset's noise gate; tempering can
+            # veto an issue, never create one the RL gate refused.
+            from .asset_behavior import temper as _temper
+            _beh = _temper(symbol, pack["cci_adjusted"],
+                           fin["confidence"],
+                           list(self.feed.state(symbol).closes or []))
+            fin["behavior"] = _beh
+            _gate = 0.02 * float(_prof.get("noise_mult") or 1.0)
+            _dir_final = (1 if _beh["score"] > 0 else -1) \
+                if abs(_beh["score"]) >= _gate else 0
+            fin["confidence"] = _beh["confidence"]
+            fin["issued"] = bool(fin["issued"] and _dir_final != 0
+                                 and fin["confidence"] > fin["asset_floor"])
+            pack = dict(pack)
+            pack["direction"] = _dir_final
+            pack["cci_adjusted_raw"] = pack["cci_adjusted"]
+            pack["cci_adjusted"] = _beh["score"]
+
             # F28 inputs: volatility state vs baseline (same measure as F20)
             window_rets = [
                 (ctxs[tf].P[i] - ctxs[tf].P[i - 1]) / ctxs[tf].P[i - 1]
@@ -1076,6 +1098,7 @@ class PredictionEngine:
                 "issued": fin["issued"],
                 "asset_floor": fin.get("asset_floor"),
                 "asset_nature": fin.get("asset_nature"),
+                "behavior": fin.get("behavior"),
                 "drhe": drhe,
                 "pcv": pcv,
                 "pcv_detail": pcv_detail,
@@ -1290,6 +1313,7 @@ class PredictionEngine:
                     "lock": dict(self.locks.get((symbol, tf)) or {}),
                     "asset_floor": results[tf].get("asset_floor"),
                     "asset_nature": results[tf].get("asset_nature"),
+                    "behavior": results[tf].get("behavior"),
                     "ladder": dict(results[tf]["ladder"]),
                     "mass": results[tf]["mass"],
                     "genesis": dict(results[tf].get("genesis") or {}),
@@ -3065,6 +3089,83 @@ class PredictionEngine:
                 rem_s = max(1.0, float(d.get("cycle_end") or 0) - now)
             candle_min = float(
                 (TIMEFRAMES.get(tf) or {}).get("minutes", 1) or 1)
+            # ── EMPIRICAL probabilities (the real fix): replay the
+            # actual 1-minute bar path over every historical start on
+            # this asset's tape, translate today's TP/SL distances (in
+            # bps) onto each start, and COUNT first touches. No
+            # driftless formula, no invented distribution — measured
+            # frequencies with the sample size printed next to them.
+            # A bar that hits both barriers counts as STOP first
+            # (conservative; also counted in `ambig`).
+            _sym = d.get("symbol") or "BTC"
+            _st = self.feed.state(_sym)
+            _cl = list(_st.closes or [])
+            _hi = list(_st.highs or _cl)
+            _lo = list(_st.lows or _cl)
+            _rem_min = max(1, int(round(rem_s / 60.0)))
+            _nb = min(len(_cl), len(_hi), len(_lo))
+            if _nb >= _rem_min + 20 and price > 0:
+                _tpb = abs(tp1 - price) / price
+                _slb = abs(price - sl) / price
+                _n = _tpn = _sln = _amb = _up = 0
+                _rets = {0.25: [], 0.5: [], 0.75: [], 1.0: []}
+                _maxi = _nb - _rem_min
+                _step = 1 if _maxi <= 400 else 2
+                for _i0 in range(0, _maxi, _step):
+                    _p0 = _cl[_i0]
+                    if _p0 <= 0:
+                        continue
+                    _tpl = _p0 * (1 + dirn * _tpb)
+                    _sll = _p0 * (1 - dirn * _slb)
+                    for _j in range(_i0 + 1, _i0 + _rem_min + 1):
+                        _ht = (_hi[_j] >= _tpl) if dirn > 0 else (_lo[_j] <= _tpl)
+                        _hs = (_lo[_j] <= _sll) if dirn > 0 else (_hi[_j] >= _sll)
+                        if _ht and _hs:
+                            _amb += 1
+                            _sln += 1
+                            break
+                        if _ht:
+                            _tpn += 1
+                            break
+                        if _hs:
+                            _sln += 1
+                            break
+                    _n += 1
+                    if _cl[_i0 + _rem_min] > _p0:
+                        _up += 1
+                    for _f, _lst in _rets.items():
+                        _k = _i0 + max(1, int(round(_rem_min * _f)))
+                        _lst.append(_cl[_k] / _p0 - 1.0)
+                if _n >= 20:
+                    def _q(vals, qv):
+                        s = sorted(vals)
+                        return s[min(len(s) - 1, max(0, int(qv * len(s))))]
+                    _bands = []
+                    for _qv in (0.05, 0.25, 0.5, 0.75, 0.95):
+                        _bands.append({
+                            "f": _qv,
+                            "level": round(price * (1 + _q(_rets[1.0], _qv)), 6)})
+                    _end = _rets[1.0]
+                    _mu = sum(_end) / len(_end)
+                    _sig = (sum((x - _mu) ** 2 for x in _end)
+                            / len(_end)) ** 0.5
+                    return {
+                        "approx": True,
+                        "method": "empirical-first-touch",
+                        "n": _n, "ambig": _amb,
+                        "p_target": round(_tpn / _n, 4),
+                        "p_stop": round(_sln / _n, 4),
+                        "p_between": round(1 - _tpn / _n - _sln / _n, 4),
+                        "p_close_down": round(1 - _up / _n, 4),
+                        "sigma": round(price * _sig, 4),
+                        "rem_s": int(rem_s),
+                        "now": round(now, 3),
+                        "entry": round(price, 6),
+                        "tp": round(tp1, 6),
+                        "sl": round(sl, 6),
+                        "direction": dirn,
+                        "bands": _bands,
+                    }
             lr = self.last_result.get((d.get("symbol") or "BTC",
                                        tf)) or {}
             atr = float(lr.get("atr") or 0.0)
@@ -3113,6 +3214,8 @@ class PredictionEngine:
                 bands.append({"f": f, "level": round(price + qv * sig_f, 6)})
             return {
                 "approx": True,
+                "method": "driftless-fallback (thin tape)",
+                "n": 0, "ambig": 0,
                 "p_target": round(p_target, 4),
                 "p_stop": round(p_stop, 4),
                 "p_between": round(p_between, 4),

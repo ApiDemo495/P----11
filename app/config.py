@@ -63,13 +63,13 @@ CONFIDENCE_FLOOR = 0.35           # below -> NO TRADE
 # still measures the base numbers — the profile is a stated prior.
 ASSET_PROFILES = {
     "BTC": {"nature": "benchmark — deepest book, reference volatility",
-            "floor_mult": 1.00, "sl_mult": 1.00, "tp_mult": 1.00},
+            "floor_mult": 1.00, "sl_mult": 1.00, "tp_mult": 1.00, "noise_mult": 1.0},
     "PAXG": {"nature": "gold token — jumpy, gap-prone around sessions",
-             "floor_mult": 1.10, "sl_mult": 1.25, "tp_mult": 1.15},
+             "floor_mult": 1.10, "sl_mult": 1.25, "tp_mult": 1.15, "noise_mult": 1.0},
     "ETH": {"nature": "unpredictable — violent wicks, higher issue bar",
-            "floor_mult": 1.20, "sl_mult": 1.20, "tp_mult": 1.10},
+            "floor_mult": 1.20, "sl_mult": 1.20, "tp_mult": 1.10, "noise_mult": 1.6},
     "BNB": {"nature": "steady — tighter ranges, mean-reverting",
-            "floor_mult": 0.95, "sl_mult": 0.90, "tp_mult": 0.95},
+            "floor_mult": 0.95, "sl_mult": 0.90, "tp_mult": 0.95, "noise_mult": 0.9},
 }
 
 

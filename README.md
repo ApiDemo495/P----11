@@ -713,6 +713,30 @@ hung boot):
 ./run.sh --supervise
 ```
 
+## Empirical probabilities · true-window charts · per-asset prediction behaviour
+
+* **Probability rebuilt from measurement**: branch_stats now replays
+  the asset's own 1-minute bar path over every historical start
+  (n≈495 on a full tape), translates today's TP/SL distances (bps)
+  onto each start, and COUNTS first touches (both-barrier bars count
+  as stop-first, conservatively, and are reported as ambiguous).
+  Bands are empirical return quantiles; P(close down) is counted.
+  The driftless erfc formula remains only as a labelled thin-tape
+  fallback (n<20). The panel prints its basis ("measured · n=495").
+* **Charts on a true window time axis**: x = the whole prediction
+  window (start caption at the left edge, end at the right); the
+  realised line comes from the candle series (full-window REST
+  backfill) merged with live ticks via realisedSeries(), shared by
+  hero and probability chart — the line starts at the window start,
+  not at page load. Candle series refreshes every ~30 s.
+* **Assets predict differently** (app/asset_behavior.py): the tape
+  regime (trend efficiency, vol ratio, stretch) tempers the signal
+  itself before the issue decision — PAXG amplified ×1.12 in real
+  trends, damped ×0.82 in chop; ETH damped ×0.78 in vol blow-offs
+  plus a ×1.6 noise gate; BNB pulled toward reversion when stretched
+  ≥1.2σ; BTC reference. Tempering can veto an issue, never create
+  one. The hero risk note states what the behaviour did and why.
+
 ## Quad line charts · genuine crowd emotions · AUTO button · TV toggle · Binance execution · asset profiles
 
 * **Quad (sub-timeframe) cards** are line charts now (ChartX line

@@ -414,6 +414,25 @@ async function loadSystemPanel() {
    across the whole chart. The last point of the line IS the live
    price — the chart can never lag the tape the way the 260-candle
    view did. */
+/* Realised series for [t0, now]: candle closes (full-window backfill)
+   merged with live ticks after the last bar. Shared by the hero and
+   the probability chart so both lines start at the window start. */
+function realisedSeries(t0, now) {
+  const cs = (S.candleSeries && S.candleSeries.symbol === S.symbol)
+    ? S.candleSeries.bars : [];
+  let pts = cs.filter(p => p.t >= t0 - 60 && p.t <= now && p.p > 0);
+  const lastBarT = pts.length ? pts[pts.length - 1].t : 0;
+  const ticks = (S.priceHist || [])
+    .filter(p => p.t > lastBarT && p.t >= t0 && p.t <= now && p.p > 0);
+  pts = [...pts, ...ticks];
+  // cut a stale seed/tick junction (>2% in <2 min) instead of a step
+  for (let i = pts.length - 1; i > 0; i--) {
+    if (Math.abs(pts[i].p / pts[i - 1].p - 1) > 0.02
+        && pts[i].t - pts[i - 1].t < 120) { pts = pts.slice(i); break; }
+  }
+  return pts;
+}
+
 let _heroRaf = 0;
 function drawHeroChart() {
   const host = $("#hero-chart"); if (!host) return;
@@ -427,6 +446,16 @@ function _drawHero() {
   const price = S.prices[S.symbol] ?? a.price; if (!price) return;
   const now = Date.now() / 1000;
   const t1 = d.cycle_end || (now + 600);
+  // TRUE WINDOW TIME AXIS (the "starting from middle" fix): the x
+  // axis is the whole prediction window, left edge = window start.
+  // The realised line is built from the CANDLE SERIES (which covers
+  // the full window from the REST backfill) + live ticks after the
+  // last bar - so it starts at the left edge of the window, not at
+  // page load / mid-chart.
+  const t0 = d.cycle_start || (now - 600);
+  let past = realisedSeries(t0, now);
+  if (!past.length || now - past[past.length - 1].t > 2) past.push({ t: now, p: price });
+  else past[past.length - 1] = { t: now, p: price };
   const w = host.clientWidth || 320, h = host.clientHeight || 190;
   let cv = host.querySelector("canvas");
   if (!cv) { host.innerHTML = ""; cv = document.createElement("canvas");
@@ -434,55 +463,36 @@ function _drawHero() {
   if (cv.width !== w * 2 || cv.height !== h * 2) { cv.width = w * 2; cv.height = h * 2; }
   const g = cv.getContext("2d"); g.setTransform(2, 0, 0, 2, 0, 0);
   g.clearRect(0, 0, w, h);
-  // realised line: this window's path (seeded from candles + ticks).
-  // The line starts at the FIRST data point — anchoring the axis at
-  // cycle_start left a blank left half when history began later
-  // (user: "why is it directly from middle starting").
-  let past = (S.priceHist || []).filter(p => p.t <= now && p.p > 0);
-  past = past.filter(p => p.t >= now - 1800);
-  // stale-seed guard: a >2% jump inside 2 minutes is a seed/tick
-  // junction (old backfill meeting live ticks), not a real move —
-  // cut the history before it rather than drawing a vertical step
-  for (let i = past.length - 1; i > 0; i--) {
-    if (Math.abs(past[i].p / past[i - 1].p - 1) > 0.02
-        && past[i].t - past[i - 1].t < 120) { past = past.slice(i); break; }
-  }
-  const t0 = past.length ? past[0].t : (now - 600);
-  if (!past.length || now - past[past.length - 1].t > 2) past.push({ t: now, p: price });
-  else past[past.length - 1] = { t: now, p: price };
-  // forward fan from the measured σ (branches payload), sqrt-time cone
   const b = d.branches;
   const sigma = b?.sigma || Math.abs(price) * 0.002;
   const Z = [[1.6449, "rgba(0,212,240,.07)"], [0.6745, "rgba(0,212,240,.13)"]];
   const fr = [0, 0.25, 0.5, 0.75, 1];
   const fanPt = (f, z) => price + z * sigma * Math.sqrt(f);
-  // split time scale: past → left 62%, remaining window → right 38%
-  const splitX = w * 0.62, rw = 46;
-  const Xp = t => ((t - t0) / Math.max(1, now - t0)) * splitX;
-  const Xf = t => splitX + ((t - now) / Math.max(1, t1 - now)) * (w - rw - splitX);
+  const rw = 46;
+  const X = t => ((t - t0) / Math.max(1, t1 - t0)) * (w - rw);
+  const nowX = X(now);
   let lo = Math.min(...past.map(p => p.p)), hi = Math.max(...past.map(p => p.p));
   lo = Math.min(lo, fanPt(1, -1.6449)); hi = Math.max(hi, fanPt(1, 1.6449));
   for (const lv of [d.entry, d.tp, d.sl]) if (lv) { lo = Math.min(lo, lv); hi = Math.max(hi, lv); }
   const pad = (hi - lo) * 0.10 || Math.abs(price * 1e-3); lo -= pad; hi += pad;
   const Y = p => h - 14 - ((p - lo) / (hi - lo || 1)) * (h - 22);
-  // grid + right scale
   g.font = "9px monospace"; g.textAlign = "left";
   for (let gi = 0; gi <= 4; gi++) {
     const val = lo + (hi - lo) * gi / 4, gy = Y(val);
     g.strokeStyle = "rgba(216,216,232,.07)"; g.beginPath(); g.moveTo(0, gy); g.lineTo(w - rw, gy); g.stroke();
     g.fillStyle = "#6e6e8c"; g.fillText(val >= 1000 ? val.toFixed(0) : val.toFixed(2), w - rw + 4, gy + 3);
   }
-  // fan (outer then inner cone), rooted at (now, live price)
+  // window start / end captions so the axis reads as a window
+  g.fillStyle = "#55556e"; g.fillText("window start", 2, h - 3);
+  g.textAlign = "right"; g.fillText("window end", w - rw - 2, h - 3); g.textAlign = "left";
   for (const [z, fill] of Z) {
-    g.beginPath(); g.moveTo(splitX, Y(price));
-    fr.forEach(f => g.lineTo(Xf(now + f * (t1 - now)), Y(fanPt(f, z))));
-    for (let i = fr.length - 1; i >= 0; i--) g.lineTo(Xf(now + fr[i] * (t1 - now)), Y(fanPt(fr[i], -z)));
+    g.beginPath(); g.moveTo(nowX, Y(price));
+    fr.forEach(f => g.lineTo(X(now + f * (t1 - now)), Y(fanPt(f, z))));
+    for (let i = fr.length - 1; i >= 0; i--) g.lineTo(X(now + fr[i] * (t1 - now)), Y(fanPt(fr[i], -z)));
     g.closePath(); g.fillStyle = fill; g.fill();
   }
-  // median
-  g.beginPath(); g.moveTo(splitX, Y(price)); g.lineTo(Xf(t1), Y(price));
+  g.beginPath(); g.moveTo(nowX, Y(price)); g.lineTo(X(t1), Y(price));
   g.strokeStyle = "rgba(216,216,232,.55)"; g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]);
-  // locked entry across everything; TP/SL faint behind, solid forward
   const hline = (lv, color, label, dash, x0, x1) => {
     if (!lv) return;
     g.beginPath(); g.moveTo(x0, Y(lv)); g.lineTo(x1, Y(lv));
@@ -491,19 +501,18 @@ function _drawHero() {
     g.fillText(`${label} ${px(lv)}`, x0 + 3, Y(lv) - 3);
   };
   hline(d.entry, "rgba(216,216,232,.5)", "entry", [2, 3], 0, w - rw);
-  hline(d.tp, "rgba(34,201,138,.35)", "", [6, 4], 0, splitX);
-  hline(d.sl, "rgba(240,56,90,.35)", "", [6, 4], 0, splitX);
-  hline(d.tp, "#22c98a", "TP →", [6, 4], splitX, w - rw);
-  hline(d.sl, "#f0385a", "SL →", [6, 4], splitX, w - rw);
-  // realised line — ends exactly at the live price
+  hline(d.tp, "rgba(34,201,138,.35)", "", [6, 4], 0, nowX);
+  hline(d.sl, "rgba(240,56,90,.35)", "", [6, 4], 0, nowX);
+  hline(d.tp, "#22c98a", "TP \u2192", [6, 4], nowX, w - rw);
+  hline(d.sl, "#f0385a", "SL \u2192", [6, 4], nowX, w - rw);
+  // realised line over the whole window - ends exactly at live price
   g.beginPath();
-  past.forEach((p, i) => { const xx = Xp(p.t), yy = Y(p.p); i ? g.lineTo(xx, yy) : g.moveTo(xx, yy); });
+  past.forEach((p, i) => { const xx = X(p.t), yy = Y(p.p); i ? g.lineTo(xx, yy) : g.moveTo(xx, yy); });
   g.strokeStyle = "#e8f6ff"; g.lineWidth = 1.5; g.stroke();
-  // now divider + live chip
-  g.beginPath(); g.moveTo(splitX, 4); g.lineTo(splitX, h - 12);
+  g.beginPath(); g.moveTo(nowX, 4); g.lineTo(nowX, h - 12);
   g.strokeStyle = "rgba(201,162,39,.8)"; g.lineWidth = 1; g.stroke();
   g.fillStyle = "#c9a227"; g.font = "9px monospace"; g.textAlign = "right";
-  g.fillText("now", splitX - 3, 12);
+  g.fillText("now", nowX - 3, 12);
   const ly = Math.max(8, Math.min(h - 8, Y(price)));
   g.fillStyle = "#00d4f0"; g.fillRect(w - rw + 1, ly - 7, rw - 2, 14);
   g.fillStyle = "#04040c"; g.font = "bold 9px monospace"; g.textAlign = "left";
@@ -516,7 +525,7 @@ function renderBranches() {
   const a = S.snap?.assets?.[S.symbol];
   const d = a?.tfs?.[S.focusTf];
   const b = d?.branches;
-  $("#branch-scope").textContent = `${S.symbol} · ${S.focusTf.toUpperCase()} · approx (driftless)`;
+  $("#branch-scope").textContent = `${S.symbol} · ${S.focusTf.toUpperCase()} · ${b?.method === "empirical-first-touch" ? `measured first-touch · n=${b.n}` : "approx (thin tape)"}`;
   if (!b || !a) {
     stats.innerHTML = "";
     cvHost.innerHTML = `<div class="dim pad" style="font-size:11px">waiting for a direction + TP/SL on ${S.focusTf.toUpperCase()}…</div>`;
@@ -531,9 +540,11 @@ function renderBranches() {
     <div class="kv"><span>P(close between)</span><b>${_pct(b.p_between)}</b></div>
     <div class="kv"><span>P(close down)</span><b>${Math.round(b.p_close_down * 100)}%</b></div>
     <div class="kv"><span>σ (remaining)</span><b>${px(b.sigma)}</b></div>
+    <div class="kv"><span>basis</span><b>${b.method === "empirical-first-touch" ? `measured · n=${b.n} windows` : "approx · thin tape"}</b></div>
     <div class="kv"><span>time left</span><b>${Math.round(b.rem_s / 60)}m ${Math.round(b.rem_s % 60)}s</b></div>`;
-  $("#branch-note").textContent =
-    "bands = quantiles of the remaining-window walk (driftless Brownian approximation, not a forecast) · realised path in white";
+  $("#branch-note").textContent = b.method === "empirical-first-touch"
+    ? `measured: first-touch outcomes replayed over ${b.n} historical windows on this asset's own tape (both-barrier bars count as stop-first, ${b.ambig} ambiguous) · bands = empirical return quantiles · realised path in white`
+    : "thin tape — driftless approximation until 20+ windows can be replayed · realised path in white";
   // ---- canvas ----
   const w = cvHost.clientWidth || 300, h = cvHost.clientHeight || 170;
   let cv = cvHost.querySelector("canvas");
@@ -586,8 +597,9 @@ function renderBranches() {
   hline(b.tp, "#22c98a", "TP →", [6, 4], X(tN));
   hline(b.sl, "#f0385a", "SL →", [6, 4], X(tN));
   hline(b.entry, "#d8d8e8", "now", [2, 3]);
-  // realised path (white)
-  const hist = (S.priceHist || []).filter(pp => pp.t >= t0 - 1 && pp.p > 0);
+  // realised path (white) — candle series from the window start,
+  // not just ticks since page load (was starting mid-chart)
+  const hist = realisedSeries(t0 - 1, Date.now() / 1000);
   if (hist.length > 1) {
     g.beginPath();
     hist.forEach((pp, i) => { const xx = X(pp.t), yy = Y(pp.p); i ? g.lineTo(xx, yy) : g.moveTo(xx, yy); });
@@ -821,7 +833,8 @@ function renderHero() {
     rn.textContent = (rk.note
       ? `TP/SL from measured moves — ${rk.note}${rk.provisional ? " · levels provisional" : ""} · frozen at the lock; an emergency re-lock re-anchors the same bps at the new entry`
       : "TP/SL: measured-moves block pending (needs a locked cycle)")
-      + (res.asset_nature ? ` · ${S.symbol} profile: ${res.asset_nature} · issue floor ${fmt(res.asset_floor, 3)}` : "");
+      + (res.asset_nature ? ` · ${S.symbol} profile: ${res.asset_nature} · issue floor ${fmt(res.asset_floor, 3)}` : "")
+      + (res.behavior?.action ? ` · behaviour: ${res.behavior.action}` : "");
   }
   // chart overlays: SL, TP ladder (horizon first), liquidation clusters
   const lines = [];
@@ -1523,6 +1536,10 @@ async function loadCandles() {
         const tail = (S.priceHist || [])
           .filter(p2 => p2.t > (seeded[seeded.length - 1]?.t || 0));
         S.priceHist = [...seeded, ...tail].slice(-900);
+        // full-window candle series for the charts' realised line:
+        // covers the window from its start (REST backfill), so the
+        // line begins at the window's left edge on a true time axis
+        S.candleSeries = { symbol: S.symbol, bars: seeded };
       }
       S.spark[tf]?.setData(bars.slice(-90).map(x => ({ time: x.t, open: 0, high: x.v || 0, low: 0, close: x.v || 0 })));
     }));
@@ -2772,6 +2789,9 @@ setInterval(() => {
   if (_tickN % 2 === 0 && Date.now() - S.lastMsgAt >= 4000) {
     api("/api/snapshot").then(applySnapshot).catch(() => {});
   }
+  // 2b) candle series refresh (~30 s): the realised line's backfill
+  // must stay current or the charts drift from the tape again
+  if (_tickN % 30 === 0) loadCandles().catch(() => {});
   // 3) §10.4 silent-socket guard (inside THE one interval, H-2): a socket
   // with no message for 15s is closed — onclose reconnects immediately
   // instead of waiting the browser's 30-minute timeout (error J-7)

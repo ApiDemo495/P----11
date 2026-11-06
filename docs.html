@@ -726,6 +726,34 @@ curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&
 <pre><code>
 ./run.sh --supervise
 </code></pre>
+<h4>Empirical probabilities · true-window charts · per-asset prediction behaviour</h4>
+<ul>
+<li><b>Probability rebuilt from measurement</b>: branch_stats now replays</li>
+</ul>
+<p>  the asset&#x27;s own 1-minute bar path over every historical start</p>
+<p>  (n≈495 on a full tape), translates today&#x27;s TP/SL distances (bps)</p>
+<p>  onto each start, and COUNTS first touches (both-barrier bars count</p>
+<p>  as stop-first, conservatively, and are reported as ambiguous).</p>
+<p>  Bands are empirical return quantiles; P(close down) is counted.</p>
+<p>  The driftless erfc formula remains only as a labelled thin-tape</p>
+<p>  fallback (n&lt;20). The panel prints its basis (&quot;measured · n=495&quot;).</p>
+<ul>
+<li><b>Charts on a true window time axis</b>: x = the whole prediction</li>
+</ul>
+<p>  window (start caption at the left edge, end at the right); the</p>
+<p>  realised line comes from the candle series (full-window REST</p>
+<p>  backfill) merged with live ticks via realisedSeries(), shared by</p>
+<p>  hero and probability chart — the line starts at the window start,</p>
+<p>  not at page load. Candle series refreshes every ~30 s.</p>
+<ul>
+<li><b>Assets predict differently</b> (app/asset_behavior.py): the tape</li>
+</ul>
+<p>  regime (trend efficiency, vol ratio, stretch) tempers the signal</p>
+<p>  itself before the issue decision — PAXG amplified ×1.12 in real</p>
+<p>  trends, damped ×0.82 in chop; ETH damped ×0.78 in vol blow-offs</p>
+<p>  plus a ×1.6 noise gate; BNB pulled toward reversion when stretched</p>
+<p>  ≥1.2σ; BTC reference. Tempering can veto an issue, never create</p>
+<p>  one. The hero risk note states what the behaviour did and why.</p>
 <h4>Quad line charts · genuine crowd emotions · AUTO button · TV toggle · Binance execution · asset profiles</h4>
 <ul>
 <li><b>Quad (sub-timeframe) cards</b> are line charts now (ChartX line</li>
