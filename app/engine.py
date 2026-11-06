@@ -4309,16 +4309,16 @@ class PredictionEngine:
                         # snapshot of the cycle) for the settle audit
                         _pk = (symbol, tf)
                         _cs = d.get("cycle_start")
+                        _praw = bs.get("p_target")
+                        _d = self.calibration_delta()
+                        _pcal = (max(0.01, min(0.99, _praw + _d))
+                                 if _praw is not None else None)
+                        bs["p_target_raw"] = _praw
+                        bs["p_target_cal"] = (round(_pcal, 4)
+                                              if _pcal is not None else None)
+                        bs["cal_delta"] = _d
                         if _cs and self._prob_pred.get(_pk, {}) \
                                 .get("cycle_start") != _cs:
-                            _praw = bs.get("p_target")
-                            _d = self.calibration_delta()
-                            _pcal = (max(0.01, min(0.99, _praw + _d))
-                                     if _praw is not None else None)
-                            bs["p_target_raw"] = _praw
-                            bs["p_target_cal"] = (round(_pcal, 4)
-                                                  if _pcal is not None else None)
-                            bs["cal_delta"] = _d
                             self._prob_pred[_pk] = {
                                 "cycle_start": _cs,
                                 "p_target": _praw,
