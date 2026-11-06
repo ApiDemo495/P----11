@@ -404,7 +404,7 @@ def test_visibility_sync_and_flat_fixes():
     assert 'id="led-brain"' in html and 'id="brain-chip"' in html
     assert 'led("#led-brain"' in js and 'brain-chip' in js
     # robust chart range (percentile) + clamped labels
-    assert "q90" in js and "padR = this.spark ? 4 : 58" in js  # v2: empirical fan quantiles + axis-clamped labels
+    assert "q95" in js and "padR = this.spark ? 4 : 58" in js  # v2: empirical fan quantiles + axis-clamped labels
     # emotion cells print small-but-real values (0.004 ≠ 0.00)
     assert "fx(v, 2)" in js
     # physics strip: cause tag + why in title/hint
@@ -416,7 +416,7 @@ def test_visibility_sync_and_flat_fixes():
     assert "#fl-forward, #fl-genesis" in css and "overflow-x: auto" in css
     assert ".card { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; min-width: 0;" in css
     assert "<th>tick</th>" not in js                 # tick merged into the name cell
-    assert "S.fvRings" in js and "q90" in js   # live rings + empirical fan range
+    assert "S.fvRings" in js and "q95" in js   # live rings + empirical fan range
     assert "devicePixelRatio" in js                 # HiDPI in LineChart v2
 
 

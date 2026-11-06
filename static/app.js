@@ -197,10 +197,12 @@ class LineChart {
     g.clearRect(0, 0, W, H);
     const padR = this.spark ? 4 : 58, padL = 6, padT = 8, padB = this.spark ? 4 : 16;
     const pw = W - padL - padR, ph = H - padT - padB;
+    d.pts = d.pts.filter(p => Number.isFinite(p.p) && Number.isFinite(p.t));
+    if (d.pts.length < 2) return;
     let lo = Infinity, hi = -Infinity;
     for (const p of d.pts) { lo = Math.min(lo, p.p); hi = Math.max(hi, p.p); }
-    for (const L of (d.levels || [])) { lo = Math.min(lo, L.p); hi = Math.max(hi, L.p); }
-    if (d.fan) for (const f of d.fan) { lo = Math.min(lo, f[2]); hi = Math.max(hi, f[1]); }
+    for (const L of (d.levels || [])) if (Number.isFinite(L.p)) { lo = Math.min(lo, L.p); hi = Math.max(hi, L.p); }
+    if (d.fan) for (const f of d.fan) if (Number.isFinite(f[1]) && Number.isFinite(f[2])) { lo = Math.min(lo, f[2]); hi = Math.max(hi, f[1]); }
     if (!(hi > lo)) { hi = lo * 1.001; lo = lo * 0.999; }
     const pad = (hi - lo) * 0.08; hi += pad; lo -= pad;
     const t0 = d.t0, t1 = d.t1, X = t => padL + (t - t0) / Math.max(1, t1 - t0) * pw,
@@ -425,7 +427,7 @@ function _drawOwn() {
   if (!host._lc) { host.innerHTML = ""; host._lc = new LineChart(host); }
   const b = d.branches;
   const fan = (b?.fan && b.fan.length > 2)
-    ? b.fan.map(p => [now + p.f * Math.max(1, t1 - now), p.q90, p.q10]) : null;
+    ? b.fan.map(p => [now + p.f * Math.max(1, t1 - now), p.q95, p.q05]) : null;
   const levels = [];
   if (d.entry) levels.push({ p: d.entry, tag: "ENTRY", color: "#c9a227", dash: false });
   if (d.tp) levels.push({ p: d.tp, tag: "TP", color: "#26a69a", dash: true });
