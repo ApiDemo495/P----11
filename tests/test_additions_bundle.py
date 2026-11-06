@@ -16,7 +16,7 @@ def test_branch_payload_carries_empirical_fan():
 def test_charts_use_fan_crosshair_riskcalc_alerts():
     js = (ROOT / "static" / "app.js").read_text()
     assert "p.q90" in js and "p.q10" in js and "empirical fan cone" in js.lower() or "d.fan" in js
-    assert "function bindHeroCross()" in js and "S.heroCross" in js
+    assert "this.cross" in js  # LineChart v2 built-in crosshair (bindHeroCross deleted with hero)
     assert "function renderRiskCalc()" in js
     assert "riskUsdt / dist" in js
     assert "checkIssuedAlerts" in js and "was === false" in js

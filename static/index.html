@@ -48,7 +48,7 @@
     <button id="auto-chip" class="btn-analyse btn-auto" title="AUTO-PREDICT: the analysis re-runs by itself so every tab is always fresh. Click to switch to MANUAL (▶ ANALYSE only).">AUTO: ON</button>
     <button id="btn-binance" class="btn-analyse" style="border-style:dashed" title="Binance execution (optional): opens Settings → Binance. Orders need enabled + keys + ARM + a qualifying issued prediction; sub-floor/random never executes.">⬢ CONNECT BINANCE</button>
     <button id="btn-analyse" class="btn-analyse" title="Run the staged analysis for this asset">▶ ANALYSE <span id="analyse-sym">BTC</span></button>
-    <span class="seg" id="seg-chart"><span class="seg-lbl">CHART</span><button data-chart="own" class="seg-btn active">OWN</button><button data-chart="tv" class="seg-btn">TRADINGVIEW</button></span>
+    <span class="seg" id="seg-chart"><span class="seg-lbl">CHART</span><button data-chart="binance" class="seg-btn active">BINANCE</button><button data-chart="tv" class="seg-btn">TRADINGVIEW</button><button data-chart="own" class="seg-btn">OWN</button></span>
   </div>
 
   <!-- alert bar -->
@@ -96,15 +96,16 @@
             <button class="btn" id="btn-all-tf" style="padding:3px 10px" title="Show all four timeframe cards">⊞ all timeframes</button>
           </div>
         </div>
-        <div id="hero-chart"></div>
-        <div id="tv-wrap" class="hidden" style="height:340px;margin-top:6px"></div>
+        <div id="chart-binance" class="main-chart"></div>
+        <div id="chart-tv" class="main-chart hidden"></div>
+        <div id="chart-own" class="main-chart hidden"></div>
         <div class="panel-h" style="margin-top:10px">TARGET LADDER — this window
           <span class="dim">TF horizon calculated &amp; shown first · TP1–TP3 are its sub-timeframes</span></div>
         <div id="subtf-strip" class="kv-row" style="margin-top:6px"></div>
         <div id="risk-note" class="hint" style="margin-top:6px"></div>
       </div>
     </div>
-    <div class="panel-h" style="margin:2px 2px 6px">TIMEFRAMES — tap a card to focus it in the hero chart</div>
+    <div class="panel-h" style="margin:2px 2px 6px">TIMEFRAMES — tap a card to focus it in the main chart</div>
     <div class="quad-grid" id="quad-grid"></div>
     <div class="panel">
       <div class="panel-h">SYSTEM — what is running, what is waiting <span class="dim" id="sys-meta"></span></div>
@@ -425,6 +426,7 @@
 </nav>
 
 <div id="toast-wrap"></div>
-<script type="module" src="/app.js?v=r14"></script>
+<script src="/vendor/lightweight-charts.standalone.production.js"></script>
+<script type="module" src="/app.js?v=r15"></script>
 </body>
 </html>

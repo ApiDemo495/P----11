@@ -458,7 +458,7 @@ def test_dashboard_rewrite_tf_focus_candles_and_tp_first():
     js = (ROOT / "static" / "app.js").read_text()
     eng = (ROOT / "app" / "engine.py").read_text()
     # focus-mode hero + revert button + sub-timeframe strip
-    for token in ("tf-hero", "hero-chart", "subtf-strip", "btn-all-tf"):
+    for token in ("tf-hero", "chart-binance", "chart-tv", "chart-own", "subtf-strip", "btn-all-tf"):
         assert token in html, token
     assert "tfFocus" in js and 'localStorage.setItem("tfFocus"' in js
     assert "function renderHero" in js and "renderDashboardMode" in js
@@ -473,7 +473,7 @@ def test_dashboard_rewrite_tf_focus_candles_and_tp_first():
     # live price into the corner under a multi-hour trend)
     assert "createLinearGradient" in js
     assert "price axis (the" in js  # v2: price axis always drawn
-    assert "function drawHeroChart()" in js
+    assert "function drawMainChart()" in js
     # the stray `s` reference in renderCalls is gone (would throw)
     assert "(s?.ladder" not in js and " s?.ladder" not in js
 

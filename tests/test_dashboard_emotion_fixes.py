@@ -83,13 +83,13 @@ def test_flywire_build_is_spawn_not_fork():
 def test_dashboard_rewrite_contracts():
     html = (ROOT / "static" / "index.html").read_text()
     assert "dash-hero" in html and "hero-badge" in html
-    assert 'id="hero-chart"' in html
+    assert 'id="chart-own"' in html and 'id="chart-binance"' in html and 'id="chart-tv"' in html
     js = (ROOT / "static" / "app.js").read_text()
     assert "hero-badge" in js
     # hero always visible; TF cards are a switcher strip, never hidden
     assert 'grid.style.display = "";' in js
     assert "setFocusTf(tf)" in js
     css = (ROOT / "static" / "style.css").read_text()
-    assert ".dash-hero" in css and "#hero-chart { height: 340px" in css
+    assert ".dash-hero" in css and ".main-chart { height: 340px" in css
     # emotion UI consumes the server dominant
     assert "em.dominant" in js

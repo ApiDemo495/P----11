@@ -172,6 +172,7 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 5px; bo
 .ring-fg { fill: none; stroke: var(--cyan); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 97.4; transition: stroke-dashoffset .95s linear; }
 .q-chart { height: 110px; margin-bottom: 6px; }
 .q-tv { height: 142px; margin-bottom: 6px; }
+.q-bn { height: 142px; margin-bottom: 6px; }
 .q-tv iframe { border-radius: 6px; }
 .q-spark { height: 26px; }
 .q-price { font: 600 15px/1 var(--mono); display: flex; align-items: baseline; gap: 8px; margin: 6px 0; }
@@ -449,7 +450,7 @@ span.tp-min.tp-horizon { color: var(--gold); font-weight: 700; letter-spacing: .
   background: rgba(240,56,90,.08); box-shadow: 0 0 24px rgba(240,56,90,.15); }
 .hero-badge.flat { color: var(--gold); border-color: var(--gold);
   background: rgba(201,162,39,.07); }
-#hero-chart { height: 340px; position: relative; margin-top: 10px;
+.main-chart { height: 340px; position: relative; margin-top: 10px;
   border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
   background: rgba(0,0,0,.22); }
 #hero-title { font: 700 17px/1.3 var(--mono); letter-spacing: 1.5px; }
@@ -460,7 +461,7 @@ span.tp-min.tp-horizon { color: var(--gold); font-weight: 700; letter-spacing: .
 .quad.focus { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold), 0 6px 22px rgba(0,0,0,.35); }
 .q-chart { height: 86px; }
 @media (max-width: 900px) {
-  #hero-chart { height: 260px; }
+  .main-chart { height: 260px; }
   .hero-badge { font-size: 20px; min-width: 160px; width: 100%; }
   .dash-hero-side { align-items: stretch; width: 100%; }
   .quad-grid { grid-template-columns: repeat(2, 1fr); }

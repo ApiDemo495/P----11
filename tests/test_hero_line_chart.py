@@ -18,12 +18,12 @@ def test_fan_sigma_floored_by_measured_block():
     assert "sigma_bps" in seg and "price * _sig_bps / 1e4" in seg
 
 
-def test_hero_is_line_chart_from_now():
+def test_own_main_chart_is_line_from_now():
     js = (ROOT / "static" / "app.js").read_text()
-    assert "function drawHeroChart()" in js
-    assert "LINE CHART FROM NOW" in js
+    assert "function drawMainChart()" in js and "function _drawOwn()" in js
+    assert "LineChart-from-now renderer (drawMainChart)" in js
     assert "past[past.length - 1] = { t: now, p: price }" in js  # ends at live
-    assert "S.charts.hero?.setData" not in js                    # no candles
+    assert "hero-chart" not in js and "drawHeroChart" not in js  # hero removed (user order)
 
 
 def test_pricehist_seeded_from_candles():

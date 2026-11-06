@@ -7,10 +7,11 @@ INDEX_HTML = (STATIC / "index.html").read_text()
 
 
 def test_no_tradingview_dependency():
-    """Own canvas chart only — the TradingView lib was removed for speed."""
-    assert "LightweightCharts" not in APP_JS
-    assert "lightweight-charts" not in INDEX_HTML
-    assert "class LineChart" in APP_JS
+    """Three sources, one toggle: Binance candles (vendored lib, Binance
+    klines), TradingView iframe (TV mode), own LineChart. No hero."""
+    assert "LightweightCharts" in APP_JS and "bnMake" in APP_JS
+    assert "lightweight-charts" in INDEX_HTML
+    assert "class LineChart" in APP_JS and "hero-chart" not in APP_JS
 
 
 def test_bottom_tab_bar_and_nine_views():

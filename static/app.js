@@ -150,11 +150,11 @@ const S = {
 };
 
 /* ═══════════ LineChart — own chart engine (v2, replaces ChartX) ═════
-   One engine for hero + sub-timeframe quads + sparklines. Design rules
+   One engine for the OWN main chart + sub-timeframe quads + sparklines. Design rules
    (user: "better than TradingView"): the PRICE IS ALWAYS VISIBLE —
    right-hand price axis with ticks, a last-price chip pinned to the
    axis, crosshair readout of time+price, dashed TP/SL/entry levels with
-   labels, and (hero) the empirical fan cone into the future half.     */
+   labels, and the empirical fan cone into the future half.     */
 class LineChart {
   constructor(el, opts = {}) {
     this.el = el; this.spark = !!opts.spark;
@@ -219,7 +219,7 @@ class LineChart {
         g.fillText(`${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`, X(t), H - 4); }
       g.textAlign = "left";
     }
-    // future region shade (hero window not yet lived)
+    // future region shade (window not yet lived)
     if (d.nowX != null) { const x = X(d.nowX);
       g.fillStyle = "rgba(120,120,200,.05)"; g.fillRect(x, padT, padL + pw - x, ph);
       g.strokeStyle = "rgba(160,160,220,.35)"; g.setLineDash([3, 3]);
@@ -403,14 +403,16 @@ function realisedSeries(t0, now) {
   return pts;
 }
 
-let _heroRaf = 0;
-function drawHeroChart() {
-  const host = $("#hero-chart"); if (!host) return;
-  if (_heroRaf) return;
-  _heroRaf = requestAnimationFrame(() => { _heroRaf = 0; _drawHero(); });
+let _mainRaf = 0;
+function drawMainChart() {
+  if (S.chartSrc === "binance") { bnTickMain(); return; }
+  if (S.chartSrc !== "own") return;
+  const host = $("#chart-own"); if (!host) return;
+  if (_mainRaf) return;
+  _mainRaf = requestAnimationFrame(() => { _mainRaf = 0; _drawOwn(); });
 }
-function _drawHero() {
-  const host = $("#hero-chart"); if (!host) return;
+function _drawOwn() {
+  const host = $("#chart-own"); if (!host) return;
   const a = S.snap?.assets?.[S.symbol]; if (!a) return;
   const d = a.tfs?.[S.focusTf]; if (!d) return;
   const price = S.prices[S.symbol] ?? a.price; if (!price) return;
@@ -430,18 +432,65 @@ function _drawHero() {
   if (d.sl) levels.push({ p: d.sl, tag: "SL", color: "#ef5350", dash: true });
   host._lc.set({ pts: past, t0, t1, nowX: now, fan, levels });
 }
-function bindHeroCross() {
-  const host = $("#hero-chart"); if (!host || host.dataset.cross) return;
-  host.dataset.cross = "1";
-  const upd = e => {
-    const r = host.getBoundingClientRect();
-    const t = (e.touches && e.touches[0]) || e;
-    S.heroCross = { x: t.clientX - r.left, y: t.clientY - r.top };
-    drawHeroChart();
-  };
-  host.addEventListener("mousemove", upd);
-  host.addEventListener("touchmove", upd, { passive: true });
-  host.addEventListener("mouseleave", () => { S.heroCross = null; drawHeroChart(); });
+
+/* ═══════ BINANCE chart: the chart you see on binance.com — Binance
+   klines (candles + volume + MA7/MA25) from our Binance feed, drawn
+   with the vendored lightweight-charts engine. No iframe, no fake. ═══ */
+const Bn = { main: null, quads: {}, key: "" };
+function bnMake(el, mini) {
+  const LW = window.LightweightCharts; if (!LW || !el) return null;
+  const chart = LW.createChart(el, {
+    layout: { background: { color: "transparent" }, textColor: "#8a8aa0", fontSize: 9 },
+    grid: { vertLines: { color: "rgba(140,140,170,.08)" }, horzLines: { color: "rgba(140,140,170,.08)" } },
+    timeScale: { timeVisible: true, secondsVisible: false },
+    rightPriceScale: { borderColor: "rgba(140,140,170,.25)" },
+    width: el.clientWidth || 300, height: el.clientHeight || (mini ? 142 : 340),
+  });
+  const candles = chart.addCandlestickSeries({ upColor: "#26a69a", downColor: "#ef5350",
+    borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350" });
+  const vol = chart.addHistogramSeries({ priceScaleId: "", priceFormat: { type: "volume" } });
+  chart.priceScale("").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
+  const ma = (color) => chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+  const out = { chart, candles, vol, ma7: ma("rgba(240,185,11,.85)"), ma25: ma("rgba(200,120,255,.7)"), last: null };
+  new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); } catch {} }).observe(el);
+  return out;
+}
+function bnFeed(inst, bars) {
+  if (!inst || !bars.length) return;
+  const cs = bars.map(b => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c }));
+  inst.candles.setData(cs);
+  inst.vol.setData(bars.map(b => ({ time: b.t, value: b.v || 0,
+    color: b.c >= b.o ? "rgba(38,166,154,.4)" : "rgba(239,83,80,.4)" })));
+  const maD = (n) => cs.map((c, i) => i < n - 1 ? null
+    : { time: c.time, value: cs.slice(i - n + 1, i + 1).reduce((x, y) => x + y.close, 0) / n }).filter(Boolean);
+  inst.ma7.setData(maD(7)); inst.ma25.setData(maD(25));
+  const lb = bars[bars.length - 1];
+  inst.last = { time: lb.t, open: lb.o, high: lb.h, low: lb.l, close: lb.c, v: lb.v || 0 };
+  try { inst.chart.timeScale().scrollToRealTime(); } catch {}
+}
+async function bnLoad(tf, inst, el) {
+  try {
+    const d = await api(`/api/candles?symbol=${S.symbol}&tf=${tf}&n=180`);
+    if (S.chartSrc === "binance" && d.bars) bnFeed(inst, d.bars);
+  } catch { /* feed warms up */ }
+}
+function bnEnsure() {
+  if (S.chartSrc !== "binance") return;
+  const mainEl = $("#chart-binance");
+  if (mainEl && !Bn.main) { Bn.main = bnMake(mainEl, false); }
+  if (Bn.main) bnLoad(S.focusTf, Bn.main, mainEl);
+  for (const tf of TF) {
+    const el = $("#qbn-" + tf); if (!el) continue;
+    if (!Bn.quads[tf]) Bn.quads[tf] = bnMake(el, true);
+    if (Bn.quads[tf]) bnLoad(tf, Bn.quads[tf], el);
+  }
+}
+function bnTickMain() {
+  const inst = Bn.main, p = S.prices?.[S.symbol];
+  if (!inst || !inst.last || !(p > 0)) return;
+  const l = inst.last;
+  l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p);
+  try { inst.candles.update({ time: l.time, open: l.open, high: l.high, low: l.low, close: l.close }); } catch {}
 }
 
 /* position sizing from the REAL locked stop distance per TF */
@@ -762,7 +811,7 @@ function setFocusTf(tf) {
   S.tfFocus = true;
   try { localStorage.setItem("tfFocus", "1"); } catch (e) { /* private mode */ }
   syncToolbar(); renderWhy(); renderQuads(); S.lastViewFetch = 0;
-  try { applyChartSrc(); } catch (e) { /* hero TV follows the focused TF */ }
+  try { applyChartSrc(); } catch (e) { /* main TV widget follows the focused TF */ }
   loadCandles().catch(() => {});
   refreshActiveView(true);
 }
@@ -923,6 +972,7 @@ function buildQuads() {
       </div>
       <div class="q-chart" id="qc-${tf}"></div>
       <div class="q-tv hidden" id="qtv-${tf}"></div>
+      <div class="q-bn hidden" id="qbn-${tf}"></div>
       <div class="q-spark" id="qs-${tf}"></div>
       <div class="q-price" id="qp-${tf}">—</div>
       <div class="q-dir flat" id="qd-${tf}">—</div>
@@ -933,7 +983,7 @@ function buildQuads() {
     S.charts[tf] = new LineChart($("#qc-" + tf));
     S.spark[tf] = new LineChart($("#qs-" + tf), { spark: true });
   });
-  // hero chart is the LINE-CHART-FROM-NOW renderer (drawHeroChart),
+  // main OWN chart is the LineChart-from-now renderer (drawMainChart),
   // (LineChart v2 line mode — candles crushed the live action)
   // into the corner under a multi-hour trend
   renderQuads(); loadCandles();
@@ -1036,12 +1086,13 @@ const TV_SYMS = { BTC: "BINANCE:BTCUSDT", PAXG: "BINANCE:PAXGUSDT",
                   ETH: "BINANCE:ETHUSDT", BNB: "BINANCE:BNBUSDT" };
 const TV_INT = { tf1: "5", tf2: "15", tf3: "60", tf4: "240" };
 function applyChartSrc() {
-  const tv = S.chartSrc === "tv";
+  const mode = S.chartSrc || "binance";   // binance | tv | own
   $$("#seg-chart .seg-btn").forEach(b =>
-    b.classList.toggle("active", (b.dataset.chart === "tv") === tv));
-  const wrap = $("#tv-wrap"), hero = $("#hero-chart");
-  if (wrap) wrap.classList.toggle("hidden", !tv);
-  if (hero) hero.style.display = tv ? "none" : "";
+    b.classList.toggle("active", b.dataset.chart === mode));
+  const own = $("#chart-own"), bn = $("#chart-binance"), wrap = $("#chart-tv");
+  if (own) own.classList.toggle("hidden", mode !== "own");
+  if (bn) bn.classList.toggle("hidden", mode !== "binance");
+  if (wrap) wrap.classList.toggle("hidden", mode !== "tv");
   const tvSrc = (tf) => "https://s.tradingview.com/widgetembed/?symbol="
     + encodeURIComponent(TV_SYMS[S.symbol] || "BINANCE:BTCUSDT")
     + `&interval=${TV_INT[tf] || "5"}&theme=dark&style=1`
@@ -1050,18 +1101,23 @@ function applyChartSrc() {
   const fill = (el, tf) => { if (!el) return; const src = tvSrc(tf);
     if (el.dataset.src !== src) { el.dataset.src = src;
       el.innerHTML = `<iframe src="${src}" style="width:100%;height:100%;border:0" allowtransparency="true" scrolling="no" allowfullscreen></iframe>`; } };
-  if (tv && wrap) fill(wrap, S.focusTf);
-  // every sub-timeframe card gets its OWN TradingView widget (its own
-  // interval) in TV mode; our LineChart + spark return in OWN mode.
+  if (mode === "tv" && wrap) fill(wrap, S.focusTf);
+  if (mode === "binance") bnEnsure();
+  if (mode === "own") drawMainChart();
+  // every sub-timeframe card follows the same toggle: our LineChart in
+  // OWN, Binance candles in BINANCE, TradingView widget in TV mode.
   for (const tf of TF) {
-    const own = $("#qc-" + tf), sp = $("#qs-" + tf), slot = $("#qtv-" + tf);
-    if (own) own.style.display = tv ? "none" : "";
-    if (sp) sp.style.display = tv ? "none" : "";
-    if (slot) { slot.classList.toggle("hidden", !tv); if (tv) fill(slot, tf); }
+    const o = $("#qc-" + tf), sp = $("#qs-" + tf),
+          slot = $("#qtv-" + tf), bslot = $("#qbn-" + tf);
+    if (o) o.style.display = mode === "own" ? "" : "none";
+    if (sp) sp.style.display = mode === "own" ? "" : "none";
+    if (slot) { slot.classList.toggle("hidden", mode !== "tv"); if (mode === "tv") fill(slot, tf); }
+    if (bslot) bslot.classList.toggle("hidden", mode !== "binance");
   }
 }
 function bindChartSrc() {
-  try { S.chartSrc = localStorage.getItem("chartSrc") || "own"; } catch { S.chartSrc = "own"; }
+  try { S.chartSrc = localStorage.getItem("chartSrc") || "binance"; } catch { S.chartSrc = "binance"; }
+  if (!["binance", "tv", "own"].includes(S.chartSrc)) S.chartSrc = "binance";
   $$("#seg-chart .seg-btn").forEach(b => b.addEventListener("click", () => {
     S.chartSrc = b.dataset.chart;
     try { localStorage.setItem("chartSrc", S.chartSrc); } catch {}
@@ -2890,7 +2946,7 @@ function applySnapshot(snap) {
   renderAlert(snap);
   try { renderQuads(); renderWhy(); renderRail(); } catch (e) { console.error("render", e); }
   try { renderBranches(); } catch (e) { console.error("branches", e); }
-  try { drawHeroChart(); } catch (e) { console.error("hero", e); }
+  try { drawMainChart(); } catch (e) { console.error("main chart", e); }
   try { renderRiskCalc(); } catch (e) { /* sizing optional */ }
   try { applyChartSrc(); } catch (e) { /* chart toggle optional */ }
   if (S.view === "dashboard") {
@@ -2939,7 +2995,7 @@ function onTick(msg) {
   S.prices = msg.prices || S.prices;
   const p = msg.prices?.[S.symbol];
   if (p != null) TF.forEach(tf => S.charts[tf]?.tick(p));
-  drawHeroChart();                  // hero line always ends at live price
+  drawMainChart();                  // main chart always ends at live price
   renderQuads({ heavy: false });   // 1 Hz: text only, no table rebuilds
 }
 function handleMessage(msg) {
@@ -3042,7 +3098,7 @@ window.addEventListener("unhandledrejection", e => {
 /* ═══════════ boot ═══════════ */
 (function boot() {
   try { S.tfFocus = localStorage.getItem("tfFocus") === "1"; } catch (e) { S.tfFocus = false; }
-  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); bindChartSrc(); bindTrading(); bindHeroCross(); bindRiskCalc(); syncAnalyseButton(); bindAllTf(); renderDashboardMode();
+  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); bindChartSrc(); bindTrading(); bindRiskCalc(); syncAnalyseButton(); bindAllTf(); renderDashboardMode();
   connectWS();
   api("/api/snapshot").then(applySnapshot).catch(() => {});
   // REST safety net lives in the single master setInterval below (H-2)
