@@ -2433,8 +2433,20 @@ async function loadRL() {
         `<div class="kv"><span>F${id}</span><b class="acc-warn">×${fmt(v, 2)}</b></div>`).join("")
         : `<div class="dim">none — every graded component's reward ≥0.40</div>`}</div>
       ${fixes ? `<div class="kv-row">${fixes}</div>` : ""}
+      <div class="panel-h" style="margin-top:8px">WINNER BOOSTS (reward &gt;0.60 earns weight, cap ×1.50)</div>
+      <div class="kv-row">${Object.entries(rl.boost || {}).length ? Object.entries(rl.boost).map(([id, v]) =>
+        `<div class="kv"><span>F${id}</span><b class="acc-up">×${fmt(v, 2)}</b></div>`).join("")
+        : `<div class="dim">none yet — no component has sustained reward &gt;0.60 over ≥8 settled windows</div>`}</div>
       <div class="panel-h" style="margin-top:8px">ISSUE-BANDIT SCOREBOARD</div>
       <div class="kv-row">${bstats}</div>
+      <div class="panel-h" style="margin-top:8px">CONTEXTUAL BANDITS (asset|tf|vol regime — own data or global)</div>
+      <div class="kv-row">${Object.entries(rl.contexts || {}).length ? Object.entries(rl.contexts).map(([ctx, b]) =>
+        `<div class="kv"><span>${esc(ctx)}</span><b>thr ${fmt(b.threshold, 2)} · ${b.committed ?? 0}/8</b></div>`).join("")
+        : `<div class="dim">no context has settled windows yet — every context uses the global bucket</div>`}</div>
+      <div class="panel-h" style="margin-top:8px">Q-TABLE — subsystem mix per window state (decided windows only)</div>
+      <div class="kv-row">${Object.entries(rl.qtable || {}).length ? Object.entries(rl.qtable).map(([state, cell]) =>
+        `<div class="kv"><span>${esc(state)}</span><b>${Object.entries(cell).map(([a, v]) => `${esc(a)} Q${fmt(v.q, 2)} n=${v.n}`).join(" · ")}</b></div>`).join("")
+        : `<div class="dim">no decided windows yet — every state plays the balanced (legacy) mix</div>`}</div>
       ${acts ? `<div class="hint" style="margin-top:6px">recent RL actions:<br/>${acts}</div>` : ""}`;
   } catch (e) {
     box.innerHTML = `<div class="dim pad">rl console: ${esc(e.message)}</div>`;

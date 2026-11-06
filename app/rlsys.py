@@ -1,7 +1,8 @@
 """Reinforcement-learning controllers (user: 'use RL to find & fix errors,
 boost prediction accuracy, fix every formula/emotion/physics').
 
-Three controllers, one console:
+Six controllers, one console — all learning ONLY from real settled
+windows (strict-sign reward: win +1, loss −1, no-trade/skip 0):
 
   1. ERROR-FINDER (auto-fix + rollback): every graded component already
      has reward rings (facc/eacc/pacc strict-sign outcomes). When a
@@ -11,21 +12,38 @@ Three controllers, one console:
      and deepens (or rolls back) otherwise. Every action is recorded —
      visible in /api/rl/status — so RL fixes are auditable, never
      invisible magic.
-  2. ISSUE-THOUSET BANDIT (accuracy booster): a4-armed bandit over the
-     confidence issue threshold {0.25,0.30,0.35,0.45? -> 0.25..0.45}
+  1b. WINNER BOOST (the symmetric half): reward >0.60 over n≥8 earns
+     weight ×1.10 per sustained pass up to a ×1.5 cap; the boost is
+     withdrawn the moment reward falls back under0.50, and a component
+     that turns bad loses its boost BEFORE any damp is applied. Winners
+     earn weight — they are never just 'not losers'.
+  2. ISSUE-THRESHOLD BANDIT (accuracy booster): a5-armed bandit over the
+     confidence issue threshold {0.25,0.30,0.35,0.40,0.45}
      commits to a bucket for8 settled windows, scores it by realised
      strict-sign reward (issued: ±1, no-trade:0), re-picks
      argmax(mean)+15% exploration. The threshold only moves where the
      DATA says issued trades win more.
-  3. TARGET TRACKER (honest): measures pooled ledger accuracy against
+  2b. CONTEXTUAL BANDIT: the same bandit kept PER CONTEXT
+     (asset|timeframe|volatility-regime) once a context has its own
+     settled history; unseen contexts fall back to the global bucket, so
+     a hot BTC/tf1 regime no longer drags the threshold for a quiet
+     BNB/tf4 — and no context invents a threshold before it has data.
+  3. Q-TABLE over window states: state = volatility regime × trend/chop
+     (measured from the tape at compute time), action = one of five
+     subsystem-mix presets applied to the CCI shares. At settlement the
+     (state, action) pair that was frozen into the lock is updated
+     Q += α(r − Q), α=0.25, on decided windows only. ε-greedy (15%)
+     selection; a state with no decided data yet plays 'balanced' —
+     exactly the legacy mix — never a guessed mix.
+  4. TARGET TRACKER (honest): measures pooled ledger accuracy against
      the user's90% target and prints the REAL number and gap — the RL
      loop climbs toward the target; it never rewrites history to fake
      reaching it.
 
 Persistence: data/rl.json with BUILD_VERSION guard (stale state dropped).
-Fairness: a fresh process starts at threshold0.35 and damp1.0 — exactly
-the legacy behaviour, so pinned confidence tests stay green until real
-settlements move the bandit.
+Fairness: a fresh process starts at threshold0.35, factor1.0 and the
+balanced mix — exactly the legacy behaviour, so pinned confidence tests
+stay green until real settlements move the learners.
 """
 from __future__ import annotations
 
@@ -36,7 +54,7 @@ import tempfile
 import time
 from typing import Any
 
-BUILD_VERSION = 1
+BUILD_VERSION = 2
 RL_FILE = os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "data", "rl.json")
 BUCKETS = [0.25, 0.30, 0.35, 0.40, 0.45]
@@ -46,9 +64,43 @@ DAMP_FLOOR = 0.4
 DAMP_STEP = 0.75         # multiply down by25% per sustained offence
 REWARD_LOW = 0.40
 REWARD_OK = 0.50
+REWARD_HIGH = 0.60       # winner-boost entry bar
+BOOST_STEP = 1.10        # multiply up by10% per sustained win streak
+BOOST_CAP = 1.5
 MIN_N = 8
 ACTION_CAP = 200
 ACC_TARGET = 0.90        # user target — reported honestly, never faked
+
+# ---- Q-table over window states -------------------------------------
+# Actions are MULTIPLIERS over the subsystem shares (renormalised to
+# 1.0 when applied). 'balanced' is the identity — the legacy mix.
+MIX_ACTIONS: dict[str, dict[str, float]] = {
+    "balanced": {},
+    "core-heavy": {"core": 1.30, "brain": 0.8, "emotion": 0.8,
+                   "physics": 0.9, "news": 0.8, "hf": 0.9, "tracer": 0.9},
+    "physics-heavy": {"physics": 1.35, "core": 0.9, "emotion": 0.85,
+                      "news": 0.85},
+    "sentiment-heavy": {"emotion": 1.30, "news": 1.25, "core": 0.9,
+                        "physics": 0.9},
+    "brain-heavy": {"brain": 1.40, "core": 0.9, "emotion": 0.9},
+}
+Q_ALPHA = 0.25           # one-step Q learning rate (γ=0: window reward
+                         # is fully realised at settlement, no bootstrap)
+Q_MIN_N = 3              # decided samples before a state leaves balanced
+
+
+def window_state(sigma_ratio: float, trend_strength: float) -> str:
+    """Window state for the Q-table, from measured tape quantities:
+    sigma_ratio = recent vol / own baseline (>1.25 high, <0.8 low);
+    trend_strength = |drift| in recent-sigma units (≥1.0 = trend)."""
+    vol = ("highvol" if sigma_ratio > 1.25 else
+           "lowvol" if sigma_ratio < 0.80 else "midvol")
+    return f"{vol}-{'trend' if trend_strength >= 1.0 else 'chop'}"
+
+
+def context_key(symbol: str, tf: str, regime: str) -> str:
+    """Contextual-bandit context: asset|timeframe|volatility regime."""
+    return f"{symbol}|{tf}|{regime}"
 
 
 def _pool_mean(engine: Any, ring_name: str) -> tuple[float, int]:
@@ -97,12 +149,12 @@ def damp_shares(shares: dict[str, float]) -> dict[str, float]:
     """Subsystem-share layer: damp is applied to the share and the pile
     is renormalised to1.0 (same rule the learning layer uses)."""
     rl = get_rl()
-    if not rl.damp:
+    if not rl.damp and not rl.boost:
         return shares
     out: dict[str, float] = {}
     for k, v in shares.items():
         cid = _SHARE_KEY_ID.get(k)
-        out[k] = float(v) * rl.damp.get(cid, 1.0) if cid else float(v)
+        out[k] = float(v) * rl.factor(cid) if cid else float(v)
     total = sum(out.values()) or 1.0
     return {k: v / total for k, v in out.items()}
 
@@ -114,16 +166,30 @@ class RLSystem:
             path = os.path.join(_tf.gettempdir(), "predict4_test_rl.json")
         self.path = path or RL_FILE
         self.damp: dict[int, float] = {}
-        self.active: dict[int, dict] = {}      # id -> action record
+        self.boost: dict[int, float] = {}
+        self.active: dict[int, dict] = {}      # id -> damp action record
+        self.boosted: dict[int, dict] = {}     # id -> boost action record
         self.actions: list[dict] = []
-        self.bandit: dict[str, Any] = {
-            "bucket": 2,                       # default0.35
-            "committed": 0,
-            "stats": {str(i): {"n": 0, "reward": 0.0}
-                      for i in range(len(BUCKETS))},
-        }
+        self.bandit: dict[str, Any] = self._fresh_bandit()
+        # contextual bandits: context -> bandit dict (own bucket/stats)
+        self.contexts: dict[str, dict[str, Any]] = {}
+        # Q-table: state -> action -> {"q": float, "n": int}
+        self.q: dict[str, dict[str, dict[str, float]]] = {}
+        self._q_pending: dict[str, dict[str, str]] = {}
         self.version = BUILD_VERSION
         self.load()
+
+    @staticmethod
+    def _fresh_bandit() -> dict[str, Any]:
+        return {"bucket": 2,                       # default0.35
+                "committed": 0,
+                "stats": {str(i): {"n": 0, "reward": 0.0}
+                          for i in range(len(BUCKETS))}}
+
+    def factor(self, cid: int) -> float:
+        """Learned weight factor for one component: damp × boost."""
+        return float(self.damp.get(int(cid), 1.0)
+                     * self.boost.get(int(cid), 1.0))
 
     # ------------------------------------------------------ persistence
     def load(self) -> None:
@@ -134,8 +200,12 @@ class RLSystem:
                 return                      # stale state dropped (B-8)
             self.damp = {int(k): float(v)
                          for k, v in (d.get("damp") or {}).items()}
+            self.boost = {int(k): float(v)
+                          for k, v in (d.get("boost") or {}).items()}
             self.active = {int(k): dict(v)
                            for k, v in (d.get("active") or {}).items()}
+            self.boosted = {int(k): dict(v)
+                            for k, v in (d.get("boosted") or {}).items()}
             self.actions = list(d.get("actions") or [])[-ACTION_CAP:]
             b = d.get("bandit") or {}
             if b.get("bucket") is not None:
@@ -144,6 +214,12 @@ class RLSystem:
                     "committed": int(b.get("committed") or 0),
                     "stats": b.get("stats") or self.bandit["stats"],
                 }
+            self.contexts = {str(k): dict(v) for k, v in
+                             (d.get("contexts") or {}).items()}
+            self.q = {str(s): {str(a): {"q": float(v.get("q", 0.0)),
+                                        "n": int(v.get("n", 0))}
+                                for a, v in (acts or {}).items()}
+                      for s, acts in (d.get("q") or {}).items()}
         except (OSError, ValueError, TypeError):
             pass
 
@@ -154,9 +230,11 @@ class RLSystem:
                 dir=os.path.dirname(self.path) or ".", suffix=".tmp")
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump({"build_version": BUILD_VERSION,
-                           "damp": self.damp, "active": self.active,
+                           "damp": self.damp, "boost": self.boost,
+                           "active": self.active, "boosted": self.boosted,
                            "actions": self.actions[-ACTION_CAP:],
-                           "bandit": self.bandit}, fh)
+                           "bandit": self.bandit,
+                           "contexts": self.contexts, "q": self.q}, fh)
             os.replace(tmp, self.path)
         except OSError:
             pass
@@ -190,6 +268,43 @@ class RLSystem:
             if n < MIN_N:
                 continue
             act = self.active.get(cid)
+            bact = self.boosted.get(cid)
+            if bact is not None and act is None:
+                # a boosted winner is re-judged every pass: fall back
+                # under the OK bar and the earned weight is withdrawn
+                # BEFORE any damp is considered; keep winning and the
+                # boost deepens toward the cap, one step per cooldown.
+                if m < REWARD_OK:
+                    self.boost.pop(cid, None)
+                    self.boosted.pop(cid, None)
+                    rec = dict(bact)
+                    rec.update(at=now, reward=round(m, 3), n=n,
+                               action="boost withdrawn (reward faded)",
+                               state="boost-withdrawn")
+                    self.actions.append(rec)
+                    taken.append(rec)
+                elif n >= int(bact.get("n", 0)) + COMMIT_N and \
+                        m > REWARD_HIGH and \
+                        self.boost.get(cid, 1.0) < BOOST_CAP:
+                    self.boost[cid] = round(min(
+                        BOOST_CAP, self.boost.get(cid, 1.0) * BOOST_STEP), 3)
+                    bact["n"] = n
+                    bact["reward"] = round(m, 3)
+                    bact["action"] = f"boost ×{self.boost[cid]:.2f}"
+                    self.actions.append(dict(bact))
+                    taken.append(dict(bact))
+                continue
+            if act is None and bact is None and m > REWARD_HIGH:
+                # WINNER BOOST: sustained reward earns weight, capped.
+                self.boost[cid] = BOOST_STEP
+                rec = {"at": now, "kind": label, "id": int(cid),
+                       "reward": round(m, 3), "n": n,
+                       "action": f"boost ×{BOOST_STEP:.2f}",
+                       "state": "boosted"}
+                self.boosted[cid] = rec
+                self.actions.append(rec)
+                taken.append(rec)
+                continue
             if act is None:
                 if m < REWARD_LOW:
                     self.damp[cid] = max(DAMP_FLOOR, DAMP_STEP)
@@ -226,43 +341,109 @@ class RLSystem:
         return taken
 
     # ------------------------------------------------ 2) issue bandit
-    def issue_threshold(self) -> float:
+    def issue_threshold(self, context: str | None = None) -> float:
+        """Threshold for a context once that context has earned its own
+        bucket; the global bucket otherwise (fresh = 0.35, legacy)."""
+        if context:
+            cb = self.contexts.get(context)
+            if cb is not None:
+                return float(BUCKETS[int(cb["bucket"])])
         return float(BUCKETS[self.bandit["bucket"]])
 
-    def on_settle(self, issued: bool, won: bool | None) -> None:
+    def on_settle(self, issued: bool, won: bool | None,
+                  context: str | None = None) -> None:
         """Score the committed bucket on ONE settled window:
-        issued → ±1, no-trade →0 (opportunity-neutral)."""
-        st = self.bandit["stats"].setdefault(
-            str(self.bandit["bucket"]), {"n": 0, "reward": 0.0})
+        issued → ±1, no-trade →0 (opportunity-neutral). The global
+        bandit always learns; a named context learns in parallel and
+        takes over its own threshold once it has a committed bucket."""
         r = 0.0 if not issued else (1.0 if won else -1.0)
-        st["n"] += 1
-        st["reward"] = round(st["reward"] + r, 3)
-        self.bandit["committed"] += 1
-        if self.bandit["committed"] >= COMMIT_N:
-            self._repick()
+        self._score_bandit(self.bandit, r, "bandit")
+        if context:
+            cb = self.contexts.setdefault(context, self._fresh_bandit())
+            self._score_bandit(cb, r, f"bandit:{context}")
         self.save()
 
-    def _mean_reward(self, i: int) -> float:
-        st = self.bandit["stats"].get(str(i)) or {"n": 0, "reward": 0.0}
+    def _score_bandit(self, bandit: dict, r: float, kind: str) -> None:
+        st = bandit["stats"].setdefault(
+            str(bandit["bucket"]), {"n": 0, "reward": 0.0})
+        st["n"] += 1
+        st["reward"] = round(st["reward"] + r, 3)
+        bandit["committed"] += 1
+        if bandit["committed"] >= COMMIT_N:
+            self._repick(bandit, kind)
+
+    @staticmethod
+    def _bandit_mean(bandit: dict, i: int) -> float:
+        st = bandit["stats"].get(str(i)) or {"n": 0, "reward": 0.0}
         n = int(st["n"])
         return (float(st["reward"]) / n) if n > 0 else float("-inf")
 
-    def _repick(self) -> None:
+    def _mean_reward(self, i: int) -> float:
+        return self._bandit_mean(self.bandit, i)
+
+    def _repick(self, bandit: dict | None = None,
+                kind: str = "bandit") -> None:
+        bandit = self.bandit if bandit is None else bandit
         best = max(range(len(BUCKETS)),
-                   key=lambda i: (self._mean_reward(i)
-                                  if self.bandit["stats"].get(str(i), {})
+                   key=lambda i: (self._bandit_mean(bandit, i)
+                                  if bandit["stats"].get(str(i), {})
                                   .get("n") else float("-inf")))
         if random.random() < EXPLORE:
             others = [i for i in range(len(BUCKETS)) if i != best]
             best = random.choice(others) if others else best
-        if best != self.bandit["bucket"]:
-            self.bandit["bucket"] = int(best)
+        if best != bandit["bucket"]:
+            bandit["bucket"] = int(best)
             self.actions.append({
-                "at": time.time(), "kind": "bandit", "id": 0,
+                "at": time.time(), "kind": kind, "id": 0,
                 "action": f"issue threshold → {BUCKETS[best]:.2f}",
-                "reward": round(self._mean_reward(best), 3), "n": 0,
-                "state": "repicked"})
-        self.bandit["committed"] = 0
+                "reward": round(self._bandit_mean(bandit, best), 3),
+                "n": 0, "state": "repicked"})
+        bandit["committed"] = 0
+
+    # ------------------------------------------- 3) Q-table over states
+    def choose_mix(self, state: str, key: str) -> str:
+        """ε-greedy subsystem-mix action for a window state. A state
+        with <Q_MIN_N decided samples plays 'balanced' (legacy mix) —
+        the table never guesses a mix it has not measured."""
+        cell = self.q.get(state) or {}
+        known = {a: v for a, v in cell.items() if int(v.get("n", 0)) > 0}
+        if sum(int(v["n"]) for v in known.values()) < Q_MIN_N:
+            action = "balanced"
+        elif random.random() < EXPLORE:
+            action = random.choice(list(MIX_ACTIONS))
+        else:
+            action = max(known, key=lambda a: float(known[a]["q"])) \
+                if known else "balanced"
+        self._q_pending[key] = {"state": state, "action": action}
+        return action
+
+    @staticmethod
+    def mix_shares(shares: dict[str, float], action: str) -> dict[str, float]:
+        """Apply a Q-table mix action to subsystem shares (renormalised
+        to 1.0 — same rule as every other share adjustment)."""
+        mult = MIX_ACTIONS.get(action) or {}
+        if not mult:
+            return dict(shares)
+        out = {k: float(v) * float(mult.get(k, 1.0))
+               for k, v in shares.items()}
+        total = sum(out.values()) or 1.0
+        return {k: v / total for k, v in out.items()}
+
+    def q_on_settle(self, state: str | None, action: str | None,
+                    reward: float | None) -> None:
+        """One-step Q update Q += α(r − Q) for the (state, action) pair
+        frozen into the settled lock. Decided windows only — a no-trade
+        window grades the bandit, never the mix."""
+        if not state or not action or reward is None:
+            return
+        if action not in MIX_ACTIONS:
+            return
+        cell = self.q.setdefault(state, {})
+        cur = cell.setdefault(action, {"q": 0.0, "n": 0})
+        cur["q"] = round(float(cur["q"])
+                         + Q_ALPHA * (float(reward) - float(cur["q"])), 4)
+        cur["n"] = int(cur["n"]) + 1
+        self.save()
 
     # ------------------------------------------- 3) honest target tracker
     def target_status(self, ledger: Any) -> dict:
@@ -304,7 +485,23 @@ class RLSystem:
                           for i, v in self.bandit["stats"].items()},
             },
             "damp": {k: v for k, v in sorted(self.damp.items())},
+            "boost": {k: v for k, v in sorted(self.boost.items())},
+            "factors": {str(k): round(self.factor(int(k)), 3) for k in
+                        sorted(set(self.damp) | set(self.boost))},
             "active_fixes": list(self.active.values()),
+            "active_boosts": list(self.boosted.values()),
+            "contexts": {
+                ctx: {"threshold": float(BUCKETS[int(b["bucket"])]),
+                      "committed": b["committed"],
+                      "stats": {BUCKETS[int(i)]: v
+                                for i, v in b["stats"].items()}}
+                for ctx, b in sorted(self.contexts.items())},
+            "qtable": {
+                state: {a: {"q": round(float(v["q"]), 3),
+                            "n": int(v["n"])}
+                        for a, v in sorted(cell.items())}
+                for state, cell in sorted(self.q.items())},
+            "mix_actions": list(MIX_ACTIONS),
             "recent_actions": self.actions[-8:][::-1],
         }
 

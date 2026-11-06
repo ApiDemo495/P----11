@@ -212,6 +212,9 @@ class PredictionEngine:
         from .rlsys import get_rl
         self.rl = get_rl()
         self._tracer_last: dict[tuple[str, str], float] = {}
+        # RL deepening: per-(asset,tf) window state / chosen Q-mix /
+        # bandit context from the latest compute, frozen into the lock
+        self._rl_state: dict[tuple[str, str], dict[str, str]] = {}
         self.news_polarity: deque[float] = deque(maxlen=30)
         self._market_cache: dict[str, dict] = {}
         self._market_cache_ts: float = 0.0
@@ -876,9 +879,18 @@ class PredictionEngine:
                 * self._hindsight_factor(symbol, tf, fid)
                 for fid in WEIGHT_IDS
             }
+            # RL DEEPENING: Q-table picks the subsystem mix for this
+            # window's measured state; the contextual bandit context is
+            # remembered so the issue threshold + settlement scoring
+            # use the same context the prediction was made under.
+            _rl_state, _rl_ctx = self._rl_window_state(symbol, tf)
+            _rl_action = self.rl.choose_mix(_rl_state, f"{symbol}|{tf}")
+            self._rl_state[(symbol, tf)] = {
+                "state": _rl_state, "action": _rl_action, "ctx": _rl_ctx}
             pack = self.cci.compute(
                 symbol, tf, comp, drhe, tme=phys["tme"],
-                shares=damp_shares(self.learning.subsystem_shares),
+                shares=self.rl.mix_shares(
+                    damp_shares(self.learning.subsystem_shares), _rl_action),
                 raw_weights=raw_mod,
             )
 
@@ -947,10 +959,13 @@ class PredictionEngine:
                 pass
 
             # RL ISSUE BANDIT: learned confidence threshold (fresh state
-            # =0.35 → identical to the legacy floor until data moves it)
+            # =0.35 → identical to the legacy floor until data moves it);
+            # a context with its own settled history speaks for itself.
             try:
                 fin["issued"] = (float(fin["confidence"])
-                                 > self.rl.issue_threshold())
+                                 > self.rl.issue_threshold(
+                                     self._rl_state.get((symbol, tf), {})
+                                     .get("ctx")))
             except Exception:
                 pass
 
@@ -3049,6 +3064,29 @@ class PredictionEngine:
         mult = max(0.25, min(1.5, float(mult)))
         return round(0.25 * mult, 6)
 
+    def _rl_window_state(self, symbol: str, tf: str) -> tuple[str, str]:
+        """Measured (Q-table state, bandit context) for this window from
+        the tape itself: recent-vs-baseline vol and drift in sigma
+        units. Thin tape -> the neutral state/context, never a guess."""
+        from .rlsys import window_state, context_key
+        try:
+            closes = list(self.feed.state(symbol).closes or [])
+        except Exception:
+            closes = []
+        if len(closes) < 30:
+            state = "midvol-chop"
+            return state, context_key(symbol, tf, state.split("-")[0])
+        rets = [(closes[i] - closes[i - 1]) / closes[i - 1]
+                for i in range(1, len(closes)) if closes[i - 1]]
+        recent = rets[-20:]
+        sig_r = _std_pop(recent) if recent else 0.0
+        sig_b = _std_pop(rets) if rets else 0.0
+        ratio = (sig_r / sig_b) if sig_b > 0 else 1.0
+        drift = abs(sum(recent)) / (sig_r * (len(recent) ** 0.5)) \
+            if sig_r > 0 else 0.0
+        state = window_state(ratio, drift)
+        return state, context_key(symbol, tf, state.split("-")[0])
+
     def _settle_and_lock(self, symbol: str, tf: str, now: float,
                          res: dict) -> None:
         """Settle the previous window in the ledger, then freeze the new
@@ -3073,13 +3111,18 @@ class PredictionEngine:
             # REINFORCEMENT loop on a settled window: score the issue
             # bandit, then run the error-finder over every reward ring
             try:
+                _ctx = prev.get("rl_ctx")
                 was_issued = (float(prev.get("confidence") or 0.0)
-                              > self.rl.issue_threshold())
-                self.rl.on_settle(
-                    issued=was_issued,
-                    won=(_row.get("result") == "win"
-                         if _row.get("result") in ("win", "loss")
-                         else None))
+                              > self.rl.issue_threshold(_ctx))
+                _won = (_row.get("result") == "win"
+                        if _row.get("result") in ("win", "loss")
+                        else None)
+                self.rl.on_settle(issued=was_issued, won=_won, context=_ctx)
+                # Q-table: grade the mix this window actually traded
+                # under (decided windows only)
+                self.rl.q_on_settle(
+                    prev.get("rl_state"), prev.get("rl_action"),
+                    (1.0 if _won else -1.0) if _won is not None else None)
                 self.rl.audit(self)
             except Exception:
                 log.exception("rl settle loop failed")

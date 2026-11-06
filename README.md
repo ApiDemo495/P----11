@@ -36,7 +36,7 @@ provided), then run `./run.sh` and forward port **8000**.
 Run the test suite:
 
 ```bash
-.venv/bin/python -m pytest -q    # 253 tests (honesty, parts 1-4, news, brain, order-book, UX sync)
+.venv/bin/python -m pytest -q    # 270 tests (honesty, parts 1-4, news, brain, order-book, UX sync, deep RL)
 ```
 
 Environment:
@@ -345,7 +345,7 @@ static/
                    contribution ticks, AUTO chip, gauges, news stream
   brains3d.js      Three.js 2×2 instanced brain visualization
   vendor/          three.module.js v0.160.1 (MIT, vendored — no CDN)
-tests/             253 tests: parts 1–4, honesty guards, news (docs11),
+tests/             270 tests: parts 1–4, honesty guards, news (docs11),
                    FlyWire brain (10), order-book layer (6), UX sync
 pytest.ini         pytest 9 + pytest-asyncio 1, strict asyncio mode,
                    plain `pytest` works (no cache plugin dependency)
@@ -644,18 +644,32 @@ emotion/physics cards carry the same in their tooltip/why line.
 
 ### Reinforcement-learning console
 
-`GET /api/rl/status` + the SETTINGS tab panel expose three controllers:
+`GET /api/rl/status` + the SETTINGS tab panel expose six controllers,
+all learning only from real settled windows (win +1 / loss −1 / 0):
 
 1. **Error-finder** — every graded ring (`facc/eacc/pacc`, brain,
    tracer) is monitored; reward < 0.40 over n≥8 windows DAMPS that
    component's effective weight (×0.75, floor0.4), recovery (≥0.50)
    RESTORES it, sustained failure deepens it — every action logged and
    reversible, never invisible.
-2. **Issue bandit** — a4-armed bandit over the confidence threshold
+1b. **Winner boost** — reward > 0.60 over n≥8 earns weight ×1.10 per
+   sustained pass up to ×1.5; the boost is withdrawn when reward fades
+   under0.50, before any damp is considered.
+2. **Issue bandit** — a5-armed bandit over the confidence threshold
    {0.25…0.45} commits for8 settled windows, scores ±1/0 by realised
    strict-sign outcome and re-picks argmax +15 % exploration. Fresh
    state =0.35 (identical to the legacy floor).
-3. **Honest target tracker** — prints the measured pooled accuracy vs
+2b. **Contextual bandit** — the same bandit kept per context
+   (asset|timeframe|volatility regime); a context speaks for itself
+   once it has its own settled history, unseen contexts use the global
+   bucket.
+3. **Q-table over window states** — state = vol regime × trend/chop
+   measured from the tape, action = subsystem-mix preset (balanced,
+   core/physics/sentiment/brain-heavy) applied to the CCI shares; the
+   (state, action) frozen into each lock is updated Q += 0.25(r − Q)
+   on decided settlements. States with <3 decided samples play the
+   balanced (legacy) mix.
+4. **Honest target tracker** — prints the measured pooled accuracy vs
    the90 % target with n and gap: *RL climbs with real settlements; the
    number is never rewritten.*
 
