@@ -10,7 +10,7 @@ def test_no_tradingview_dependency():
     """Own canvas chart only — the TradingView lib was removed for speed."""
     assert "LightweightCharts" not in APP_JS
     assert "lightweight-charts" not in INDEX_HTML
-    assert "class ChartX" in APP_JS
+    assert "class LineChart" in APP_JS
 
 
 def test_bottom_tab_bar_and_nine_views():
@@ -69,7 +69,7 @@ def test_per_tf_candle_endpoints():
     tape with high/low wicks drives all four cards; TP/lock overlays
     remain per-TF. The endpoint itself still accepts tf= aggregation.)"""
     assert "/api/candles?symbol=${S.symbol}&tf=tf1&n=260" in APP_JS
-    assert "Y(b.high)" in APP_JS          # per-bar wicks (zigzag)
+    assert "d.pts[d.pts.length - 1]" in APP_JS  # v2 line engine (user ordered ChartX deleted)
     # every TF chart still receives data in the loop
     assert "S.charts[tf].setData" in APP_JS or "c.setData(" in APP_JS
 

@@ -464,3 +464,12 @@ span.tp-min.tp-horizon { color: var(--gold); font-weight: 700; letter-spacing: .
   .quad-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 560px) { .quad-grid { grid-template-columns: 1fr; } }
+
+/* --- width pass (user: "side blank space, both side"): cards must fill
+   their columns; nothing may push the page sideways ------------------- */
+html, body { overflow-x: hidden; max-width: 100vw; }
+.grid > *, .cards > *, .quad-grid > *, .f-grid > *, .phys-grid > * { min-width: 0; }
+.card, .panel, section.card { width: 100%; }
+table { max-width: 100%; }
+canvas { max-width: 100%; }
+#main { width: 100%; min-width: 0; }

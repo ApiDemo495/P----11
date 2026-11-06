@@ -465,7 +465,7 @@ def test_ui_contract_static_assets():
     assert "var(--cyan)" in css and "var(--red)" in css
     js = open("static/app.js").read()
     assert "LightweightCharts" not in js       # own ChartX canvas
-    assert "class ChartX" in js
+    assert "class LineChart" in js
     assert "MIXED SIGNALS" not in js           # label comes from backend
 
 

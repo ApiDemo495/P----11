@@ -149,153 +149,123 @@ const S = {
   newsSel: "BTC", histDay: null,
 };
 
-/* ═══════════ ChartX — own canvas line chart ═══════════ */
-class ChartX {
+/* ═══════════ LineChart — own chart engine (v2, replaces ChartX) ═════
+   One engine for hero + sub-timeframe quads + sparklines. Design rules
+   (user: "better than TradingView"): the PRICE IS ALWAYS VISIBLE —
+   right-hand price axis with ticks, a last-price chip pinned to the
+   axis, crosshair readout of time+price, dashed TP/SL/entry levels with
+   labels, and (hero) the empirical fan cone into the future half.     */
+class LineChart {
   constructor(el, opts = {}) {
-    this.el = el; this.spark = !!opts.spark; this.line = !!opts.line;
+    this.el = el; this.spark = !!opts.spark;
     this.cv = document.createElement("canvas");
-    this.cv.style.cssText = "width:100%;height:100%;display:block";
-    el.innerHTML = ""; el.appendChild(this.cv);
-    this.bars = []; this.lines = []; this.markers = [];
-    this.maxBars = opts.maxBars || 150;
-    this._raf = 0; this._lastW = 0; this._lastH = 0;
-    if (typeof ResizeObserver !== "undefined")
-      new ResizeObserver(() => this.schedule()).observe(el);
+    this.cv.style.cssText = "display:block;width:100%;height:100%";
+    el.appendChild(this.cv);
+    this.cross = null;
+    const upd = e => { const r = this.cv.getBoundingClientRect();
+      const t = (e.touches && e.touches[0]) || e;
+      this.cross = { x: t.clientX - r.left, y: t.clientY - r.top }; this.draw(); };
+    this.cv.addEventListener("mousemove", upd);
+    this.cv.addEventListener("touchmove", upd, { passive: true });
+    this.cv.addEventListener("mouseleave", () => { this.cross = null; this.draw(); });
   }
-  // coalesce redraws to one per animation frame — 4 charts × 1 Hz ticks ×
-  // full canvas reallocation was the "laggy chart"
-  schedule() {
-    if (this._raf) return;
-    this._raf = requestAnimationFrame(() => { this._raf = 0; this.draw(); });
-  }
-  setData(bars) { this.bars = bars.slice(-this.maxBars); this.schedule(); }
-  setLines(l) { this.lines = l || []; this.schedule(); }
-  setMarkers(m) { this.markers = m || []; this.schedule(); }
-  tick(price) {
-    const t = Math.floor(Date.now() / 1000 / 60) * 60;
-    const b = this.bars[this.bars.length - 1];
-    if (!b) this.bars.push({ time: t, open: price, high: price, low: price, close: price });
-    else if (b.time === t) { b.close = price; b.high = Math.max(b.high, price); b.low = Math.min(b.low, price); }
-    else if (b.time < t) this.bars.push({ time: t, open: b.close, high: Math.max(b.close, price), low: Math.min(b.close, price), close: price });
-    else return;
-    if (this.bars.length > 280) this.bars.shift();
-    this.schedule();
-  }
+  set(data) { this.d = data; this.draw(); }
+  setData(bars) { // OHLC bars -> close line (quad/spark feed)
+    this.base = { pts: bars.map(b => ({ t: b.time > 1e12 ? b.time / 1000 : b.time, p: b.close })).filter(p => p.p > 0) };
+    if (this.base.pts.length) { this.base.t0 = this.base.pts[0].t; this.base.t1 = this.base.pts[this.base.pts.length - 1].t; }
+    this._sync(); }
+  setLines(ls) { this.lines = ls || []; this._sync(); }
+  setMarkers() { /* markers dropped in v2: levels+labels carry the info */ }
+  tick(p) { if (!this.base || !this.base.pts.length) return;
+    const now = Date.now() / 1000, last = this.base.pts[this.base.pts.length - 1];
+    if (now - last.t < 1) last.p = p; else this.base.pts.push({ t: now, p });
+    if (this.base.pts.length > 900) this.base.pts.splice(0, this.base.pts.length - 900);
+    this.base.t1 = now; this._sync(); }
+  _sync() { if (!this.base) return;
+    this.d = { ...this.base, levels: (this.lines || []).map(L => ({ p: L.price, tag: L.title || "", color: L.color, dash: L.dash })) };
+    this.draw(); }
   draw() {
-    const w = this.el.clientWidth || 240, h = this.el.clientHeight || 100;
-    const cv = this.cv;
-    // resize ONLY when the box actually changed — resizing every frame
-    // reallocates the bitmap and was the main per-tick cost
-    if (cv.width !== w * 2 || cv.height !== h * 2) {
-      cv.width = w * 2; cv.height = h * 2;
+    const d = this.d; if (!d || !d.pts || d.pts.length < 2) return;
+    const cv = this.cv, W = this.el.clientWidth || 300, H = this.el.clientHeight || 120;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
+    const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const root = getComputedStyle(document.documentElement);
+    const INK = root.getPropertyValue("--ink").trim() || "#e8e8f2",
+          DIM = root.getPropertyValue("--dim").trim() || "#8a8aa0",
+          UP = "#26a69a", DN = "#ef5350", GOLD = "#c9a227";
+    g.clearRect(0, 0, W, H);
+    const padR = this.spark ? 4 : 58, padL = 6, padT = 8, padB = this.spark ? 4 : 16;
+    const pw = W - padL - padR, ph = H - padT - padB;
+    let lo = Infinity, hi = -Infinity;
+    for (const p of d.pts) { lo = Math.min(lo, p.p); hi = Math.max(hi, p.p); }
+    for (const L of (d.levels || [])) { lo = Math.min(lo, L.p); hi = Math.max(hi, L.p); }
+    if (d.fan) for (const f of d.fan) { lo = Math.min(lo, f[2]); hi = Math.max(hi, f[1]); }
+    if (!(hi > lo)) { hi = lo * 1.001; lo = lo * 0.999; }
+    const pad = (hi - lo) * 0.08; hi += pad; lo -= pad;
+    const t0 = d.t0, t1 = d.t1, X = t => padL + (t - t0) / Math.max(1, t1 - t0) * pw,
+          Y = p => padT + (hi - p) / (hi - lo) * ph;
+    // grid + price axis (the "no price visible" fix: always drawn)
+    g.font = "9px ui-monospace,monospace"; g.textAlign = "left";
+    const ticks = 4;
+    for (let i = 0; i <= ticks; i++) {
+      const p = lo + (hi - lo) * i / ticks, y = Y(p);
+      g.strokeStyle = "rgba(140,140,170,.14)"; g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + pw, y); g.stroke();
+      if (!this.spark) { g.fillStyle = DIM; g.fillText(px(p), padL + pw + 4, y + 3); }
     }
-    const g = cv.getContext("2d"); g.setTransform(2, 0, 0, 2, 0, 0);
-    g.clearRect(0, 0, w, h);
-    if (!this.bars.length) return;
-    let hi = -Infinity, lo = Infinity;
-    for (const b of this.bars) { hi = Math.max(hi, b.high); lo = Math.min(lo, b.low); }
-    if (!this.spark) for (const l of this.lines) { hi = Math.max(hi, l.price); lo = Math.min(lo, l.price); }
-    // robust range: a single pump/wick must not flatten everything else
-    // (user: 'charts are flat'). Use the5–95th percentile of the bar
-    // extremes when the view is long enough; off-range lines clamp to
-    // the edges WITH their real labels (canvas clips the rest).
-    if (!this.spark && this.bars.length >= 10) {
-      const ex = [];
-      for (const b of this.bars) { ex.push(b.high, b.low); }
-      ex.sort((a2, b2) => a2 - b2);
-      const p5 = ex[Math.floor(ex.length * 0.05)];
-      const p95 = ex[Math.min(ex.length - 1, Math.ceil(ex.length * 0.95) - 1)];
-      if (p95 > p5) { lo = p5; hi = p95; }
-      // outliers can't flatten the view — BUT TP/SL/LIQ levels must stay
-      // visible, so widen the robust range to include the overlay lines
-      for (const l of this.lines) {
-        if (l.price > hi) hi = l.price;
-        if (l.price < lo) lo = l.price;
-      }
+    if (!this.spark) { // time axis
+      g.fillStyle = DIM; g.textAlign = "center";
+      for (let i = 0; i <= 4; i++) { const t = t0 + (t1 - t0) * i / 4, dt = new Date(t * 1000);
+        g.fillText(`${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`, X(t), H - 4); }
+      g.textAlign = "left";
     }
-    const pad = (hi - lo) * 0.08 || Math.max(hi * 1e-4, 0.01); hi += pad; lo -= pad;
-    const rw = this.spark ? 2 : 48;
-    const X = i => (i / Math.max(1, this.bars.length - 1)) * (w - rw) + 1;
-    const Y = p => h - 3 - ((p - lo) / (hi - lo || 1)) * (h - 6);
-    if (this.spark) {
+    // future region shade (hero window not yet lived)
+    if (d.nowX != null) { const x = X(d.nowX);
+      g.fillStyle = "rgba(120,120,200,.05)"; g.fillRect(x, padT, padL + pw - x, ph);
+      g.strokeStyle = "rgba(160,160,220,.35)"; g.setLineDash([3, 3]);
+      g.beginPath(); g.moveTo(x, padT); g.lineTo(x, padT + ph); g.stroke(); g.setLineDash([]); }
+    // empirical fan cone
+    if (d.fan && d.fan.length > 1) {
       g.beginPath();
-      this.bars.forEach((b, i) => { const x = X(i), y = Y(b.close); i ? g.lineTo(x, y) : g.moveTo(x, y); });
-      g.strokeStyle = "rgba(0,212,240,.45)"; g.lineWidth = 1; g.stroke(); return;
+      d.fan.forEach((f, i) => i ? g.lineTo(X(f[0]), Y(f[1])) : g.moveTo(X(f[0]), Y(f[1])));
+      for (let i = d.fan.length - 1; i >= 0; i--) g.lineTo(X(d.fan[i][0]), Y(d.fan[i][2]));
+      g.closePath(); g.fillStyle = "rgba(38,166,154,.12)"; g.fill();
+      g.beginPath(); d.fan.forEach((f, i) => i ? g.lineTo(X(f[0]), Y(f[1])) : g.moveTo(X(f[0]), Y(f[1])));
+      g.strokeStyle = UP; g.globalAlpha = .5; g.stroke(); g.globalAlpha = 1;
+      g.beginPath(); d.fan.forEach((f, i) => i ? g.lineTo(X(f[0]), Y(f[2])) : g.moveTo(X(f[0]), Y(f[2])));
+      g.strokeStyle = DN; g.stroke();
     }
-    // level lines with DE-COLLIDED labels: sort by screen y and enforce
-    // an 11 px minimum gap — TP1/TP-horizon/SL labels used to print on
-    // top of each other in the quad cards (unreadable stacks)
-    const _lbl = this.lines.map(l => ({
-      l, y: Math.max(10, Math.min(h - 4, Y(l.price))),
-    })).sort((a, b) => a.y - b.y);
-    for (let i = 1; i < _lbl.length; i++)
-      if (_lbl[i].y - _lbl[i - 1].y < 11) _lbl[i].y = _lbl[i - 1].y + 11;
-    for (let i = _lbl.length - 2; i >= 0; i--)
-      if (_lbl[i + 1].y - _lbl[i].y < 11) _lbl[i].y = _lbl[i + 1].y - 11;
-    for (const { l, y } of _lbl) {
-      g.strokeStyle = l.color; g.setLineDash(l.dash === false ? [] : [5, 4]); g.lineWidth = l.hit ? 1.8 : 1;
-      g.beginPath(); g.moveTo(0, Y(l.price)); g.lineTo(w - rw, Y(l.price)); g.stroke(); g.setLineDash([]);
-      g.fillStyle = l.color; g.font = "9px monospace"; g.textAlign = "right";
-      g.fillText(`${l.title} ${l.price.toFixed(l.price > 1000 ? 0 : 2)}`, w - rw - 3, y - 3);
-    }
-    // ── price grid + right-hand scale (reads like a real chart) ──
-    g.font = "9px monospace"; g.textAlign = "left";
-    for (let gi = 0; gi <= 4; gi++) {
-      const val = lo + (hi - lo) * gi / 4;
-      const gy = Y(val);
-      g.strokeStyle = "rgba(216,216,232,.07)"; g.lineWidth = 1;
-      g.beginPath(); g.moveTo(0, gy); g.lineTo(w - rw, gy); g.stroke();
-      g.fillStyle = "#6e6e8c";
-      g.fillText(val >= 1000 ? val.toFixed(0) : val.toFixed(2),
-                 w - rw + 4, Math.max(8, Math.min(h - 4, gy + 3)));
-    }
-    if (this.line) {
-      // LINE mode (quad cards): closes as one line ending at the live
-      // tick — same "chart must match price" rule as the hero; candle
-      // bodies on a 90 px card were unreadable dots
-      g.beginPath();
-      this.bars.forEach((b, i) => { const x = X(i), y = Y(b.close); i ? g.lineTo(x, y) : g.moveTo(x, y); });
-      g.strokeStyle = "#e8f6ff"; g.lineWidth = 1.3; g.stroke();
-      const lb = this.bars[this.bars.length - 1];
-      if (lb) {
-        g.fillStyle = "#00d4f0";
-        g.beginPath(); g.arc(X(this.bars.length - 1), Y(lb.close), 2.2, 0, 7); g.fill();
-      }
-      return;
-    }
-    // ── CANDLES (the rewrite): bodies + wicks — a flat line was hiding
-    //    the actual two-sided structure of every bar ──
-    const plotW = w - rw;
-    const stepN = plotW / Math.max(1, this.bars.length);
-    const bw = Math.max(1, Math.min(stepN * 0.68, 13));
-    for (let i = 0; i < this.bars.length; i++) {
-      const b = this.bars[i];
-      const x = X(i);
-      const up = b.close >= b.open;
-      const col = up ? "#22c98a" : "#f0385a";
-      g.strokeStyle = col; g.lineWidth = 1;
-      g.beginPath(); g.moveTo(x, Y(b.high)); g.lineTo(x, Y(b.low)); g.stroke();
-      const yO = Y(b.open), yC = Y(b.close);
-      const top = Math.min(yO, yC);
-      const bh = Math.max(1, Math.abs(yO - yC));
-      g.fillStyle = col;
-      g.fillRect(x - bw / 2, top, bw, bh);
-    }
-    for (const m of this.markers) {
-      const i = this.bars.findIndex(b => b.time === m.time); if (i < 0) continue;
-      g.fillStyle = m.color; g.font = "9px sans-serif"; g.textAlign = "center";
-      g.fillText(m.glyph || "•", X(i), m.above ? Y(this.bars[i].high) - 3 : Y(this.bars[i].low) + 10);
-    }
-    const last = this.bars[this.bars.length - 1];
-    let ly = Y(last.close); ly = Math.max(8, Math.min(h - 8, ly));
-    g.fillStyle = last.close >= last.open ? "#00d4f0" : "#f0385a";
-    g.fillRect(w - rw + 1, ly - 7, rw - 2, 14);
-    g.fillStyle = "#04040c"; g.font = "bold 9px monospace"; g.textAlign = "left";
-    g.fillText(px(last.close), w - rw + 3, ly + 3);
-    g.fillStyle = "#55556e"; g.font = "8px monospace";
-    g.fillText(px(hi), w - rw + 2, 10); g.fillText(px(lo), w - rw + 2, h - 5);
+    // levels: entry gold solid, TP green dashed, SL red dashed + labels
+    for (const L of (d.levels || [])) { const y = Y(L.p); if (y < padT - 2 || y > padT + ph + 2) continue;
+      g.strokeStyle = L.color; g.setLineDash(L.dash ? [5, 4] : []);
+      g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + pw, y); g.stroke(); g.setLineDash([]);
+      g.fillStyle = L.color; g.font = "bold 9px ui-monospace,monospace";
+      g.fillText(`${L.tag} ${px(L.p)}`, padL + 3, y - 3); g.font = "9px ui-monospace,monospace"; }
+    // the line itself: gradient area + 1.8px stroke, coloured by window move
+    const up = d.pts[d.pts.length - 1].p >= d.pts[0].p, col = up ? UP : DN;
+    const grad = g.createLinearGradient(0, padT, 0, padT + ph);
+    grad.addColorStop(0, up ? "rgba(38,166,154,.25)" : "rgba(239,83,80,.25)"); grad.addColorStop(1, "rgba(0,0,0,0)");
+    g.beginPath(); d.pts.forEach((p, i) => i ? g.lineTo(X(p.t), Y(p.p)) : g.moveTo(X(p.t), Y(p.p)));
+    g.lineTo(X(d.pts[d.pts.length - 1].t), padT + ph); g.lineTo(X(d.pts[0].t), padT + ph); g.closePath();
+    g.fillStyle = grad; g.fill();
+    g.beginPath(); d.pts.forEach((p, i) => i ? g.lineTo(X(p.t), Y(p.p)) : g.moveTo(X(p.t), Y(p.p)));
+    g.strokeStyle = col; g.lineWidth = 1.8; g.stroke(); g.lineWidth = 1;
+    // last price: dot + axis chip (always visible)
+    const lp = d.pts[d.pts.length - 1], lx = X(lp.t), ly = Y(lp.p);
+    g.fillStyle = col; g.beginPath(); g.arc(lx, ly, 3, 0, 7); g.fill();
+    if (!this.spark) { g.fillRect(padL + pw + 1, ly - 8, padR - 2, 16);
+      g.fillStyle = "#0b0b14"; g.font = "bold 9px ui-monospace,monospace";
+      g.fillText(px(lp.p), padL + pw + 4, ly + 3); g.font = "9px ui-monospace,monospace"; }
+    // crosshair with time·price readout
+    if (this.cross && !this.spark) { const { x, y } = this.cross;
+      if (x >= padL && x <= padL + pw && y >= padT && y <= padT + ph) {
+        g.strokeStyle = "rgba(200,200,230,.4)"; g.setLineDash([3, 3]);
+        g.beginPath(); g.moveTo(x, padT); g.lineTo(x, padT + ph); g.moveTo(padL, y); g.lineTo(padL + pw, y); g.stroke(); g.setLineDash([]);
+        const ct = t0 + (x - padL) / pw * (t1 - t0), cp = hi - (y - padT) / ph * (hi - lo), dt = new Date(ct * 1000);
+        g.fillStyle = INK; g.fillText(`${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}:${String(dt.getSeconds()).padStart(2, "0")} · ${px(cp)}`, Math.min(x + 6, W - 120), 12); } }
   }
 }
+
 
 /* ═══════════ shell: assets, tabs, focus bar ═══════════ */
 function buildRail() {
@@ -446,105 +416,19 @@ function _drawHero() {
   const price = S.prices[S.symbol] ?? a.price; if (!price) return;
   const now = Date.now() / 1000;
   const t1 = d.cycle_end || (now + 600);
-  // TRUE WINDOW TIME AXIS (the "starting from middle" fix): the x
-  // axis is the whole prediction window, left edge = window start.
-  // The realised line is built from the CANDLE SERIES (which covers
-  // the full window from the REST backfill) + live ticks after the
-  // last bar - so it starts at the left edge of the window, not at
-  // page load / mid-chart.
   const t0 = d.cycle_start || (now - 600);
   let past = realisedSeries(t0, now);
   if (!past.length || now - past[past.length - 1].t > 2) past.push({ t: now, p: price });
   else past[past.length - 1] = { t: now, p: price };
-  const w = host.clientWidth || 320, h = host.clientHeight || 190;
-  let cv = host.querySelector("canvas");
-  if (!cv) { host.innerHTML = ""; cv = document.createElement("canvas");
-    cv.style.cssText = "width:100%;height:100%;display:block"; host.appendChild(cv); }
-  if (cv.width !== w * 2 || cv.height !== h * 2) { cv.width = w * 2; cv.height = h * 2; }
-  const g = cv.getContext("2d"); g.setTransform(2, 0, 0, 2, 0, 0);
-  g.clearRect(0, 0, w, h);
+  if (!host._lc) { host.innerHTML = ""; host._lc = new LineChart(host); }
   const b = d.branches;
-  const sigma = b?.sigma || Math.abs(price) * 0.002;
-  const fr = [0, 0.25, 0.5, 0.75, 1];
-  const fanPt = (f, z) => price + z * sigma * Math.sqrt(f);
-  // empirical cone (measured quantiles per fraction) when available
-  const fan = (b?.fan && b.fan.length > 2) ? b.fan : null;
-  const conePt = (f, key, z) => {
-    if (!fan) return fanPt(f, z);
-    const pt = fan.reduce((best, p) => Math.abs(p.f - f) < Math.abs(best.f - f) ? p : best, fan[0]);
-    return pt[key];
-  };
-  const rw = 46;
-  const X = t => ((t - t0) / Math.max(1, t1 - t0)) * (w - rw);
-  const nowX = X(now);
-  let lo = Math.min(...past.map(p => p.p)), hi = Math.max(...past.map(p => p.p));
-  lo = Math.min(lo, conePt(1, "q05", -1.6449)); hi = Math.max(hi, conePt(1, "q95", 1.6449));
-  for (const lv of [d.entry, d.tp, d.sl]) if (lv) { lo = Math.min(lo, lv); hi = Math.max(hi, lv); }
-  const pad = (hi - lo) * 0.10 || Math.abs(price * 1e-3); lo -= pad; hi += pad;
-  const Y = p => h - 14 - ((p - lo) / (hi - lo || 1)) * (h - 22);
-  g.font = "9px monospace"; g.textAlign = "left";
-  for (let gi = 0; gi <= 4; gi++) {
-    const val = lo + (hi - lo) * gi / 4, gy = Y(val);
-    g.strokeStyle = "rgba(216,216,232,.07)"; g.beginPath(); g.moveTo(0, gy); g.lineTo(w - rw, gy); g.stroke();
-    g.fillStyle = "#6e6e8c"; g.fillText(val >= 1000 ? val.toFixed(0) : val.toFixed(2), w - rw + 4, gy + 3);
-  }
-  // window start / end captions so the axis reads as a window
-  g.fillStyle = "#55556e"; g.fillText("window start", 2, h - 3);
-  g.textAlign = "right"; g.fillText("window end", w - rw - 2, h - 3); g.textAlign = "left";
-  for (const [hiK, loK, fill] of [["q95", "q05", "rgba(0,212,240,.07)"], ["q75", "q25", "rgba(0,212,240,.13)"]]) {
-    g.beginPath(); g.moveTo(nowX, Y(price));
-    fr.forEach(f => g.lineTo(X(now + f * (t1 - now)), Y(conePt(f, hiK, 1.6449))));
-    for (let i = fr.length - 1; i >= 0; i--) g.lineTo(X(now + fr[i] * (t1 - now)), Y(conePt(fr[i], loK, -1.6449)));
-    g.closePath(); g.fillStyle = fill; g.fill();
-  }
-  if (fan) {  // empirical median path
-    g.beginPath(); g.moveTo(nowX, Y(price));
-    fan.forEach(p => g.lineTo(X(now + p.f * (t1 - now)), Y(p.q50)));
-    g.strokeStyle = "rgba(216,216,232,.55)"; g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]);
-  }
-  g.beginPath(); g.moveTo(nowX, Y(price)); g.lineTo(X(t1), Y(price));
-  g.strokeStyle = "rgba(216,216,232,.55)"; g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]);
-  const hline = (lv, color, label, dash, x0, x1) => {
-    if (!lv) return;
-    g.beginPath(); g.moveTo(x0, Y(lv)); g.lineTo(x1, Y(lv));
-    g.strokeStyle = color; g.lineWidth = 1.2; g.setLineDash(dash); g.stroke(); g.setLineDash([]);
-    g.fillStyle = color; g.font = "9px monospace"; g.textAlign = "left";
-    g.fillText(`${label} ${px(lv)}`, x0 + 3, Y(lv) - 3);
-  };
-  hline(d.entry, "rgba(216,216,232,.5)", "entry", [2, 3], 0, w - rw);
-  hline(d.tp, "rgba(34,201,138,.35)", "", [6, 4], 0, nowX);
-  hline(d.sl, "rgba(240,56,90,.35)", "", [6, 4], 0, nowX);
-  hline(d.tp, "#22c98a", "TP \u2192", [6, 4], nowX, w - rw);
-  hline(d.sl, "#f0385a", "SL \u2192", [6, 4], nowX, w - rw);
-  // realised line over the whole window - ends exactly at live price
-  g.beginPath();
-  past.forEach((p, i) => { const xx = X(p.t), yy = Y(p.p); i ? g.lineTo(xx, yy) : g.moveTo(xx, yy); });
-  g.strokeStyle = "#e8f6ff"; g.lineWidth = 1.5; g.stroke();
-  g.beginPath(); g.moveTo(nowX, 4); g.lineTo(nowX, h - 12);
-  g.strokeStyle = "rgba(201,162,39,.8)"; g.lineWidth = 1; g.stroke();
-  g.fillStyle = "#c9a227"; g.font = "9px monospace"; g.textAlign = "right";
-  g.fillText("now", nowX - 3, 12);
-  const ly = Math.max(8, Math.min(h - 8, Y(price)));
-  g.fillStyle = "#00d4f0"; g.fillRect(w - rw + 1, ly - 7, rw - 2, 14);
-  g.fillStyle = "#04040c"; g.font = "bold 9px monospace"; g.textAlign = "left";
-  g.fillText(px(price), w - rw + 3, ly + 3);
-  S._heroGeom = { t0, t1, lo, hi, w, h, rw };
-  // crosshair (mouse/touch): time + price + distance to the barriers
-  const cx = S.heroCross;
-  if (cx && cx.x < w - rw && cx.y < h) {
-    g.strokeStyle = "rgba(216,216,232,.35)"; g.lineWidth = 1; g.setLineDash([2, 3]);
-    g.beginPath(); g.moveTo(cx.x, 0); g.lineTo(cx.x, h - 12); g.stroke();
-    g.beginPath(); g.moveTo(0, cx.y); g.lineTo(w - rw, cx.y); g.stroke();
-    g.setLineDash([]);
-    const cPrice = lo + (1 - (cx.y - 8) / (h - 22)) * (hi - lo);
-    const cTime = new Date((t0 + (cx.x / (w - rw)) * (t1 - t0)) * 1000);
-    const hh = String(cTime.getHours()).padStart(2, "0"), mm = String(cTime.getMinutes()).padStart(2, "0");
-    const dTp = d.tp ? ` · TP ${((d.tp / cPrice - 1) * 100).toFixed(2)}%` : "";
-    const dSl = d.sl ? ` · SL ${((d.sl / cPrice - 1) * 100).toFixed(2)}%` : "";
-    g.fillStyle = "rgba(4,4,12,.85)"; g.fillRect(4, 4, 218, 14);
-    g.fillStyle = "#d8d8e8"; g.font = "9px monospace"; g.textAlign = "left";
-    g.fillText(`${hh}:${mm} · ${px(cPrice)}${dTp}${dSl}`, 7, 14);
-  }
+  const fan = (b?.fan && b.fan.length > 2)
+    ? b.fan.map(p => [now + p.f * Math.max(1, t1 - now), p.q90, p.q10]) : null;
+  const levels = [];
+  if (d.entry) levels.push({ p: d.entry, tag: "ENTRY", color: "#c9a227", dash: false });
+  if (d.tp) levels.push({ p: d.tp, tag: "TP", color: "#26a69a", dash: true });
+  if (d.sl) levels.push({ p: d.sl, tag: "SL", color: "#ef5350", dash: true });
+  host._lc.set({ pts: past, t0, t1, nowX: now, fan, levels });
 }
 function bindHeroCross() {
   const host = $("#hero-chart"); if (!host || host.dataset.cross) return;
@@ -590,7 +474,20 @@ function renderRiskCalc() {
     return r ? `${tf.toUpperCase()}: ${r.qty.toFixed(4)} (${fmt(r.notional, 0)} USDT)` : `${tf.toUpperCase()}: —`;
   }).join(" · ");
 }
+async function applyRiskToTrading() {
+  const eq = Number($("#risk-eq")?.value || 0), pct = Number($("#risk-pct")?.value || 0);
+  const st = $("#risk-apply-state");
+  if (!(eq > 0) || !(pct > 0)) { if (st) st.textContent = "enter equity and risk % first"; return; }
+  const r = await api("/api/trading/config", { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sizing_mode: "risk", equity_usdt: eq, risk_pct: pct }) });
+  if (st) st.textContent = r.ok
+    ? `ACTIVE: orders sized as ${fmt(eq,0)} USDT x ${pct}% / stop distance (capped by max order + equity). Binance must still be enabled + ARMED.`
+    : "could not save sizing — " + (r.error || "");
+  toast(r.ok ? "position sizing is now LIVE for Binance orders" : "sizing save failed", r.ok ? "ok" : "err");
+}
 function bindRiskCalc() {
+  const ab = $("#risk-apply");
+  if (ab && !ab.dataset.wired) { ab.dataset.wired = "1"; ab.addEventListener("click", applyRiskToTrading); }
   for (const id of ["#risk-eq", "#risk-pct"]) {
     const el = $(id); if (!el || el.dataset.wired) continue;
     el.dataset.wired = "1";
@@ -1031,11 +928,11 @@ function buildQuads() {
       <div class="q-foot"><span id="qf-${tf}"></span><span id="qa-${tf}"></span></div>`;
     grid.appendChild(q);
     q.addEventListener("click", () => { if (S.focusTf !== tf) setFocusTf(tf); });
-    S.charts[tf] = new ChartX($("#qc-" + tf), { line: true });
-    S.spark[tf] = new ChartX($("#qs-" + tf), { spark: true });
+    S.charts[tf] = new LineChart($("#qc-" + tf));
+    S.spark[tf] = new LineChart($("#qs-" + tf), { spark: true });
   });
   // hero chart is the LINE-CHART-FROM-NOW renderer (drawHeroChart),
-  // not ChartX candles — a 260-candle view crushed the live action
+  // (LineChart v2 line mode — candles crushed the live action)
   // into the corner under a multi-hour trend
   renderQuads(); loadCandles();
 }
@@ -3143,3 +3040,25 @@ window.addEventListener("unhandledrejection", e => {
   api("/api/snapshot").then(applySnapshot).catch(() => {});
   // REST safety net lives in the single master setInterval below (H-2)
 })();
+
+// [binance-header-btn] discoverable exchange entry point in the header.
+(() => {
+  const b = $("#btn-binance"); if (!b) return;
+  b.addEventListener("click", () => {
+    document.querySelector('.tab[data-t="settings"]')?.click();
+    setTimeout(() => $("#trade-enable")?.scrollIntoView({behavior:"smooth", block:"center"}), 80);
+    toast("Binance: paste keys → Enable → ARM. Nothing trades until a qualifying prediction is issued.", "ok");
+  });
+  const paint = async () => {
+    try { const t = await (await fetch("/api/trading/status")).json();
+      const c = t.config || {};
+      b.textContent = !c.enabled ? "⬢ CONNECT BINANCE"
+        : !c.has_keys ? "⬢ BINANCE — KEYS NEEDED"
+        : c.armed ? "⬢ BINANCE — LIVE (ARMED)" : "⬢ BINANCE — CONNECTED";
+      b.style.borderColor = c.armed ? "var(--up)" : c.has_keys ? "var(--gold,#c9a227)" : "";
+      b.style.color = c.armed ? "var(--up)" : "";
+    } catch (e) { /* header stays as connect */ }
+  };
+  paint(); window.__paintBinance = paint;
+})();
+

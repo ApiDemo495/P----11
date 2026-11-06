@@ -330,6 +330,24 @@ def get_flywire() -> "FlyWireBrain":
     return _GLOBAL
 
 
+
+def short_error(e) -> str | None:
+    """One-line human summary of a brain failure. Raw exception text
+    (thrift deserialize / page-header fragments) read as 'millions of
+    errors' in the UI — it is never surfaced again."""
+    if not e:
+        return None
+    t = str(e).lower()
+    if "thrift" in t or "deserialize" in t or "page header" in t or "pageheader" in t:
+        return "neuPrint dataset unreadable here (cached file format) — RECONNECT rebuilds it"
+    if "oom" in t or "exit -" in t or "out of memory" in t:
+        return "build ran out of memory (~2 GB free RAM needed) — RECONNECT retries"
+    if "download" in t or "network" in t or "timed out" in t or "timeout" in t:
+        return "download interrupted — RECONNECT retries"
+    if "token" in t or "401" in t or "403" in t or "auth" in t:
+        return "neuPrint token missing/rejected — paste one in Settings → Brain"
+    return "brain offline — vote withheld; Settings → Brain → RECONNECT"
+
 class FlyWireBrain:
     """Download → build → verify → encode → propagate → vote → learn.
 
@@ -701,7 +719,8 @@ class FlyWireBrain:
                     "text": f"building {self.progress.get('pct', 0):.0f} %"
                             f" — {self.progress.get('stage', '')}"}
         return {"kind": "absent",
-                "text": f"brain absent — {self.last_error or 'not loaded'}"}
+                "text": "brain offline — vote withheld "
+                        "(Settings → Brain → RECONNECT)"}
 
     # ---------------------------------------------------------- encoding
     def encode(self, values: list[float]) -> np.ndarray | None:
@@ -1363,7 +1382,7 @@ class FlyWireBrain:
         return {
             "state": self.state,
             "progress": self.progress,
-            "last_error": self.last_error,
+            "last_error": short_error(self.last_error),
             "verify": self.steps or self.verify(),
             "meta": self.meta,
             "chip": self.chip(),

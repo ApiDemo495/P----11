@@ -207,7 +207,7 @@ def test_dashboard_only_chrome_and_zigzag_chart():
     fn = js.split("function syncAnalyseButton")[1].split("\n}")[0]
     assert "seg-assets" in fn and "seg-tf" in fn
     # charts draw per-bar high→low wicks (real-market zigzag)
-    assert "Y(b.high)" in js and "Y(b.low)" in js
+    assert "class LineChart" in js  # v2 own line engine replaces candle ChartX
     # grid rows must not stretch (the blank-space bug)
     css = (ROOT / "static" / "style.css").read_text()
     assert "align-content: start" in css
@@ -347,7 +347,7 @@ def test_calibration_and_day_flatten_ui_contract():
     assert "hs-calib" in (ROOT / "static" / "index.html").read_text()
     assert "sl_provisional" in js
     # chart: denser window + strong wicks
-    assert "bars.slice(-this.maxBars)" in js and "g.fillRect(x - bw / 2" in js
+    assert "length > 900" in js and "createLinearGradient" in js  # v2 line engine caps pts, gradient area
 
 
 def test_old_app_inspiration_bundle():
@@ -404,7 +404,7 @@ def test_visibility_sync_and_flat_fixes():
     assert 'id="led-brain"' in html and 'id="brain-chip"' in html
     assert 'led("#led-brain"' in js and 'brain-chip' in js
     # robust chart range (percentile) + clamped labels
-    assert "percentile" in js and "Math.min(h - 4, Y(l.price))" in js
+    assert "q90" in js and "padR = this.spark ? 4 : 58" in js  # v2: empirical fan quantiles + axis-clamped labels
     # emotion cells print small-but-real values (0.004 ≠ 0.00)
     assert "fx(v, 2)" in js
     # physics strip: cause tag + why in title/hint
@@ -416,8 +416,8 @@ def test_visibility_sync_and_flat_fixes():
     assert "#fl-forward, #fl-genesis" in css and "overflow-x: auto" in css
     assert ".card { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; min-width: 0;" in css
     assert "<th>tick</th>" not in js                 # tick merged into the name cell
-    assert "S.fvRings" in js and "percentile" in js   # live rings + robust spark range
-    assert "cv.height = h * 2" in js                 # HiDPI sparks (x AND y)
+    assert "S.fvRings" in js and "q90" in js   # live rings + empirical fan range
+    assert "devicePixelRatio" in js                 # HiDPI in LineChart v2
 
 
 def test_history_not_updating_guards():
@@ -471,8 +471,8 @@ def test_dashboard_rewrite_tf_focus_candles_and_tp_first():
     # charts: CANDLES on the quad cards (grid + scale) — the HERO is
     # now the user's requested line-chart-from-now (candles crushed the
     # live price into the corner under a multi-hour trend)
-    assert "g.fillRect(x - bw / 2" in js
-    assert "price grid + right-hand scale" in js
+    assert "createLinearGradient" in js
+    assert "price axis (the" in js  # v2: price axis always drawn
     assert "function drawHeroChart()" in js
     # the stray `s` reference in renderCalls is gone (would throw)
     assert "(s?.ladder" not in js and " s?.ladder" not in js

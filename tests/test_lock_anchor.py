@@ -28,6 +28,6 @@ def test_branch_barriers_are_gated_tpsl_not_subframe():
 
 def test_chart_labels_decobllided_and_quads_trimmed():
     js = (ROOT / "static" / "app.js").read_text()
-    assert "_lbl" in js and "11 px minimum gap" in js
+    assert "padR = this.spark ? 4 : 58" in js  # v2: labels live on the price axis, no collision stack
     assert "quad cards show ONLY the horizon TP + SL" in js
     assert "_pct" in js          # <1% instead of a misleading 0%

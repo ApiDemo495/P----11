@@ -46,6 +46,7 @@
     <div id="brain-chip" class="feed-chip" title="FlyWire v783 connectome — live state from the last analysis pass">🧠 …</div>
     <div id="status-chips" class="trace-row"></div>
     <button id="auto-chip" class="btn-analyse btn-auto" title="AUTO-PREDICT: the analysis re-runs by itself so every tab is always fresh. Click to switch to MANUAL (▶ ANALYSE only).">AUTO: ON</button>
+    <button id="btn-binance" class="btn-analyse" style="border-style:dashed" title="Binance execution (optional): opens Settings → Binance. Orders need enabled + keys + ARM + a qualifying issued prediction; sub-floor/random never executes.">⬢ CONNECT BINANCE</button>
     <button id="btn-analyse" class="btn-analyse" title="Run the staged analysis for this asset">▶ ANALYSE <span id="analyse-sym">BTC</span></button>
     <span class="seg" id="seg-chart"><span class="seg-lbl">CHART</span><button data-chart="own" class="seg-btn active">OWN</button><button data-chart="tv" class="seg-btn">TRADINGVIEW</button></span>
   </div>
@@ -127,6 +128,8 @@
         <div class="kv"><span id="risk-out-tf">size for focus TF</span><b id="risk-out">—</b></div>
       </div>
       <div id="risk-table" class="hint"></div>
+      <button class="btn" id="risk-apply" style="margin-top:8px" title="Push equity + risk% into the Binance sizing config: every qualifying order is then sized as equity x risk% / real stop distance (capped by max order). This is what makes the calculator functional.">USE THESE NUMBERS FOR BINANCE ORDERS →</button>
+      <div class="hint" id="risk-apply-state"></div>
     </div>
     <div class="panel">
       <div class="panel-h">EXCHANGE PHYSICS — clock-skew · trade gaps · liquidation telemetry

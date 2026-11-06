@@ -852,7 +852,8 @@ async def trading_status() -> JSONResponse:
 async def trading_config(body: dict) -> JSONResponse:
     from .trading import load_cfg, save_cfg, public_cfg
     cfg = load_cfg()
-    for k in ("enabled", "testnet", "max_order_usdt", "max_orders_day"):
+    for k in ("enabled", "testnet", "max_order_usdt", "max_orders_day",
+              "sizing_mode", "equity_usdt", "risk_pct"):
         if k in body:
             cfg[k] = body[k]
     # blank key fields mean "keep the stored key" — never wipe by accident

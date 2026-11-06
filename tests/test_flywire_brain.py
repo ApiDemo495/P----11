@@ -142,7 +142,7 @@ def test_five_step_verification_and_absence():
     assert all("ms" in s or s["step"].startswith("neuprint") or
                s["step"] == "absent" for s in steps)
     chip = b.chip()
-    assert chip["kind"] == "absent" and "brain absent" in chip["text"]
+    assert chip["kind"] == "absent" and "brain offline" in chip["text"]
     # vote withheld, fusion weight 0 (engine helper)
     assert b.vote([0.5] * 30)["vote"] is None
     from app.engine import PredictionEngine

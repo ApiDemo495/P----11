@@ -49,6 +49,12 @@ DEFAULTS = {
     "api_key": "",
     "api_secret": "",
     "max_order_usdt": 25.0,
+    # FUNCTIONAL equity sizing (the POSITION SIZE panel drives this):
+    # mode "risk" sizes every order as equity x risk_pct% / stop-distance,
+    # capped by max_order_usdt and by the equity itself. "fixed" = legacy.
+    "sizing_mode": "fixed",
+    "equity_usdt": 0.0,
+    "risk_pct": 1.0,
     "max_orders_day": 4,
     "armed_until": 0.0,
 }
@@ -192,7 +198,15 @@ class Trader:
         cfg = self.cfg
         sym = SYMBOLS[sig["symbol"]]
         entry = float(sig["entry"])
-        qty = round(float(cfg["max_order_usdt"]) / entry, 6)
+        notional = float(cfg["max_order_usdt"])
+        if cfg.get("sizing_mode") == "risk" and float(cfg.get("equity_usdt") or 0) > 0:
+            sl = float(sig.get("sl") or 0)
+            dist = abs(entry - sl) / entry if sl > 0 else 0.0
+            if dist > 0:
+                risk_usdt = float(cfg["equity_usdt"]) * float(cfg.get("risk_pct") or 1.0) / 100.0
+                notional = min(risk_usdt / dist, notional,
+                               float(cfg["equity_usdt"]))
+        qty = round(notional / entry, 6)
         side = "BUY" if sig["direction"] > 0 else "SELL"
         close = "SELL" if side == "BUY" else "BUY"
         entry_o = self._signed("POST", "/fapi/v1/order", {
