@@ -177,6 +177,7 @@ class Trader:
             self.orders_today += 1
             self.open_positions[sig["symbol"]] = {
                 "tf": sig.get("tf"), "entry": sig.get("entry"),
+                "side": sig.get("direction"),
                 "window_end": sig.get("window_end")}
         except Exception as exc:                       # never crash engine
             row["ok"] = False
@@ -202,6 +203,24 @@ class Trader:
             "stopPrice": round(float(sig["tp"]), 2), "closePosition": "true"})
         return {"symbol": sym, "qty": qty, "entry_id": entry_o.get("orderId"),
                 "sl_id": sl_o.get("orderId"), "tp_id": tp_o.get("orderId")}
+
+    def close_position(self, symbol: str, exit_price: float,
+                       result: str | None) -> dict | None:
+        """Settlement reached: close the book on an open position and
+        log the estimated outcome (bps vs entry, side-aware)."""
+        pos = self.open_positions.pop(symbol, None)
+        if not pos:
+            return None
+        entry = float(pos.get("entry") or 0)
+        side = int(pos.get("side") or 0)
+        pnl_bps = round(side * (exit_price / entry - 1) * 1e4, 1) \
+            if entry > 0 and exit_price > 0 else None
+        row = {"ts": time.time(), "symbol": symbol, "tf": pos.get("tf"),
+               "side": side, "entry": entry, "exit": exit_price,
+               "ok": True, "why": f"position closed at settle ({result})",
+               "pnl_bps_est": pnl_bps, "closed": True}
+        _log(row)
+        return row
 
     def status(self) -> dict:
         self.cfg = load_cfg()

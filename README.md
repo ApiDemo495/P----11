@@ -713,6 +713,24 @@ hung boot):
 ./run.sh --supervise
 ```
 
+## Self-directed additions (free-will bundle)
+
+* **Empirical fan**: branch payload now carries `fan` — measured
+  return quantiles (q05/q25/q50/q75/q95) at each elapsed fraction of
+  the remaining window. Hero and probability charts draw this cone
+  (with its drifting empirical median) instead of a Gaussian cone;
+  the labelled fallback keeps a sigma cone on thin tape.
+* **Hero crosshair**: mouse/touch crosshair with time, price, and
+  live % distance to TP and SL readouts.
+* **Position-size calculator** (dashboard): equity x risk% / the
+  focus TF's real locked stop distance -> quantity, notional,
+  x-equity for all four TFs; inputs persist locally.
+* **Issued alerts**: a toast fires the moment any asset/TF crosses
+  into ISSUED (entry/TP/SL in the message); sub-floor leans silent.
+* **Trade close-out**: when a window settles, an open optional-
+  execution position is closed in the trading book with a side-aware
+  estimated pnl (bps) in the gate log — the loop is closed.
+
 ## Empirical probabilities · true-window charts · per-asset prediction behaviour
 
 * **Probability rebuilt from measurement**: branch_stats now replays

@@ -465,14 +465,20 @@ function _drawHero() {
   g.clearRect(0, 0, w, h);
   const b = d.branches;
   const sigma = b?.sigma || Math.abs(price) * 0.002;
-  const Z = [[1.6449, "rgba(0,212,240,.07)"], [0.6745, "rgba(0,212,240,.13)"]];
   const fr = [0, 0.25, 0.5, 0.75, 1];
   const fanPt = (f, z) => price + z * sigma * Math.sqrt(f);
+  // empirical cone (measured quantiles per fraction) when available
+  const fan = (b?.fan && b.fan.length > 2) ? b.fan : null;
+  const conePt = (f, key, z) => {
+    if (!fan) return fanPt(f, z);
+    const pt = fan.reduce((best, p) => Math.abs(p.f - f) < Math.abs(best.f - f) ? p : best, fan[0]);
+    return pt[key];
+  };
   const rw = 46;
   const X = t => ((t - t0) / Math.max(1, t1 - t0)) * (w - rw);
   const nowX = X(now);
   let lo = Math.min(...past.map(p => p.p)), hi = Math.max(...past.map(p => p.p));
-  lo = Math.min(lo, fanPt(1, -1.6449)); hi = Math.max(hi, fanPt(1, 1.6449));
+  lo = Math.min(lo, conePt(1, "q05", -1.6449)); hi = Math.max(hi, conePt(1, "q95", 1.6449));
   for (const lv of [d.entry, d.tp, d.sl]) if (lv) { lo = Math.min(lo, lv); hi = Math.max(hi, lv); }
   const pad = (hi - lo) * 0.10 || Math.abs(price * 1e-3); lo -= pad; hi += pad;
   const Y = p => h - 14 - ((p - lo) / (hi - lo || 1)) * (h - 22);
@@ -485,11 +491,16 @@ function _drawHero() {
   // window start / end captions so the axis reads as a window
   g.fillStyle = "#55556e"; g.fillText("window start", 2, h - 3);
   g.textAlign = "right"; g.fillText("window end", w - rw - 2, h - 3); g.textAlign = "left";
-  for (const [z, fill] of Z) {
+  for (const [hiK, loK, fill] of [["q95", "q05", "rgba(0,212,240,.07)"], ["q75", "q25", "rgba(0,212,240,.13)"]]) {
     g.beginPath(); g.moveTo(nowX, Y(price));
-    fr.forEach(f => g.lineTo(X(now + f * (t1 - now)), Y(fanPt(f, z))));
-    for (let i = fr.length - 1; i >= 0; i--) g.lineTo(X(now + fr[i] * (t1 - now)), Y(fanPt(fr[i], -z)));
+    fr.forEach(f => g.lineTo(X(now + f * (t1 - now)), Y(conePt(f, hiK, 1.6449))));
+    for (let i = fr.length - 1; i >= 0; i--) g.lineTo(X(now + fr[i] * (t1 - now)), Y(conePt(fr[i], loK, -1.6449)));
     g.closePath(); g.fillStyle = fill; g.fill();
+  }
+  if (fan) {  // empirical median path
+    g.beginPath(); g.moveTo(nowX, Y(price));
+    fan.forEach(p => g.lineTo(X(now + p.f * (t1 - now)), Y(p.q50)));
+    g.strokeStyle = "rgba(216,216,232,.55)"; g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]);
   }
   g.beginPath(); g.moveTo(nowX, Y(price)); g.lineTo(X(t1), Y(price));
   g.strokeStyle = "rgba(216,216,232,.55)"; g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]);
@@ -517,6 +528,80 @@ function _drawHero() {
   g.fillStyle = "#00d4f0"; g.fillRect(w - rw + 1, ly - 7, rw - 2, 14);
   g.fillStyle = "#04040c"; g.font = "bold 9px monospace"; g.textAlign = "left";
   g.fillText(px(price), w - rw + 3, ly + 3);
+  S._heroGeom = { t0, t1, lo, hi, w, h, rw };
+  // crosshair (mouse/touch): time + price + distance to the barriers
+  const cx = S.heroCross;
+  if (cx && cx.x < w - rw && cx.y < h) {
+    g.strokeStyle = "rgba(216,216,232,.35)"; g.lineWidth = 1; g.setLineDash([2, 3]);
+    g.beginPath(); g.moveTo(cx.x, 0); g.lineTo(cx.x, h - 12); g.stroke();
+    g.beginPath(); g.moveTo(0, cx.y); g.lineTo(w - rw, cx.y); g.stroke();
+    g.setLineDash([]);
+    const cPrice = lo + (1 - (cx.y - 8) / (h - 22)) * (hi - lo);
+    const cTime = new Date((t0 + (cx.x / (w - rw)) * (t1 - t0)) * 1000);
+    const hh = String(cTime.getHours()).padStart(2, "0"), mm = String(cTime.getMinutes()).padStart(2, "0");
+    const dTp = d.tp ? ` · TP ${((d.tp / cPrice - 1) * 100).toFixed(2)}%` : "";
+    const dSl = d.sl ? ` · SL ${((d.sl / cPrice - 1) * 100).toFixed(2)}%` : "";
+    g.fillStyle = "rgba(4,4,12,.85)"; g.fillRect(4, 4, 218, 14);
+    g.fillStyle = "#d8d8e8"; g.font = "9px monospace"; g.textAlign = "left";
+    g.fillText(`${hh}:${mm} · ${px(cPrice)}${dTp}${dSl}`, 7, 14);
+  }
+}
+function bindHeroCross() {
+  const host = $("#hero-chart"); if (!host || host.dataset.cross) return;
+  host.dataset.cross = "1";
+  const upd = e => {
+    const r = host.getBoundingClientRect();
+    const t = (e.touches && e.touches[0]) || e;
+    S.heroCross = { x: t.clientX - r.left, y: t.clientY - r.top };
+    drawHeroChart();
+  };
+  host.addEventListener("mousemove", upd);
+  host.addEventListener("touchmove", upd, { passive: true });
+  host.addEventListener("mouseleave", () => { S.heroCross = null; drawHeroChart(); });
+}
+
+/* position sizing from the REAL locked stop distance per TF */
+function renderRiskCalc() {
+  const out = $("#risk-out"), tbl = $("#risk-table");
+  if (!out) return;
+  try {
+    const eqSaved = localStorage.getItem("riskEq"), pctSaved = localStorage.getItem("riskPct");
+    if (eqSaved && document.activeElement !== $("#risk-eq")) $("#risk-eq").value = eqSaved;
+    if (pctSaved && document.activeElement !== $("#risk-pct")) $("#risk-pct").value = pctSaved;
+  } catch {}
+  const eq = Number($("#risk-eq")?.value || 0), pct = Number($("#risk-pct")?.value || 0);
+  const a = S.snap?.assets?.[S.symbol];
+  if (!a || !(eq > 0) || !(pct > 0)) { out.textContent = "—"; return; }
+  const riskUsdt = eq * pct / 100;
+  const row = tf => {
+    const c = a.tfs?.[tf];
+    if (!c?.entry || !c?.sl) return null;
+    const dist = Math.abs(c.entry - c.sl);
+    if (!(dist > 0)) return null;
+    const qty = riskUsdt / dist, notional = qty * c.entry;
+    return { tf, qty, notional, lev: notional / eq };
+  };
+  const f = row(S.focusTf);
+  out.textContent = f ? `${f.qty.toFixed(4)} ${S.symbol} · ${fmt(f.notional, 0)} USDT notional · ${f.lev.toFixed(2)}× equity`
+                      : "no locked stop on this TF yet";
+  const tfEl = $("#risk-out-tf"); if (tfEl) tfEl.textContent = `size for ${S.focusTf.toUpperCase()} (risk ${fmt(riskUsdt, 2)} USDT)`;
+  if (tbl) tbl.innerHTML = TF.map(tf => {
+    const r = row(tf);
+    return r ? `${tf.toUpperCase()}: ${r.qty.toFixed(4)} (${fmt(r.notional, 0)} USDT)` : `${tf.toUpperCase()}: —`;
+  }).join(" · ");
+}
+function bindRiskCalc() {
+  for (const id of ["#risk-eq", "#risk-pct"]) {
+    const el = $(id); if (!el || el.dataset.wired) continue;
+    el.dataset.wired = "1";
+    el.addEventListener("input", () => {
+      try {
+        localStorage.setItem("riskEq", $("#risk-eq").value);
+        localStorage.setItem("riskPct", $("#risk-pct").value);
+      } catch {}
+      renderRiskCalc();
+    });
+  }
 }
 
 function renderBranches() {
@@ -571,15 +656,29 @@ function renderBranches() {
   const X = t => ((t - t0) / Math.max(1, t1 - t0)) * (w - 42) + 1;
   const Y = p2 => h - 14 - ((p2 - lo) / (hi - lo || 1)) * (h - 20);
   const XF = f => X(tN + f * Math.max(1, t1 - tN));   // fan x at fraction f
-  // shaded quantile fan (5→95), rooted at (now, current price)
-  const upper = b.bands.filter(x => x.f >= 0.5);
-  const lower = b.bands.filter(x => x.f <= 0.5);
-  g.beginPath();
-  g.moveTo(X(tN), Y(b.entry));
-  upper.forEach(x => g.lineTo(XF(x.f), Y(x.level)));
-  for (let i = lower.length - 1; i >= 0; i--) g.lineTo(XF(lower[i].f), Y(lower[i].level));
-  g.closePath();
-  g.fillStyle = "rgba(240,56,90,.08)"; g.fill();
+  // shaded EMPIRICAL cone (quantiles per elapsed fraction, measured
+  // on this asset's tape), rooted at (now, current price)
+  if (b.fan && b.fan.length > 2) {
+    for (const [hiK, loK, fill] of [["q95", "q05", "rgba(0,212,240,.08)"], ["q75", "q25", "rgba(0,212,240,.14)"]]) {
+      g.beginPath();
+      g.moveTo(X(tN), Y(b.entry));
+      b.fan.forEach(p => g.lineTo(XF(p.f), Y(p[hiK])));
+      for (let i = b.fan.length - 1; i >= 0; i--) g.lineTo(XF(b.fan[i].f), Y(b.fan[i][loK]));
+      g.closePath(); g.fillStyle = fill; g.fill();
+    }
+    g.beginPath(); g.moveTo(X(tN), Y(b.entry));
+    b.fan.forEach(p => g.lineTo(XF(p.f), Y(p.q50)));
+    g.strokeStyle = "rgba(216,216,232,.5)"; g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]);
+  } else {
+    const upper = b.bands.filter(x => x.f >= 0.5);
+    const lower = b.bands.filter(x => x.f <= 0.5);
+    g.beginPath();
+    g.moveTo(X(tN), Y(b.entry));
+    upper.forEach(x => g.lineTo(XF(x.f), Y(x.level)));
+    for (let i = lower.length - 1; i >= 0; i--) g.lineTo(XF(lower[i].f), Y(lower[i].level));
+    g.closePath();
+    g.fillStyle = "rgba(240,56,90,.08)"; g.fill();
+  }
   // median band line
   const med = b.bands.find(x => x.f === 0.5);
   if (med) {
@@ -2857,15 +2956,34 @@ function renderAlert(snap) {
 /* ═══════════ snapshot / tick plumbing ═══════════ */
 // s.serverOffset re-anchors on EVERY message (advice H-2): the countdown
 // never drifts with the client's wall clock.
+/* alert the moment a call actually ISSUES (crosses the floor) —
+   sub-floor leans stay silent by design */
+function checkIssuedAlerts(snap) {
+  if (!S._issuedSeen) S._issuedSeen = {};
+  for (const [sym, a] of Object.entries(snap.assets || {})) {
+    for (const [tf, c] of Object.entries(a.tfs || {})) {
+      const k = `${sym}|${tf}`;
+      const was = S._issuedSeen[k];
+      const isNow = !!c.issued;
+      S._issuedSeen[k] = isNow;
+      if (isNow && was === false) {
+        toast(`⚡ ISSUED ${sym} ${tf.toUpperCase()} ${c.direction > 0 ? "▲ BULL" : "▼ BEAR"} · entry ${px(c.entry)} · TP ${px(c.tp)} · SL ${px(c.sl)}`, "ok");
+      }
+    }
+  }
+}
+
 function applySnapshot(snap) {
   if (!snap || snap.type !== "snapshot") return;
   S.snap = snap;
+  try { checkIssuedAlerts(snap); } catch (e) { /* alerts optional */ }
   S.serverOffset = (snap.ts ? snap.ts * 1000 : Date.now()) - Date.now();
   renderBoot(snap);               // overlay FIRST — contract test guard
   renderAlert(snap);
   try { renderQuads(); renderWhy(); renderRail(); } catch (e) { console.error("render", e); }
   try { renderBranches(); } catch (e) { console.error("branches", e); }
   try { drawHeroChart(); } catch (e) { console.error("hero", e); }
+  try { renderRiskCalc(); } catch (e) { /* sizing optional */ }
   try { applyChartSrc(); } catch (e) { /* chart toggle optional */ }
   if (S.view === "dashboard") {
     try { renderMicro(); } catch (e) { console.error("micro", e); }
@@ -3016,7 +3134,7 @@ window.addEventListener("unhandledrejection", e => {
 /* ═══════════ boot ═══════════ */
 (function boot() {
   try { S.tfFocus = localStorage.getItem("tfFocus") === "1"; } catch (e) { S.tfFocus = false; }
-  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); bindChartSrc(); bindTrading(); syncAnalyseButton(); bindAllTf(); renderDashboardMode();
+  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); bindChartSrc(); bindTrading(); bindHeroCross(); bindRiskCalc(); syncAnalyseButton(); bindAllTf(); renderDashboardMode();
   connectWS();
   api("/api/snapshot").then(applySnapshot).catch(() => {});
   // REST safety net lives in the single master setInterval below (H-2)

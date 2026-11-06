@@ -726,6 +726,32 @@ curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&
 <pre><code>
 ./run.sh --supervise
 </code></pre>
+<h4>Self-directed additions (free-will bundle)</h4>
+<ul>
+<li><b>Empirical fan</b>: branch payload now carries <code>fan</code> — measured</li>
+</ul>
+<p>  return quantiles (q05/q25/q50/q75/q95) at each elapsed fraction of</p>
+<p>  the remaining window. Hero and probability charts draw this cone</p>
+<p>  (with its drifting empirical median) instead of a Gaussian cone;</p>
+<p>  the labelled fallback keeps a sigma cone on thin tape.</p>
+<ul>
+<li><b>Hero crosshair</b>: mouse/touch crosshair with time, price, and</li>
+</ul>
+<p>  live % distance to TP and SL readouts.</p>
+<ul>
+<li><b>Position-size calculator</b> (dashboard): equity x risk% / the</li>
+</ul>
+<p>  focus TF&#x27;s real locked stop distance -&gt; quantity, notional,</p>
+<p>  x-equity for all four TFs; inputs persist locally.</p>
+<ul>
+<li><b>Issued alerts</b>: a toast fires the moment any asset/TF crosses</li>
+</ul>
+<p>  into ISSUED (entry/TP/SL in the message); sub-floor leans silent.</p>
+<ul>
+<li><b>Trade close-out</b>: when a window settles, an open optional-</li>
+</ul>
+<p>  execution position is closed in the trading book with a side-aware</p>
+<p>  estimated pnl (bps) in the gate log — the loop is closed.</p>
 <h4>Empirical probabilities · true-window charts · per-asset prediction behaviour</h4>
 <ul>
 <li><b>Probability rebuilt from measurement</b>: branch_stats now replays</li>

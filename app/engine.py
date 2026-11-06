@@ -3149,6 +3149,21 @@ class PredictionEngine:
                     _mu = sum(_end) / len(_end)
                     _sig = (sum((x - _mu) ** 2 for x in _end)
                             / len(_end)) ** 0.5
+                    # empirical cone by time fraction — the fan the
+                    # charts draw (quantiles of the measured return
+                    # distribution at each elapsed fraction, not a
+                    # Gaussian sqrt-time cone)
+                    _fan = [{"f": 0.0, "q05": round(price, 6),
+                             "q25": round(price, 6), "q50": round(price, 6),
+                             "q75": round(price, 6), "q95": round(price, 6)}]
+                    for _f in (0.25, 0.5, 0.75, 1.0):
+                        _fan.append({
+                            "f": _f,
+                            "q05": round(price * (1 + _q(_rets[_f], 0.05)), 6),
+                            "q25": round(price * (1 + _q(_rets[_f], 0.25)), 6),
+                            "q50": round(price * (1 + _q(_rets[_f], 0.50)), 6),
+                            "q75": round(price * (1 + _q(_rets[_f], 0.75)), 6),
+                            "q95": round(price * (1 + _q(_rets[_f], 0.95)), 6)})
                     return {
                         "approx": True,
                         "method": "empirical-first-touch",
@@ -3165,6 +3180,7 @@ class PredictionEngine:
                         "sl": round(sl, 6),
                         "direction": dirn,
                         "bands": _bands,
+                        "fan": _fan,
                     }
             lr = self.last_result.get((d.get("symbol") or "BTC",
                                        tf)) or {}
@@ -3228,6 +3244,13 @@ class PredictionEngine:
                 "sl": round(sl, 6),
                 "direction": dirn,
                 "bands": bands,
+                "fan": [{"f": f,
+                         "q05": round(price - 1.6449 * sigma * (f ** 0.5), 6),
+                         "q25": round(price - 0.6745 * sigma * (f ** 0.5), 6),
+                         "q50": round(price, 6),
+                         "q75": round(price + 0.6745 * sigma * (f ** 0.5), 6),
+                         "q95": round(price + 1.6449 * sigma * (f ** 0.5), 6)}
+                        for f in (0.0, 0.25, 0.5, 0.75, 1.0)],
             }
         except Exception:
             return None
@@ -3300,6 +3323,13 @@ class PredictionEngine:
                 price, int(prev.get("side") or 0),
                 window_end=float(prev.get("window_end") or 0),
                 level_outcome=_lvl)
+            # close the trading book for this asset if a position was
+            # opened under the optional execution module
+            try:
+                self.trader.close_position(symbol, price,
+                                           _row.get("result"))
+            except Exception:
+                pass
             # REINFORCEMENT loop on a settled window: score the issue
             # bandit, then run the error-finder over every reward ring
             try:
