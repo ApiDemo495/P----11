@@ -163,7 +163,16 @@ class RLSystem:
     def __init__(self, path: str | None = None) -> None:
         if path is None and os.environ.get("PYTEST_CURRENT_TEST"):
             import tempfile as _tf
-            path = os.path.join(_tf.gettempdir(), "predict4_test_rl.json")
+            # per-PID file, removed on first use: a shared fixed tmp
+            # path leaked learned damp/boost factors from one pytest
+            # run into the next and silently re-weighted the CCI in
+            # unrelated tests (the suite passed once, then failed).
+            path = os.path.join(
+                _tf.gettempdir(), f"predict4_test_rl_{os.getpid()}.json")
+            try:
+                os.remove(path)
+            except OSError:
+                pass
         self.path = path or RL_FILE
         self.damp: dict[int, float] = {}
         self.boost: dict[int, float] = {}

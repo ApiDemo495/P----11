@@ -47,21 +47,34 @@ esac
 # built-in shortcut no longer errors. Everything below runs in the
 # BACKGROUND — a slow marketplace used to add seconds to EVERY boot.
 ensure_md_preview() {
-  command -v code >/dev/null 2>&1 || return 0
+  # failures are LOGGED (data/md_preview.log) — the old version sent
+  # everything to /dev/null, so a broken install looked identical to a
+  # working one and the error kept coming back with no trace.
+  mkdir -p data
+  command -v code >/dev/null 2>&1 || {
+    echo "no 'code' CLI on PATH — editor extensions are installed by the" \
+         "devcontainer (customizations.vscode.extensions) or run" \
+         "scripts/fix_markdown_preview.sh from an editor terminal" \
+         >> data/md_preview.log; return 0; }
   _have=$(code --list-extensions 2>/dev/null \
             | grep -ix "shd101wyy.markdown-preview-enhanced" || true)
   if [ -z "$_have" ]; then
     code --install-extension shd101wyy.markdown-preview-enhanced \
-      >/dev/null 2>&1 || true
+      >> data/md_preview.log 2>&1 || true
     code --list-extensions 2>/dev/null \
-      | grep -qix "shd101wyy.markdown-preview-enhanced" || return 0
+      | grep -qix "shd101wyy.markdown-preview-enhanced" || {
+        echo "MPE install did not land — see scripts/fix_markdown_preview.sh" \
+          >> data/md_preview.log; return 0; }
   fi
-  # merge user keybindings idempotently (never clobber what exists)
+  # merge user keybindings idempotently (never clobber what exists);
+  # the script detects the REAL user dir (Codespaces ~/.vscode-remote,
+  # local ~/.config/Code, macOS, Windows) — see its docstring.
   command -v python3 >/dev/null 2>&1 || return 0
-  python3 scripts/ensure_md_keybindings.py || true
+  python3 scripts/ensure_md_keybindings.py >> data/md_preview.log 2>&1 || true
 }
-# spawn immediately: runs while setup/boot proceed in parallel
-( ensure_md_preview ) >/dev/null 2>&1 || true
+# spawn immediately, ACTUALLY in the background (&): runs while
+# setup/boot proceed in parallel
+( ensure_md_preview ) >/dev/null 2>&1 &
 
 if curl -sf -m 3 "$HEALTH_URL" >/dev/null 2>&1; then
   log "app already healthy on :$PORT — nothing to do"

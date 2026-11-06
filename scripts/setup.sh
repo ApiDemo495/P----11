@@ -30,24 +30,29 @@ warn() { printf '[setup %4ss] WARN: %s\n' "$(( $(date +%s) - T0 ))" "$*"; }
 # engine — install it ONLY when missing (a --force install on every boot
 # was adding marketplace round-trips to each start).
 if command -v code >/dev/null 2>&1; then
+  mkdir -p data
   EXT_LIST="$(code --list-extensions 2>/dev/null || true)"
   for ext in shd101wyy.markdown-preview-enhanced yzhang.markdown-all-in-one; do
     if printf '%s\n' "$EXT_LIST" | grep -qix "$ext"; then
       : # already present — zero network, zero lag
-    elif code --install-extension "$ext" >/dev/null 2>&1; then
+    elif code --install-extension "$ext" >> data/md_preview.log 2>&1; then
       log "editor extension installed: $ext"
     else
-      warn "could not install $ext (install from the Extensions panel)"
+      warn "could not install $ext — run scripts/fix_markdown_preview.sh from an editor terminal (log: data/md_preview.log)"
     fi
   done
   # remap Ctrl+Shift+V / Ctrl+K V to MPE's preview so the missing
-  # built-in markdown.showPreview shortcut stops erroring (idempotent,
-  # only when MPE is actually installed)
+  # built-in markdown.showPreview shortcut stops erroring (idempotent;
+  # the script finds the REAL user keybindings dir for this editor —
+  # Codespaces, local, macOS, Windows — and says where it wrote)
   if code --list-extensions 2>/dev/null \
        | grep -qix "shd101wyy.markdown-preview-enhanced"; then
-    "$PYTHON_BIN" scripts/ensure_md_keybindings.py >/dev/null 2>&1 \
-      || python3 scripts/ensure_md_keybindings.py >/dev/null 2>&1 || true
+    "$PYTHON_BIN" scripts/ensure_md_keybindings.py >> data/md_preview.log 2>&1 \
+      || python3 scripts/ensure_md_keybindings.py >> data/md_preview.log 2>&1 || true
+    log "markdown preview: MPE present, shortcut remap ensured (data/md_preview.log)"
   fi
+else
+  warn "no 'code' CLI here — markdown extensions come from the devcontainer definition or scripts/fix_markdown_preview.sh in the editor"
 fi
 
 req_hash() {

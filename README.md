@@ -1,12 +1,18 @@
-> **Can't open markdown preview?** Some editors ship without built-in
-> markdown (`markdown.showPreview not found` — no extension can add that
-> command). Three fixes, in order of ease: **1)** press **Ctrl+Shift+V**
-> again — setup/auto-start installs *Markdown Preview Enhanced* in the
-> background and **remaps Ctrl+Shift+V / Ctrl+K V to its preview**
-> (`scripts/ensure_md_keybindings.py`); **2)** open
-> [`docs.html`](docs.html) — a double-click in any browser renders this
-> file and API_SETUP.md with zero extensions; **3)** visit
-> **http://localhost:8000/docs** while the app runs.
+> **Can't open markdown preview?** `markdown.showPreview not found`
+> means the editor's *built-in* Markdown extension is disabled/absent —
+> no marketplace extension can add that command back. The permanent
+> cure (one run): **`bash scripts/fix_markdown_preview.sh`** from a
+> terminal inside the editor (or the VS Code task *"Fix Markdown
+> Preview (permanent)"*). It installs *Markdown Preview Enhanced*
+> (its own preview engine) and **remaps Ctrl+Shift+V / Ctrl+K V to it
+> in the real user keybindings file for your editor** — Codespaces
+> (`~/.vscode-remote/data/User/`), local, macOS and Windows are all
+> detected (`scripts/ensure_md_keybindings.py`; setup/auto-start also
+> run it, logging to `data/md_preview.log` — nothing is silent any
+> more). If you want the built-in command itself back: Extensions →
+> `@builtin markdown` → *Markdown Language Features* → **Enable** →
+> reload window. Zero-extension fallbacks: [`docs.html`](docs.html)
+> in any browser, or **http://localhost:8000/docs** while the app runs.
 
 # Crypto Prediction 4
 
@@ -36,7 +42,7 @@ provided), then run `./run.sh` and forward port **8000**.
 Run the test suite:
 
 ```bash
-.venv/bin/python -m pytest -q    # 270 tests (honesty, parts 1-4, news, brain, order-book, UX sync, deep RL)
+.venv/bin/python -m pytest -q    # 276 tests (honesty, parts 1-4, news, brain, order-book, UX sync, deep RL)
 ```
 
 Environment:
@@ -345,7 +351,7 @@ static/
                    contribution ticks, AUTO chip, gauges, news stream
   brains3d.js      Three.js 2×2 instanced brain visualization
   vendor/          three.module.js v0.160.1 (MIT, vendored — no CDN)
-tests/             270 tests: parts 1–4, honesty guards, news (docs11),
+tests/             276 tests: parts 1–4, honesty guards, news (docs11),
                    FlyWire brain (10), order-book layer (6), UX sync
 pytest.ini         pytest 9 + pytest-asyncio 1, strict asyncio mode,
                    plain `pytest` works (no cache plugin dependency)
@@ -477,7 +483,7 @@ automatically:
 | `./run.sh` | Foreground start: runs `scripts/setup.sh` if the stamp/venv is stale, then serves on `PORT` (default **8000**). `SKIP_SETUP=1` to bypass. |
 | `scripts/setup.sh` | Idempotent bootstrap: `.venv` → `requirements.txt` (hard) → `requirements-agents.txt` incl. **cmake + llama-cpp-python + huggingface-hub** (best-effort) → `data/`, `data/history/`, `models/` → **`scripts/download_models.py`** (auto-picks Phi-3-mini ≥14 GB / TinyLlama ≥7 GB / Qwen2-0.5B, downloads from the HF Hub) → hourly `learning_cron` crontab entry (best-effort). Fast no-op via `.setup_stamp`; `FORCE=1` re-runs everything. |
 | `scripts/auto_start.sh` | Background supervisor (devcontainer `postStartCommand`): health-check → setup (only when stale, **niced** so the UI stays responsive) → `nohup` uvicorn → waits for `/api/health`. The editor-preview fix (install MPE only if missing + Ctrl+Shift+V remap) runs **in the background and never delays the boot**. `--stop` / `--restart` supported. |
-| devcontainer | `postCreateCommand` = full setup, `postStartCommand` = auto-start — opening the Codespace brings the app up by itself. |
+| devcontainer | `postCreateCommand` = full setup, `postStartCommand` **and `postAttachCommand`** = auto-start (attach is what actually fires on every re-open; `remoteEnv INSTALL_AGENTS=1` turns the background agent-deps + model download ON in the container) — opening the Codespace brings the app up by itself. Outside dev containers, the **folder-open VS Code task** in `.vscode/tasks.json` runs the same auto-start in any editor (allow automatic tasks once when VS Code asks). Note: lifecycle commands only take effect after a container **Rebuild** in an existing Codespace. |
 | In-process hourly loop | `main.py` runs a wall-clock safety net every 10 min: if the macro learning cycle is >60 min old it fires macro + deep + save directly — learning keeps running even without system cron (mirrors `scripts/learning_cron.sh`). |
 
 Every AI stage is optional-by-design: no keys → formula-only agents, model
