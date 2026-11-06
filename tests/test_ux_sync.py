@@ -468,10 +468,12 @@ def test_dashboard_rewrite_tf_focus_candles_and_tp_first():
     assert "_ord.unshift(_ord.pop())" in js        # [3,0,1,2] order
     # engine precomputes the horizon target first
     assert "ALWAYS calculated FIRST" in eng
-    # charts: CANDLES + grid scale + configurable depth (hero260)
+    # charts: CANDLES on the quad cards (grid + scale) — the HERO is
+    # now the user's requested line-chart-from-now (candles crushed the
+    # live price into the corner under a multi-hour trend)
     assert "g.fillRect(x - bw / 2" in js
     assert "price grid + right-hand scale" in js
-    assert "maxBars: 260" in js
+    assert "function drawHeroChart()" in js
     # the stray `s` reference in renderCalls is gone (would throw)
     assert "(s?.ladder" not in js and " s?.ladder" not in js
 

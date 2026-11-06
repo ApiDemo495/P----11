@@ -387,6 +387,98 @@ async function loadSystemPanel() {
 }
 
 /* ═══════ PROBABILITY BRANCHES chart (own canvas — no chart lib) ═══════ */
+/* ═══ HERO: proper LINE CHART FROM NOW ═══
+   Left: the realised price line up to a gold NOW divider. Right: the
+   forward fan for the rest of the window (shaded q05–q95 / q25–q75
+   cone + median), with TP/SL as future barriers and the locked entry
+   across the whole chart. The last point of the line IS the live
+   price — the chart can never lag the tape the way the 260-candle
+   view did. */
+let _heroRaf = 0;
+function drawHeroChart() {
+  const host = $("#hero-chart"); if (!host) return;
+  if (_heroRaf) return;
+  _heroRaf = requestAnimationFrame(() => { _heroRaf = 0; _drawHero(); });
+}
+function _drawHero() {
+  const host = $("#hero-chart"); if (!host) return;
+  const a = S.snap?.assets?.[S.symbol]; if (!a) return;
+  const d = a.tfs?.[S.focusTf]; if (!d) return;
+  const price = S.prices[S.symbol] ?? a.price; if (!price) return;
+  const now = Date.now() / 1000;
+  const t1 = d.cycle_end || (now + 600);
+  const w = host.clientWidth || 320, h = host.clientHeight || 190;
+  let cv = host.querySelector("canvas");
+  if (!cv) { host.innerHTML = ""; cv = document.createElement("canvas");
+    cv.style.cssText = "width:100%;height:100%;display:block"; host.appendChild(cv); }
+  if (cv.width !== w * 2 || cv.height !== h * 2) { cv.width = w * 2; cv.height = h * 2; }
+  const g = cv.getContext("2d"); g.setTransform(2, 0, 0, 2, 0, 0);
+  g.clearRect(0, 0, w, h);
+  // realised line: this window's path (seeded from candles + ticks)
+  const t0 = Math.max(d.cycle_start || (now - 600), now - 1800);
+  const past = (S.priceHist || []).filter(p => p.t >= t0 && p.t <= now && p.p > 0);
+  if (!past.length || now - past[past.length - 1].t > 2) past.push({ t: now, p: price });
+  else past[past.length - 1] = { t: now, p: price };
+  // forward fan from the measured σ (branches payload), sqrt-time cone
+  const b = d.branches;
+  const sigma = b?.sigma || Math.abs(price) * 0.002;
+  const Z = [[1.6449, "rgba(0,212,240,.07)"], [0.6745, "rgba(0,212,240,.13)"]];
+  const fr = [0, 0.25, 0.5, 0.75, 1];
+  const fanPt = (f, z) => price + z * sigma * Math.sqrt(f);
+  // split time scale: past → left 62%, remaining window → right 38%
+  const splitX = w * 0.62, rw = 46;
+  const Xp = t => ((t - t0) / Math.max(1, now - t0)) * splitX;
+  const Xf = t => splitX + ((t - now) / Math.max(1, t1 - now)) * (w - rw - splitX);
+  let lo = Math.min(...past.map(p => p.p)), hi = Math.max(...past.map(p => p.p));
+  lo = Math.min(lo, fanPt(1, -1.6449)); hi = Math.max(hi, fanPt(1, 1.6449));
+  for (const lv of [d.entry, d.tp, d.sl]) if (lv) { lo = Math.min(lo, lv); hi = Math.max(hi, lv); }
+  const pad = (hi - lo) * 0.10 || Math.abs(price * 1e-3); lo -= pad; hi += pad;
+  const Y = p => h - 14 - ((p - lo) / (hi - lo || 1)) * (h - 22);
+  // grid + right scale
+  g.font = "9px monospace"; g.textAlign = "left";
+  for (let gi = 0; gi <= 4; gi++) {
+    const val = lo + (hi - lo) * gi / 4, gy = Y(val);
+    g.strokeStyle = "rgba(216,216,232,.07)"; g.beginPath(); g.moveTo(0, gy); g.lineTo(w - rw, gy); g.stroke();
+    g.fillStyle = "#6e6e8c"; g.fillText(val >= 1000 ? val.toFixed(0) : val.toFixed(2), w - rw + 4, gy + 3);
+  }
+  // fan (outer then inner cone), rooted at (now, live price)
+  for (const [z, fill] of Z) {
+    g.beginPath(); g.moveTo(splitX, Y(price));
+    fr.forEach(f => g.lineTo(Xf(now + f * (t1 - now)), Y(fanPt(f, z))));
+    for (let i = fr.length - 1; i >= 0; i--) g.lineTo(Xf(now + fr[i] * (t1 - now)), Y(fanPt(fr[i], -z)));
+    g.closePath(); g.fillStyle = fill; g.fill();
+  }
+  // median
+  g.beginPath(); g.moveTo(splitX, Y(price)); g.lineTo(Xf(t1), Y(price));
+  g.strokeStyle = "rgba(216,216,232,.55)"; g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]);
+  // locked entry across everything; TP/SL faint behind, solid forward
+  const hline = (lv, color, label, dash, x0, x1) => {
+    if (!lv) return;
+    g.beginPath(); g.moveTo(x0, Y(lv)); g.lineTo(x1, Y(lv));
+    g.strokeStyle = color; g.lineWidth = 1.2; g.setLineDash(dash); g.stroke(); g.setLineDash([]);
+    g.fillStyle = color; g.font = "9px monospace"; g.textAlign = "left";
+    g.fillText(`${label} ${px(lv)}`, x0 + 3, Y(lv) - 3);
+  };
+  hline(d.entry, "rgba(216,216,232,.5)", "entry", [2, 3], 0, w - rw);
+  hline(d.tp, "rgba(34,201,138,.35)", "", [6, 4], 0, splitX);
+  hline(d.sl, "rgba(240,56,90,.35)", "", [6, 4], 0, splitX);
+  hline(d.tp, "#22c98a", "TP →", [6, 4], splitX, w - rw);
+  hline(d.sl, "#f0385a", "SL →", [6, 4], splitX, w - rw);
+  // realised line — ends exactly at the live price
+  g.beginPath();
+  past.forEach((p, i) => { const xx = Xp(p.t), yy = Y(p.p); i ? g.lineTo(xx, yy) : g.moveTo(xx, yy); });
+  g.strokeStyle = "#e8f6ff"; g.lineWidth = 1.5; g.stroke();
+  // now divider + live chip
+  g.beginPath(); g.moveTo(splitX, 4); g.lineTo(splitX, h - 12);
+  g.strokeStyle = "rgba(201,162,39,.8)"; g.lineWidth = 1; g.stroke();
+  g.fillStyle = "#c9a227"; g.font = "9px monospace"; g.textAlign = "right";
+  g.fillText("now", splitX - 3, 12);
+  const ly = Math.max(8, Math.min(h - 8, Y(price)));
+  g.fillStyle = "#00d4f0"; g.fillRect(w - rw + 1, ly - 7, rw - 2, 14);
+  g.fillStyle = "#04040c"; g.font = "bold 9px monospace"; g.textAlign = "left";
+  g.fillText(px(price), w - rw + 3, ly + 3);
+}
+
 function renderBranches() {
   const stats = $("#branch-stats"), cvHost = $("#branch-canvas");
   if (!stats || !cvHost) return;
@@ -795,10 +887,9 @@ function buildQuads() {
     S.charts[tf] = new ChartX($("#qc-" + tf));
     S.spark[tf] = new ChartX($("#qs-" + tf), { spark: true });
   });
-  // hero chart (TF-focus mode): denser series, candles
-  if ($("#hero-chart") && !S.charts.hero) {
-    S.charts.hero = new ChartX($("#hero-chart"), { maxBars: 260 });
-  }
+  // hero chart is the LINE-CHART-FROM-NOW renderer (drawHeroChart),
+  // not ChartX candles — a 260-candle view crushed the live action
+  // into the corner under a multi-hour trend
   renderQuads(); loadCandles();
 }
 function renderQuads(opts = {}) {
@@ -1356,9 +1447,16 @@ async function loadCandles() {
       const mapped = bars.map(x => ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c }));
       c.setData(mapped);
       c.setMarkers(markers.slice(-36));
+      // seed the realised-path history (hero line chart + branches):
+      // without this the white path only existed from page load and
+      // the forward fan floated with nothing behind it
       if (tf === S.focusTf) {
-        S.charts.hero?.setData(mapped);
-        S.charts.hero?.setMarkers(markers.slice(-36));
+        const _norm = t => t > 1e12 ? t / 1000 : t;
+        const seeded = mapped.map(x => ({ t: _norm(x.time), p: x.close }))
+          .filter(p2 => p2.p > 0);
+        const tail = (S.priceHist || [])
+          .filter(p2 => p2.t > (seeded[seeded.length - 1]?.t || 0));
+        S.priceHist = [...seeded, ...tail].slice(-900);
       }
       S.spark[tf]?.setData(bars.slice(-90).map(x => ({ time: x.t, open: 0, high: x.v || 0, low: 0, close: x.v || 0 })));
     }));
@@ -2622,6 +2720,7 @@ function applySnapshot(snap) {
   renderAlert(snap);
   try { renderQuads(); renderWhy(); renderRail(); } catch (e) { console.error("render", e); }
   try { renderBranches(); } catch (e) { console.error("branches", e); }
+  try { drawHeroChart(); } catch (e) { console.error("hero", e); }
   if (S.view === "dashboard") {
     try { renderMicro(); } catch (e) { console.error("micro", e); }
   }
@@ -2668,6 +2767,7 @@ function onTick(msg) {
   S.prices = msg.prices || S.prices;
   const p = msg.prices?.[S.symbol];
   if (p != null) TF.forEach(tf => S.charts[tf]?.tick(p));
+  drawHeroChart();                  // hero line always ends at live price
   renderQuads({ heavy: false });   // 1 Hz: text only, no table rebuilds
 }
 function handleMessage(msg) {

@@ -713,6 +713,24 @@ hung boot):
 ./run.sh --supervise
 ```
 
+## Hero line-chart-from-now + visible fan
+
+User: hero candles sat at 72-75k while the real price was >76k, and
+the probability chart showed "just white green and red line nothing
+else". The hero is now a proper LINE chart from now: realised path
+(seeded from candles + live ticks) up to a gold NOW divider at 62%
+width, then the forward fan for the remaining window (shaded
+q05-q95/q25-q75 cone + median), TP/SL as future barriers, locked
+entry across the chart, and the line's last point IS the live price
+on every tick — it cannot lag the tape. The old view (260 one-minute
+candles under a multi-hour trend) crushed live action into the corner
+as dots; candles remain on the quad cards. The fan sigma is floored
+by the measured block sigma (sqrt-scaled to remaining time): the
+ATR-only sigma glued the cone to the price line, so only TP/SL/now
+lines were visible; live cone spread is now ~0.5% of price on tf1.
+priceHist is seeded from /api/candles so the realised path exists
+from page load, not just from the first tick.
+
 ## One anchor + chart legibility (follow-up)
 
 Live screenshot on the levels build still showed two entries on one

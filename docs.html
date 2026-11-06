@@ -726,6 +726,22 @@ curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&
 <pre><code>
 ./run.sh --supervise
 </code></pre>
+<h4>Hero line-chart-from-now + visible fan</h4>
+<p>User: hero candles sat at 72-75k while the real price was &gt;76k, and</p>
+<p>the probability chart showed &quot;just white green and red line nothing</p>
+<p>else&quot;. The hero is now a proper LINE chart from now: realised path</p>
+<p>(seeded from candles + live ticks) up to a gold NOW divider at 62%</p>
+<p>width, then the forward fan for the remaining window (shaded</p>
+<p>q05-q95/q25-q75 cone + median), TP/SL as future barriers, locked</p>
+<p>entry across the chart, and the line&#x27;s last point IS the live price</p>
+<p>on every tick — it cannot lag the tape. The old view (260 one-minute</p>
+<p>candles under a multi-hour trend) crushed live action into the corner</p>
+<p>as dots; candles remain on the quad cards. The fan sigma is floored</p>
+<p>by the measured block sigma (sqrt-scaled to remaining time): the</p>
+<p>ATR-only sigma glued the cone to the price line, so only TP/SL/now</p>
+<p>lines were visible; live cone spread is now ~0.5% of price on tf1.</p>
+<p>priceHist is seeded from /api/candles so the realised path exists</p>
+<p>from page load, not just from the first tick.</p>
 <h4>One anchor + chart legibility (follow-up)</h4>
 <p>Live screenshot on the levels build still showed two entries on one</p>
 <p>screen (trace LOCKED 75,672 vs hero entry 76,182): fresh_cycle computed</p>

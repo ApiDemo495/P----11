@@ -3047,6 +3047,16 @@ class PredictionEngine:
             # sigma over the remaining time (per-candle ATR → sqrt time)
             t_min = max(rem_s / 60.0, 1e-3)
             sigma = atr * math.sqrt(max(t_min, 1e-3) / max(candle_min, 1.0))
+            # the fan must be VISIBLE: ATR-of-1m-candles made σ so small
+            # the cone glued itself to the price line (user: "only white
+            # green and red line nothing else"). Floor σ by the measured
+            # block σ (per-horizon, sqrt-scaled to the remaining time).
+            _sig_bps = float((d.get("risk") or {}).get("sigma_bps") or 0.0)
+            _hz_min = float((d.get("risk") or {}).get("minutes")
+                            or candle_min or 1)
+            if _sig_bps > 0 and price > 0:
+                sigma = max(sigma, price * _sig_bps / 1e4
+                            * math.sqrt(t_min / max(_hz_min, 1.0)))
             up = (tp1 - price) * dirn          # room to target (dir side)
             down = (price - sl) * dirn          # room to stop (against)
             if up <= 0 or down <= 0:
@@ -3070,6 +3080,10 @@ class PredictionEngine:
             for f, qv in z.items():
                 sig_f = atr * math.sqrt(max(t_min * f, 1e-4)
                                         / max(candle_min, 1.0))
+                if _sig_bps > 0 and price > 0:
+                    sig_f = max(sig_f, price * _sig_bps / 1e4
+                                * math.sqrt(max(t_min * f, 1e-4)
+                                            / max(_hz_min, 1.0)))
                 bands.append({"f": f, "level": round(price + qv * sig_f, 6)})
             return {
                 "approx": True,
