@@ -98,6 +98,10 @@ class EmotionSystem:
         self.weights: dict[tuple[str, str], list[float]] = {}
         self.acc: dict = {}        # (sym, tf) -> 21 EWMA accuracies
         self.n_updates: dict = {}  # (sym, tf) -> reward-call count
+        # dominant-channel tracking: previous pass + since-when, so the
+        # DOMINANT NOW header is measured server-side (survives reloads)
+        self._prev_emos: dict = {}
+        self._dom: dict = {}       # (sym, tf) -> (channel id, since ts)
 
     @property
     def ready(self) -> bool:
@@ -161,8 +165,12 @@ class EmotionSystem:
         dirs: dict[int, int] = {}
 
         # ---- E1 FII: fear intensity index --------------------------------
+        # streak counts back over at most the last 240 bars: the old
+        # loop ran over the WHOLE backfill tape (~1000 bars), so in any
+        # net-up session streak ≈ tape length, PDI pinned at 1.0 and
+        # the channel could never un-saturate within a session.
         streak = 0
-        for p in reversed(mc):
+        for p in reversed(mc[-240:]):
             if p > open_:
                 streak += 1
             else:
@@ -434,7 +442,49 @@ class EmotionSystem:
                 zero_reasons[str(_eid)] = (
                     "computed — channel exactly 0.0 this window "
                     "(no trigger, both sides balanced)")
+        # ---- DOMINANT channel (server-side, honest) ---------------------
+        # The old UI picked max(raw value): channels are [0,1] with 0.5
+        # neutral, and several sig() channels saturate at 1.00 in calm
+        # tapes — the FIRST saturated channel in index order (E2) then
+        # won every tie, forever ("Greed is always top"). Rank instead
+        # by DEVIATION FROM NEUTRAL |v-0.5|*2, break (near-)ties by
+        # who MOVED most since the previous pass, and track held-time
+        # here so it survives page reloads.
+        import time as _time
+        _key = (ctx.symbol, ctx.tf)
+        _prev = self._prev_emos.get(_key) or {}
+        _w = self._weights(ctx.symbol, ctx.tf)
+        _ranked = sorted(
+            ((abs(float(emos[i]) - 0.5) * 2.0,
+              abs(float(emos[i]) - float(_prev.get(i, emos[i]))),
+              float(_w[i - 1]), i)
+             for i in range(1, 22)),
+            key=lambda t: (round(t[0], 3), t[1], t[2]), reverse=True)
+        _dev, _dlt, _wv, _dom_id = _ranked[0]
+        # when several channels are pegged at the same extreme and
+        # none moved, crowning one is arbitrary — SAY so (tied count)
+        _tied = sum(1 for t in _ranked
+                    if t[0] >= _dev - 0.01 and t[3] != _dom_id)
+        _now = _time.time()
+        _cur = self._dom.get(_key)
+        if _cur is None or _cur[0] != _dom_id:
+            self._dom[_key] = (_dom_id, _now)
+            _held = 0.0
+        else:
+            _held = _now - _cur[1]
+        self._prev_emos[_key] = dict(emos)
+        dominant = {
+            "id": int(_dom_id),
+            "value": round(float(emos[_dom_id]), 5),
+            "intensity": round(_dev, 4),          # 0 = neutral, 1 = extreme
+            "moved": round(_dlt, 5),
+            "held_s": round(_held, 1),
+            "tied": int(_tied),                   # others at same extreme
+            "runner_up": {"id": int(_ranked[1][3]),
+                          "intensity": round(_ranked[1][0], 4)},
+        }
         return {
+            "dominant": dominant,
             "emotions": {k: round(v, 5) for k, v in emos.items()},
             "zero_reasons": zero_reasons,
             "zero_causes": _causes(zero_reasons),

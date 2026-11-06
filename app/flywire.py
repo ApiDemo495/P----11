@@ -296,13 +296,21 @@ def build_sync(parquet_path: Path, ann_path: Path, out_npz: Path,
 
 
 def start_build() -> mp.Process:
-    """Spawn the build worker (B-1/B-11). Returns the Process."""
+    """Spawn the build worker (B-1/B-11). Returns the Process.
+
+    SPAWN, not fork: forking the whole API server (feed buffers, rings,
+    any half-built scipy state) into the build child is fragile and
+    bloats the child's resident set — on a fresh 4-core Codespace the
+    forked worker died silently (no pipe message, no cache file, just
+    "build produced no cache file"). A spawned child re-imports clean
+    and holds only the build's own arrays."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     parent, child = mp.Pipe(duplex=False)
-    p = mp.Process(target=_build_worker,
-                   args=(str(CACHE_DIR), str(CACHE_DIR / "flywire_783.npz"),
-                         child),
-                   daemon=True)
+    ctx = mp.get_context("spawn")
+    p = ctx.Process(target=_build_worker,
+                    args=(str(CACHE_DIR), str(CACHE_DIR / "flywire_783.npz"),
+                          child),
+                    daemon=True)
     p.start()
     start_build.last_pipe = parent          # type: ignore[attr-defined]
     return p
@@ -421,8 +429,32 @@ class FlyWireBrain:
 
     def _acquire_then_build(self) -> None:
         try:
+            # download with REAL progress: poll the .part files while
+            # acquire() runs (the old code sat at "1% — downloading"
+            # for the whole 130 MB, indistinguishable from a hang)
             self.progress = {"stage": "downloading", "pct": 1.0}
-            states = acquire()
+            _res: dict = {}
+            _th = threading.Thread(
+                target=lambda: _res.update(states=acquire()),
+                name="flywire-download", daemon=True)
+            _th.start()
+            _want = float(sum(EXPECTED_MIN.values())) or 1.0
+            while _th.is_alive():
+                _have = 0.0
+                for _n in _SOURCES:
+                    for _cand in (CACHE_DIR / _n,
+                                  (CACHE_DIR / _n).with_suffix(
+                                      (CACHE_DIR / _n).suffix + ".part")):
+                        try:
+                            if _cand.exists():
+                                _have += _cand.stat().st_size
+                        except OSError:
+                            pass
+                self.progress = {"stage": "downloading",
+                                 "pct": round(min(40.0, 1.0 + 39.0
+                                                  * _have / _want), 1)}
+                _th.join(timeout=0.5)
+            states = _res.get("states") or {}
             # curl fallback returns "downloaded (curl)" — anything that
             # actually landed counts as success (was marking a FULL
             # download as failed → brain stayed absent)
@@ -452,7 +484,13 @@ class FlyWireBrain:
                     time.sleep(0.4)
             self._proc.join(timeout=5)
             if not self.npz_path().exists():
-                raise RuntimeError("build produced no cache file")
+                _rc = self._proc.exitcode
+                raise RuntimeError(
+                    f"build worker died (exit {_rc}) without writing "
+                    "the cache file — a negative exit is a signal "
+                    "(-9 = OOM-killed: the build needs ~2 GB free RAM; "
+                    "close other Codespace processes) — press RECONNECT "
+                    "to retry; the vote stays withheld meanwhile")
             t0 = time.perf_counter()
             self._load(self.npz_path())
             self.load_ms = round((time.perf_counter() - t0) * 1000, 1)

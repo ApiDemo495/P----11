@@ -183,7 +183,7 @@ class MarketFeed:
         self.last_delivery = now
         self.updates += 1
         self._tick_times.append(now)
-        del self._tick_times[:-200]
+        del self._tick_times[:-2000]     # depth@100ms alone is ~40 msg/s
 
     def stats(self) -> dict:
         """Feed chip payload — source, age, ticks/s, switches (advice D)."""
@@ -454,16 +454,28 @@ class MarketFeed:
                         msg = json.loads(raw)
                         data = msg.get("data", msg)
                         ev = data.get("e")
-                        # partial book: b/a are LIST of levels (full top-20
-                        # replacement each100 ms — aggTrade's `a` is an int)
-                        if (isinstance(data.get("b"), list)
-                                and isinstance(data.get("a"), list)):
-                            _bs = reverse.get(str(data.get("s") or "").lower())
+                        # every stream message is a tick for the rate
+                        # meter (was: kline only -> "0.0 ticks/s" while
+                        # depth/aggTrade poured in)
+                        self.note("binance-ws")
+                        # Partial-book depth20 sends "bids"/"asks" (full
+                        # top-20 replacement each 100 ms); diff-depth
+                        # sends "b"/"a". The old handler only accepted
+                        # b/a, so the LIVE book never populated and
+                        # F32-F35 read 0.000 on every live tape.
+                        _bb = data.get("bids", data.get("b"))
+                        _aa = data.get("asks", data.get("a"))
+                        if isinstance(_bb, list) and isinstance(_aa, list):
+                            # partial-book payloads carry NO "s" field —
+                            # the symbol lives in the combined-stream
+                            # name ("btcusdt@depth20@100ms")
+                            _sym_raw = str(data.get("s") or "").lower() or \
+                                str(msg.get("stream") or "").split("@")[0]
+                            _bs = reverse.get(_sym_raw)
                             if _bs:
                                 try:
                                     self.book.on_depth(
-                                        _bs, data.get("b") or [],
-                                        data.get("a") or [],
+                                        _bs, _bb or [], _aa or [],
                                         int(data.get("E") or 0))
                                 except Exception:
                                     pass

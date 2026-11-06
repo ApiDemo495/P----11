@@ -616,16 +616,15 @@ function setFocusTf(tf) {
 }
 
 function renderDashboardMode() {
+  // REWRITTEN dashboard: the decision hero (focused-TF big chart) is
+  // ALWAYS visible and the four timeframe cards sit under it as a
+  // switcher strip — the old mode hid one or the other, so the page
+  // looked unchanged between modes and the big chart was easy to miss.
   const hero = $("#tf-hero"), grid = $("#quad-grid");
   if (!hero || !grid) return;
-  if (S.tfFocus) {
-    hero.classList.remove("hidden");
-    grid.style.display = "none";
-    renderHero();
-  } else {
-    hero.classList.add("hidden");
-    grid.style.display = "";
-  }
+  hero.classList.remove("hidden");
+  grid.style.display = "";
+  renderHero();
 }
 
 function renderHero() {
@@ -641,6 +640,11 @@ function renderHero() {
   if (ttl) {
     ttl.innerHTML = `${tf.toUpperCase()} · <b style="color:var(--cyan)">${m.mins}m</b> window
       <span class="dim">${S.symbol} · sub-timeframes ${m.tps.join(" / ")}m</span>`;
+  }
+  const badge = $("#hero-badge");
+  if (badge) {
+    badge.className = "hero-badge " + (dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat");
+    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)}${cyc?.issued ? " · ISSUED" : " · no trade"}</small>`;
   }
   const stats = $("#hero-stats");
   if (stats) {
@@ -755,6 +759,7 @@ function buildQuads() {
       <div class="q-tps" id="qt-${tf}"></div>
       <div class="q-foot"><span id="qf-${tf}"></span><span id="qa-${tf}"></span></div>`;
     grid.appendChild(q);
+    q.addEventListener("click", () => { if (S.focusTf !== tf) setFocusTf(tf); });
     S.charts[tf] = new ChartX($("#qc-" + tf));
     S.spark[tf] = new ChartX($("#qs-" + tf), { spark: true });
   });
@@ -1541,25 +1546,36 @@ async function loadEmotion() {
   try {
     const sys = await api(`/api/systems?symbol=${S.symbol}`);
     const em = sys.systems?.[`${S.symbol}|${S.focusTf}`]?.emotion || {};
-    // DOMINANT NOW — biggest channel intensity + how long it held
+    // DOMINANT NOW — server-ranked by deviation-from-neutral (the old
+    // max(raw value) crowned the first sig()-saturated channel — E2 —
+    // on every tie, so "Greed" won forever). Server also tracks the
+    // real held-time; the local calc below is only a fallback and now
+    // uses the same deviation ranking.
     try {
       const dom = $("#em-dominant");
       const ev = em.emotions || {};
-      let best = -1, bi = 0, ri = 0, second = -1;
-      for (let i = 1; i <= 22; i++) {
-        const v = Number(ev[i] ?? 0);
-        if (v > best) { second = best; ri = bi; best = v; bi = i; }
-        else if (v > second) { second = v; ri = i; }
+      let bi = 0, best = -1, ri = 0, second = -1, heldS = 0;
+      if (em.dominant && em.dominant.id) {
+        bi = em.dominant.id;
+        best = em.dominant.intensity;
+        ri = (em.dominant.runner_up || {}).id || 0;
+        second = (em.dominant.runner_up || {}).intensity ?? -1;
+        heldS = Math.round(em.dominant.held_s || 0);
+      } else {
+        for (let i = 1; i <= 21; i++) {
+          const dev = Math.abs(Number(ev[i] ?? 0.5) - 0.5) * 2;
+          if (dev > best) { second = best; ri = bi; best = dev; bi = i; }
+          else if (dev > second) { second = dev; ri = i; }
+        }
+        if (!S.domEm || S.domEm.i !== bi) S.domEm = { i: bi, since: Date.now() };
+        heldS = Math.max(0, Math.round((Date.now() - S.domEm.since) / 1000));
       }
       if (dom && bi) {
-        const nowMs = Date.now();
-        if (!S.domEm || S.domEm.i !== bi) S.domEm = { i: bi, since: nowMs };
-        const heldS = Math.max(0, Math.round((nowMs - S.domEm.since) / 1000));
         const pct = Math.round(best * 100);
         dom.innerHTML = `
           <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
             <div style="font:700 26px/1 var(--mono);color:var(--gold)">${esc((typeof EMO !== "undefined" && EMO[bi - 1]) || ("E" + bi))}</div>
-            <div class="dim">E${bi} · <b style="color:var(--text)">${pct}%</b> intensity · held ${heldS}s · runner-up ${esc((typeof EMO !== "undefined" && EMO[ri - 1]) || ("E" + ri))} ${Math.round(second * 100)}%</div>
+            <div class="dim">E${bi} · <b style="color:var(--text)">${pct}%</b> intensity · held ${heldS}s · runner-up ${esc((typeof EMO !== "undefined" && EMO[ri - 1]) || ("E" + ri))} ${Math.round(second * 100)}%${em.dominant?.tied ? ` · <span class="acc-warn">+${em.dominant.tied} channel${em.dominant.tied > 1 ? "s" : ""} tied at this extreme (saturated tape — no single winner)</span>` : ""}</div>
           </div>
           <div class="bar" style="margin-top:8px;max-width:420px"><i class="pos" style="width:${clamp(pct, 2, 100)}%"></i></div>
           <div class="hint">confidence modifier only — never the direction (advice §5.1)</div>`;

@@ -1009,6 +1009,7 @@ class PredictionEngine:
                     -1 if cerc_sync[tf] < -1e-6 else 0
                 ),
                 "cerc": em["cerc"],
+                "dominant": em.get("dominant"),
                 "emotions": em["emotions"],
                 "directions": em["directions"],
                 "rtp": em["rtp"],
@@ -1272,6 +1273,7 @@ class PredictionEngine:
                     "emotion": {
                         "aggregate": round(cerc_sync[tf], 5),
                         "cerc": em["cerc"],
+                        "dominant": em.get("dominant"),
                         "features": em.get("features") or {},
                         "zero_reasons": em.get("zero_reasons") or {},
                         "zero_causes": em.get("zero_causes") or {},
