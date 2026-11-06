@@ -713,6 +713,27 @@ hung boot):
 ./run.sh --supervise
 ```
 
+## One anchor + chart legibility (follow-up)
+
+Live screenshot on the levels build still showed two entries on one
+screen (trace LOCKED 75,672 vs hero entry 76,182): fresh_cycle computed
+targets/blocks from the compute price and only afterwards froze the
+settlement lock at the live price. Now the lock is created FIRST and
+targets, the measured-moves block and the displayed entry all anchor
+to the lock's price — verified live 16/16 cycles entry == lock price
+(the one apparent exception was a lagging cached lock display in the
+systems payload, not the levels). Emergency re-locks move lock, block
+and targets together (`moves_risk.reanchor`), so the anchor stays one
+number there too.
+
+Charts: level-line labels are de-collided (11 px minimum gap, sorted
+by screen y) in every ChartX; quad cards draw only horizon-TP + SL
+lines (sub-target values stay in the text row/calls table;
+liquidation overlays are hero-only); the probability-branches panel
+uses the gated horizon TP/SL pair instead of the 5-minute sub-frame
+(whose tiny distance made it read 0%/0%/100%) and prints `<1%`
+instead of a misleading rounded 0%.
+
 ## TP/SL levels rewrite — one locked anchor
 
 `app/levels.py` is the single source of truth for displayed TP/SL. A

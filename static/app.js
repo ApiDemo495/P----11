@@ -216,14 +216,21 @@ class ChartX {
       this.bars.forEach((b, i) => { const x = X(i), y = Y(b.close); i ? g.lineTo(x, y) : g.moveTo(x, y); });
       g.strokeStyle = "rgba(0,212,240,.45)"; g.lineWidth = 1; g.stroke(); return;
     }
-    for (const l of this.lines) {
+    // level lines with DE-COLLIDED labels: sort by screen y and enforce
+    // an 11 px minimum gap — TP1/TP-horizon/SL labels used to print on
+    // top of each other in the quad cards (unreadable stacks)
+    const _lbl = this.lines.map(l => ({
+      l, y: Math.max(10, Math.min(h - 4, Y(l.price))),
+    })).sort((a, b) => a.y - b.y);
+    for (let i = 1; i < _lbl.length; i++)
+      if (_lbl[i].y - _lbl[i - 1].y < 11) _lbl[i].y = _lbl[i - 1].y + 11;
+    for (let i = _lbl.length - 2; i >= 0; i--)
+      if (_lbl[i + 1].y - _lbl[i].y < 11) _lbl[i].y = _lbl[i + 1].y - 11;
+    for (const { l, y } of _lbl) {
       g.strokeStyle = l.color; g.setLineDash(l.dash === false ? [] : [5, 4]); g.lineWidth = l.hit ? 1.8 : 1;
       g.beginPath(); g.moveTo(0, Y(l.price)); g.lineTo(w - rw, Y(l.price)); g.stroke(); g.setLineDash([]);
-      // label chip at the RIGHT edge (next to the price scale): the old
-      // left-edge labels stacked on top of the candles and each other
       g.fillStyle = l.color; g.font = "9px monospace"; g.textAlign = "right";
-      const ly2 = Math.max(10, Math.min(h - 4, Y(l.price)));
-      g.fillText(`${l.title} ${l.price.toFixed(l.price > 1000 ? 0 : 2)}`, w - rw - 3, ly2 - 3);
+      g.fillText(`${l.title} ${l.price.toFixed(l.price > 1000 ? 0 : 2)}`, w - rw - 3, y - 3);
     }
     // ── price grid + right-hand scale (reads like a real chart) ──
     g.font = "9px monospace"; g.textAlign = "left";
@@ -394,10 +401,11 @@ function renderBranches() {
       "bands appear once the window has a direction and a seeded stop";
     return;
   }
+  const _pct = p => p > 0 && p < 0.01 ? "<1%" : `${Math.round(p * 100)}%`;
   stats.innerHTML = `
-    <div class="kv"><span>P(target before stop)</span><b class="acc-up">${Math.round(b.p_target * 100)}%</b></div>
-    <div class="kv"><span>P(stop first)</span><b class="acc-dn">${Math.round(b.p_stop * 100)}%</b></div>
-    <div class="kv"><span>P(close between)</span><b>${Math.round(b.p_between * 100)}%</b></div>
+    <div class="kv"><span>P(target before stop)</span><b class="acc-up">${_pct(b.p_target)}</b></div>
+    <div class="kv"><span>P(stop first)</span><b class="acc-dn">${_pct(b.p_stop)}</b></div>
+    <div class="kv"><span>P(close between)</span><b>${_pct(b.p_between)}</b></div>
     <div class="kv"><span>P(close down)</span><b>${Math.round(b.p_close_down * 100)}%</b></div>
     <div class="kv"><span>σ (remaining)</span><b>${px(b.sigma)}</b></div>
     <div class="kv"><span>time left</span><b>${Math.round(b.rem_s / 60)}m ${Math.round(b.rem_s % 60)}s</b></div>`;
@@ -835,22 +843,15 @@ function renderQuads(opts = {}) {
     const lines = [];
     if (cyc?.sl) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL" });
     // liquidation clusters (measured @forceOrder buckets) as purple overlays
-    const mgi = S.snap?.systems?.[`${S.symbol}|${tf}`]?.micro;
-    if (mgi?.available) {
-      if (mgi.nearest_up?.price)
-        lines.push({ price: mgi.nearest_up.price, color: "#a855f7",
-                     title: `LIQ↑ ${Math.round(mgi.nearest_up.bps)}bp`, dash: true });
-      if (mgi.nearest_down?.price)
-        lines.push({ price: mgi.nearest_down.price, color: "#a855f7",
-                     title: `LIQ↓ ${Math.round(mgi.nearest_down.bps)}bp`, dash: true });
-    }
-    (cyc?.targets || []).forEach((t, i) => {
-      if (t.level) lines.push({
-        price: t.level,
-        color: t.status === "hit" ? "#22c98a" : t.status === "locked" ? "#c9a227" : "#00d4f0",
-        title: `TP${i + 1}${t.status === "hit" ? " ✓" : t.status === "locked" ? " 🔒" : ""}`,
-        dash: t.status !== "locked", hit: t.status === "hit",
-      });
+    // (liquidation-cluster overlays live on the hero chart only — on
+    // the small quad cards they were two more colliding labels)
+    // quad cards show ONLY the horizon TP + SL lines: every sub-target
+    // line on a 90 px card was an unreadable label stack (the values
+    // themselves are in the text row under the card and the calls table)
+    const _hz = (cyc?.targets || [])[(cyc?.targets || []).length - 1];
+    if (_hz?.level) lines.push({
+      price: _hz.level, color: "#c9a227",
+      title: `TP${_hz.minutes}m`, dash: false,
     });
     if (heavy) S.charts[tf]?.setLines(lines);
   });

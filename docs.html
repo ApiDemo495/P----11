@@ -726,6 +726,24 @@ curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&
 <pre><code>
 ./run.sh --supervise
 </code></pre>
+<h4>One anchor + chart legibility (follow-up)</h4>
+<p>Live screenshot on the levels build still showed two entries on one</p>
+<p>screen (trace LOCKED 75,672 vs hero entry 76,182): fresh_cycle computed</p>
+<p>targets/blocks from the compute price and only afterwards froze the</p>
+<p>settlement lock at the live price. Now the lock is created FIRST and</p>
+<p>targets, the measured-moves block and the displayed entry all anchor</p>
+<p>to the lock&#x27;s price — verified live 16/16 cycles entry == lock price</p>
+<p>(the one apparent exception was a lagging cached lock display in the</p>
+<p>systems payload, not the levels). Emergency re-locks move lock, block</p>
+<p>and targets together (<code>moves_risk.reanchor</code>), so the anchor stays one</p>
+<p>number there too.</p>
+<p>Charts: level-line labels are de-collided (11 px minimum gap, sorted</p>
+<p>by screen y) in every ChartX; quad cards draw only horizon-TP + SL</p>
+<p>lines (sub-target values stay in the text row/calls table;</p>
+<p>liquidation overlays are hero-only); the probability-branches panel</p>
+<p>uses the gated horizon TP/SL pair instead of the 5-minute sub-frame</p>
+<p>(whose tiny distance made it read 0%/0%/100%) and prints <code>&lt;1%</code></p>
+<p>instead of a misleading rounded 0%.</p>
 <h4>TP/SL levels rewrite — one locked anchor</h4>
 <p><code>app/levels.py</code> is the single source of truth for displayed TP/SL. A</p>
 <p>level belongs to the prediction that created it, anchored at that</p>

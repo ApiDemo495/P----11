@@ -3025,9 +3025,13 @@ class PredictionEngine:
         try:
             dirn = int(d.get("direction") or 0)
             sl = float(d.get("sl") or 0.0)
+            # the barrier pair is the cycle's gated TP/SL (locked-entry
+            # anchored) — targets[0] is the 5-minute sub-frame, whose
+            # tiny distance made the panel read 0%/0%/100%
             targets = d.get("targets") or []
-            tp1 = float((targets[0] or {}).get("level") or 0.0) \
-                if targets else 0.0
+            tp1 = float(d.get("tp") or 0.0) or (
+                float((targets[0] or {}).get("level") or 0.0)
+                if targets else 0.0)
             if not dirn or price <= 0 or sl <= 0 or tp1 <= 0:
                 return None
             rem_s = float(d.get("countdown_s") or 0)
@@ -3308,7 +3312,17 @@ class PredictionEngine:
                 self.hist.record_no_sl_hit(symbol)
         targets = []
         _mins = TIMEFRAMES[tf]["targets"]
-        _price0 = res.get("_price", 0.0) or self.feed.prices().get(symbol, 0.0)
+        # LOCK FIRST, then anchor EVERYTHING to the lock's entry price:
+        # the settlement lock, the targets, the TP/SL block and the
+        # displayed "entry (locked)" are one number. (Before this, the
+        # block anchored to the compute price while the lock froze the
+        # live price seconds later — two different "entries" on screen,
+        # 75,672 in the trace vs 76,182 in the hero.)
+        self._settle_and_lock(symbol, tf, now, res)
+        _lock_now = self.locks.get((symbol, tf)) or {}
+        _price0 = (float(_lock_now.get("price") or 0.0)
+                   or res.get("_price", 0.0)
+                   or self.feed.prices().get(symbol, 0.0))
         # MEASURED-MOVES TP/SL (docs11-charts B-1): levels come from
         # this asset's measured excursions at each horizon — q80 MAE
         # stop, clip(1.5·SL·f(edge), q50, q95) target — frozen here.
@@ -3362,7 +3376,6 @@ class PredictionEngine:
                 targets.append(
                     TargetState(k=k, minutes=minutes, level=None, status="pending")
                 )
-        self._settle_and_lock(symbol, tf, now, res)
         _g_start, _g_end = self._grid_window(tf, now)
         cyc = TFCycle(
             symbol=symbol,
