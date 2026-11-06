@@ -45,8 +45,9 @@
     <div id="feed-chip" class="feed-chip">…</div>
     <div id="brain-chip" class="feed-chip" title="FlyWire v783 connectome — live state from the last analysis pass">🧠 …</div>
     <div id="status-chips" class="trace-row"></div>
-    <span id="auto-chip" class="chip" title="AUTO-PREDICT: the analysis re-runs by itself so every tab is always fresh. Click to switch to MANUAL (▶ ANALYSE only).">AUTO</span>
+    <button id="auto-chip" class="btn-analyse btn-auto" title="AUTO-PREDICT: the analysis re-runs by itself so every tab is always fresh. Click to switch to MANUAL (▶ ANALYSE only).">AUTO: ON</button>
     <button id="btn-analyse" class="btn-analyse" title="Run the staged analysis for this asset">▶ ANALYSE <span id="analyse-sym">BTC</span></button>
+    <span class="seg" id="seg-chart"><span class="seg-lbl">CHART</span><button data-chart="own" class="seg-btn active">OWN</button><button data-chart="tv" class="seg-btn">TRADINGVIEW</button></span>
   </div>
 
   <!-- alert bar -->
@@ -95,6 +96,7 @@
           </div>
         </div>
         <div id="hero-chart"></div>
+        <div id="tv-wrap" class="hidden" style="height:340px;margin-top:6px"></div>
         <div class="panel-h" style="margin-top:10px">TARGET LADDER — this window
           <span class="dim">TF horizon calculated &amp; shown first · TP1–TP3 are its sub-timeframes</span></div>
         <div id="subtf-strip" class="kv-row" style="margin-top:6px"></div>
@@ -358,6 +360,31 @@
         <a class="btn" href="/docs" target="_blank">open docs (README + API setup)</a>
         <span class="hint">History DB: <code>data/history.db</code> · settings: <code>data/settings.json</code> · weights persist across restarts.</span>
       </div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">BINANCE EXECUTION — OPTIONAL · OFF BY DEFAULT · TESTNET FIRST</div>
+      <div class="hint" style="margin-bottom:8px">Trades can only fire when ALL of these hold: enabled here + API keys saved + ARM timer running + signal ISSUED above the asset's own confidence floor + TP/SL on the correct side of entry. Sub-floor predictions are refused and logged. Keys are stored only in <code>data/trading.json</code> on this machine and masked everywhere.</div>
+      <div class="kv-row">
+        <div class="kv"><span>status</span><b id="tr-status">—</b></div>
+        <div class="kv"><span>open positions</span><b id="tr-open">—</b></div>
+        <div class="kv"><span>orders today</span><b id="tr-today">—</b></div>
+      </div>
+      <div class="kv-row" style="margin-top:8px">
+        <label class="kv"><span>API key</span><input id="tr-key" type="password" placeholder="binance futures key" style="width:170px"></label>
+        <label class="kv"><span>API secret</span><input id="tr-secret" type="password" placeholder="secret" style="width:150px"></label>
+        <label class="kv"><span>max order USDT</span><input id="tr-max" type="number" value="25" min="5" max="500" style="width:70px"></label>
+        <label class="kv"><span>max orders/day</span><input id="tr-cap" type="number" value="4" min="1" max="20" style="width:55px"></label>
+        <label class="kv"><span>testnet</span><input id="tr-testnet" type="checkbox" checked></label>
+        <label class="kv"><span>ENABLE trading</span><input id="tr-enabled" type="checkbox"></label>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" id="tr-save">save keys &amp; settings</button>
+        <button class="btn" id="tr-arm" style="background:#22c98a;color:#04040c;font-weight:700">ARM 30 MIN</button>
+        <button class="btn" id="tr-disarm" style="background:#f0385a;color:#fff;font-weight:700">DISARM / KILL</button>
+        <button class="btn" id="tr-clear">clear keys</button>
+      </div>
+      <div class="panel-h" style="margin-top:12px">GATE LOG — every decision, fired or refused</div>
+      <div id="tr-log" class="hint">—</div>
     </div>
     <div class="panel">
       <div class="panel-h">REINFORCEMENT CONSOLE — error-finder · issue bandit · accuracy target

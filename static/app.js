@@ -11,9 +11,15 @@ const TF_META = {
   tf4: { mins: 247, tps: [60, 120, 180, 247] },
 };
 const ASSETS = ["BTC", "PAXG", "ETH", "BNB"];
-const EMO = ["FOMO","Greed","Fear","Panic","Hope","Euphoria","Anxiety","Confusion",
-  "Regret","Trust","Doubt","Excitement","Boredom","Guilt","Pride","Envy","Relief",
-  "Anticipation","Denial","Euphoria 2","Greed 2","CERC"];
+// genuine MARKET emotions, named for what each E-channel measures
+// (Pride/Envy/Guilt were not market emotions — removed). Retail vs
+// hedge crowd reads are computed server-side from these channels.
+const EMO = ["Fear","Loss aversion","Hedge demand","Panic","Startle reflex",
+  "Session greed","Smart-money greed","Volatility stress","Rollover panic",
+  "Smart-money absorption","Herding","Range fatigue","Reversal fear",
+  "Sentiment","Intent to act","Announcement impulse","Crowd pull",
+  "Trend-chase fatigue","Smart-money divergence","News FOMO",
+  "Trend exhaustion","Net emotion"];
 const P_NAMES = {
   1:"QTPB quantised price ladder",2:"WFCP wave-function collapse",3:"TME trend memory",
   4:"QTPB ladder density",5:"PSI phase state",6:"DRHE/DRPT trend decoherence",
@@ -146,7 +152,7 @@ const S = {
 /* ═══════════ ChartX — own canvas line chart ═══════════ */
 class ChartX {
   constructor(el, opts = {}) {
-    this.el = el; this.spark = !!opts.spark;
+    this.el = el; this.spark = !!opts.spark; this.line = !!opts.line;
     this.cv = document.createElement("canvas");
     this.cv.style.cssText = "width:100%;height:100%;display:block";
     el.innerHTML = ""; el.appendChild(this.cv);
@@ -242,6 +248,20 @@ class ChartX {
       g.fillStyle = "#6e6e8c";
       g.fillText(val >= 1000 ? val.toFixed(0) : val.toFixed(2),
                  w - rw + 4, Math.max(8, Math.min(h - 4, gy + 3)));
+    }
+    if (this.line) {
+      // LINE mode (quad cards): closes as one line ending at the live
+      // tick — same "chart must match price" rule as the hero; candle
+      // bodies on a 90 px card were unreadable dots
+      g.beginPath();
+      this.bars.forEach((b, i) => { const x = X(i), y = Y(b.close); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+      g.strokeStyle = "#e8f6ff"; g.lineWidth = 1.3; g.stroke();
+      const lb = this.bars[this.bars.length - 1];
+      if (lb) {
+        g.fillStyle = "#00d4f0";
+        g.beginPath(); g.arc(X(this.bars.length - 1), Y(lb.close), 2.2, 0, 7); g.fill();
+      }
+      return;
     }
     // ── CANDLES (the rewrite): bodies + wicks — a flat line was hiding
     //    the actual two-sided structure of every bar ──
@@ -414,9 +434,20 @@ function _drawHero() {
   if (cv.width !== w * 2 || cv.height !== h * 2) { cv.width = w * 2; cv.height = h * 2; }
   const g = cv.getContext("2d"); g.setTransform(2, 0, 0, 2, 0, 0);
   g.clearRect(0, 0, w, h);
-  // realised line: this window's path (seeded from candles + ticks)
-  const t0 = Math.max(d.cycle_start || (now - 600), now - 1800);
-  const past = (S.priceHist || []).filter(p => p.t >= t0 && p.t <= now && p.p > 0);
+  // realised line: this window's path (seeded from candles + ticks).
+  // The line starts at the FIRST data point — anchoring the axis at
+  // cycle_start left a blank left half when history began later
+  // (user: "why is it directly from middle starting").
+  let past = (S.priceHist || []).filter(p => p.t <= now && p.p > 0);
+  past = past.filter(p => p.t >= now - 1800);
+  // stale-seed guard: a >2% jump inside 2 minutes is a seed/tick
+  // junction (old backfill meeting live ticks), not a real move —
+  // cut the history before it rather than drawing a vertical step
+  for (let i = past.length - 1; i > 0; i--) {
+    if (Math.abs(past[i].p / past[i - 1].p - 1) > 0.02
+        && past[i].t - past[i - 1].t < 120) { past = past.slice(i); break; }
+  }
+  const t0 = past.length ? past[0].t : (now - 600);
   if (!past.length || now - past[past.length - 1].t > 2) past.push({ t: now, p: price });
   else past[past.length - 1] = { t: now, p: price };
   // forward fan from the measured σ (branches payload), sqrt-time cone
@@ -787,9 +818,10 @@ function renderHero() {
   const rn = $("#risk-note");
   if (rn) {
     const rk = cyc?.risk || {};
-    rn.textContent = rk.note
+    rn.textContent = (rk.note
       ? `TP/SL from measured moves — ${rk.note}${rk.provisional ? " · levels provisional" : ""} · frozen at the lock; an emergency re-lock re-anchors the same bps at the new entry`
-      : "TP/SL: measured-moves block pending (needs a locked cycle)";
+      : "TP/SL: measured-moves block pending (needs a locked cycle)")
+      + (res.asset_nature ? ` · ${S.symbol} profile: ${res.asset_nature} · issue floor ${fmt(res.asset_floor, 3)}` : "");
   }
   // chart overlays: SL, TP ladder (horizon first), liquidation clusters
   const lines = [];
@@ -884,7 +916,7 @@ function buildQuads() {
       <div class="q-foot"><span id="qf-${tf}"></span><span id="qa-${tf}"></span></div>`;
     grid.appendChild(q);
     q.addEventListener("click", () => { if (S.focusTf !== tf) setFocusTf(tf); });
-    S.charts[tf] = new ChartX($("#qc-" + tf));
+    S.charts[tf] = new ChartX($("#qc-" + tf), { line: true });
     S.spark[tf] = new ChartX($("#qs-" + tf), { spark: true });
   });
   // hero chart is the LINE-CHART-FROM-NOW renderer (drawHeroChart),
@@ -959,8 +991,8 @@ async function loadAutoPredict() {
     S.autoPredict = on;
     const chip = $("#auto-chip");
     if (chip) {
-      chip.textContent = on ? "AUTO" : "MANUAL";
-      chip.className = "chip " + (on ? "chip-ok" : "chip-warn");
+      chip.textContent = on ? "AUTO: ON" : "AUTO: OFF";
+      chip.className = "btn-analyse btn-auto " + (on ? "auto-on" : "auto-off");
       chip.title = on
         ? "AUTO-PREDICT on — analysis re-runs by itself every ~45 s; every tab is always fresh. Click for MANUAL mode (▶ ANALYSE only)."
         : "MANUAL mode — press ▶ ANALYSE on the dashboard for a fresh full analysis. Click for AUTO.";
@@ -983,6 +1015,40 @@ function bindAutoChip() {
   const row = $("#st-auto");
   if (row) row.addEventListener("click", () => chip && chip.click());
   loadAutoPredict();
+}
+
+/* ═══════ chart source: OWN charts ⇄ TradingView (proper toggle) ═══════ */
+const TV_SYMS = { BTC: "BINANCE:BTCUSDT", PAXG: "BINANCE:PAXGUSDT",
+                  ETH: "BINANCE:ETHUSDT", BNB: "BINANCE:BNBUSDT" };
+const TV_INT = { tf1: "5", tf2: "15", tf3: "60", tf4: "240" };
+function applyChartSrc() {
+  const tv = S.chartSrc === "tv";
+  $$("#seg-chart .seg-btn").forEach(b =>
+    b.classList.toggle("active", (b.dataset.chart === "tv") === tv));
+  const wrap = $("#tv-wrap"), hero = $("#hero-chart"), grid = $("#quad-grid");
+  if (wrap) wrap.classList.toggle("hidden", !tv);
+  if (hero) hero.style.display = tv ? "none" : "";
+  if (grid) grid.style.display = tv ? "none" : "";
+  if (tv && wrap) {
+    const src = "https://s.tradingview.com/widgetembed/?symbol="
+      + encodeURIComponent(TV_SYMS[S.symbol] || "BINANCE:BTCUSDT")
+      + `&interval=${TV_INT[S.focusTf] || "5"}&theme=dark&style=1`
+      + "&timezone=Etc%2FUTC&withdateranges=1&hide_side_toolbar=0"
+      + "&allow_symbol_change=0&saveimage=0";
+    if (wrap.dataset.src !== src) {
+      wrap.dataset.src = src;
+      wrap.innerHTML = `<iframe src="${src}" style="width:100%;height:100%;border:0" allowtransparency="true" scrolling="no" allowfullscreen></iframe>`;
+    }
+  }
+}
+function bindChartSrc() {
+  try { S.chartSrc = localStorage.getItem("chartSrc") || "own"; } catch { S.chartSrc = "own"; }
+  $$("#seg-chart .seg-btn").forEach(b => b.addEventListener("click", () => {
+    S.chartSrc = b.dataset.chart;
+    try { localStorage.setItem("chartSrc", S.chartSrc); } catch {}
+    applyChartSrc();
+  }));
+  applyChartSrc();
 }
 
 /* ═══════ staged ANALYSE: button, timeline, result box ═══════ */
@@ -1503,8 +1569,14 @@ async function loadFormulas() {
       card.className = "card";
       const ft = tr[fid] || null;
       const hz = (S.snap?.hindsight?.per || {})[`${S.symbol}|${S.focusTf}|F${fid}`];
-      const zeroChip = ft?.zero_reason
-        ? `<span class="chip chip-warn" title="why it is 0">${ft.zero_cause ? (ZCAUSE[ft.zero_cause] || ft.zero_cause) + " · " : ""}0 · ${ft.zero_reason}</span>` : "";
+      // a 0.00 must ALWAYS carry its reason on the card itself (user:
+      // "formulas 1 emotion is 0.00 without any reason") — trace reason
+      // first, flat-history derivation as the guaranteed fallback
+      const _flatWhy = (raw === 0 && hist.length > 2
+        && hist.every(v => Math.abs(v - hist[0]) < 1e-12))
+        ? `reading identical across the last ${hist.length} passes — the tape feature this formula reads did not change (flat input, not a dead formula)` : "";
+      const zeroChip = (ft?.zero_reason || _flatWhy)
+        ? `<span class="chip chip-warn" title="why it is 0">${ft?.zero_cause ? (ZCAUSE[ft.zero_cause] || ft.zero_cause) + " · " : ""}0 · ${ft?.zero_reason || _flatWhy}</span>` : "";
       const tickOn = contribs[fid] ? Math.abs(contribs[fid].contribution) >= 1e-5 : null;
       const tickChip = tickOn === null ? "" :
         `<span class="chip ${tickOn ? "chip-ok" : "chip-err"}" title="${tickOn ? "contributed to this window's CCI" : "did not contribute (flat or zero this window)"}">${tickOn ? "✓ tick" : "✗ no tick"}</span>`;
@@ -1715,7 +1787,12 @@ async function loadEmotion() {
       </div>
       ${em.features ? `<div class="kv-row"><div class="kv"><span>measured features (tape only — never the signal, G-3)</span>
         <b>samples ${em.features.samples ?? "—"} · vol-z ${fmt(em.features.vol_z, 3)} · climax ×${fmt(em.features.climax_ratio, 2)} · violence gate ${fmt(em.features.violence_gate, 2)} · streak ${em.features.window_streak ?? "—"}</b></div></div>` : ""}
-      <div class="hint">22 spec emotion formulas feed E22 CERC → confidence modulator ±15 % (never the direction, advice §5.1). Circles: conic ring = |value|, border = direction.</div>`;
+      <div class="hint">22 spec emotion formulas feed E22 CERC → confidence modulator ±15 % (never the direction, advice §5.1). Circles: conic ring = |value|, border = direction.</div>
+      <div class="kv-grid" style="margin:8px 0">
+        <div class="kv"><span>RETAIL emotion (herd/crowd/news channels)</span><b>${em.retail ? `${em.retail.score >= 0 ? "+" : ""}${fmt(em.retail.score, 3)} · ${esc(em.retail.label)}` : "—"}</b></div>
+        <div class="kv"><span>HEDGE / smart-money emotion (absorption/divergence)</span><b>${em.hedge ? `${em.hedge.score >= 0 ? "+" : ""}${fmt(em.hedge.score, 3)} · ${esc(em.hedge.label)}` : "—"}</b></div>
+        <div class="kv"><span>crowd split (retail − hedge)</span><b>${em.retail && em.hedge ? fmt(em.retail.score - em.hedge.score, 3) + (Math.abs(em.retail.score - em.hedge.score) > 0.3 ? " · crowds DISAGREE" : " · crowds aligned") : "—"}</b></div>
+      </div>`;
     const grid = $("#em-grid");
     if (!grid.children.length) {
       for (let i = 1; i <= 22; i++) {
@@ -2592,9 +2669,57 @@ async function loadRL() {
   }
 }
 
+/* ═══════ Binance execution (optional, gated — app/trading.py) ═══════ */
+async function loadTrading() {
+  try {
+    const t = await api("/api/trading/status");
+    const c = t.config || {};
+    $("#tr-status").textContent = !c.enabled ? "OFF (default)"
+      : !c.has_keys ? "enabled but NO KEYS"
+      : `${c.testnet ? "TESTNET" : "MAINNET ⚠"} · ${c.armed ? "ARMED" : "not armed"}`;
+    $("#tr-open").textContent = Object.keys(t.open_positions || {}).join(", ") || "none";
+    $("#tr-today").textContent = String(t.orders_today ?? 0);
+    if ($("#tr-key") && c.api_key) $("#tr-key").placeholder = c.api_key;
+    if ($("#tr-max") && c.max_order_usdt) $("#tr-max").value = c.max_order_usdt;
+    if ($("#tr-cap") && c.max_orders_day) $("#tr-cap").value = c.max_orders_day;
+    if ($("#tr-testnet")) $("#tr-testnet").checked = c.testnet !== false;
+    if ($("#tr-enabled")) $("#tr-enabled").checked = !!c.enabled;
+    const log = $("#tr-log");
+    if (log) log.innerHTML = (t.log || []).slice(-8).reverse().map(r =>
+      `<div>${new Date((r.ts || 0) * 1000).toTimeString().slice(0, 8)} ${esc(r.symbol || "")} ${esc(r.tf || "")} — <b class="${r.ok ? "acc-up" : "acc-dn"}">${r.ok ? "FIRED" : "refused"}</b> ${esc(r.why || "")}</div>`).join("") || "no decisions yet";
+  } catch { /* trading optional */ }
+}
+function bindTrading() {
+  const save = $("#tr-save"), arm = $("#tr-arm"), dis = $("#tr-disarm"), clr = $("#tr-clear");
+  if (!save) return;
+  save.addEventListener("click", async () => {
+    try {
+      await api("/api/trading/config", { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: $("#tr-key").value, api_secret: $("#tr-secret").value,
+          max_order_usdt: Number($("#tr-max").value || 25), max_orders_day: Number($("#tr-cap").value || 4),
+          testnet: $("#tr-testnet").checked, enabled: $("#tr-enabled").checked }) });
+      toast("trading settings saved (keys masked, stored locally)", "ok");
+    } catch (e) { toast("trading: " + e.message, "err"); }
+    loadTrading();
+  });
+  arm.addEventListener("click", async () => {
+    await api("/api/trading/arm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ minutes: 30 }) });
+    toast("ARMED for 30 min — only ISSUED signals can fire", "ok"); loadTrading();
+  });
+  dis.addEventListener("click", async () => {
+    await api("/api/trading/arm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ minutes: 0 }) });
+    toast("DISARMED — no orders can fire", "warn"); loadTrading();
+  });
+  clr.addEventListener("click", async () => {
+    await api("/api/trading/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clear_keys: true }) });
+    toast("keys cleared, trading disabled", "warn"); loadTrading();
+  });
+}
+
 async function loadSettings() {
   try {
     loadRL().catch(() => {});
+    loadTrading().catch(() => {});
     const l = await api("/api/learning");
     const lr = l.learning || {};
     $("#st-eta").textContent = fmt(lr.eta ?? lr.rates?.eta ?? 0.02, 3);
@@ -2721,6 +2846,7 @@ function applySnapshot(snap) {
   try { renderQuads(); renderWhy(); renderRail(); } catch (e) { console.error("render", e); }
   try { renderBranches(); } catch (e) { console.error("branches", e); }
   try { drawHeroChart(); } catch (e) { console.error("hero", e); }
+  try { applyChartSrc(); } catch (e) { /* chart toggle optional */ }
   if (S.view === "dashboard") {
     try { renderMicro(); } catch (e) { console.error("micro", e); }
   }
@@ -2870,7 +2996,7 @@ window.addEventListener("unhandledrejection", e => {
 /* ═══════════ boot ═══════════ */
 (function boot() {
   try { S.tfFocus = localStorage.getItem("tfFocus") === "1"; } catch (e) { S.tfFocus = false; }
-  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); syncAnalyseButton(); bindAllTf(); renderDashboardMode();
+  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); bindChartSrc(); bindTrading(); syncAnalyseButton(); bindAllTf(); renderDashboardMode();
   connectWS();
   api("/api/snapshot").then(applySnapshot).catch(() => {});
   // REST safety net lives in the single master setInterval below (H-2)

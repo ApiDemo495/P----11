@@ -713,6 +713,41 @@ hung boot):
 ./run.sh --supervise
 ```
 
+## Quad line charts · genuine crowd emotions · AUTO button · TV toggle · Binance execution · asset profiles
+
+* **Quad (sub-timeframe) cards** are line charts now (ChartX line
+  mode): closes as one line ending at the live tick, horizon-TP + SL
+  lines only — same "chart must match the price" rule as the hero.
+  Hero line starts at its first data point (was blank-left/"starting
+  from middle") and cuts stale candle-seed junctions instead of
+  drawing a vertical step.
+* **Emotions are genuine market emotions**: Pride/Envy/Guilt labels
+  removed; channels named for what they measure (Fear, Loss aversion,
+  Hedge demand, Panic, Herding, News FOMO, Smart-money absorption/
+  divergence…). Two measured crowd reads on the Emotion tab: RETAIL
+  (herd/crowd/news channels E11/16/17/20/6) vs HEDGE/smart-money
+  (E7/10/19/2/9), each signed, with a crowd-split disagreement read.
+* **AUTO is a proper button** in a box next to ▶ ANALYSE (AUTO: ON /
+  OFF), not a chip.
+* **Chart source toggle** (toolbar: OWN | TRADINGVIEW, persisted):
+  TradingView widget for the current asset/timeframe replaces the
+  hero + quads; own charts one click back.
+* **Binance execution (app/trading.py) — optional, OFF by default.**
+  Testnet-first; orders (futures MARKET + STOP_MARKET SL +
+  TAKE_PROFIT_MARKET TP) can fire only when enabled + keys saved +
+  ARM timer running + signal ISSUED above the asset floor + levels
+  valid as given (never repaired at order time) + no open position on
+  the symbol + daily cap not reached. Every decision is logged
+  (Settings → Binance Execution shows status, positions, gate log).
+  Keys live only in data/trading.json, masked in APIs.
+* **Per-asset profiles** (config.ASSET_PROFILES): PAXG (gold) wider
+  SL/TP ×1.25/×1.15 + floor ×1.10; ETH unpredictable floor ×1.20,
+  SL ×1.20; BNB steady SL ×0.90; BTC reference. Applied to the issue
+  gate (can only tighten) and to the measured block bps; shown in the
+  hero risk note.
+* Formula cards: a 0.00 always carries its reason on the card
+  (trace reason, flat-history fallback).
+
 ## Hero line-chart-from-now + visible fan
 
 User: hero candles sat at 72-75k while the real price was >76k, and

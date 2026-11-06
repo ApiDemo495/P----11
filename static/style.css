@@ -323,6 +323,9 @@ td b.up { color: var(--green); } td b.down { color: var(--red); } td b.flat { co
 }
 .btn-analyse:disabled { opacity: .55; cursor: wait; }
 .btn-analyse:hover { filter: brightness(1.1); }
+.btn-auto { margin-left: 8px; }
+.btn-auto.auto-on { background: #22c98a; }
+.btn-auto.auto-off { background: #3a4356; color: #d8d8e8; }
 .analyse-panel {
   border: 1px solid var(--line2, #2c3542); border-radius: 10px;
   background: #0d1119; padding: 12px 14px; margin-bottom: 12px;

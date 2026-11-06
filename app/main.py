@@ -843,6 +843,44 @@ async def settings_put(body: dict) -> JSONResponse:
     return JSONResponse({"ok": True, "settings": engine.agents.settings})
 
 
+@app.get("/api/trading/status")
+async def trading_status() -> JSONResponse:
+    return JSONResponse({"ok": True, **engine.trader.status()})
+
+
+@app.put("/api/trading/config")
+async def trading_config(body: dict) -> JSONResponse:
+    from .trading import load_cfg, save_cfg, public_cfg
+    cfg = load_cfg()
+    for k in ("enabled", "testnet", "max_order_usdt", "max_orders_day"):
+        if k in body:
+            cfg[k] = body[k]
+    # blank key fields mean "keep the stored key" — never wipe by accident
+    if body.get("api_key"):
+        cfg["api_key"] = str(body["api_key"]).strip()
+    if body.get("api_secret"):
+        cfg["api_secret"] = str(body["api_secret"]).strip()
+    if body.get("clear_keys"):
+        cfg["api_key"] = cfg["api_secret"] = ""
+        cfg["enabled"] = False
+        cfg["armed_until"] = 0.0
+    save_cfg(cfg)
+    engine.trader.cfg = cfg
+    return JSONResponse({"ok": True, "config": public_cfg(cfg)})
+
+
+@app.post("/api/trading/arm")
+async def trading_arm(body: dict) -> JSONResponse:
+    from .trading import load_cfg, save_cfg, public_cfg
+    import time as _t
+    cfg = load_cfg()
+    minutes = max(0, min(240, int(body.get("minutes") or 0)))
+    cfg["armed_until"] = (_t.time() + minutes * 60) if minutes else 0.0
+    save_cfg(cfg)
+    engine.trader.cfg = cfg
+    return JSONResponse({"ok": True, "config": public_cfg(cfg)})
+
+
 @app.get("/api/agents/status")
 async def agents_status() -> JSONResponse:
     return JSONResponse({"ok": True, "agents": engine.agents.status(),

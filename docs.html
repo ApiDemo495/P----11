@@ -726,6 +726,53 @@ curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&
 <pre><code>
 ./run.sh --supervise
 </code></pre>
+<h4>Quad line charts · genuine crowd emotions · AUTO button · TV toggle · Binance execution · asset profiles</h4>
+<ul>
+<li><b>Quad (sub-timeframe) cards</b> are line charts now (ChartX line</li>
+</ul>
+<p>  mode): closes as one line ending at the live tick, horizon-TP + SL</p>
+<p>  lines only — same &quot;chart must match the price&quot; rule as the hero.</p>
+<p>  Hero line starts at its first data point (was blank-left/&quot;starting</p>
+<p>  from middle&quot;) and cuts stale candle-seed junctions instead of</p>
+<p>  drawing a vertical step.</p>
+<ul>
+<li><b>Emotions are genuine market emotions</b>: Pride/Envy/Guilt labels</li>
+</ul>
+<p>  removed; channels named for what they measure (Fear, Loss aversion,</p>
+<p>  Hedge demand, Panic, Herding, News FOMO, Smart-money absorption/</p>
+<p>  divergence…). Two measured crowd reads on the Emotion tab: RETAIL</p>
+<p>  (herd/crowd/news channels E11/16/17/20/6) vs HEDGE/smart-money</p>
+<p>  (E7/10/19/2/9), each signed, with a crowd-split disagreement read.</p>
+<ul>
+<li><b>AUTO is a proper button</b> in a box next to ▶ ANALYSE (AUTO: ON /</li>
+</ul>
+<p>  OFF), not a chip.</p>
+<ul>
+<li><b>Chart source toggle</b> (toolbar: OWN | TRADINGVIEW, persisted):</li>
+</ul>
+<p>  TradingView widget for the current asset/timeframe replaces the</p>
+<p>  hero + quads; own charts one click back.</p>
+<ul>
+<li><b>Binance execution (app/trading.py) — optional, OFF by default.</b></li>
+</ul>
+<p>  Testnet-first; orders (futures MARKET + STOP_MARKET SL +</p>
+<p>  TAKE_PROFIT_MARKET TP) can fire only when enabled + keys saved +</p>
+<p>  ARM timer running + signal ISSUED above the asset floor + levels</p>
+<p>  valid as given (never repaired at order time) + no open position on</p>
+<p>  the symbol + daily cap not reached. Every decision is logged</p>
+<p>  (Settings → Binance Execution shows status, positions, gate log).</p>
+<p>  Keys live only in data/trading.json, masked in APIs.</p>
+<ul>
+<li><b>Per-asset profiles</b> (config.ASSET_PROFILES): PAXG (gold) wider</li>
+</ul>
+<p>  SL/TP ×1.25/×1.15 + floor ×1.10; ETH unpredictable floor ×1.20,</p>
+<p>  SL ×1.20; BNB steady SL ×0.90; BTC reference. Applied to the issue</p>
+<p>  gate (can only tighten) and to the measured block bps; shown in the</p>
+<p>  hero risk note.</p>
+<ul>
+<li>Formula cards: a 0.00 always carries its reason on the card</li>
+</ul>
+<p>  (trace reason, flat-history fallback).</p>
 <h4>Hero line-chart-from-now + visible fan</h4>
 <p>User: hero candles sat at 72-75k while the real price was &gt;76k, and</p>
 <p>the probability chart showed &quot;just white green and red line nothing</p>

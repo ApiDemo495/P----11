@@ -50,6 +50,22 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else (hi if v > hi else v)
 
 
+def _crowd(emos, dirs, ids, labels):
+    """Signed crowd read from a channel subset: mean of
+    (intensity x direction), intensity = |v-0.5|x2. Labels are the
+    (positive, negative, flat) human readings of that crowd."""
+    vals = []
+    for i in ids:
+        v = float(emos.get(i, 0.5) or 0.5)
+        d = int(dirs.get(i, 0) or 0)
+        vals.append((abs(v - 0.5) * 2.0) * d)
+    score = sum(vals) / len(vals) if vals else 0.0
+    label = labels[0] if score > 0.15 else labels[1] if score < -0.15 \
+        else labels[2]
+    return {"score": round(score, 4), "label": label,
+            "channels": list(ids)}
+
+
 def _lag_value(ring) -> float | None:
     """GRC-lagging comparator: the value from HIST_EMOTION_LAG GRCs ago
     (oldest ring entry once full; the most recent entry during bootstrap)."""
@@ -513,6 +529,17 @@ class EmotionSystem:
                 "pdi_session": round(pdi_sess, 4),
                 "serotonin": round(serotonin_brain, 4),
             },
+            # RETAIL vs HEDGE/SMART-MONEY emotion — measured from the
+            # channels that actually describe each crowd (herd/crowd/
+            # news-surge vs smart-money/absorption/divergence), signed
+            # by each channel's own direction. Genuine market reads,
+            # not one blended mood.
+            "retail": _crowd(emos, dirs, (11, 16, 17, 20, 6),
+                             ("FOMO-chasing", "panic-selling", "retail quiet")),
+            "hedge": _crowd(emos, dirs, (7, 10, 19, 2, 9),
+                            ("hedges pressing (defensive bids)",
+                             "smart money distributing",
+                             "hedges quiet")),
         }
 
     # ------------------------------------------------------------------

@@ -30,6 +30,8 @@ from .bgn import BgnSynchronizer
 from .cci import CCIEngine, finalize_confidence
 from .clock import grc_id, next_grc_ts, seconds_to_next_grc
 from .config import (
+    ASSET_PROFILES,
+    asset_profile,
     BRAIN_COMPONENT_ID,
     CONFIDENCE_FLOOR,
     EMOTION_COMPONENT_ID,
@@ -227,6 +229,10 @@ class PredictionEngine:
         self.auditor = FormulaAuditor()
         from .ledger import SettlementLedger
         self.ledger = SettlementLedger()
+        # optional Binance execution (disabled unless the user enables
+        # + arms it in Settings — see app/trading.py safety doctrine)
+        from .trading import Trader
+        self.trader = Trader()
         self.locks: dict[tuple[str, str], dict] = {}   # frozen signals
         self._load_locks()
         self.last_window_ts = time.time()              # watchdog anchor
@@ -970,6 +976,18 @@ class PredictionEngine:
             except Exception:
                 pass
 
+            # PER-ASSET GATE: gold is not BTC — the asset's nature sets
+            # its own issue bar (can only tighten the decision here;
+            # BNB's steadiness is expressed via the RL bandit learning
+            # on top of a slightly lower stated prior). Carried in the
+            # payload so every panel can show which bar applied.
+            _prof = asset_profile(symbol)
+            fin["asset_floor"] = round(
+                CONFIDENCE_FLOOR * _prof["floor_mult"], 4)
+            fin["asset_nature"] = _prof["nature"]
+            if float(fin["confidence"]) <= fin["asset_floor"]:
+                fin["issued"] = False
+
             # F28 inputs: volatility state vs baseline (same measure as F20)
             window_rets = [
                 (ctxs[tf].P[i] - ctxs[tf].P[i - 1]) / ctxs[tf].P[i - 1]
@@ -1011,6 +1029,8 @@ class PredictionEngine:
                 ),
                 "cerc": em["cerc"],
                 "dominant": em.get("dominant"),
+                "retail": em.get("retail"),
+                "hedge": em.get("hedge"),
                 "emotions": em["emotions"],
                 "directions": em["directions"],
                 "rtp": em["rtp"],
@@ -1054,6 +1074,8 @@ class PredictionEngine:
                 "base_confidence": pack["confidence"],
                 "direction": pack["direction"],
                 "issued": fin["issued"],
+                "asset_floor": fin.get("asset_floor"),
+                "asset_nature": fin.get("asset_nature"),
                 "drhe": drhe,
                 "pcv": pcv,
                 "pcv_detail": pcv_detail,
@@ -1266,6 +1288,8 @@ class PredictionEngine:
                 self.prev_cci_dir[(symbol, tf)] = _lad
                 self.display_systems[(symbol, tf)] = {
                     "lock": dict(self.locks.get((symbol, tf)) or {}),
+                    "asset_floor": results[tf].get("asset_floor"),
+                    "asset_nature": results[tf].get("asset_nature"),
                     "ladder": dict(results[tf]["ladder"]),
                     "mass": results[tf]["mass"],
                     "genesis": dict(results[tf].get("genesis") or {}),
@@ -1275,6 +1299,8 @@ class PredictionEngine:
                         "aggregate": round(cerc_sync[tf], 5),
                         "cerc": em["cerc"],
                         "dominant": em.get("dominant"),
+                        "retail": em.get("retail"),
+                        "hedge": em.get("hedge"),
                         "features": em.get("features") or {},
                         "zero_reasons": em.get("zero_reasons") or {},
                         "zero_causes": em.get("zero_causes") or {},
@@ -3359,6 +3385,21 @@ class PredictionEngine:
                                   _highs, _lows, atr=res.get("atr", 0.0),
                                   spread_bps=_spread)
                    for m in dict.fromkeys(_mins)}
+        # per-asset nature scales the measured distances (gold wider,
+        # BNB tighter, ETH wider) — bps scaled, levels recomputed from
+        # the same locked anchor so the invariant cannot break
+        _prof = asset_profile(symbol)
+        if _prof["sl_mult"] != 1.0 or _prof["tp_mult"] != 1.0:
+            for _b in _blocks.values():
+                _b["sl_bps"] = round(_b["sl_bps"] * _prof["sl_mult"], 3)
+                _b["tp_bps"] = round(_b["tp_bps"] * _prof["tp_mult"], 3)
+                _b["tp"] = round(_price0 * (1 + _dir * _b["tp_bps"] / 1e4), 6)
+                _b["sl"] = round(_price0 * (1 - _dir * _b["sl_bps"] / 1e4), 6)
+                _b["rr"] = round(_b["tp_bps"] / _b["sl_bps"], 3) \
+                    if _b["sl_bps"] else None
+                _b["note"] = (_b.get("note", "")
+                              + f" · asset profile ×{_prof['sl_mult']} SL"
+                                f"/×{_prof['tp_mult']} TP ({symbol} nature)")
         _horizon_block = _blocks[_mins[-1]]     # horizon TP ALWAYS calculated FIRST
         for k, minutes in enumerate(_mins, start=1):
             if k == len(_mins):
@@ -3421,6 +3462,20 @@ class PredictionEngine:
             cyc.tp_dist = abs(_horizon_block["tp"] - _price0)
             cyc.sl_dist = abs(_price0 - _horizon_block["sl"])
             cyc.ratio = _horizon_block["rr"]
+        # OPTIONAL execution: the trader re-checks every safety gate
+        # itself (disabled / unarmed / sub-floor / wrong-side levels
+        # are refused + logged) — this hook can never fire a random
+        # prediction by accident.
+        try:
+            self.trader.consider({
+                "symbol": symbol, "tf": tf, "issued": bool(cyc.issued),
+                "direction": int(cyc.direction or 0),
+                "entry": float(_price0 or 0), "tp": cyc.tp, "sl": cyc.sl,
+                "tp_bps": _horizon_block.get("tp_bps"),
+                "sl_bps": _horizon_block.get("sl_bps"),
+                "window_end": _g_end})
+        except Exception:
+            log.exception("trading consider failed")
         return cyc
 
     # ==================================================================

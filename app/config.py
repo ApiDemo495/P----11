@@ -55,6 +55,26 @@ LEARNING_RATE_ETA = 0.02
 WEIGHT_MIN = 0.005
 WEIGHT_MAX = 0.15
 CONFIDENCE_FLOOR = 0.35           # below -> NO TRADE
+
+# Per-asset behaviour profiles: the app must NOT treat gold like BTC.
+# floor_mult scales the issue floor (asset gate can only tighten the
+# final decision vs the global floor family), sl/tp_mult scale the
+# measured-moves block distances for that asset's nature. The tape
+# still measures the base numbers — the profile is a stated prior.
+ASSET_PROFILES = {
+    "BTC": {"nature": "benchmark — deepest book, reference volatility",
+            "floor_mult": 1.00, "sl_mult": 1.00, "tp_mult": 1.00},
+    "PAXG": {"nature": "gold token — jumpy, gap-prone around sessions",
+             "floor_mult": 1.10, "sl_mult": 1.25, "tp_mult": 1.15},
+    "ETH": {"nature": "unpredictable — violent wicks, higher issue bar",
+            "floor_mult": 1.20, "sl_mult": 1.20, "tp_mult": 1.10},
+    "BNB": {"nature": "steady — tighter ranges, mean-reverting",
+            "floor_mult": 0.95, "sl_mult": 0.90, "tp_mult": 0.95},
+}
+
+
+def asset_profile(symbol: str) -> dict:
+    return ASSET_PROFILES.get(symbol, ASSET_PROFILES["BTC"])
 DOUBLE_CHECK_RATIO = 0.6
 DOUBLE_CHECK_PENALTY = 0.5
 
