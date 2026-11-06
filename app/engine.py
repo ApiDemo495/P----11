@@ -127,6 +127,23 @@ STATE_DIRECTIONS = {
 }
 
 
+def _calibration_delta(audit: dict) -> float:
+    """Additive correction for future P(target) forecasts, fitted ONLY
+    from graded forecasts: systematically predict 62% but realise 54%
+    -> future forecasts shift by the measured gap (clamped +-0.15).
+    Needs n>=30 graded windows. SELF-DISABLING: once n>=60 and the
+    calibrated Brier score is worse than the raw one, the correction
+    turns itself off - calibration must prove it helps or it stops."""
+    n = int(audit.get("n") or 0)
+    if n < 30:
+        return 0.0
+    gap = audit["tp_first"] / n - audit["sum_pred"] / n
+    if (n >= 60 and audit.get("brier_cal_sum") is not None
+            and audit["brier_sum"] and audit["brier_cal_sum"] > audit["brier_sum"]):
+        return 0.0
+    return round(max(-0.15, min(0.15, gap)), 4)
+
+
 class PredictionEngine:
     def __init__(
         self,
@@ -2983,6 +3000,9 @@ class PredictionEngine:
         except OSError:
             pass
 
+    def calibration_delta(self) -> float:
+        return _calibration_delta(self._prob_audit)
+
     def prob_audit_summary(self) -> dict:
         a = self._prob_audit
         n = int(a.get("n") or 0)
@@ -2995,6 +3015,8 @@ class PredictionEngine:
                 "realised_tp_first": round(realised, 4),
                 "gap": round(realised - mean_pred, 4),
                 "brier": round(a["brier_sum"] / n, 4),
+                "brier_cal": (round(a["brier_cal_sum"] / n, 4) if a.get("brier_cal_sum") is not None else None),
+                "calibration_delta": _calibration_delta(a),
                 "verdict": ("well calibrated" if abs(realised - mean_pred) < 0.05
                             else "OVERCONFIDENT — predicted more than realised"
                             if mean_pred > realised
@@ -3408,6 +3430,8 @@ class PredictionEngine:
                     _pa["sum_pred"] += float(_pred["p_target"])
                     _pa["tp_first"] += int(_y)
                     _pa["brier_sum"] += (float(_pred["p_target"]) - _y) ** 2
+                    if _pred.get("p_target_cal") is not None:
+                        _pa["brier_cal_sum"] = (_pa.get("brier_cal_sum") or 0.0) + (float(_pred["p_target_cal"]) - _y) ** 2
                     self._save_prob_audit()
             except Exception:
                 pass
@@ -4287,9 +4311,18 @@ class PredictionEngine:
                         _cs = d.get("cycle_start")
                         if _cs and self._prob_pred.get(_pk, {}) \
                                 .get("cycle_start") != _cs:
+                            _praw = bs.get("p_target")
+                            _d = self.calibration_delta()
+                            _pcal = (max(0.01, min(0.99, _praw + _d))
+                                     if _praw is not None else None)
+                            bs["p_target_raw"] = _praw
+                            bs["p_target_cal"] = (round(_pcal, 4)
+                                                  if _pcal is not None else None)
+                            bs["cal_delta"] = _d
                             self._prob_pred[_pk] = {
                                 "cycle_start": _cs,
-                                "p_target": bs.get("p_target"),
+                                "p_target": _praw,
+                                "p_target_cal": _pcal,
                                 "method": bs.get("method")}
                 tfs[tf] = d
             assets[symbol] = {
