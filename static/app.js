@@ -684,6 +684,13 @@ function renderHero() {
       return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${t.level ? px(t.level) : "—"} <span class="dim">${st}</span>${_rel}</b></div>`;
     }).join("") || `<div class="dim pad">waiting for the first lock…</div>`;
   }
+  const rn = $("#risk-note");
+  if (rn) {
+    const rk = cyc?.risk || {};
+    rn.textContent = rk.note
+      ? `TP/SL from measured moves — ${rk.note}${rk.provisional ? " · levels provisional" : ""} · frozen at the lock; an emergency re-lock re-anchors the same bps at the new entry`
+      : "TP/SL: measured-moves block pending (needs a locked cycle)";
+  }
   // chart overlays: SL, TP ladder (horizon first), liquidation clusters
   const lines = [];
   if (cyc?.sl) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL" });

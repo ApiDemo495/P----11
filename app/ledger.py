@@ -80,7 +80,8 @@ class SettlementLedger:
         return f"{symbol}|{tf}"
 
     def settle(self, symbol: str, tf: str, entry: float, settle_price: float,
-               side: int, window_end: float | None = None) -> dict:
+               side: int, window_end: float | None = None,
+               level_outcome: str | None = None) -> dict:
         """Grade one completed window. side==0 -> skipped (never a win)."""
         if side == 0 or not entry or not settle_price:
             result = "skip"
@@ -92,7 +93,10 @@ class SettlementLedger:
                 result = "win" if (move > 0) == (side > 0) else "loss"
         row = {"ts": time.time(), "window_end": window_end or time.time(),
                "entry": round(entry, 6), "settle": round(settle_price, 6),
-               "side": int(side), "result": result}
+               "side": int(side), "result": result,
+               # docs11-charts B-3: window outcome AND level outcome are
+               # two separate columns (TP first / SL first / neither)
+               "level_outcome": level_outcome}
         key = self._key(symbol, tf)
         self.rows.setdefault(key, []).append(row)
         del self.rows[key][:-500]              # keep last 500 per pair
@@ -121,7 +125,15 @@ class SettlementLedger:
                 cur = 0
         streak = cur
         n = len(graded)
+        # realised TP-first % (docs11-charts B-3 hourly-review input):
+        # compare against branch_stats' predicted P(target before stop)
+        _lv = [r.get("level_outcome") for r in graded
+               if r.get("level_outcome")]
+        _tp_first = _lv.count("TP first")
         return {
+            "tp_first_n": len(_lv),
+            "tp_first_pct": (round(_tp_first / len(_lv), 4)
+                             if _lv else None),
             "n": n, "wins": wins, "losses": losses,
             "ties": 0,                     # ties are graded as losses
             "skipped": skipped,

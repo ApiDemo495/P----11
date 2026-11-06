@@ -2462,6 +2462,28 @@ class PredictionEngine:
         lock["reason"] = (f"NEWS_EMERGENCY re-lock: {(reason or 'news event')[:140]}"
                           f" | original entry {old_entry:.6f}")
         lock["emergency"] = True
+        # re-anchor the CYCLE's levels at the new entry with the SAME
+        # measured bps distances — the old code moved only the lock's
+        # entry, leaving TP/SL frozen at the old price (a BUY whose
+        # TP sat BELOW its entry, the user's "TP/SL in air")
+        _cyc = self.cycles.get((symbol, tf))
+        if _cyc is not None and _cyc.risk:
+            from .moves_risk import reanchor as _reanchor
+            _cyc.risk = _reanchor(_cyc.risk, price)
+            _dir = int(_cyc.risk.get("direction") or _cyc.direction or 1)
+            for _t in _cyc.targets:
+                if _t.status in ("locked", "hit"):
+                    _tb = _t.minutes
+                    _bps = (float(_cyc.risk["tp_bps"])
+                            * math.sqrt(max(1, _tb)
+                                        / max(1, int(_cyc.risk["minutes"]))))
+                    _t.level = round(price * (1 + _dir * _bps / 1e4), 6)
+                    _t.status = "locked"
+                    _t.locked_at = now
+            _cyc.tp = _cyc.risk["tp"]
+            _cyc.sl = _cyc.risk["sl"]
+            _cyc.events.append({"ts": now, "type": "relock_reanchor",
+                                "new_entry": price})
         row = self.news.record_emergency(symbol, lock["lock_id"],
                                          reason or "news emergency",
                                          old_entry, price, ok=True)
@@ -3106,11 +3128,26 @@ class PredictionEngine:
             if same_window:
                 return                      # lock holds for the whole window
             price = self.feed.prices().get(symbol, 0.0)
+            # level outcome of the PREVIOUS cycle (B-3: separate column
+            # from the window win/loss): first touch wins, from the
+            # cycle's own event log on the same price stream
+            _lvl = None
+            _pc = self.cycles.get((symbol, tf))
+            if _pc is not None and int(prev.get("side") or 0):
+                _first = next((e.get("type") for e in _pc.events
+                               if e.get("type") in ("target_hit",
+                                                    "sl_crossed")), None)
+                _lvl = ("TP first" if _first == "target_hit" else
+                        "SL first" if _first == "sl_crossed" else
+                        "TP first" if any(t.status == "hit"
+                                          for t in _pc.targets) else
+                        "SL first" if _pc.sl_observed else "neither")
             _row = self.ledger.settle(
                 symbol, tf,
                 float(prev.get("price") or 0.0),
                 price, int(prev.get("side") or 0),
-                window_end=float(prev.get("window_end") or 0))
+                window_end=float(prev.get("window_end") or 0),
+                level_outcome=_lvl)
             # REINFORCEMENT loop on a settled window: score the issue
             # bandit, then run the error-finder over every reward ring
             try:
@@ -3267,37 +3304,50 @@ class PredictionEngine:
         targets = []
         _mins = TIMEFRAMES[tf]["targets"]
         _price0 = res.get("_price", 0.0) or self.feed.prices().get(symbol, 0.0)
-        # USER RULE: the timeframe's own horizon TP (the LAST target = the
-        # window itself, e.g.22m for tf1) is ALWAYS calculated FIRST —
-        # precomputed before any sub-frame level.
-        _horizon_level = self._project_level(
-            _price0, res["direction"] or 1, res["confidence"],
-            res["atr"], _mins[-1])
+        # MEASURED-MOVES TP/SL (docs11-charts B-1): levels come from
+        # this asset's measured excursions at each horizon — q80 MAE
+        # stop, clip(1.5·SL·f(edge), q50, q95) target — frozen here.
+        # The old conf·ATR·√min projection made ~2 bp targets that
+        # barely changed window to window. USER RULE kept: the TF's
+        # own horizon TP (LAST target) is calculated FIRST.
+        from .moves_risk import risk_block as _risk_block
+        _dir = res["direction"] or 1
+        _edge = min(1.0, abs(float(res.get("confidence") or 0.0)) / 0.35)
+        _st = self.feed.state(symbol)
+        _closes = list(_st.closes or [])
+        _highs = list(_st.highs or _closes)
+        _lows = list(_st.lows or _closes)
+        try:
+            _spread = float((self.feed.book_status(symbol) or {})
+                            .get("spread_bps") or 0.0)
+        except Exception:
+            _spread = 0.0
+        _blocks = {m: _risk_block(_price0, _dir, m, _edge, _closes,
+                                  _highs, _lows, atr=res.get("atr", 0.0),
+                                  spread_bps=_spread)
+                   for m in dict.fromkeys(_mins)}
+        _horizon_block = _blocks[_mins[-1]]     # horizon TP ALWAYS calculated FIRST
         for k, minutes in enumerate(_mins, start=1):
             if k == len(_mins):
-                level = _horizon_level          # precomputed first — always
                 targets.append(
                     TargetState(
                         k=k,
                         minutes=minutes,
-                        level=level,
+                        level=_horizon_block["tp"],
                         status="locked",
-                        direction=res["direction"] or 1,
+                        direction=_dir,
                         locked_at=now,
                         locked_cci=res["cci_adjusted"],
                     )
                 )
             elif k == 1:
-                level = self._project_level(
-                    _price0, res["direction"] or 1, res["confidence"],
-                    res["atr"], minutes)
                 targets.append(
                     TargetState(
                         k=k,
                         minutes=minutes,
-                        level=level,
+                        level=_blocks[minutes]["tp"],
                         status="locked",
-                        direction=res["direction"] or 1,
+                        direction=_dir,
                         locked_at=now,
                         locked_cci=res["cci_adjusted"],
                     )
@@ -3327,8 +3377,18 @@ class PredictionEngine:
             qdpc_tau=res.get("qdpc_tau"),
         )
         cyc.events.append({"ts": now, "type": "cycle_fresh", "reason": reason})
+        cyc.risk = dict(_horizon_block)
         self.cycles[(symbol, tf)] = cyc
         self._apply_risk(symbol, tf, cyc, res)
+        if cyc.sl is None and _price0 > 0:
+            # unissued (the common case): the measured-moves block IS
+            # the displayed TP/SL — frozen, on the correct side of the
+            # entry, instead of a 1×ATR seed that changed every snapshot
+            cyc.tp = _horizon_block["tp"]
+            cyc.sl = _horizon_block["sl"]
+            cyc.tp_dist = abs(_horizon_block["tp"] - _price0)
+            cyc.sl_dist = abs(_price0 - _horizon_block["sl"])
+            cyc.ratio = _horizon_block["rr"]
         return cyc
 
     # ==================================================================
@@ -3605,13 +3665,14 @@ class PredictionEngine:
             if res["direction"] and shift > (0.3 if k == 1 else 0.5):
                 cyc.direction = res["direction"]
             nxt = cyc.target(k + 1)
-            nxt.level = self._project_level(
+            from .moves_risk import risk_block as _rb2
+            _st2 = self.feed.state(symbol)
+            nxt.level = _rb2(
                 self.feed.prices().get(symbol, 0.0),
-                cyc.direction,
-                res["confidence"],
-                res["atr"],
-                nxt.minutes,
-            )
+                cyc.direction, nxt.minutes,
+                min(1.0, abs(float(res.get("confidence") or 0.0)) / 0.35),
+                list(_st2.closes or []), list(_st2.highs or []),
+                list(_st2.lows or []), atr=res.get("atr", 0.0))["tp"]
             nxt.direction = cyc.direction
             nxt.status = "locked"
             nxt.locked_at = now

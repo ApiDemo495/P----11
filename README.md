@@ -42,7 +42,7 @@ provided), then run `./run.sh` and forward port **8000**.
 Run the test suite:
 
 ```bash
-.venv/bin/python -m pytest -q    # 287 tests (honesty, parts 1-4, news, brain, order-book, UX sync, deep RL)
+.venv/bin/python -m pytest -q    # 293 tests (honesty, parts 1-4, news, brain, order-book, UX sync, deep RL)
 ```
 
 Environment:
@@ -351,7 +351,7 @@ static/
                    contribution ticks, AUTO chip, gauges, news stream
   brains3d.js      Three.js 2×2 instanced brain visualization
   vendor/          three.module.js v0.160.1 (MIT, vendored — no CDN)
-tests/             287 tests: parts 1–4, honesty guards, news (docs11),
+tests/             293 tests: parts 1–4, honesty guards, news (docs11),
                    FlyWire brain (10), order-book layer (6), UX sync
 pytest.ini         pytest 9 + pytest-asyncio 1, strict asyncio mode,
                    plain `pytest` works (no cache plugin dependency)
@@ -678,6 +678,21 @@ all learning only from real settled windows (win +1 / loss −1 / 0):
 4. **Honest target tracker** — prints the measured pooled accuracy vs
    the90 % target with n and gap: *RL climbs with real settlements; the
    number is never rewritten.*
+
+### Measured-moves TP/SL (docs11-charts)
+
+Levels are computed once per cycle, frozen at the lock, from this
+asset's MEASURED excursions at that horizon (`app/moves_risk.py`):
+q80-MAE stop, `clip(1.5·SL·f(edge), q50, q95)` target (rr ≥ 1.0),
+σ capped at q80/1.2816 so one bad print cannot inflate it; below
+n=5 windows the block is provisional (ATR fallback) and says so.
+The hero prints the block's note (bps, rr, n, quantiles). TP2/TP3
+are computed with the same block when TP1/TP2 hit. An emergency
+re-lock re-anchors the SAME bps distances at the new entry
+(`reanchor()`) — a BUY can never end up with TP below its entry.
+Settled ledger rows carry a separate `level_outcome` column
+(TP first / SL first / neither) and `stats()` reports realised
+TP-first % against the branches' predicted P(target before stop).
 
 ### Repository rules
 

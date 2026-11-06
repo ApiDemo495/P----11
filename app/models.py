@@ -97,6 +97,7 @@ class TFCycle:
     sl_tighten: float = 1.0
     safe_events: int = 0
     sl_observed: bool = False        # unissued cycle: SL crossed (one-shot event)
+    risk: dict = field(default_factory=dict)   # measured-moves TP/SL block (frozen)
     pending_reset: bool = False      # CLOSE POSITION -> fresh cycle at next GRC
     close_alert: bool = False        # one-shot UI flag
     safe_alert: bool = False         # one-shot UI flag
@@ -131,6 +132,9 @@ class TFCycle:
             "active_k": self.active_k,
             "tp": self.tp,
             "sl": self.sl,
+            "risk": self.risk,
+            "sl_provisional": (not self.issued) or bool(
+                (self.risk or {}).get("provisional")),
             "ratio": self.ratio,
             "safe_events": self.safe_events,
             "pending_reset": self.pending_reset,

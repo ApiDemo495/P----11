@@ -52,7 +52,7 @@ pip install -r requirements.txt
 <p>provided), then run <code>./run.sh</code> and forward port <b>8000</b>.</p>
 <p>Run the test suite:</p>
 <pre><code>
-.venv/bin/python -m pytest -q    # 287 tests (honesty, parts 1-4, news, brain, order-book, UX sync, deep RL)
+.venv/bin/python -m pytest -q    # 293 tests (honesty, parts 1-4, news, brain, order-book, UX sync, deep RL)
 </code></pre>
 <p>Environment:</p>
 <table>
@@ -388,7 +388,7 @@ static/
                    contribution ticks, AUTO chip, gauges, news stream
   brains3d.js      Three.js 2×2 instanced brain visualization
   vendor/          three.module.js v0.160.1 (MIT, vendored — no CDN)
-tests/             287 tests: parts 1–4, honesty guards, news (docs11),
+tests/             293 tests: parts 1–4, honesty guards, news (docs11),
                    FlyWire brain (10), order-book layer (6), UX sync
 pytest.ini         pytest 9 + pytest-asyncio 1, strict asyncio mode,
                    plain `pytest` works (no cache plugin dependency)
@@ -698,6 +698,19 @@ curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&
 <p>4. <b>Honest target tracker</b> — prints the measured pooled accuracy vs</p>
 <p>   the90 % target with n and gap: *RL climbs with real settlements; the</p>
 <p>   number is never rewritten.*</p>
+<h5>Measured-moves TP/SL (docs11-charts)</h5>
+<p>Levels are computed once per cycle, frozen at the lock, from this</p>
+<p>asset&#x27;s MEASURED excursions at that horizon (<code>app/moves_risk.py</code>):</p>
+<p>q80-MAE stop, <code>clip(1.5·SL·f(edge), q50, q95)</code> target (rr ≥ 1.0),</p>
+<p>σ capped at q80/1.2816 so one bad print cannot inflate it; below</p>
+<p>n=5 windows the block is provisional (ATR fallback) and says so.</p>
+<p>The hero prints the block&#x27;s note (bps, rr, n, quantiles). TP2/TP3</p>
+<p>are computed with the same block when TP1/TP2 hit. An emergency</p>
+<p>re-lock re-anchors the SAME bps distances at the new entry</p>
+<p>(<code>reanchor()</code>) — a BUY can never end up with TP below its entry.</p>
+<p>Settled ledger rows carry a separate <code>level_outcome</code> column</p>
+<p>(TP first / SL first / neither) and <code>stats()</code> reports realised</p>
+<p>TP-first % against the branches&#x27; predicted P(target before stop).</p>
 <h5>Repository rules</h5>
 <ul>
 <li><b>No pull requests, no merges.</b> Work is committed and pushed directly</li>
