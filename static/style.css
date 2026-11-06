@@ -171,6 +171,8 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 5px; bo
 .ring-bg { fill: none; stroke: #1c1c2e; stroke-width: 3; }
 .ring-fg { fill: none; stroke: var(--cyan); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 97.4; transition: stroke-dashoffset .95s linear; }
 .q-chart { height: 110px; margin-bottom: 6px; }
+.q-tv { height: 142px; margin-bottom: 6px; }
+.q-tv iframe { border-radius: 6px; }
 .q-spark { height: 26px; }
 .q-price { font: 600 15px/1 var(--mono); display: flex; align-items: baseline; gap: 8px; margin: 6px 0; }
 .q-price .chg { font-size: 10.5px; font-weight: 500; }

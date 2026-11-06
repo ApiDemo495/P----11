@@ -762,6 +762,7 @@ function setFocusTf(tf) {
   S.tfFocus = true;
   try { localStorage.setItem("tfFocus", "1"); } catch (e) { /* private mode */ }
   syncToolbar(); renderWhy(); renderQuads(); S.lastViewFetch = 0;
+  try { applyChartSrc(); } catch (e) { /* hero TV follows the focused TF */ }
   loadCandles().catch(() => {});
   refreshActiveView(true);
 }
@@ -921,6 +922,7 @@ function buildQuads() {
           <circle class="ring-fg" cx="18" cy="18" r="15.5"/></svg><b class="q-time">—</b></span>
       </div>
       <div class="q-chart" id="qc-${tf}"></div>
+      <div class="q-tv hidden" id="qtv-${tf}"></div>
       <div class="q-spark" id="qs-${tf}"></div>
       <div class="q-price" id="qp-${tf}">—</div>
       <div class="q-dir flat" id="qd-${tf}">—</div>
@@ -1037,20 +1039,25 @@ function applyChartSrc() {
   const tv = S.chartSrc === "tv";
   $$("#seg-chart .seg-btn").forEach(b =>
     b.classList.toggle("active", (b.dataset.chart === "tv") === tv));
-  const wrap = $("#tv-wrap"), hero = $("#hero-chart"), grid = $("#quad-grid");
+  const wrap = $("#tv-wrap"), hero = $("#hero-chart");
   if (wrap) wrap.classList.toggle("hidden", !tv);
   if (hero) hero.style.display = tv ? "none" : "";
-  if (grid) grid.style.display = tv ? "none" : "";
-  if (tv && wrap) {
-    const src = "https://s.tradingview.com/widgetembed/?symbol="
-      + encodeURIComponent(TV_SYMS[S.symbol] || "BINANCE:BTCUSDT")
-      + `&interval=${TV_INT[S.focusTf] || "5"}&theme=dark&style=1`
-      + "&timezone=Etc%2FUTC&withdateranges=1&hide_side_toolbar=0"
-      + "&allow_symbol_change=0&saveimage=0";
-    if (wrap.dataset.src !== src) {
-      wrap.dataset.src = src;
-      wrap.innerHTML = `<iframe src="${src}" style="width:100%;height:100%;border:0" allowtransparency="true" scrolling="no" allowfullscreen></iframe>`;
-    }
+  const tvSrc = (tf) => "https://s.tradingview.com/widgetembed/?symbol="
+    + encodeURIComponent(TV_SYMS[S.symbol] || "BINANCE:BTCUSDT")
+    + `&interval=${TV_INT[tf] || "5"}&theme=dark&style=1`
+    + "&timezone=Etc%2FUTC&withdateranges=1&hide_side_toolbar=0"
+    + "&allow_symbol_change=0&saveimage=0";
+  const fill = (el, tf) => { if (!el) return; const src = tvSrc(tf);
+    if (el.dataset.src !== src) { el.dataset.src = src;
+      el.innerHTML = `<iframe src="${src}" style="width:100%;height:100%;border:0" allowtransparency="true" scrolling="no" allowfullscreen></iframe>`; } };
+  if (tv && wrap) fill(wrap, S.focusTf);
+  // every sub-timeframe card gets its OWN TradingView widget (its own
+  // interval) in TV mode; our LineChart + spark return in OWN mode.
+  for (const tf of TF) {
+    const own = $("#qc-" + tf), sp = $("#qs-" + tf), slot = $("#qtv-" + tf);
+    if (own) own.style.display = tv ? "none" : "";
+    if (sp) sp.style.display = tv ? "none" : "";
+    if (slot) { slot.classList.toggle("hidden", !tv); if (tv) fill(slot, tf); }
   }
 }
 function bindChartSrc() {
