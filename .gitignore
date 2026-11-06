@@ -12,6 +12,8 @@ data/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/settings.json
 
 # Part 4 runtime data (Section 13 history stays local)
 data/history/

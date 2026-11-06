@@ -1,0 +1,12 @@
+{
+  // Markdown preview: Markdown Preview Enhanced is the workspace's
+  // preview engine (auto-installed; it does not depend on the built-in
+  // markdown.showPreview command). Ctrl+Shift+V is remapped to it in
+  // the USER keybindings by scripts/ensure_md_keybindings.py.
+  "markdown-preview-enhanced.automaticallyShowPreviewOfMarkdownBeingEdited": false,
+  "markdown-preview-enhanced.previewTheme": "github-dark.css",
+  "[markdown]": {
+    "editor.wordWrap": "on",
+    "editor.quickSuggestions": { "comments": "off", "strings": "off", "other": "off" }
+  }
+}
