@@ -233,6 +233,14 @@ class PredictionEngine:
         # + arms it in Settings — see app/trading.py safety doctrine)
         from .trading import Trader
         self.trader = Trader()
+        # probability-forecast audit: every window's predicted
+        # P(target-before-stop) is remembered and graded against the
+        # realised first touch at settlement — the probability system
+        # itself gets an accuracy score, not just the direction.
+        self._prob_pred: dict = {}
+        self._prob_audit = {"n": 0, "sum_pred": 0.0, "tp_first": 0,
+                            "brier_sum": 0.0}
+        self._load_prob_audit()
         self.locks: dict[tuple[str, str], dict] = {}   # frozen signals
         self._load_locks()
         self.last_window_ts = time.time()              # watchdog anchor
@@ -2958,6 +2966,40 @@ class PredictionEngine:
         except OSError:
             pass
 
+    # -- probability-forecast audit persistence -------------------------
+    def _load_prob_audit(self) -> None:
+        try:
+            with open("data/prob_audit.json", encoding="utf-8") as fh:
+                self._prob_audit = {**self._prob_audit, **json.load(fh)}
+        except (OSError, ValueError):
+            pass
+
+    def _save_prob_audit(self) -> None:
+        try:
+            import os as _os
+            _os.makedirs("data", exist_ok=True)
+            with open("data/prob_audit.json", "w", encoding="utf-8") as fh:
+                json.dump(self._prob_audit, fh)
+        except OSError:
+            pass
+
+    def prob_audit_summary(self) -> dict:
+        a = self._prob_audit
+        n = int(a.get("n") or 0)
+        if not n:
+            return {"n": 0, "note": "no graded probability forecasts yet"}
+        mean_pred = a["sum_pred"] / n
+        realised = a["tp_first"] / n
+        return {"n": n,
+                "mean_predicted": round(mean_pred, 4),
+                "realised_tp_first": round(realised, 4),
+                "gap": round(realised - mean_pred, 4),
+                "brier": round(a["brier_sum"] / n, 4),
+                "verdict": ("well calibrated" if abs(realised - mean_pred) < 0.05
+                            else "OVERCONFIDENT — predicted more than realised"
+                            if mean_pred > realised
+                            else "underconfident — realised more than predicted")}
+
     @staticmethod
     def _grid_window(tf: str, now: float) -> tuple[float, float]:
         """Epoch-aligned window (advice 0.1): start = floor(now/W)*W."""
@@ -3164,10 +3206,28 @@ class PredictionEngine:
                             "q50": round(price * (1 + _q(_rets[_f], 0.50)), 6),
                             "q75": round(price * (1 + _q(_rets[_f], 0.75)), 6),
                             "q95": round(price * (1 + _q(_rets[_f], 0.95)), 6)})
+                    def _wilson(k, n):
+                        if not n:
+                            return [0.0, 0.0]
+                        z, ph = 1.96, k / n
+                        den = 1 + z * z / n
+                        cen = (ph + z * z / (2 * n)) / den
+                        half = z * ((ph * (1 - ph) / n
+                                     + z * z / (4 * n * n)) ** 0.5) / den
+                        return [round(max(0.0, cen - half), 4),
+                                round(min(1.0, cen + half), 4)]
                     return {
                         "approx": True,
                         "method": "empirical-first-touch",
                         "n": _n, "ambig": _amb,
+                        # Wilson 95% intervals: a probability without
+                        # its uncertainty is a claim; with n it is a
+                        # measurement. EV = counted expectancy of the
+                        # barrier pair in bps from the current price.
+                        "ci_target": _wilson(_tpn, _n),
+                        "ci_stop": _wilson(_sln, _n),
+                        "ev_bps": round((_tpn / _n) * _tpb * 1e4
+                                        - (_sln / _n) * _slb * 1e4, 1),
                         "p_target": round(_tpn / _n, 4),
                         "p_stop": round(_sln / _n, 4),
                         "p_between": round(1 - _tpn / _n - _sln / _n, 4),
@@ -3232,6 +3292,10 @@ class PredictionEngine:
                 "approx": True,
                 "method": "driftless-fallback (thin tape)",
                 "n": 0, "ambig": 0,
+                "ci_target": None, "ci_stop": None,
+                "ev_bps": round(p_target * abs(tp1 - price) / price * 1e4
+                                - p_stop * abs(price - sl) / price * 1e4, 1)
+                if price > 0 else None,
                 "p_target": round(p_target, 4),
                 "p_stop": round(p_stop, 4),
                 "p_between": round(p_between, 4),
@@ -3328,6 +3392,23 @@ class PredictionEngine:
             try:
                 self.trader.close_position(symbol, price,
                                            _row.get("result"))
+            except Exception:
+                pass
+            # grade the probability forecast made for THAT window:
+            # only windows where a barrier was actually decided count
+            try:
+                _pred = self._prob_pred.pop((symbol, tf), None)
+                if (_pred and _pred.get("p_target") is not None
+                        and abs(float(_pred.get("cycle_start") or 0)
+                                - float(prev.get("window_start") or 0)) < 1.0
+                        and _lvl in ("TP first", "SL first")):
+                    _y = 1.0 if _lvl == "TP first" else 0.0
+                    _pa = self._prob_audit
+                    _pa["n"] += 1
+                    _pa["sum_pred"] += float(_pred["p_target"])
+                    _pa["tp_first"] += int(_y)
+                    _pa["brier_sum"] += (float(_pred["p_target"]) - _y) ** 2
+                    self._save_prob_audit()
             except Exception:
                 pass
             # REINFORCEMENT loop on a settled window: score the issue
@@ -3602,6 +3683,9 @@ class PredictionEngine:
         try:
             self.trader.consider({
                 "symbol": symbol, "tf": tf, "issued": bool(cyc.issued),
+                "feed_age_s": round(now - float(
+                    self.feed.state(symbol).last_tick or 0), 1)
+                if self.feed.state(symbol).last_tick else 999.0,
                 "direction": int(cyc.direction or 0),
                 "entry": float(_price0 or 0), "tp": cyc.tp, "sl": cyc.sl,
                 "tp_bps": _horizon_block.get("tp_bps"),
@@ -4197,9 +4281,21 @@ class PredictionEngine:
                     bs = self.branch_stats(d, price, now, tf)
                     if bs:
                         d["branches"] = bs
+                        # remember this window's forecast ONCE (first
+                        # snapshot of the cycle) for the settle audit
+                        _pk = (symbol, tf)
+                        _cs = d.get("cycle_start")
+                        if _cs and self._prob_pred.get(_pk, {}) \
+                                .get("cycle_start") != _cs:
+                            self._prob_pred[_pk] = {
+                                "cycle_start": _cs,
+                                "p_target": bs.get("p_target"),
+                                "method": bs.get("method")}
                 tfs[tf] = d
             assets[symbol] = {
                 "price": price,
+                "feed_age_s": (round(now - float(st.last_tick), 1)
+                               if getattr(st, "last_tick", 0) else None),
                 "window_change_pct": round(
                     (price / base - 1.0) * 100, 3
                 ) if base else 0.0,
@@ -4231,6 +4327,7 @@ class PredictionEngine:
                 "warning": self.phase_warning,
             },
             "assets": assets,
+            "prob_audit": self.prob_audit_summary(),
             "bgn": {
                 tf: {t2: round(v, 4) for t2, v in row.items()}
                 for tf, row in (self.bgn.last_matrix.get("BTC") or {}).items()

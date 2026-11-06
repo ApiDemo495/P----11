@@ -103,6 +103,9 @@ def gate(cfg: dict, sig: dict, open_symbols: set,
         return False, "no API keys configured"
     if float(cfg.get("armed_until") or 0) <= time.time():
         return False, "not ARMED (arm timer expired — press ARM to trade)"
+    if float(sig.get("feed_age_s") or 0) > 20.0:
+        return False, (f"stale tape ({sig.get('feed_age_s'):.0f}s since last "
+                       "tick) — never trade a dead feed")
     if not sig.get("issued"):
         return False, "signal not ISSUED (below confidence floor — no trade)"
     if not sig.get("direction"):

@@ -726,6 +726,33 @@ curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&
 <pre><code>
 ./run.sh --supervise
 </code></pre>
+<h4>Deep audit bundle — uncertainty, expectancy, forecast grading, stale-tape safety</h4>
+<ul>
+<li><b>Wilson 95% intervals + expectancy</b> on every empirical</li>
+</ul>
+<p>  probability: P(target) ships with its interval (n-aware) and the</p>
+<p>  barrier pair&#x27;s counted expectancy in bps (panel + payload).</p>
+<ul>
+<li><b>Probability-forecast audit</b>: each window&#x27;s predicted</li>
+</ul>
+<p>  P(target-before-stop) is remembered at first snapshot and graded</p>
+<p>  against the realised first touch at settlement (decided windows</p>
+<p>  only), persisted in data/prob_audit.json. Snapshot exposes</p>
+<p>  mean-predicted vs realised, gap, Brier score and a verdict</p>
+<p>  (well-calibrated / overconfident / underconfident); the branches</p>
+<p>  panel prints it. The probability system now has its own accuracy.</p>
+<ul>
+<li><b>Feed staleness</b>: every live-price write stamps last_tick</li>
+</ul>
+<p>  (binance-ws + sim paths); snapshot carries per-asset feed_age_s;</p>
+<p>  the trading gate refuses on a tape older than 20 s — never trade</p>
+<p>  a dead feed.</p>
+<ul>
+<li><b>Ledger expectancy</b>: per asset/TF mean signed bps per graded</li>
+</ul>
+<p>  window + payoff ratio (avg win / avg loss bps) in stats() and the</p>
+<p>  ledger table&#x27;s EXPECTANCY column — hit-rate alone never decides</p>
+<p>  whether a direction is worth trading.</p>
 <h4>Self-directed additions (free-will bundle)</h4>
 <ul>
 <li><b>Empirical fan</b>: branch payload now carries <code>fan</code> — measured</li>

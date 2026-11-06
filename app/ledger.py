@@ -130,7 +130,18 @@ class SettlementLedger:
         _lv = [r.get("level_outcome") for r in graded
                if r.get("level_outcome")]
         _tp_first = _lv.count("TP first")
+        # expectancy: mean signed bps per graded window + payoff ratio
+        # (avg win bps / avg loss bps) — the numbers that decide whether
+        # a direction is worth trading, beyond the raw hit-rate
+        _bps = [(int(r["side"]) * (float(r["settle"]) / float(r["entry"]) - 1)
+                 * 1e4) for r in graded
+                if r.get("entry") and r.get("settle") and r.get("side")]
+        _wb = [x for x in _bps if x > 0]
+        _lb = [-x for x in _bps if x < 0]
         return {
+            "exp_bps": round(sum(_bps) / len(_bps), 2) if _bps else None,
+            "payoff": (round((sum(_wb) / len(_wb)) / (sum(_lb) / len(_lb)), 3)
+                       if _wb and _lb else None),
             "tp_first_n": len(_lv),
             "tp_first_pct": (round(_tp_first / len(_lv), 4)
                              if _lv else None),

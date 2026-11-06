@@ -625,6 +625,9 @@ function renderBranches() {
     <div class="kv"><span>P(close between)</span><b>${_pct(b.p_between)}</b></div>
     <div class="kv"><span>P(close down)</span><b>${Math.round(b.p_close_down * 100)}%</b></div>
     <div class="kv"><span>σ (remaining)</span><b>${px(b.sigma)}</b></div>
+    <div class="kv"><span>expectancy (barrier pair)</span><b class="${(b.ev_bps ?? 0) >= 0 ? "acc-up" : "acc-dn"}">${b.ev_bps != null ? `${b.ev_bps >= 0 ? "+" : ""}${fmt(b.ev_bps, 1)} bp` : "—"}</b></div>
+    <div class="kv"><span>P(target) 95% interval</span><b>${b.ci_target ? `${Math.round(b.ci_target[0] * 100)}–${Math.round(b.ci_target[1] * 100)}%` : "—"}</b></div>
+    <div class="kv"><span>forecast audit (all windows)</span><b>${S.snap?.prob_audit?.n ? `n=${S.snap.prob_audit.n} · pred ${Math.round(S.snap.prob_audit.mean_predicted * 100)}% vs realised ${Math.round(S.snap.prob_audit.realised_tp_first * 100)}% · ${esc(S.snap.prob_audit.verdict || "")}` : "grading after settled windows"}</b></div>
     <div class="kv"><span>basis</span><b>${b.method === "empirical-first-touch" ? `measured · n=${b.n} windows` : "approx · thin tape"}</b></div>
     <div class="kv"><span>time left</span><b>${Math.round(b.rem_s / 60)}m ${Math.round(b.rem_s % 60)}s</b></div>`;
   $("#branch-note").textContent = b.method === "empirical-first-touch"
@@ -1460,6 +1463,7 @@ function renderLedger() {
       <td class="mono acc-up">${st.wins}</td><td class="mono acc-dn">${st.losses}</td>
       <td class="mono">${st.skipped}</td>
       <td class="mono">${rateTxt}</td>
+      <td class="mono" title="mean signed bps per graded window · payoff = avg win ÷ avg loss (bps)">${st.exp_bps != null ? `${st.exp_bps >= 0 ? "+" : ""}${fmt(st.exp_bps, 1)}bp` : "—"}${st.payoff != null ? ` · ×${fmt(st.payoff, 2)}` : ""}</td>
       <td class="mono">${st.streak} / ${st.best_streak}</td>
       <td class="mono">${(st.last20 || []).map(r => r === "win" ? "W" : "L").join("") || "·"}</td>
     </tr>`;
@@ -1481,7 +1485,7 @@ function renderLedger() {
     }
   }
   el.innerHTML = `<table class="tbl">
-    <thead><tr><th>ASSET</th><th>TF</th><th>n</th><th>W</th><th>L</th><th>SKIP</th><th>STRICT-SIGN</th><th>STREAK/BEST</th><th>LAST 20</th></tr></thead>
+    <thead><tr><th>ASSET</th><th>TF</th><th>n</th><th>W</th><th>L</th><th>SKIP</th><th>STRICT-SIGN</th><th>EXPECTANCY</th><th>STREAK/BEST</th><th>LAST 20</th></tr></thead>
     <tbody>${rows}</tbody></table>
     <div class="kv-row" style="margin-top:8px">${pooled}</div>
     <div class="hint">${led.rule} — every accuracy number in the app is read from this ledger, nowhere else.</div>`;

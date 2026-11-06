@@ -57,7 +57,7 @@ class SymbolState:
         "symbol", "times", "closes", "volumes",
         "opens", "highs", "lows", "sources",
         "live_price", "live_volume", "live_open", "live_high", "live_low",
-        "day_open",
+        "day_open", "last_tick",
     )
 
     def __init__(self, symbol: str):
@@ -75,6 +75,7 @@ class SymbolState:
         self.live_high: float = 0.0
         self.live_low: float = 0.0
         self.day_open: float = 0.0
+        self.last_tick: float = 0.0   # wall time of last live update
 
     @property
     def last_bar_time(self) -> int:
@@ -513,6 +514,7 @@ class MarketFeed:
                         st = self.states[sym]
                         price = float(k["c"])
                         st.live_price = price
+                        st.last_tick = time.time()
                         st.live_volume = float(k["v"])
                         st.live_open = float(k["o"])
                         st.live_high = float(k["h"])
@@ -648,6 +650,7 @@ class MarketFeed:
                 if not (st.times and ts <= st.times[-1]):
                     st.push_bar(ts, price, volume, o, h, l, source="sim")
             st.live_price = price
+            st.last_tick = time.time()
             st.live_open = st.opens[-1]
             st.live_high = st.highs[-1]
             st.live_low = st.lows[-1]
@@ -707,6 +710,7 @@ class MarketFeed:
                     price += 0.02 * (SIM_BASE_PRICES[sym] - price)
                 self._sim_price[sym] = price
                 st.live_price = price
+                st.last_tick = time.time()
                 vol = per_sec_vol[sym] * rng.lognormvariate(0, 0.6)
                 if rolled:
                     # close out the minute that just ended with its OHLC

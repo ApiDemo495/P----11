@@ -713,6 +713,27 @@ hung boot):
 ./run.sh --supervise
 ```
 
+## Deep audit bundle — uncertainty, expectancy, forecast grading, stale-tape safety
+
+* **Wilson 95% intervals + expectancy** on every empirical
+  probability: P(target) ships with its interval (n-aware) and the
+  barrier pair's counted expectancy in bps (panel + payload).
+* **Probability-forecast audit**: each window's predicted
+  P(target-before-stop) is remembered at first snapshot and graded
+  against the realised first touch at settlement (decided windows
+  only), persisted in data/prob_audit.json. Snapshot exposes
+  mean-predicted vs realised, gap, Brier score and a verdict
+  (well-calibrated / overconfident / underconfident); the branches
+  panel prints it. The probability system now has its own accuracy.
+* **Feed staleness**: every live-price write stamps last_tick
+  (binance-ws + sim paths); snapshot carries per-asset feed_age_s;
+  the trading gate refuses on a tape older than 20 s — never trade
+  a dead feed.
+* **Ledger expectancy**: per asset/TF mean signed bps per graded
+  window + payoff ratio (avg win / avg loss bps) in stats() and the
+  ledger table's EXPECTANCY column — hit-rate alone never decides
+  whether a direction is worth trading.
+
 ## Self-directed additions (free-will bundle)
 
 * **Empirical fan**: branch payload now carries `fan` — measured
