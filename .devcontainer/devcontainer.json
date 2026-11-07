@@ -6,7 +6,10 @@
   ],
   "portsAttributes": {
     "8000": {
-      "label": "Prediction App"
+      "label": "Prediction App",
+      "visibility": "public",
+      "onAutoForward": "openPreview",
+      "protocol": "https"
     }
   },
   "postCreateCommand": "bash scripts/setup.sh",

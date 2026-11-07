@@ -135,9 +135,13 @@ function toast(msg, kind = "") {
   setTimeout(() => t.remove(), 4200);
 }
 async function api(path, opts) {
-  const r = await fetch(path, opts);
-  if (!r.ok) throw new Error(`${path} → ${r.status}`);
-  return r.json();
+  const ctl = new AbortController();
+  const to = setTimeout(() => ctl.abort(), 10000);
+  try {
+    const r = await fetch(path, { ...(opts || {}), signal: ctl.signal });
+    if (!r.ok) throw new Error(`${path} → ${r.status}`);
+    return await r.json();
+  } finally { clearTimeout(to); }
 }
 
 /* ── state ──────────────────────────────────────────────────── */
@@ -180,7 +184,9 @@ function renderMicro() {
   const bk = sys.book || {};
   $("#micro-meta").textContent = `${S.symbol} · ${m?.mode || "—"}`;
   if (!m && !bk.book) {
-    box.innerHTML = `<div class="dim pad">loading…</div>`;
+    box.innerHTML = `<div class="dim pad">${S.snap
+      ? "engine pass pending — systems publish on the next GRC"
+      : "loading…"}</div>`;
     return;
   }
   if (!m?.available && !bk.book) {
@@ -545,6 +551,9 @@ function bnEnsure() {
 }
 function bnTickMain() {
   const inst = Bn.main, p = S.prices?.[S.symbol];
+  if (inst && !inst.last && Date.now() - (Bn._tryAt || 0) > 5000) {
+    Bn._tryAt = Date.now(); bnLoad(S.focusTf, inst);
+  }
   if (!inst || !inst.last || !(p > 0)) return;
   const l = inst.last;
   l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p);
@@ -2946,6 +2955,17 @@ setInterval(() => {
   // 2b) candle series refresh (~30 s): the realised line's backfill
   // must stay current or the charts drift from the tape again
   if (_tickN % 30 === 0) loadCandles().catch(() => {});
+  // connection honesty on the chip while the socket is silent
+  if (S.lastMsgAt && Date.now() - S.lastMsgAt > 15000) {
+    const fc = $("#feed-chip");
+    if (fc && !fc.dataset.stale) {
+      fc.dataset.stale = "1";
+      fc.textContent = "⚠ connection stale — retrying";
+      fc.className = "feed-chip stale";
+    }
+  } else if ($("#feed-chip")?.dataset.stale) {
+    delete $("#feed-chip").dataset.stale;
+  }
   // 3) §10.4 silent-socket guard (inside THE one interval, H-2): a socket
   // with no message for 15s is closed — onclose reconnects immediately
   // instead of waiting the browser's 30-minute timeout (error J-7)
@@ -3109,6 +3129,15 @@ function handleMessage(msg) {
   else if (msg.type === "analyse_stage") onAnalyseStage(msg);
   else if (msg.type === "analyse_done") onAnalyseDone(msg);
 }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  loadCandles().catch(() => {});
+  try { drawMainChart(); } catch {}
+});
+window.addEventListener("focus", () => {
+  loadCandles().catch(() => {});
+  try { drawMainChart(); } catch {}
+});
 let ws;                       // module scope: master tick guards silence
 function connectWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
