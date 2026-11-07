@@ -234,3 +234,21 @@ ARIA summary; sparkline mode keeps only line + end dot (Tufte).
 25. Storytelling with Charts / Number Analytics — line-chart craft
     (2–3 series max, markers/grid in moderation, typography 8–12 pt)
     https://www.storytellingwithcharts.com/blog/best-practices-for-line-charts-in-financial-presentations/
+
+## Addendum (2026-11-07, after first user screenshots of PriceChart)
+
+The first build still folded TP/SL **levels into the y-domain**. With
+TP +1.3 % away and real price movement of ±0.05 %, the price line was
+compressed flat — the exact failure TradingView's support page
+describes ("My chart looks compressed… automatic scaling forces the
+chart to fit all indicator levels… enable *Scale price chart only*",
+tradingview.com/support/solutions/43000762934). The general principle
+(data-viz engineering practice; Chart.js suggestedMin/Max docs; uPlot
+rangeNum): **a chart's domain comes from the data it plots; an
+annotation is drawn onto that domain, never folded into it** — and an
+off-scale annotation is labelled with its real value/distance, not
+silently dropped. PriceChart now: domain = price series + fan inner
+band/median only; in-range levels drawn as lines; off-scale levels
+pinned as edge tags (▲/▼ + price + % distance). Small cards (<300 px
+wide or <130 px price pane) go compact: no H/L or MA end labels, level
+text suppressed — the values live in the card's text rows.

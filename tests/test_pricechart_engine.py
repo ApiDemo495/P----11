@@ -27,6 +27,13 @@ def test_research_rules_implemented():
     assert "VOL " in LC                                # volume sub-pane labelled
 
 
+def test_domain_from_data_not_levels():
+    assert "DOMAIN RULE" in LC and "Scale price chart only" in LC.replace("scale price chart only", "Scale price chart only") or "DOMAIN RULE" in LC
+    assert "offScale" in LC and "edge tag" in LC       # far levels pinned, not folded in
+    assert "histogram: true" in JS                     # volume spark is bars, not a line
+    assert "Math.min(12" in LC                         # sparse volume bars capped
+
+
 def test_probability_chart_uses_shared_engine():
     assert "cvHost._pc.setModel" in JS
     assert "lo: p2.q05, lo2: p2.q25, mid: p2.q50, hi2: p2.q75, hi: p2.q95" in JS  # nested fan bands

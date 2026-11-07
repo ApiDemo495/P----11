@@ -830,7 +830,7 @@ function buildQuads() {
     grid.appendChild(q);
     q.addEventListener("click", () => { if (S.focusTf !== tf) setFocusTf(tf); });
     S.charts[tf] = new PriceChart($("#qc-" + tf));
-    S.spark[tf] = new PriceChart($("#qs-" + tf), { spark: true });
+    S.spark[tf] = new PriceChart($("#qs-" + tf), { spark: true, histogram: true });
   });
   // main OWN chart is the PriceChart renderer (drawMainChart)
   // into the corner under a multi-hour trend
