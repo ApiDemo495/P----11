@@ -3087,11 +3087,11 @@ function checkIssuedAlerts(snap) {
 function applySnapshot(snap) {
   if (!snap || snap.type !== "snapshot") return;
   S.snap = snap;
-  if (snap.ts) S.serverOff = snap.ts - Date.now() / 1000;   // server clock offset
+  if (snap.ts) S.serverOff = snap.ts - Date.now() / 1000;
   // snapshot = price truth only when the tick stream is dead (>5 s)
-  const _tickFresh = S._lastTickAt && (Date.now() - S._lastTickAt < 5000);
+  const _tf = S._lastTickAt && (Date.now() - S._lastTickAt < 5000);
   for (const [sym, av] of Object.entries(snap.assets || {}))
-    if (av.price > 0 && (!_tickFresh || !((S.prices || {})[sym] > 0)))
+    if (av.price > 0 && (!_tf || !((S.prices || {})[sym] > 0)))
       (S.prices ||= {})[sym] = av.price;
   try { checkIssuedAlerts(snap); } catch (e) { /* alerts optional */ }
   S.serverOffset = (snap.ts ? snap.ts * 1000 : Date.now()) - Date.now();
