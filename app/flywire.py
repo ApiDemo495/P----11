@@ -463,12 +463,37 @@ class FlyWireBrain:
         threading.Thread(target=_later, name="flywire-retry",
                          daemon=True).start()
 
+    def _restore_bundled(self) -> bool:
+        """The built connectome SHIPS WITH THE REPO (assets/connectome,
+        gzipped 62 MB): if the working cache has no npz, restore from
+        the bundle — NO download, no build, brain ready in seconds on
+        a fresh Codespace. Download/build remains only as a fallback
+        when the bundle is missing or stale-versioned."""
+        try:
+            bundled = (Path(__file__).resolve().parent.parent
+                       / "assets" / "connectome" / "flywire_783.npz.gz")
+            if not bundled.exists():
+                return False
+            import gzip, shutil
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = self.npz_path().with_suffix(".npz.part")
+            with gzip.open(bundled, "rb") as fh, open(tmp, "wb") as out:
+                shutil.copyfileobj(fh, out, 1 << 20)
+            tmp.replace(self.npz_path())
+            _log("connectome restored from repo bundle (no download)")
+            return True
+        except Exception as exc:
+            _log(f"bundle restore failed: {exc!r}")
+            return False
+
     def ensure(self) -> None:
         """Hot-swap in the connectome without ever blocking first paint."""
         with self._lock:
             if self.state in ("building", "ready"):
                 return
             npz = self.npz_path()
+            if not npz.exists():
+                self._restore_bundled()
             if npz.exists():
                 try:
                     t0 = time.perf_counter()

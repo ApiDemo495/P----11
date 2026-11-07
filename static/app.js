@@ -171,7 +171,7 @@ class LineChart {
   }
   set(data) { this.d = data; this.draw(); }
   setData(bars) { // OHLC bars -> close line (quad/spark feed)
-    this.base = { pts: bars.map(b => ({ t: b.time > 1e12 ? b.time / 1000 : b.time, p: b.close })).filter(p => p.p > 0) };
+    this.base = { pts: bars.map(b => ({ t: b.time > 1e12 ? b.time / 1000 : b.time, p: b.close, v: b.v || 0 })).filter(p => p.p > 0) };
     if (this.base.pts.length) { this.base.t0 = this.base.pts[0].t; this.base.t1 = this.base.pts[this.base.pts.length - 1].t; }
     this._sync(); }
   setLines(ls) { this.lines = ls || []; this._sync(); }
@@ -206,8 +206,10 @@ class LineChart {
     // line into a corner): the cone is clipped to the plot below.
     if (!(hi > lo)) { hi = lo * 1.001; lo = lo * 0.999; }
     const pad = (hi - lo) * 0.08; hi += pad; lo -= pad;
+    const hasVol = !this.spark && d.pts.some(p => (p.v || 0) > 0);
+    const phP = hasVol ? ph * 0.82 : ph;   // price pane; volume lives below
     const t0 = d.t0, t1 = d.t1, X = t => padL + (t - t0) / Math.max(1, t1 - t0) * pw,
-          Y = p => padT + (hi - p) / (hi - lo) * ph;
+          Y = p => padT + (hi - p) / (hi - lo) * phP;
     // grid + price axis (the "no price visible" fix: always drawn)
     g.font = "9px ui-monospace,monospace"; g.textAlign = "left";
     const ticks = 4;
@@ -254,6 +256,25 @@ class LineChart {
     g.fillStyle = grad; g.fill();
     g.beginPath(); d.pts.forEach((p, i) => i ? g.lineTo(X(p.t), Y(p.p)) : g.moveTo(X(p.t), Y(p.p)));
     g.strokeStyle = col; g.lineWidth = 2.2; g.stroke(); g.lineWidth = 1;
+    // MA overlay (Binance-style white moving-average line)
+    if (!this.spark && d.pts.length >= 10) {
+      const per = d.pts.length >= 40 ? 20 : 5;
+      g.beginPath(); let started = false, acc = 0;
+      d.pts.forEach((p, i) => { acc += p.p; if (i >= per) acc -= d.pts[i - per].p;
+        if (i >= per - 1) { const x = X(p.t), y = Y(acc / per);
+          started ? g.lineTo(x, y) : g.moveTo(x, y); started = true; } });
+      g.strokeStyle = "rgba(255,255,255,.6)"; g.lineWidth = 1; g.stroke();
+    }
+    // volume strip (Binance layout) — real bar volumes, up/down colours
+    if (hasVol) {
+      const vmax = Math.max(...d.pts.map(p => p.v || 0)) || 1;
+      const vBase = padT + ph, vH = ph - phP - 2, bw = Math.max(1, pw / d.pts.length - 0.5);
+      d.pts.forEach((p, i) => { const v = (p.v || 0) / vmax, x = X(p.t);
+        g.fillStyle = (i && p.p < d.pts[i - 1].p) ? "rgba(239,83,80,.55)" : "rgba(38,166,154,.55)";
+        g.fillRect(x - bw / 2, vBase - v * vH, bw, Math.max(0.5, v * vH)); });
+      g.fillStyle = DIM; g.font = "8px ui-monospace,monospace";
+      g.fillText("VOL", padL + 1, vBase - vH - 1); g.font = "9px ui-monospace,monospace";
+    }
     // last price: dot + axis chip (always visible)
     const lp = d.pts[d.pts.length - 1], lx = X(lp.t), ly = Y(lp.p);
     g.fillStyle = col; g.beginPath(); g.arc(lx, ly, 3, 0, 7); g.fill();
@@ -641,11 +662,24 @@ function renderBranches() {
     b.fan.forEach(p => g.lineTo(XF(p.f), Y(p.q50)));
     g.strokeStyle = "#7fd8cf"; g.setLineDash([4, 3]); g.lineWidth = 1.4; g.stroke(); g.setLineDash([]);
   }
-  // realised price — thick white, the hero of this chart
+  // realised price — thick white with a Binance-style area gradient
   if (hist.length > 1) {
+    const grad = g.createLinearGradient(0, 8, 0, h - 16);
+    grad.addColorStop(0, "rgba(240,185,11,.28)"); grad.addColorStop(1, "rgba(240,185,11,0)");
+    g.beginPath();
+    hist.forEach((pp, i) => { const xx = X(pp.t), yy = Y(pp.p); i ? g.lineTo(xx, yy) : g.moveTo(xx, yy); });
+    g.lineTo(X(hist[hist.length - 1].t), h - 16); g.lineTo(X(hist[0].t), h - 16); g.closePath();
+    g.fillStyle = grad; g.fill();
     g.beginPath();
     hist.forEach((pp, i) => { const xx = X(pp.t), yy = Y(pp.p); i ? g.lineTo(xx, yy) : g.moveTo(xx, yy); });
     g.strokeStyle = "#ffffff"; g.lineWidth = 2; g.stroke();
+    // volume strip along the bottom, like Binance
+    if (hist.some(pp => (pp.v || 0) > 0)) {
+      const vmax = Math.max(...hist.map(pp => pp.v || 0)) || 1;
+      hist.forEach((pp, i) => { const vv = (pp.v || 0) / vmax;
+        g.fillStyle = (i && pp.p < hist[i - 1].p) ? "rgba(239,83,80,.5)" : "rgba(38,166,154,.5)";
+        g.fillRect(X(pp.t) - 1, h - 16 - vv * 22, 2, Math.max(0.5, vv * 22)); });
+    }
     const lp = hist[hist.length - 1];
     g.fillStyle = "#fff"; g.beginPath(); g.arc(X(lp.t), Y(lp.p), 3, 0, 7); g.fill();
   }
@@ -1585,7 +1619,7 @@ async function loadCandles() {
     // per-TF below.
     const md = await api(`/api/candles?symbol=${S.symbol}&tf=tf1&n=260`);
     const mbars = (md.bars || []).map(x =>
-      ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c }));
+      ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
     // EACH timeframe card aggregates the tape at its OWN interval
     // (user: every TF chart must be different — they were all the same
     // 1-minute series photocopied four times). Wider TF = wider bars.
@@ -1618,7 +1652,7 @@ async function loadCandles() {
         if (t.status === "hit" && t.hit_ts)
           markers.push({ time: Math.floor(t.hit_ts / 60) * 60, above: true, color: "#22c98a", glyph: "▲" });
       });
-      const mapped = bars.map(x => ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c }));
+      const mapped = bars.map(x => ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
       c.setData(mapped);
       c.setMarkers(markers.slice(-36));
       // seed the realised-path history (hero line chart + branches):
@@ -1626,7 +1660,7 @@ async function loadCandles() {
       // the forward fan floated with nothing behind it
       if (tf === S.focusTf) {
         const _norm = t => t > 1e12 ? t / 1000 : t;
-        const seeded = mapped.map(x => ({ t: _norm(x.time), p: x.close }))
+        const seeded = mapped.map(x => ({ t: _norm(x.time), p: x.close, v: x.v || 0 }))
           .filter(p2 => p2.p > 0);
         const tail = (S.priceHist || [])
           .filter(p2 => p2.t > (seeded[seeded.length - 1]?.t || 0));
