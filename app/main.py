@@ -105,12 +105,24 @@ async def _startup_watchdog() -> None:
     _os._exit(75)
 
 
+async def _boot() -> None:
+    """Full engine boot, OFF the startup path: uvicorn serves the app
+    shell + /api/health immediately and the boot overlay reports
+    progress; a slow brain restore / feed backfill can no longer
+    leave the port answering 502 (fresh-Codespace bug, 22 reports)."""
+    try:
+        await feed.start()
+        await engine.start()
+        await clock.start()
+        log.info("application booted (feed=%s)", feed.mode)
+    except Exception:
+        log.exception("background boot failed — shell stays up")
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     feed.on_tick = _on_feed_tick
-    await feed.start()
-    await engine.start()
-    await clock.start()
+    asyncio.create_task(_boot())
     global _learning_task
     _learning_task = asyncio.create_task(_hourly_learning_loop())
     asyncio.create_task(_startup_watchdog())
@@ -119,7 +131,7 @@ async def _startup() -> None:
     app.state.link_watchdog.start()
     app.state._vault_task = asyncio.create_task(_vault_loop())
     app.state._news_ticker = asyncio.create_task(_news_ticker())
-    log.info("application started (feed=%s)", feed.mode)
+    log.info("application shell up — engine booting in background")
 
 
 @app.on_event("shutdown")
