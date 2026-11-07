@@ -53,7 +53,8 @@ def test_one_price_truth_and_current_bucket():
     # snapshots sync S.prices (REST lulls must not leave the chart on
     # a stale tick price); the chart forces the current bucket to the
     # snapshot price and drops future candles
-    assert "one price truth" in JS
+    assert "the 1 Hz tick stream is the live price truth" in JS
+    assert "const liveP = (S.prices?.[S.symbol] > 0) ? S.prices[S.symbol] : a.price;" in JS
     assert "b2.time <= bt0" in JS and "lb.close = liveP" in JS
     assert "S.priceHist.push({ t: serverNow(), p: _pp })" in JS
     assert "if (bt > inst.last.time)" in JS        # quad bars advance too

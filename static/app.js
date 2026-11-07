@@ -366,7 +366,9 @@ function drawOwnChart() {
   inst.stale.textContent = (age != null && age > 15) ? `stale — last print ${Math.round(age)}s ago` : "";
   const bucket0 = (S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60;
   const bt0 = Math.floor(now / bucket0) * bucket0;
-  const liveP = a.price > 0 ? a.price : S.prices?.[S.symbol];
+  // the 1 Hz tick stream is the live price truth; a.price (snapshot,
+  // GRC-cadence) is only the fallback before the first tick arrives
+  const liveP = (S.prices?.[S.symbol] > 0) ? S.prices[S.symbol] : a.price;
   let bars = (S.tfBars?.[S.focusTf] || []).filter(b2 => b2.close > 0 && b2.time <= bt0);
   if (bars.length && liveP > 0) {
     // bridge any tape gap with the browser's own price prints (same
@@ -2993,8 +2995,9 @@ function applySnapshot(snap) {
   if (!snap || snap.type !== "snapshot") return;
   S.snap = snap;
   if (snap.ts) S.serverOff = snap.ts - Date.now() / 1000;   // server clock offset
+  // snapshot price fills gaps only — never overwrite the tick stream
   for (const [sym, av] of Object.entries(snap.assets || {}))
-    if (av.price > 0) (S.prices ||= {})[sym] = av.price;     // one price truth
+    if (av.price > 0 && !((S.prices || {})[sym] > 0)) (S.prices ||= {})[sym] = av.price;
   try { checkIssuedAlerts(snap); } catch (e) { /* alerts optional */ }
   S.serverOffset = (snap.ts ? snap.ts * 1000 : Date.now()) - Date.now();
   renderBoot(snap);               // overlay FIRST — contract test guard
