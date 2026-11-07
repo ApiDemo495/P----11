@@ -634,10 +634,24 @@ async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONRes
              "l": st.lows[i], "c": st.closes[i], "v": st.volumes[i]}
             for i in range(start, count)
         ]
-        if st.live_price > 0 and st.live_open > 0:
-            bars.append({"t": (bars[-1]["t"] + 60) if bars else int(time.time() // 60) * 60,
-                         "o": st.live_open, "h": st.live_high, "l": st.live_low,
-                         "c": st.live_price, "v": st.live_volume, "live": True})
+        if st.live_price > 0:
+            # the live partial bar belongs to the CURRENT bucket: merge
+            # into it when the tape already has it, else open it at the
+            # previous close. (Was: appended at last_bar+60 — a future
+            # candle whose close the chart then chased a minute late.)
+            bkt = int(time.time() // 60) * 60
+            bars = [b for b in bars if b["t"] <= bkt]      # never future
+            if bars and bars[-1]["t"] == bkt:
+                bars[-1]["h"] = max(bars[-1]["h"], st.live_high or 0, st.live_price)
+                bars[-1]["l"] = min(bars[-1]["l"], st.live_low or bars[-1]["l"], st.live_price)
+                bars[-1]["c"] = st.live_price
+                bars[-1]["live"] = True
+            else:
+                prev_c = bars[-1]["c"] if bars else st.live_price
+                bars.append({"t": bkt, "o": prev_c,
+                             "h": max(st.live_high or 0, st.live_price, prev_c),
+                             "l": min(st.live_low or st.live_price, st.live_price, prev_c),
+                             "c": st.live_price, "v": st.live_volume, "live": True})
     else:
         # epoch-aligned buckets of W minutes
         bucket: dict[int, dict] = {}

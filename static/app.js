@@ -364,7 +364,28 @@ function drawOwnChart() {
   // stale tape state on the chart itself (doc A-4) — never a silent flat line
   const age = a.feed_age_s;
   inst.stale.textContent = (age != null && age > 15) ? `stale — last print ${Math.round(age)}s ago` : "";
-  const bars = (S.tfBars?.[S.focusTf] || []).filter(b2 => b2.close > 0);
+  const bucket0 = (S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60;
+  const bt0 = Math.floor(now / bucket0) * bucket0;
+  const liveP = a.price > 0 ? a.price : S.prices?.[S.symbol];
+  let bars = (S.tfBars?.[S.focusTf] || []).filter(b2 => b2.close > 0 && b2.time <= bt0);
+  if (bars.length && liveP > 0) {
+    // bridge any tape gap with the browser's own price prints (same
+    // prices the header shows) so the candle series can never end
+    // minutes behind the quoted price
+    const ring = (S.priceHist || []).filter(pt => pt.t > bars[bars.length - 1].time && pt.t <= now && pt.p > 0);
+    const byBucket = new Map();
+    for (const pt of ring) {
+      const bk = Math.floor(pt.t / bucket0) * bucket0;
+      const o = byBucket.get(bk);
+      if (!o) byBucket.set(bk, { time: bk, open: pt.p, high: pt.p, low: pt.p, close: pt.p, v: 0 });
+      else { o.high = Math.max(o.high, pt.p); o.low = Math.min(o.low, pt.p); o.close = pt.p; }
+    }
+    bars = [...bars, ...[...byBucket.values()].sort((x, y) => x.time - y.time)];
+    const lb = bars[bars.length - 1];
+    if (lb.time === bt0) { lb.close = liveP; lb.high = Math.max(lb.high, liveP); lb.low = Math.min(lb.low, liveP); }
+    else bars.push({ time: bt0, open: lb.close, high: Math.max(lb.close, liveP),
+                     low: Math.min(lb.close, liveP), close: liveP, v: 0 });
+  }
   const key = `${S.symbol}|${S.focusTf}|${d.cycle_start}`;
   // data refreshes whenever loadCandles brings a newer last bar (the
   // cycle-only key froze the chart at first paint — candles fell
@@ -388,9 +409,9 @@ function drawOwnChart() {
   // live candle from the tick stream (candles.update, never setData
   // per tick); on a bucket roll the live bar ADVANCES — open = prev
   // close — instead of freezing at the first-painted bar
-  const p = S.prices?.[S.symbol];
+  const p = liveP;
   if (inst.last && p > 0) {
-    const bucket = (S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60;
+    const bucket = bucket0;
     const bt = Math.floor(now / bucket) * bucket;
     if (bt > inst.last.time)
       inst.last = { time: bt, open: inst.last.close, high: Math.max(inst.last.close, p),
@@ -916,7 +937,7 @@ function refreshActiveView(force) {
 /* mini candle chart for the TF cards (doc C-5): candles + price lines
    only — no volume, no fan, no noise line; scroll/scale disabled.
    Keeps the setData/setLines/tick API the app already calls. */
-function quadChart(el) {
+function quadChart(el, bucketSec = 60) {
   const LW = window.LightweightCharts;
   const noop = { setData() {}, setLines() {}, tick() {} };
   if (!LW || !el) return noop;
@@ -948,8 +969,13 @@ function quadChart(el) {
     },
     tick(p) {
       if (!inst.last || !(p > 0)) return;
+      const bt = Math.floor(serverNow() / bucketSec) * bucketSec;
+      if (bt > inst.last.time)   // bucket roll: advance, never freeze
+        inst.last = { time: bt, open: inst.last.close, high: Math.max(inst.last.close, p),
+                      low: Math.min(inst.last.close, p), close: p };
+      else { const l = inst.last;
+        l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p); }
       const l = inst.last;
-      l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p);
       try { candles.update({ time: l.time, open: l.open, high: l.high, low: l.low, close: l.close }); } catch {}
     } };
   return inst;
@@ -978,7 +1004,7 @@ function buildQuads() {
       <div class="q-foot"><span id="qf-${tf}"></span><span id="qa-${tf}"></span></div>`;
     grid.appendChild(q);
     q.addEventListener("click", () => { if (S.focusTf !== tf) setFocusTf(tf); });
-    S.charts[tf] = quadChart($("#qc-" + tf));
+    S.charts[tf] = quadChart($("#qc-" + tf), (tf === "tf3" || tf === "tf4") ? 300 : 60);
   });
   // main OWN chart is the PriceChart renderer (drawMainChart)
   // into the corner under a multi-hour trend
@@ -2863,7 +2889,7 @@ setInterval(() => {
     const _pp = S.prices?.[S.symbol];
     if (_pp > 0) {
       if (!S.priceHist) S.priceHist = [];
-      S.priceHist.push({ t: Date.now() / 1000, p: _pp });
+      S.priceHist.push({ t: serverNow(), p: _pp });
       if (S.priceHist.length > 900) S.priceHist = S.priceHist.slice(-900);
     }
   } catch (e2) { /* ring optional */ }
@@ -2967,6 +2993,8 @@ function applySnapshot(snap) {
   if (!snap || snap.type !== "snapshot") return;
   S.snap = snap;
   if (snap.ts) S.serverOff = snap.ts - Date.now() / 1000;   // server clock offset
+  for (const [sym, av] of Object.entries(snap.assets || {}))
+    if (av.price > 0) (S.prices ||= {})[sym] = av.price;     // one price truth
   try { checkIssuedAlerts(snap); } catch (e) { /* alerts optional */ }
   S.serverOffset = (snap.ts ? snap.ts * 1000 : Date.now()) - Date.now();
   renderBoot(snap);               // overlay FIRST — contract test guard
@@ -2974,6 +3002,8 @@ function applySnapshot(snap) {
   try { renderQuads(); renderWhy(); renderRail(); } catch (e) { console.error("render", e); }
   try { renderBranches(); } catch (e) { console.error("branches", e); }
   try { drawMainChart(); } catch (e) { console.error("main chart", e); }
+  try { const p2 = S.prices?.[S.symbol];
+    if (p2 > 0) TF.forEach(tf => S.charts[tf]?.tick(p2)); } catch (e) { /* quads optional */ }
   try { renderRiskCalc(); } catch (e) { /* sizing optional */ }
   try { applyChartSrc(); } catch (e) { /* chart toggle optional */ }
   if (S.view === "dashboard") {

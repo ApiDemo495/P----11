@@ -564,3 +564,22 @@ def test_news_feed_never_empty():
     per = {sym: sum(1 for it in n.items if sym in it.get("symbols", []))
            for sym in SYMBOL_ORDER}
     assert all(c >= 3 for c in per.values()), per
+
+
+def test_candles_tf1_live_bar_is_current_bucket_not_future():
+    """Regression: the tf1 endpoint appended the live bar at
+    last_bar+60 (a future candle). It must merge into the CURRENT
+    bucket with close == live_price, and never emit a future bar."""
+    import time as _t
+    from fastapi.testclient import TestClient
+    from app.main import app, engine
+    st = engine.feed.state("BTC")
+    bkt = int(_t.time() // 60) * 60
+    st.push_bar(bkt, 100.0, 1.0, 99.0, 101.0, 98.0, source="test")
+    st.live_price, st.live_open = 105.0, 100.0
+    st.live_high, st.live_low, st.live_volume = 106.0, 99.5, 2.0
+    c = TestClient(app)
+    bars = c.get("/api/candles?symbol=BTC&tf=tf1&n=50").json()["bars"]
+    assert bars and bars[-1]["t"] == bkt          # current bucket, not +60
+    assert bars[-1]["c"] == 105.0                 # close == live price
+    assert all(b["t"] <= bkt for b in bars)       # no future candles

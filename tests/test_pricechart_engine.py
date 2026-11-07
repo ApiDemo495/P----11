@@ -47,3 +47,13 @@ def test_probability_chart_uses_shared_engine():
     assert "cvHost._pc.setModel" in JS
     assert "lo: p2.q05, lo2: p2.q25, mid: p2.q50, hi2: p2.q75, hi: p2.q95" in JS  # nested fan bands
     assert "TARGET FIRST" in JS                        # one-glance bar kept
+
+
+def test_one_price_truth_and_current_bucket():
+    # snapshots sync S.prices (REST lulls must not leave the chart on
+    # a stale tick price); the chart forces the current bucket to the
+    # snapshot price and drops future candles
+    assert "one price truth" in JS
+    assert "b2.time <= bt0" in JS and "lb.close = liveP" in JS
+    assert "S.priceHist.push({ t: serverNow(), p: _pp })" in JS
+    assert "if (bt > inst.last.time)" in JS        # quad bars advance too
