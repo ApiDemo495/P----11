@@ -35,6 +35,14 @@ def test_domain_from_data_not_levels():
     assert "Math.min(12" in LC                         # sparse volume bars capped
 
 
+def test_own_chart_live_candle_never_freezes():
+    # regression (user screenshot): candles fell behind the live price
+    # because setData keyed on the cycle only and bucket rolls skipped
+    assert "dataKey" in JS and "bars[bars.length - 1].time" in JS
+    assert "inst.last = { time: bt, open: inst.last.close" in JS
+    assert "Own.rangeKey" in JS          # reframe only on window change
+
+
 def test_probability_chart_uses_shared_engine():
     assert "cvHost._pc.setModel" in JS
     assert "lo: p2.q05, lo2: p2.q25, mid: p2.q50, hi2: p2.q75, hi: p2.q95" in JS  # nested fan bands

@@ -328,7 +328,7 @@ function ownMake(el) {
   legend.style.cssText = "position:absolute;top:6px;left:8px;z-index:5;font:10px ui-monospace,monospace;color:#c9c9dc;pointer-events:none";
   el.appendChild(legend);
   const stale = document.createElement("div");
-  stale.style.cssText = "position:absolute;top:6px;right:70px;z-index:5;font:10px ui-monospace,monospace;color:#ef9a9a;pointer-events:none";
+  stale.style.cssText = "position:absolute;top:22px;left:8px;z-index:5;font:10px ui-monospace,monospace;color:#ef9a9a;pointer-events:none";
   el.appendChild(stale);
   chart.subscribeCrosshairMove(param => {
     const bar = param?.seriesData?.get(candles);
@@ -366,28 +366,41 @@ function drawOwnChart() {
   inst.stale.textContent = (age != null && age > 15) ? `stale — last print ${Math.round(age)}s ago` : "";
   const bars = (S.tfBars?.[S.focusTf] || []).filter(b2 => b2.close > 0);
   const key = `${S.symbol}|${S.focusTf}|${d.cycle_start}`;
-  if (bars.length && key !== Own.key) {
-    Own.key = key;
+  // data refreshes whenever loadCandles brings a newer last bar (the
+  // cycle-only key froze the chart at first paint — candles fell
+  // behind the live price within a minute and never caught up)
+  const dataKey = bars.length ? `${key}|${bars[bars.length - 1].time}|${bars.length}` : "";
+  if (bars.length && dataKey !== Own.key) {
+    Own.key = dataKey;
     const cs = bars.map(b2 => ({ time: b2.time, open: b2.open, high: b2.high, low: b2.low, close: b2.close }));
     inst.candles.setData(cs);
     inst.vol.setData(bars.map(b2 => ({ time: b2.time, value: b2.v || 0,
       color: b2.close >= b2.open ? "rgba(38,166,154,.4)" : "rgba(239,83,80,.4)" })));
     const lb = bars[bars.length - 1];
     inst.last = { ...lb };
-    // frame: last ~3 windows of history + the current window's remainder
-    try { inst.chart.timeScale().setVisibleRange({
-      from: Math.max(cs[0].time, (d.cycle_start || cs[0].time) - 2 * Math.max(60, (d.cycle_end || 0) - (d.cycle_start || 0))),
-      to: d.cycle_end || cs[cs.length - 1].time }); } catch {}
+    if (key !== Own.rangeKey) {   // reframe only on symbol/TF/window change
+      Own.rangeKey = key;
+      try { inst.chart.timeScale().setVisibleRange({
+        from: Math.max(cs[0].time, (d.cycle_start || cs[0].time) - 2 * Math.max(60, (d.cycle_end || 0) - (d.cycle_start || 0))),
+        to: d.cycle_end || cs[cs.length - 1].time }); } catch {}
+    }
   }
-  // live candle from the tick stream (candles.update, never setData per tick)
+  // live candle from the tick stream (candles.update, never setData
+  // per tick); on a bucket roll the live bar ADVANCES — open = prev
+  // close — instead of freezing at the first-painted bar
   const p = S.prices?.[S.symbol];
   if (inst.last && p > 0) {
-    const l = inst.last, bucket = (S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60;
-    if (Math.floor(now / bucket) * bucket > l.time) { /* bucket rolled: loadCandles refetches */ }
+    const bucket = (S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60;
+    const bt = Math.floor(now / bucket) * bucket;
+    if (bt > inst.last.time)
+      inst.last = { time: bt, open: inst.last.close, high: Math.max(inst.last.close, p),
+                    low: Math.min(inst.last.close, p), close: p };
     else {
+      const l = inst.last;
       l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p);
-      try { inst.candles.update({ time: l.time, open: l.open, high: l.high, low: l.low, close: l.close }); } catch {}
     }
+    const l = inst.last;
+    try { inst.candles.update({ time: l.time, open: l.open, high: l.high, low: l.low, close: l.close }); } catch {}
   }
   ownSetLines(inst, d);
   // markers: LOCK at the window boundary + settled hits (server-settled)
