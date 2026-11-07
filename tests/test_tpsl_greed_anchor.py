@@ -68,7 +68,7 @@ def test_branch_fan_anchored_at_now():
     js = (ROOT / "static" / "app.js").read_text()
     assert "originT: tN" in js                  # fan rooted at now (PriceChart model)
     lc = (ROOT / "static" / "LineChart.js").read_text()
-    assert "levels: line + direct tag on the line + tag on the axis" in lc
+    assert "levels: in-range = line + direct tag; off-scale = edge tag" in lc
     assert '{ p: b.tp, label: "TP", color: "#26a69a", dash: true }' in js
 
 
