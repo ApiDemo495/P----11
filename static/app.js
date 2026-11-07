@@ -428,13 +428,22 @@ function drawOwnChart() {
       Own.key = dataKey;          // key set ONLY after a clean setData
       const lb = bars[bars.length - 1];
       inst.last = { ...lb };
-      if (key !== Own.rangeKey) {   // reframe only on symbol/TF/window change
-        Own.rangeKey = key;
-        try { inst.chart.timeScale().setVisibleRange({
-          from: lt(Math.max(bars[0].time, (d.cycle_start || bars[0].time) - 2 * Math.max(60, (d.cycle_end || 0) - (d.cycle_start || 0)))),
-          to: lt(d.cycle_end || bars[bars.length - 1].time) }); } catch {}
-      }
     } catch { /* rejected series: leave Own.key stale, retry next paint */ }
+  }
+  // viewport follows the live bucket: left = window context (cycle
+  // start - 2 windows, capped at 3 windows back), right = now + a
+  // couple of buckets. Reframes on cycle change OR when "now" nears
+  // the right edge, so candles always end at the live price at the
+  // chart's right edge — never stranded mid-chart (user screenshot).
+  if (bars.length) {
+    const Wsec = Math.max(bucket0, (d.cycle_end || 0) - (d.cycle_start || 0)) || bucket0;
+    let vFrom = Math.max(bars[0].time, (d.cycle_start || bars[0].time) - 2 * Wsec);
+    vFrom = Math.max(vFrom, bt0 - 3 * Wsec);
+    const vTo = bt0 + 2 * bucket0;
+    if (key !== Own.rangeKey || !Own.rangeTo || bt0 > Own.rangeTo - 2 * bucket0) {
+      Own.rangeKey = key; Own.rangeTo = vTo;
+      try { inst.chart.timeScale().setVisibleRange({ from: lt(vFrom), to: lt(vTo) }); } catch {}
+    }
   }
   // live candle from the tick stream (candles.update, never setData
   // per tick); on a bucket roll the live bar ADVANCES — open = prev
