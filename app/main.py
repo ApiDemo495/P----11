@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .clock import MasterClock, seconds_to_next_grc
-from .config import SYMBOLS, TF_ORDER, TIMEFRAMES
+from .config import SYMBOLS, SYMBOL_ORDER, TF_ORDER, TIMEFRAMES
 from .engine import PredictionEngine
 from .feed import MarketFeed
 
@@ -109,6 +109,9 @@ async def _startup() -> None:
     global _learning_task
     _learning_task = asyncio.create_task(_hourly_learning_loop())
     asyncio.create_task(_startup_watchdog())
+    from .chartlink import LinkWatchdog as _LW
+    app.state.link_watchdog = _LW(feed, SYMBOL_ORDER)
+    app.state.link_watchdog.start()
     app.state._vault_task = asyncio.create_task(_vault_loop())
     app.state._news_ticker = asyncio.create_task(_news_ticker())
     log.info("application started (feed=%s)", feed.mode)
@@ -681,6 +684,23 @@ async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONRes
                              "c": st.live_price, "v": st.live_volume, "live": True})
     return JSONResponse({"ok": True, "symbol": symbol, "tf": tf,
                          "bucket_minutes": W, "bars": bars})
+
+
+@app.get("/api/chart-link")
+async def chart_link(symbol: str = "") -> JSONResponse:
+    """NEW: measured chart<->price link per asset (docs11 Part D).
+    The browser's Chart Link panel reads this; delta_bps is the
+    server-side truth about whether candles end at the live price."""
+    from .chartlink import all_reports, link_report
+    if symbol:
+        if symbol not in SYMBOLS:
+            return JSONResponse({"ok": False, "error": "unknown symbol"},
+                                status_code=400)
+        return JSONResponse({"ok": True, **link_report(feed, symbol)})
+    wd = getattr(app.state, "link_watchdog", None)
+    out = all_reports(feed, SYMBOL_ORDER)
+    out["watchdog"] = (wd.status() if wd else {"checks": 0, "incidents": []})
+    return JSONResponse(out)
 
 
 @app.get("/api/systems")

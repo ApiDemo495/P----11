@@ -109,6 +109,11 @@
     <div class="panel-h" style="margin:2px 2px 6px">TIMEFRAMES — tap a card to focus it in the main chart</div>
     <div class="quad-grid" id="quad-grid"></div>
     <div class="panel">
+      <div class="panel-h">CHART LINK — do the candles end at the live price? <span class="dim" id="link-meta"></span>
+        <button id="btn-repair-link" class="seg-btn" style="float:right">⟳ REPAIR LINK</button></div>
+      <div id="link-panel"><div class="dim pad">measuring…</div></div>
+    </div>
+    <div class="panel">
       <div class="panel-h">SYSTEM — what is running, what is waiting <span class="dim" id="sys-meta"></span></div>
       <div id="sys-panel"><div class="dim pad">loading…</div></div>
     </div>
@@ -430,6 +435,6 @@
 <div id="toast-wrap"></div>
 <script src="/LineChart.js?v=3"></script>
 <script src="/vendor/lightweight-charts.standalone.production.js"></script>
-<script type="module" src="/app.js?v=r36"></script>
+<script type="module" src="/app.js?v=r37"></script>
 </body>
 </html>

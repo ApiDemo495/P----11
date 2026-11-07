@@ -745,6 +745,15 @@ class MarketFeed:
                     st.live_volume += vol
                     st.live_high = max(st.live_high or price, price)
                     st.live_low = min(st.live_low or price, price) if st.live_low else price
+                # the partial minute lives ON the tape, continuously —
+                # same semantics as the Binance kline handler (the sim
+                # used to hide it until the roll, so every consumer of
+                # closes[-1] lagged the live price by up to a minute)
+                st.push_bar(
+                    minute * 60, price, st.live_volume,
+                    st.live_open or price, st.live_high or price,
+                    st.live_low or price, source="sim",
+                )
                 await self._emit_tick(sym, price, vol)
             last_minute = minute
 

@@ -154,6 +154,9 @@ const S = {
 };
 
 /* ═══════════ shell: assets, tabs, focus bar ═══════════ */
+document.addEventListener("DOMContentLoaded", () => {
+  $("#btn-repair-link")?.addEventListener("click", () => repairChartLink(true));
+});
 function buildRail() {
   const list = $("#asset-list"); list.innerHTML = "";
   ASSETS.forEach(sym => {
@@ -2952,6 +2955,7 @@ setInterval(() => {
   if (_tickN % 2 === 0 && Date.now() - S.lastMsgAt >= 4000) {
     api("/api/snapshot").then(applySnapshot).catch(() => {});
   }
+  if (_tickN % 5 === 0) pollChartLink();
   // 2b) candle series refresh (~30 s): the realised line's backfill
   // must stay current or the charts drift from the tape again
   if (_tickN % 30 === 0) loadCandles().catch(() => {});
@@ -3026,6 +3030,38 @@ function renderAlert(snap) {
     $("#alert-text").textContent = "SAFE — SL TIGHTENED 15%";
     setTimeout(() => bar.classList.add("hidden"), 9000);
   }
+}
+
+async function repairChartLink(manual) {
+  Own.key = ""; Own.rangeKey = ""; Own.lineKey = ""; Own.markerKey = "";
+  try { Bn.main = null; Bn.quads = {}; } catch {}
+  await loadCandles().catch(() => {});
+  try { bnEnsure(); } catch {}
+  try { drawMainChart(); } catch {}
+  if (manual) toast("chart link repaired — candles resynced to the live tape", "ok");
+}
+async function pollChartLink() {
+  try {
+    const d = await api("/api/chart-link");
+    const box = $("#link-panel"); if (!box) return;
+    const rows = Object.values(d.assets || {}).map(r => `
+      <tr><td class="mono">${r.symbol}</td>
+      <td class="mono">${fmt(r.live_price, 2)}</td>
+      <td class="mono">${fmt(r.last_bar_close, 2)}</td>
+      <td class="mono" style="color:${r.ok ? "var(--green)" : "var(--red)"}">${r.delta_bps == null ? "—" : r.delta_bps.toFixed(1) + " bps"}</td>
+      <td class="mono">${r.bar_age_s == null ? "—" : Math.round(r.bar_age_s) + "s"}</td>
+      <td>${r.ok ? "✓ linked" : "✗ DESYNC"}</td></tr>`).join("");
+    const inc = (d.watchdog?.incidents || []).slice(-3).reverse().map(i =>
+      `<div class="hint">⚠ ${new Date(i.ts * 1000).toLocaleTimeString()} ${i.symbol} desync ${i.delta_bps?.toFixed?.(1)} bps (bar ${Math.round(i.bar_age_s || 0)}s old, ${esc(i.mode)}/${esc(i.source)})</div>`).join("");
+    box.innerHTML = `<table class="tbl"><thead><tr><th>ASSET</th><th>LIVE</th><th>LAST CANDLE</th><th>Δ</th><th>BAR AGE</th><th>LINK</th></tr></thead><tbody>${rows}</tbody></table>${inc}`;
+    const meta = $("#link-meta");
+    if (meta) meta.textContent = `server-measured · ${d.watchdog?.checks ?? 0} checks · ${d.watchdog?.desync_checks ?? 0} desync checks`;
+    const f = (d.assets || {})[S.symbol];
+    if (f && !f.ok && Date.now() - (S._linkRepairAt || 0) > 30000) {
+      S._linkRepairAt = Date.now();       // auto-repair, ≤ 1 / 30 s
+      repairChartLink(false);
+    }
+  } catch { /* endpoint warming up */ }
 }
 
 /* ═══════════ snapshot / tick plumbing ═══════════ */
