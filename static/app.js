@@ -3088,10 +3088,7 @@ function applySnapshot(snap) {
   if (!snap || snap.type !== "snapshot") return;
   S.snap = snap;
   if (snap.ts) S.serverOff = snap.ts - Date.now() / 1000;   // server clock offset
-  // snapshot price fills gaps only while ticks are fresh; if the
-  // socket is dead (>5 s without a tick — e.g. a private port's auth
-  // wall blocking the upgrade), snapshots take over as price truth
-  // so the whole app stays live over REST instead of freezing
+  // snapshot = price truth only when the tick stream is dead (>5 s)
   const _tickFresh = S._lastTickAt && (Date.now() - S._lastTickAt < 5000);
   for (const [sym, av] of Object.entries(snap.assets || {}))
     if (av.price > 0 && (!_tickFresh || !((S.prices || {})[sym] > 0)))
