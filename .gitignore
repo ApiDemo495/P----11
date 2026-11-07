@@ -26,3 +26,8 @@ models/
 data/
 data.pre-r2-1347/
 .app.lock
+
+# backtest runtime artifacts
+backtest/cache/
+backtest/out/
+backtest/replay.db
