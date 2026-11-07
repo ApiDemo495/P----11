@@ -492,7 +492,8 @@ function bnTickMain() {
   if (!inst || !inst.last || !(p > 0)) return;
   const l = inst.last;
   l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p);
-  try { inst.candles.update({ time: l.time, open: l.open, high: l.high, low: l.low, close: l.close }); } catch {}
+  try { inst.candles.update({ time: l.time, open: l.open, high: l.high, low: l.low, close: l.close }); }
+  catch { bnLoad(S.focusTf, inst); }   // bucket rolled: refetch, never freeze
 }
 
 /* position sizing from the REAL locked stop distance per TF */
@@ -1577,9 +1578,24 @@ async function loadCandles() {
     const md = await api(`/api/candles?symbol=${S.symbol}&tf=tf1&n=260`);
     const mbars = (md.bars || []).map(x =>
       ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c }));
+    // EACH timeframe card aggregates the tape at its OWN interval
+    // (user: every TF chart must be different — they were all the same
+    // 1-minute series photocopied four times). Wider TF = wider bars.
+    const QINT = { tf1: 1, tf2: 3, tf3: 10, tf4: 30 };
+    const agg = (bars, mins) => {
+      if (mins <= 1) return bars;
+      const out = new Map();
+      for (const b of bars) {
+        const t = Math.floor(b.t / (mins * 60)) * mins * 60;
+        const o = out.get(t);
+        if (!o) out.set(t, { t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0 });
+        else { o.h = Math.max(o.h, b.h); o.l = Math.min(o.l, b.l); o.c = b.c; o.v += b.v || 0; }
+      }
+      return [...out.values()];
+    };
     await Promise.all(TF.map(async tf => {
       const d = { bars: md.bars };
-      const bars = d.bars || [];
+      const bars = agg(d.bars || [], QINT[tf] || 1);
       const c = S.charts[tf]; if (!c || !bars.length) return;
       const markers = [];
       for (let i = 2; i < bars.length - 2; i++) {
@@ -1613,6 +1629,8 @@ async function loadCandles() {
         S.candleSeries = { symbol: S.symbol, bars: seeded };
       }
       S.spark[tf]?.setData(bars.slice(-90).map(x => ({ time: x.t, open: 0, high: x.v || 0, low: 0, close: x.v || 0 })));
+      // Binance-mode cards refresh on the same cadence (chart <-> price link)
+      if (S.chartSrc === "binance") { try { bnEnsure(); } catch (e) {} }
     }));
   } catch { /* first GRC may not be ready */ }
 }

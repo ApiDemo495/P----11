@@ -884,7 +884,13 @@ async def trading_arm(body: dict) -> JSONResponse:
 
 @app.get("/api/agents/status")
 async def agents_status() -> JSONResponse:
-    return JSONResponse({"ok": True, "agents": engine.agents.status(),
+    ag = engine.agents.status()
+    try:
+        ag["auditor"] = engine.auditor.status()   # was None forever:
+    except Exception:                              # the Agents tab span
+        ag["auditor"] = {"available": False,       # on "checking daemon…"
+                          "hint": "auditor status unavailable"}
+    return JSONResponse({"ok": True, "agents": ag,
                          "signal": engine.last_agent_signal or {}})
 
 

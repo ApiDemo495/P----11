@@ -476,8 +476,15 @@ class EmotionSystem:
         _key = (ctx.symbol, ctx.tf)
         _prev = self._prev_emos.get(_key) or {}
         _w = self._weights(ctx.symbol, ctx.tf)
+        # E9 (roll-over panic) is a 0-BASED magnitude: 0 = no pain, so
+        # its neutral is 0, not 0.5. Ranking it by |v-0.5| made it
+        # "100% extreme" in every up-tape for days (user screenshot).
+        _NEUTRAL = {9: 0.0}
+        def _dev_of(i):
+            _n = _NEUTRAL.get(i, 0.5)
+            return abs(float(emos[i]) - _n) / (1.0 - _n if _n == 0 else 0.5)
         _ranked = sorted(
-            ((abs(float(emos[i]) - 0.5) * 2.0,
+            ((_dev_of(i),
               abs(float(emos[i]) - float(_prev.get(i, emos[i]))),
               float(_w[i - 1]), i)
              for i in range(1, 22)),

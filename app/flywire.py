@@ -715,9 +715,13 @@ class FlyWireBrain:
                              + (f" · {age} s ago" if age is not None
                                 else ""))}
         if self.state == "building":
+            _live = (getattr(self, "last_pass_at", 0)
+                     and time.time() - self.last_pass_at < 30)
             return {"kind": "build",
-                    "text": f"building {self.progress.get('pct', 0):.0f} %"
-                            f" — {self.progress.get('stage', '')}"}
+                    "text": (f"building {self.progress.get('pct', 0):.0f} %"
+                             f" — {self.progress.get('stage', '')}"
+                             + (" · vote live from current build"
+                                if _live else ""))}
         return {"kind": "absent",
                 "text": "brain offline — vote withheld "
                         "(Settings → Brain → RECONNECT)"}
