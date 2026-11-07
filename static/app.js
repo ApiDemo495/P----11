@@ -853,7 +853,7 @@ function renderHero() {
   const badge = $("#hero-badge");
   if (badge) {
     badge.className = "hero-badge " + (dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat");
-    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)}${cyc?.issued ? " · ISSUED" : " · no trade"}</small>`;
+    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)}${cyc?.tier ? ` · ${cyc.tier} · P ${fmt(cyc.p_side, 2)}` : " · ISSUED"}</small>`;
   }
   const stats = $("#hero-stats");
   if (stats) {
@@ -1053,8 +1053,8 @@ function renderQuads(opts = {}) {
     const qd = $("#qd-" + tf);
     if (qd) {
       qd.className = "q-dir " + (dir > 0 ? "up" : dir < 0 ? "down" : "flat");
-      qd.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO TRADE"}
-        <span class="iss">${cyc?.issued ? "ISSUED · targets active" : "below floor · no trade"}</span>`;
+      qd.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "▲ BULLISH"}
+        <span class="iss">${cyc?.tier ? `${cyc.tier} · P ${fmt(cyc.p_side, 2)} · s ${fmt(res?.raw_score, 3)} (floor ${fmt(res?.noise_floor_s, 3)})` : "ISSUED · targets active"}</span>`;
     }
     $("#qf-" + tf).textContent = res ? `CCI ${fmt(res.cci_adjusted, 4)} · conf ${fmt(res.confidence, 3)}` : "";
     const ag = res?.agent;
@@ -1416,7 +1416,7 @@ function renderWhy() {
   const _conf = Number(s.confidence || 0);
   const _neutral = _edge <= 0;
   const _size = !s.issued
-    ? "call: NO TRADE until signals align"
+    ? "call: side pending first compute"
     : (_neutral || _conf < 0.5)
       ? "size: half or less — thin edge, keep the stop tight"
       : "size: normal — edge and confidence both speak";
@@ -1430,11 +1430,11 @@ function renderWhy() {
   el.innerHTML = lockBlock + ladderBlock + sparkHtml + ticksBlock + whoBlock + convBlock + exBlock + `
     <div class="why-head">
       <div class="why-dir ${dir > 0 ? "up" : dir < 0 ? "down" : "flat"}">
-        ${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO TRADE"}<span class="sym">${S.symbol} · ${tf.toUpperCase()} · ${TF_META[tf].mins}m</span></div>
+        ${dir > 0 ? "▲ BULLISH" : "▼ BEARISH"}<span class="sym">${S.symbol} · ${tf.toUpperCase()} · ${TF_META[tf].mins}m</span></div>
       <div class="why-conf">CONFIDENCE
         <div class="bar"><i class="${s.confidence > 0.35 ? "pos" : "neg"}" style="width:${clamp((s.confidence || 0) * 100, 0, 100)}%"></i></div>
         <b>${fx(s.confidence, 3)}</b> / floor ${bd.floor ?? 0.35}</div>
-      <div class="why-badge ${s.issued ? "ok" : ""}">${s.issued ? "✓ SIGNAL ISSUED" : "NO TRADE · below floor"}</div>
+      <div class="why-badge ${s.issued ? "ok" : ""}">${s.issued ? `✓ ISSUED · ${esc(s.tier || "")} · P ${fmt(s.p_side, 2)}` : "side pending"}</div>
     </div>
     <div class="why-reason">${s.reason || ""}</div>
     <div class="why-grid">
@@ -1610,7 +1610,7 @@ function renderCalls() {
     return `<tr class="${tf === S.focusTf ? "focus-row" : ""}">
       <td class="mono">${tf.toUpperCase()}</td>
       <td class="mono">${m.mins}m</td>
-      <td>${dirTxt} <span class="dim">${cyc?.issued ? "· issued" : "· no trade"}</span>${_leanNote}</td>
+      <td>${dirTxt} <span class="dim">${cyc?.tier ? "· " + cyc.tier : "· issued"}</span>${_leanNote}</td>
       <td class="mono">${fmt(res?.confidence, 3)}</td>
       ${tps}
       <td class="mono sl-cell">${sl}</td>
@@ -2764,7 +2764,7 @@ async function showDay(date) {
           tf, direction: pr.direction ?? 0,
           confidence: pr.confidence, issued: pr.issued,
           result: oc.target_hit ? "target ✓" : oc.sl_hit ? "SL ✗"
-            : (pr.issued ? "open / no close" : "no trade"),
+            : (pr.issued ? "open / no close" : "watch-only"),
           time: Date.parse(rc.timestamp || "") / 1000 || null,
         });
       });

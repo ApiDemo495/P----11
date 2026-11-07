@@ -270,9 +270,10 @@ def test_sl_safe_branch_tightens_sl_and_cuts_confidence(live_engine):
     if cyc.direction == 0:
         cyc.direction = 1
     emitted.clear()
+    _safe_before = cyc.safe_events
     run(engine._on_sl_hit(sym, tf, time.time()))
     cyc = engine.cycles[(sym, tf)]
-    assert cyc.safe_events == 1
+    assert cyc.safe_events == _safe_before + 1
     assert cyc.sl_tighten == tighten_before * 0.85
     assert cyc.confidence == pytest.approx(conf_before - 0.15)
     kinds = [m.get("kind") for m in emitted if m.get("type") == "sl_event"]
@@ -306,7 +307,7 @@ def test_sl_close_branch_invalidates_and_waits_for_grc(live_engine):
         engine._event_result = real
     cyc = engine.cycles[(sym, tf)]
     assert cyc.pending_reset is True
-    assert cyc.issued is False
+    assert cyc.issued is True and cyc.tier == "watch-only"
     assert all(t.status in ("invalidated", "hit") for t in cyc.targets)
     kinds = [m.get("kind") for m in emitted if m.get("type") == "sl_event"]
     assert "close" in kinds
@@ -330,7 +331,10 @@ def test_extreme_override_needs_all_three_conditions(live_engine):
 
     # only two conditions true -> no override
     res["confidence"] = 0.10                 # condition 1 (drop below 0.25)
-    t4_dir = cyc.target(4).direction or 1
+    t4_dir = cyc.direction or 1
+    cyc.target(4).status = "locked"
+    cyc.target(4).direction = t4_dir
+    cyc.pending_reset = False   # live cycles may carry a boot-time reset
     # condition 3: fake opposing news — four full-weight regulatory items
     # (0.25 * 1 * 1 * 1 each) push the clamped aggregate past -/+0.8
     engine.news.items = []

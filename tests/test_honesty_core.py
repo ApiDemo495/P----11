@@ -77,7 +77,9 @@ def test_tape_veto_flattens_low_conviction():
     res = {"tf1": {"issued": True, "direction": -1, "confidence": 0.40,
                    "reason": "old"}}
     eng._apply_tape_veto("BTC", res)
-    assert res["tf1"]["direction"] == 0 and res["tf1"]["issued"] is False
+    # docs11-doublecheck §5: the side STANDS; conviction is downgraded
+    assert res["tf1"]["direction"] != 0 and res["tf1"]["issued"] is True
+    assert res["tf1"]["tier"] == "watch-only"
     assert res["tf1"]["tape_veto"] is True
     assert "TAPE VETO" in res["tf1"]["reason"]
     # high conviction passes through

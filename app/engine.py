@@ -1109,8 +1109,17 @@ class PredictionEngine:
             _dir_final = (1 if _beh["score"] > 0 else -1) \
                 if abs(_beh["score"]) >= _gate else 0
             fin["confidence"] = _beh["confidence"]
-            fin["issued"] = bool(fin["issued"] and _dir_final != 0
-                                 and fin["confidence"] > fin["asset_floor"])
+            # docs11-doublecheck §3: EVERY window gets a side. The old
+            # chain (RL bandit -> asset floor -> noise gate) fused three
+            # different units into one veto and silenced the app for
+            # days. It survives only as exec_ok (trader/size gate);
+            # `issued` now means "a side was issued", which is always.
+            fin["exec_ok"] = bool(fin.get("issued") and _dir_final != 0
+                                  and fin["confidence"] > fin["asset_floor"])
+            fin["issued"] = True
+            _tier = self._tier_for(symbol, tf, float(_beh["score"]))
+            fin.update(_tier)
+            fin["raw_score"] = round(float(_beh["score"]), 5)
             pack = dict(pack)
             pack["direction"] = _dir_final
             pack["cci_adjusted_raw"] = pack["cci_adjusted"]
@@ -1202,6 +1211,13 @@ class PredictionEngine:
                 "base_confidence": pack["confidence"],
                 "direction": pack["direction"],
                 "issued": fin["issued"],
+                "exec_ok": fin.get("exec_ok"),
+                "tier": fin.get("tier"),
+                "p_side": fin.get("p_side"),
+                "raw_score": fin.get("raw_score"),
+                "noise_floor_s": fin.get("noise_floor_s"),
+                "calib_n": fin.get("calib_n"),
+                "calib_provisional": fin.get("calib_provisional"),
                 "asset_floor": fin.get("asset_floor"),
                 "asset_nature": fin.get("asset_nature"),
                 "behavior": fin.get("behavior"),
@@ -1416,6 +1432,12 @@ class PredictionEngine:
                                               "n_active": 0}
                 self.prev_cci_dir[(symbol, tf)] = _lad
                 self.display_systems[(symbol, tf)] = {
+                    "tier": results[tf].get("tier"),
+                    "p_side": results[tf].get("p_side"),
+                    "raw_score": results[tf].get("raw_score"),
+                    "noise_floor_s": results[tf].get("noise_floor_s"),
+                    "calib_n": results[tf].get("calib_n"),
+                    "calib_provisional": results[tf].get("calib_provisional"),
                     "lock": dict(self.locks.get((symbol, tf)) or {}),
                     "asset_floor": results[tf].get("asset_floor"),
                     "asset_nature": results[tf].get("asset_nature"),
@@ -1683,6 +1705,36 @@ class PredictionEngine:
             ],
             "edges": edges,
         }
+
+    def _tier_for(self, symbol: str, tf: str, score: float) -> dict:
+        """docs11-doublecheck §4: calibrated P(side) + tier. The noise
+        floor lives in SCORE units and only sets the tier — it can
+        never suppress the side. Provisional Platt: a = 1/median|s|
+        (a typical score maps to P≈0.73), labelled provisional until
+        40 score samples exist for this asset+TF."""
+        import math as _m
+        pool = [abs(float(v)) for v in
+                (self.score_hist.get((symbol, tf), []) or []) if v is not None]
+        med = 0.0
+        if len(pool) >= 10:
+            _o = sorted(pool); med = _o[len(_o) // 2]
+        floor_s = max(0.02, 0.5 * med)
+        p_side = 0.5
+        if med > 0:
+            p_side = 1.0 / (1.0 + _m.exp(-min(20.0, abs(score) / med)))
+        if abs(score) <= floor_s:
+            tier = "watch-only"
+        elif p_side >= 0.62:
+            tier = "full"
+        elif p_side >= 0.56:
+            tier = "half"
+        elif p_side >= 0.52:
+            tier = "quarter"
+        else:
+            tier = "watch-only"
+        return {"tier": tier, "p_side": round(p_side, 4),
+                "noise_floor_s": round(floor_s, 5),
+                "calib_n": len(pool), "calib_provisional": len(pool) < 40}
 
     def _direction_ladder(self, symbol: str, tf: str, score: float,
                           comps: list, brain: dict, prev_side: int) -> tuple[int, str, float]:
@@ -2132,7 +2184,7 @@ class PredictionEngine:
                                 "entry": round(entry_used, 6),
                                 "tp": _tp_lv, "sl": round(sl, 6) if sl else None,
                                 "ratio": ratio_used}
-                               if recheck["passed"] else None),
+                               ),   # the call stands regardless of recheck
                 "weightage": [{"id": str(k), "w": round(v, 5)}
                               for k, v in top_w],
                 "weightage_note": ("per-asset, per-timeframe weights — "
@@ -2150,8 +2202,9 @@ class PredictionEngine:
                 },
             }
             if not recheck["passed"]:
-                final["signal"] = "NO TRADE"
-                final["issued"] = False
+                # advisory only: the call stands; the failed checks are
+                # printed so the arithmetic can be audited (doc §1)
+                final["recheck_advisory"] = recheck["verdict"]
             job["result"] = final
             job["status"] = "done"
             await self._emit_stage(
@@ -2627,7 +2680,11 @@ class PredictionEngine:
                 dc["message"] = "MIXED SIGNALS"
             res["double_check"] = dc
             if not dc["issued"]:
-                res["issued"] = False
+                # disagreement is shown, never a veto (docs11-doublecheck
+                # §5: pick the stronger side, display both) — cap the
+                # tier at quarter as degraded evidence instead
+                res["tier"] = "quarter" if res.get("tier") in ("full", "half") else res.get("tier", "watch-only")
+                res["degraded_evidence"] = True
             res["confidence"] = dc["confidence"]
             if dc["label"] == "overridden":
                 res["direction"] = dc["direction"]
@@ -2769,17 +2826,16 @@ class PredictionEngine:
             opposes = (move > threshold and res["direction"] < 0) or \
                       (move < -threshold and res["direction"] > 0)
             if opposes and float(res.get("confidence") or 0) < 0.62:
-                res["direction"] = 0
-                res["issued"] = False
+                # side stands (never flattened); conviction downgraded
+                res["tier"] = "watch-only"
                 res["tape_veto"] = True
                 res["reason"] = (f"TAPE VETO: last 3 bars moved "
                                  f"{move / price * 1e4:+.1f} bps against the call "
-                                 f"and confidence < 0.62 — flattened. " +
+                                 f"and confidence < 0.62 — tier cut to watch-only. " +
                                  str(res.get("reason") or ""))[:400]
                 disp = self.display_systems.get((symbol, tf))
                 if disp is not None:
-                    disp["direction"] = 0
-                    disp["issued"] = False
+                    disp["tier"] = "watch-only"
                     disp["reason"] = res["reason"]
 
     # cadence per advice §8.3: 4-hourly for 22/44 min, daily for 130/247
@@ -3928,10 +3984,12 @@ class PredictionEngine:
             cci=res["cci_adjusted"],
             drhe=res["drhe"],
             issued=res["issued"],
+            tier=str(res.get("tier") or "watch-only"),
+            p_side=float(res.get("p_side") or 0.5),
             cycle_start=_g_start,
             cycle_end=_g_end,
             targets=targets,
-            active_k=1 if res["issued"] else None,
+            active_k=1,   # every issued side is tracked + graded
             warning=warning,
             refreshed_at=now,
             qdpc_tau=res.get("qdpc_tau"),
@@ -3955,7 +4013,8 @@ class PredictionEngine:
         # prediction by accident.
         try:
             self.trader.consider({
-                "symbol": symbol, "tf": tf, "issued": bool(cyc.issued),
+                "symbol": symbol, "tf": tf,
+                "issued": bool(cyc.issued and cyc.tier != "watch-only"),
                 "feed_age_s": round(now - float(
                     self.feed.state(symbol).last_tick or 0), 1)
                 if self.feed.state(symbol).last_tick else 999.0,
@@ -4308,10 +4367,11 @@ class PredictionEngine:
             cyc.safe_events += 1
             cyc.sl_tighten *= (1.0 - SL_TIGHTEN_FACTOR)
             cyc.confidence = max(0.0, cyc.confidence - SL_CONFIDENCE_PENALTY)
-            cyc.issued = cyc.confidence > CONFIDENCE_FLOOR
-            cyc.active_k = (
-                cyc.active_k if cyc.issued else None
-            )
+            # docs11-doublecheck: the side stays issued + graded; the
+            # penalty is expressed as a one-step tier cut
+            _steps = ["watch-only", "quarter", "half", "full"]
+            if cyc.tier in _steps and _steps.index(cyc.tier) > 0:
+                cyc.tier = _steps[_steps.index(cyc.tier) - 1]
             # next sub-target recalculated with updated parameters
             if cyc.issued and cyc.active_k is not None:
                 t = cyc.target(cyc.active_k)
@@ -4346,7 +4406,7 @@ class PredictionEngine:
                 if tgt.status in ("locked", "pending"):
                     tgt.status = "invalidated"
             cyc.active_k = None
-            cyc.issued = False
+            cyc.tier = "watch-only"   # side stays issued + graded (doc §3)
             cyc.pending_reset = True
             cyc.close_alert = True
             cyc.tp = cyc.sl = None

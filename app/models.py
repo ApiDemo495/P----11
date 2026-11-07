@@ -86,7 +86,9 @@ class TFCycle:
     confidence: float = 0.0          # Confidence_final
     cci: float = 0.0                 # signed, double-checked CCI
     drhe: float = 1.0
-    issued: bool = False             # False -> NO TRADE overlay
+    issued: bool = False             # side issued (docs11-doublecheck: always)
+    tier: str = "watch-only"         # full|half|quarter|watch-only (size hint)
+    p_side: float = 0.5              # calibrated P(side) in [0.50, 1)
     cycle_start: float = 0.0         # epoch seconds
     cycle_end: float = 0.0           # epoch seconds (countdown target)
     targets: list[TargetState] = field(default_factory=list)
@@ -118,6 +120,8 @@ class TFCycle:
             age = max(0.0, now - self.cycle_start)
             eff = self.confidence * math.exp(-age / max(self.qdpc_tau, 1e-9))
         return {
+            "tier": self.tier,
+            "p_side": self.p_side,
             "symbol": self.symbol,
             "tf": self.tf,
             "W": self.W,

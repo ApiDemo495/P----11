@@ -327,9 +327,10 @@ def test_analyse_pipeline_stages_and_readonly():
         assert st["summary"]
     # final box: signal + 4 TPs + SL + per-asset weightage + total time
     r = job["result"]
-    assert r["signal"] in ("BUY", "SELL", "FLAT", "NO TRADE")
+    assert r["signal"] in ("BUY", "SELL", "FLAT")   # never NO TRADE
     assert r["recheck"] and "checks" in r["recheck"]  # recheck gate ran
-    assert (r["prediction"] is not None) == r["recheck"]["passed"]
+    # recheck verifies arithmetic; it can never veto the call (doc §1)
+    assert r["prediction"] is not None
     assert len(r["tps"]) >= 1  # locked cycle targets (horizon last)
     assert r["sl"] is not None
     assert r["weightage"] and r["weightage_note"]
@@ -338,7 +339,7 @@ def test_analyse_pipeline_stages_and_readonly():
     # WS stream reached the client
     types = [m["type"] for m in msgs]
     assert types[0] == "analyse_started"
-    assert types[-1] == "analyse_done"
+    assert "analyse_done" in types   # live SL/target events may follow now
     assert types.count("analyse_stage") == 8  # + recheck stage (user: recheck everything before producing)
     # keyless AI stage is honest about skipping
     ai_stage = next(s for s in job["stages"] if s["stage"] == "ai_review")

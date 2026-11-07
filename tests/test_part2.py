@@ -502,8 +502,13 @@ def test_engine_pipeline_carries_part2_state():
             assert sorted(res["emotion"]["emotions"]) == list(range(1, 22))
             assert res["base_confidence"] >= 0.0
             if res["issued"]:
-                assert res["confidence"] > CONFIDENCE_FLOOR
-                assert res["arc"]["ratio"] is not None
+                # docs11-doublecheck: a side is always issued, even on
+                # a weak tape (this one: conf ~0.03 -> watch-only tier,
+                # arc ratio legitimately None); the 0.35 floor is now
+                # only an execution gate (exec_ok), never a silence
+                assert res["direction"] != 0
+                assert res["tier"] in ("full", "half", "quarter", "watch-only")
+                assert isinstance(res["exec_ok"], bool)
             # 28 weighted components stored for the next GRC's reward rule
             comp = engine.prev_comp[("BTC", tf)]
             assert set(comp) == set(WEIGHT_IDS)
