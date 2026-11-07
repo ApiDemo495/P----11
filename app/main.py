@@ -93,11 +93,16 @@ async def _startup_watchdog() -> None:
     import os as _os
     if _os.environ.get("SUPERVISE") != "1":
         return
-    await _a.sleep(30.0)
-    if engine.phase != "live" or not all(engine.readiness.values()):
-        print("startup watchdog: not ready after 30s — exiting 75",
-              flush=True)
-        _os._exit(75)
+    # cold boots (bundled-brain restore + initial analysis phase)
+    # take minutes on a 4-core Codespace; the old 30 s deadline
+    # killed healthy boots and left the port answering 502
+    for _i in range(10):
+        await _a.sleep(30.0)
+        if engine.phase == "live" and all(engine.readiness.values()):
+            return
+    print("startup watchdog: not ready after 300s — exiting 75",
+          flush=True)
+    _os._exit(75)
 
 
 @app.on_event("startup")

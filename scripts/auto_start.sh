@@ -119,15 +119,23 @@ nohup "$VENV_PY" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" \
   --workers 1 >>"$LOG" 2>&1 &
 echo $! > "$PIDFILE"
 
-# wait for health (up to 60 s)
-for i in $(seq 1 60); do
+# wait for health (up to 240 s — a cold boot restores the bundled
+# brain and runs the initial analysis before uvicorn serves)
+for i in $(seq 1 240); do
   if curl -sf -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
     log "✓ app healthy on http://0.0.0.0:$PORT (pid $(cat "$PIDFILE")) — total $(( $(date +%s) - T0 ))s"
+    # port must ALWAYS be public: set it on every start (best effort;
+    # devcontainer.json also declares it for fresh Codespaces)
+    if command -v gh >/dev/null 2>&1 && [ -n "${CODESPACE_NAME:-}" ]; then
+      gh codespace ports visibility "$PORT:public" -c "$CODESPACE_NAME" \
+        >/dev/null 2>&1 && log "port $PORT visibility set to public" \
+        || log "could not set port visibility (set it once in the Ports tab)"
+    fi
     exit 0
   fi
   sleep 1
 done
 
-log "✗ app did not become healthy in 60 s — last log lines:"
+log "✗ app did not become healthy in 240 s — last log lines:"
 tail -n 25 "$LOG" 2>/dev/null
 exit 1
