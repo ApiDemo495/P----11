@@ -40,3 +40,12 @@ def test_split_vote_and_stale_feed_blocked():
 def test_broken_levels_blocked():
     r = _recheck_prediction(**{**GOOD, "levels_ok": False, "ratio": 1.2})
     assert not r["passed"] and "levels valid + 2:1" in r["failed"]
+
+
+def test_negative_measured_expectancy_blocked():
+    r = _recheck_prediction(**{**GOOD, "exp_bps": -4.2, "exp_n": 40})
+    assert not r["passed"] and "measured expectancy (settled ledger)" in r["failed"]
+    r2 = _recheck_prediction(**{**GOOD, "exp_bps": 3.1, "exp_n": 40})
+    assert r2["passed"]
+    r3 = _recheck_prediction(**{**GOOD, "exp_bps": -4.2, "exp_n": 5})
+    assert r3["passed"]  # too few settled windows to judge yet

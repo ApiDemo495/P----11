@@ -572,6 +572,8 @@ function renderBranches() {
     <div class="kv"><span>P(target before stop)</span><b class="acc-up">${_pct(b.p_target_cal ?? b.p_target)}${b.cal_delta ? ` <span class="dim" style="font-size:9px">cal (raw ${_pct(b.p_target_raw ?? b.p_target)})</span>` : ""}</b></div>
     <div class="kv"><span>calibration (graded forecasts)</span><b>${S.snap?.prob_audit?.n ? `Δ ${S.snap.prob_audit.calibration_delta > 0 ? "+" : ""}${Math.round((S.snap.prob_audit.calibration_delta || 0) * 100)} pts · Brier raw ${S.snap.prob_audit.brier ?? "—"}${S.snap.prob_audit.brier_cal != null ? ` vs cal ${S.snap.prob_audit.brier_cal}` : ""} · n=${S.snap.prob_audit.n}` : "collecting — active after 30 graded windows"}</b></div>
     <div class="kv"><span>P(stop first)</span><b class="acc-dn">${_pct(b.p_stop)}</b></div>
+    <div class="kv"><span>P(target | similar setups)</span><b class="acc-up">${b.p_target_cond != null ? `${_pct(b.p_target_cond)} <span class="dim" style="font-size:9px">n=${b.n_cond} · EV ${b.ev_bps_cond > 0 ? "+" : ""}${fmt(b.ev_bps_cond, 1)} bp</span>` : `<span class="dim">collecting (n=${b.n_cond || 0}/30 matched)</span>`}</b></div>
+    <div class="kv"><span>fan basis</span><b>${esc(b.fan_basis || "all windows")}</b></div>
     <div class="kv"><span>P(close between)</span><b>${_pct(b.p_between)}</b></div>
     <div class="kv"><span>P(close down)</span><b>${Math.round(b.p_close_down * 100)}%</b></div>
     <div class="kv"><span>σ (remaining)</span><b>${px(b.sigma)}</b></div>

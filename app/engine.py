@@ -129,7 +129,8 @@ STATE_DIRECTIONS = {
 
 def _recheck_prediction(*, direction: int, conf: float, floor: float,
                         feed_age_s, voters: dict, levels_ok: bool,
-                        ratio, lock_dir: int, tfs_computed: int) -> dict:
+                        ratio, lock_dir: int, tfs_computed: int,
+                        exp_bps=None, exp_n: int = 0) -> dict:
     """The analysis RECHECK gate (user: calculate everything, take every
     data, recheck everything, THEN produce a prediction). A prediction
     is produced only when every check passes; otherwise the honest
@@ -156,6 +157,9 @@ def _recheck_prediction(*, direction: int, conf: float, floor: float,
         f"ratio {ratio}" if ratio is not None else "no levels")
     add("confidence above floor", direction != 0 and conf > floor,
         f"conf {conf:.3f} vs floor {floor:.3f}")
+    if exp_bps is not None and exp_n >= 20:
+        add("measured expectancy (settled ledger)", exp_bps > 0,
+            f"{exp_bps:+.1f} bp/window over n={exp_n} settled")
     if lock_dir:
         add("agrees with locked call", direction == lock_dir,
             "locked " + ("BUY" if lock_dir > 0 else "SELL")
@@ -2051,13 +2055,20 @@ class PredictionEngine:
             _levels_ok = bool(_lv_valid({
                 "entry": entry_used, "tp": _tp_lv, "sl": sl,
                 "direction": _dir_lv}) if _tp_lv and sl else False)
+            _lstats = {}
+            try:
+                _lstats = self.ledger.stats(symbol, tf) or {}
+            except Exception:
+                _lstats = {}
             recheck = _recheck_prediction(
                 direction=direction, conf=conf,
                 floor=float(res.get("asset_floor") or CONFIDENCE_FLOOR),
                 feed_age_s=_age, voters=_voters, levels_ok=_levels_ok,
                 ratio=ratio_used,
                 lock_dir=int(getattr(cyc, "direction", 0) or 0) if cyc else 0,
-                tfs_computed=len(res_pack))
+                tfs_computed=len(res_pack),
+                exp_bps=_lstats.get("exp_bps"),
+                exp_n=int(_lstats.get("n") or 0))
             await self._emit_stage(
                 job, "recheck", "done" if recheck["passed"] else "blocked",
                 _t_re, time.time(), recheck["verdict"],
@@ -3296,6 +3307,38 @@ class PredictionEngine:
                 _slb = abs(price - sl) / price
                 _n = _tpn = _sln = _amb = _up = 0
                 _rets = {0.25: [], 0.5: [], 0.75: [], 1.0: []}
+                # PRECISION PASS: unconditional frequencies mix every
+                # regime together. Also count the subset of historical
+                # starts whose SETUP matches now — (a) 5-bar momentum
+                # agreeing with the direction, (b) realised-vol regime
+                # (10-bar vol above/below the tape median). Conditional
+                # frequencies on matched setups are sharper estimates;
+                # they are reported alongside, never instead of, the
+                # unconditional ones, each with its own n.
+                _nc = _tpc = _slc = 0                    # momentum-matched
+                _rets_c = {0.25: [], 0.5: [], 0.75: [], 1.0: []}
+                _vols = []
+                for _vi in range(10, _nb):
+                    _vr = [(_cl[_vj] - _cl[_vj - 1]) / _cl[_vj - 1]
+                           for _vj in range(_vi - 9, _vi + 1)
+                           if _cl[_vj - 1] > 0]
+                    if len(_vr) >= 8:
+                        _vm = sum(_vr) / len(_vr)
+                        _vols.append((sum((x - _vm) ** 2 for x in _vr)
+                                      / len(_vr)) ** 0.5)
+                _vol_med = sorted(_vols)[len(_vols) // 2] if _vols else 0.0
+                def _vol_at(i0):
+                    if i0 < 10:
+                        return None
+                    vr = [(_cl[j] - _cl[j - 1]) / _cl[j - 1]
+                          for j in range(i0 - 9, i0 + 1) if _cl[j - 1] > 0]
+                    if len(vr) < 8:
+                        return None
+                    m = sum(vr) / len(vr)
+                    return (sum((x - m) ** 2 for x in vr) / len(vr)) ** 0.5
+                _cur_vol = _vol_at(_nb - 1)
+                _cur_mom = (1 if _nb >= 6 and _cl[-1] > _cl[-6]
+                            else -1 if _nb >= 6 else 0)
                 _maxi = _nb - _rem_min
                 _step = 1 if _maxi <= 400 else 2
                 for _i0 in range(0, _maxi, _step):
@@ -3304,20 +3347,42 @@ class PredictionEngine:
                         continue
                     _tpl = _p0 * (1 + dirn * _tpb)
                     _sll = _p0 * (1 - dirn * _slb)
+                    _oc = 0                              # 1 tp / -1 sl first
                     for _j in range(_i0 + 1, _i0 + _rem_min + 1):
                         _ht = (_hi[_j] >= _tpl) if dirn > 0 else (_lo[_j] <= _tpl)
                         _hs = (_lo[_j] <= _sll) if dirn > 0 else (_hi[_j] >= _sll)
                         if _ht and _hs:
                             _amb += 1
-                            _sln += 1
+                            _oc = -1
                             break
                         if _ht:
-                            _tpn += 1
+                            _oc = 1
                             break
                         if _hs:
-                            _sln += 1
+                            _oc = -1
                             break
+                    if _oc > 0:
+                        _tpn += 1
+                    elif _oc < 0:
+                        _sln += 1
                     _n += 1
+                    # matched-setup subset: momentum agrees AND vol regime
+                    # matches the current one (both measured, both cheap)
+                    _mom_i = (1 if _i0 >= 5 and _cl[_i0] > _cl[_i0 - 5]
+                              else -1 if _i0 >= 5 else 0)
+                    _v_i = _vol_at(_i0)
+                    _match = (_mom_i == dirn and _cur_mom == dirn
+                              and (_v_i is None or _cur_vol is None
+                                   or (_v_i > _vol_med) == (_cur_vol > _vol_med)))
+                    if _match:
+                        _nc += 1
+                        if _oc > 0:
+                            _tpc += 1
+                        elif _oc < 0:
+                            _slc += 1
+                        for _f, _lst in _rets_c.items():
+                            _k = _i0 + max(1, int(round(_rem_min * _f)))
+                            _lst.append(_cl[_k] / _p0 - 1.0)
                     if _cl[_i0 + _rem_min] > _p0:
                         _up += 1
                     for _f, _lst in _rets.items():
@@ -3361,9 +3426,27 @@ class PredictionEngine:
                                      + z * z / (4 * n * n)) ** 0.5) / den
                         return [round(max(0.0, cen - half), 4),
                                 round(min(1.0, cen + half), 4)]
+                    if _nc >= 50 and len(_rets_c[1.0]) >= 50:
+                        _fan = [{"f": 0.0, "q05": round(price, 6),
+                                 "q25": round(price, 6),
+                                 "q50": round(price, 6),
+                                 "q75": round(price, 6),
+                                 "q95": round(price, 6)}]
+                        for _f in (0.25, 0.5, 0.75, 1.0):
+                            _fan.append({
+                                "f": _f,
+                                "q05": round(price * (1 + _q(_rets_c[_f], 0.05)), 6),
+                                "q25": round(price * (1 + _q(_rets_c[_f], 0.25)), 6),
+                                "q50": round(price * (1 + _q(_rets_c[_f], 0.50)), 6),
+                                "q75": round(price * (1 + _q(_rets_c[_f], 0.75)), 6),
+                                "q95": round(price * (1 + _q(_rets_c[_f], 0.95)), 6)})
+                        _fan_basis = f"setup-matched (momentum+vol) n={_nc}"
+                    else:
+                        _fan_basis = f"all windows n={_n}"
                     return {
                         "approx": True,
                         "method": "empirical-first-touch",
+                        "fan_basis": _fan_basis,
                         "n": _n, "ambig": _amb,
                         # Wilson 95% intervals: a probability without
                         # its uncertainty is a claim; with n it is a
@@ -3373,6 +3456,12 @@ class PredictionEngine:
                         "ci_stop": _wilson(_sln, _n),
                         "ev_bps": round((_tpn / _n) * _tpb * 1e4
                                         - (_sln / _n) * _slb * 1e4, 1),
+                        "p_target_cond": (round(_tpc / _nc, 4)
+                                          if _nc >= 30 else None),
+                        "n_cond": _nc,
+                        "ev_bps_cond": (round((_tpc / _nc) * _tpb * 1e4
+                                              - (_slc / _nc) * _slb * 1e4, 1)
+                                        if _nc >= 30 else None),
                         "p_target": round(_tpn / _n, 4),
                         "p_stop": round(_sln / _n, 4),
                         "p_between": round(1 - _tpn / _n - _sln / _n, 4),
