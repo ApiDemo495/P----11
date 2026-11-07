@@ -76,6 +76,10 @@ ensure_md_preview() {
 # setup/boot proceed in parallel
 ( ensure_md_preview ) >/dev/null 2>&1 &
 
+# port visibility on EVERY invocation — even (especially) when the
+# app is already healthy; the old order skipped this on early exit
+bash scripts/make_port_public.sh || true
+
 if curl -sf -m 3 "$HEALTH_URL" >/dev/null 2>&1; then
   log "app already healthy on :$PORT — nothing to do"
   exit 0
@@ -124,13 +128,6 @@ echo $! > "$PIDFILE"
 for i in $(seq 1 240); do
   if curl -sf -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
     log "✓ app healthy on http://0.0.0.0:$PORT (pid $(cat "$PIDFILE")) — total $(( $(date +%s) - T0 ))s"
-    # port must ALWAYS be public: set it on every start (best effort;
-    # devcontainer.json also declares it for fresh Codespaces)
-    if command -v gh >/dev/null 2>&1 && [ -n "${CODESPACE_NAME:-}" ]; then
-      gh codespace ports visibility "$PORT:public" -c "$CODESPACE_NAME" \
-        >/dev/null 2>&1 && log "port $PORT visibility set to public" \
-        || log "could not set port visibility (set it once in the Ports tab)"
-    fi
     exit 0
   fi
   sleep 1

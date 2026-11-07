@@ -3088,9 +3088,14 @@ function applySnapshot(snap) {
   if (!snap || snap.type !== "snapshot") return;
   S.snap = snap;
   if (snap.ts) S.serverOff = snap.ts - Date.now() / 1000;   // server clock offset
-  // snapshot price fills gaps only — never overwrite the tick stream
+  // snapshot price fills gaps only while ticks are fresh; if the
+  // socket is dead (>5 s without a tick — e.g. a private port's auth
+  // wall blocking the upgrade), snapshots take over as price truth
+  // so the whole app stays live over REST instead of freezing
+  const _tickFresh = S._lastTickAt && (Date.now() - S._lastTickAt < 5000);
   for (const [sym, av] of Object.entries(snap.assets || {}))
-    if (av.price > 0 && !((S.prices || {})[sym] > 0)) (S.prices ||= {})[sym] = av.price;
+    if (av.price > 0 && (!_tickFresh || !((S.prices || {})[sym] > 0)))
+      (S.prices ||= {})[sym] = av.price;
   try { checkIssuedAlerts(snap); } catch (e) { /* alerts optional */ }
   S.serverOffset = (snap.ts ? snap.ts * 1000 : Date.now()) - Date.now();
   renderBoot(snap);               // overlay FIRST — contract test guard
@@ -3145,6 +3150,7 @@ function applySnapshot(snap) {
   refreshActiveView();
 }
 function onTick(msg) {
+  S._lastTickAt = Date.now();
   S.prices = msg.prices || S.prices;
   const p = msg.prices?.[S.symbol];
   if (p != null) TF.forEach(tf => S.charts[tf]?.tick(p));
