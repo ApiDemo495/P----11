@@ -105,6 +105,19 @@ async def _startup_watchdog() -> None:
     _os._exit(75)
 
 
+_loop_lag = {"s": 0.0}
+
+
+async def _lag_meter() -> None:
+    """Event-loop lag: if sync work ever blocks the loop again, this
+    number (in /api/health) says so instead of a silent 502."""
+    import asyncio as _a
+    while True:
+        t0 = time.time()
+        await _a.sleep(1.0)
+        _loop_lag["s"] = round(max(0.0, time.time() - t0 - 1.0), 2)
+
+
 async def _boot() -> None:
     """Full engine boot, OFF the startup path: uvicorn serves the app
     shell + /api/health immediately and the boot overlay reports
@@ -123,6 +136,7 @@ async def _boot() -> None:
 async def _startup() -> None:
     feed.on_tick = _on_feed_tick
     asyncio.create_task(_boot())
+    asyncio.create_task(_lag_meter())
     global _learning_task
     _learning_task = asyncio.create_task(_hourly_learning_loop())
     asyncio.create_task(_startup_watchdog())
@@ -254,6 +268,7 @@ async def health() -> dict:
     return {
         "ok": True,
         "commit": _COMMIT,
+        "loop_lag_s": _loop_lag["s"],
         "phase": engine.phase,
         "feed": feed.mode,
         "feed_stats": feed.stats(),

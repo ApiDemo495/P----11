@@ -325,7 +325,12 @@ class PredictionEngine:
         # brain.md B-11: never block first prediction — load the cached
         # connectome now or build it in the background (absent until then)
         try:
-            self.brains.fw.ensure()
+            # the connectome load is synchronous CPU work on a 202 MB
+            # npz — running it inline froze the event loop solid for
+            # the whole load (health/WS dead = proxy 502 on Codespaces)
+            import asyncio as _aio
+            _aio.get_running_loop().create_task(
+                _aio.to_thread(self.brains.fw.ensure))
         except Exception:
             log.exception("flywire ensure failed")
         # Section 10: learned weights/brain state resume from the JSON file
