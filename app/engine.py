@@ -4238,6 +4238,7 @@ class PredictionEngine:
         if t.status != "locked":
             return
         t.status = "hit"
+        t.hit_ts = now
         cyc.events.append({"ts": now, "type": "target_hit", "k": k, "level": t.level})
 
         if k in (1, 2):
@@ -4440,6 +4441,7 @@ class PredictionEngine:
                                 if (d > 0 and price >= t.level) or (
                                         d < 0 and price <= t.level):
                                     t.status = "hit"
+                                    t.hit_ts = now
                                     cyc.events.append(
                                         {"ts": now, "type": "target_hit",
                                          "k": t.k, "level": t.level,

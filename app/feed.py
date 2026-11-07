@@ -418,7 +418,23 @@ class MarketFeed:
                     st.live_open = st.opens[-1]
                     st.live_high = st.highs[-1]
                     st.live_low = st.lows[-1]
-                st.day_open = st.closes[0] if st.closes else 0.0
+                # D-6: session reference = the exchange's own 24h open
+                # (never bars[0] of whatever history the chart holds —
+                # that produced absurd +12% / +53% / -36% tickers)
+                st.day_open = (st.closes[-1440] if len(st.closes) >= 1440
+                               else (st.closes[0] if st.closes else 0.0))
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as tc:
+                        for sym, ex_symbol in SYMBOLS.items():
+                            tr = await tc.get(
+                                f"{base}/api/v3/ticker/24hr",
+                                params={"symbol": ex_symbol})
+                            tr.raise_for_status()
+                            self.states[sym].day_open = float(
+                                tr.json().get("openPrice") or 0.0) \
+                                or self.states[sym].day_open
+                except Exception:
+                    pass          # fallback above stays; never fake it
         return pushed
 
     async def _start_binance(self) -> None:

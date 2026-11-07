@@ -306,6 +306,8 @@ function _drawOwn() { drawOwnChart(); }
    default OFF; volume histogram; OHLC crosshair legend; stale-tape
    note on the chart itself (doc A-4). ═══════ */
 const Own = { inst: null, key: "", lineKey: "", markerKey: "" };
+const TZ_OFF = 19800;                    // IST = UTC+5:30 (doc D-2)
+const lt = t => t + TZ_OFF;              // render-only shift for LWC
 function ownMake(el) {
   const LW = window.LightweightCharts; if (!LW || !el) return null;
   const chart = LW.createChart(el, {
@@ -317,7 +319,8 @@ function ownMake(el) {
     width: el.clientWidth || 300, height: el.clientHeight || 340,
   });
   const candles = chart.addCandlestickSeries({ upColor: "#26a69a", downColor: "#ef5350",
-    borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350" });
+    borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350",
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
   const vol = chart.addHistogramSeries({ priceScaleId: "", priceFormat: { type: "volume" } });
   chart.priceScale("").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
   const fanOpts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
@@ -361,9 +364,26 @@ function drawOwnChart() {
   if (!Own.inst) { host.innerHTML = ""; Own.inst = ownMake(host); }
   const inst = Own.inst; if (!inst) return;
   const now = serverNow();
-  // stale tape state on the chart itself (doc A-4) — never a silent flat line
+  // honesty on the chart itself (docs A-4 / D-3 / D-4): SIM label,
+  // stale tape, live-bar stall and price/tape DESYNC with auto-rebuild
   const age = a.feed_age_s;
-  inst.stale.textContent = (age != null && age > 15) ? `stale — last print ${Math.round(age)}s ago` : "";
+  const tapeArr = S.tfBars?.[S.focusTf] || [];
+  const tapeLast = tapeArr[tapeArr.length - 1];
+  const desync = (tapeLast && liveP0() > 0) ? Math.abs(tapeLast.close - liveP0()) / liveP0() : 0;
+  const stalled = tapeLast && (now - tapeLast.time) > 2 * ((S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60);
+  if (desync > 0.002 || stalled) {
+    if (Date.now() - (S._desyncAt || 0) > 5000) {   // rebuild at most 1/5s
+      S._desyncAt = Date.now(); Own.key = "";
+      loadCandles().catch(() => {});
+    }
+  }
+  const notes = [];
+  if (S.snap?.feed?.simulated) notes.push("SIM TAPE — simulated feed, not exchange bars");
+  if (desync > 0.002) notes.push(`CHART DESYNC ${(desync * 100).toFixed(1)}% — rebuilding`);
+  else if (stalled) notes.push("live bar stalled — refetching");
+  else if (age != null && age > 15) notes.push(`stale — last print ${Math.round(age)}s ago`);
+  inst.stale.textContent = notes.join(" · ");
+  function liveP0() { return (S.prices?.[S.symbol] > 0) ? S.prices[S.symbol] : a.price; }
   const bucket0 = (S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60;
   const bt0 = Math.floor(now / bucket0) * bucket0;
   // the 1 Hz tick stream is the live price truth; a.price (snapshot,
@@ -400,10 +420,10 @@ function drawOwnChart() {
   // behind the live price within a minute and never caught up)
   const dataKey = bars.length ? `${key}|${bars[bars.length - 1].time}|${bars.length}` : "";
   if (bars.length && dataKey !== Own.key) {
-    const cs = bars.map(b2 => ({ time: b2.time, open: b2.open, high: b2.high, low: b2.low, close: b2.close }));
+    const cs = bars.map(b2 => ({ time: lt(b2.time), open: b2.open, high: b2.high, low: b2.low, close: b2.close }));
     try {
       inst.candles.setData(cs);
-      inst.vol.setData(bars.map(b2 => ({ time: b2.time, value: b2.v || 0,
+      inst.vol.setData(bars.map(b2 => ({ time: lt(b2.time), value: b2.v || 0,
         color: b2.close >= b2.open ? "rgba(38,166,154,.4)" : "rgba(239,83,80,.4)" })));
       Own.key = dataKey;          // key set ONLY after a clean setData
       const lb = bars[bars.length - 1];
@@ -411,8 +431,8 @@ function drawOwnChart() {
       if (key !== Own.rangeKey) {   // reframe only on symbol/TF/window change
         Own.rangeKey = key;
         try { inst.chart.timeScale().setVisibleRange({
-          from: Math.max(cs[0].time, (d.cycle_start || cs[0].time) - 2 * Math.max(60, (d.cycle_end || 0) - (d.cycle_start || 0))),
-          to: d.cycle_end || cs[cs.length - 1].time }); } catch {}
+          from: lt(Math.max(bars[0].time, (d.cycle_start || bars[0].time) - 2 * Math.max(60, (d.cycle_end || 0) - (d.cycle_start || 0)))),
+          to: lt(d.cycle_end || bars[bars.length - 1].time) }); } catch {}
       }
     } catch { /* rejected series: leave Own.key stale, retry next paint */ }
   }
@@ -431,18 +451,18 @@ function drawOwnChart() {
       l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p);
     }
     const l = inst.last;
-    try { inst.candles.update({ time: l.time, open: l.open, high: l.high, low: l.low, close: l.close }); } catch {}
+    try { inst.candles.update({ time: lt(l.time), open: l.open, high: l.high, low: l.low, close: l.close }); } catch {}
   }
   ownSetLines(inst, d);
   // markers: LOCK at the window boundary + settled hits (server-settled)
   const bucket = (S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60;
   const markers = [];
-  if (d.cycle_start) markers.push({ time: Math.floor(d.cycle_start / bucket) * bucket,
+  if (d.cycle_start) markers.push({ time: lt(Math.floor(d.cycle_start / bucket) * bucket),
     position: (d.direction || 0) < 0 ? "aboveBar" : "belowBar",
     shape: (d.direction || 0) < 0 ? "arrowDown" : "arrowUp",
     color: "#e6b93d", text: "LOCK" });
   for (const t of (d.targets || []))
-    if (t.status === "hit" && t.hit_ts) markers.push({ time: Math.floor(t.hit_ts / bucket) * bucket,
+    if (t.status === "hit" && t.hit_ts) markers.push({ time: lt(Math.floor(t.hit_ts / bucket) * bucket),
       position: "aboveBar", shape: "circle", color: "#22c98a", text: `TP${t.k} hit` });
   const mk = JSON.stringify(markers);
   if (mk !== Own.markerKey) { Own.markerKey = mk;
@@ -455,7 +475,7 @@ function drawOwnChart() {
     if (!fanKey) { inst.fan50.setData([]); inst.fan25.setData([]); inst.fan75.setData([]); }
     else {
       const fT = f => Math.floor(now + f * Math.max(1, (d.cycle_end || now) - now));
-      const series = k => b.fan.map(p2 => ({ time: fT(p2.f), value: p2[k] }))
+      const series = k => b.fan.map(p2 => ({ time: lt(fT(p2.f)), value: p2[k] }))
         .filter((v, i, arr) => i === 0 || v.time > arr[i - 1].time);
       try { inst.fan50.setData(series("q50")); inst.fan25.setData(series("q25")); inst.fan75.setData(series("q75")); } catch {}
     }
@@ -486,12 +506,12 @@ function bnMake(el, mini) {
 }
 function bnFeed(inst, bars) {
   if (!inst || !bars.length) return;
-  const cs = bars.map(b => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c }));
+  const cs = bars.map(b => ({ time: lt(b.t), open: b.o, high: b.h, low: b.l, close: b.c }));
   inst.candles.setData(cs);
-  inst.vol.setData(bars.map(b => ({ time: b.t, value: b.v || 0,
+  inst.vol.setData(bars.map(b => ({ time: lt(b.t), value: b.v || 0,
     color: b.c >= b.o ? "rgba(38,166,154,.4)" : "rgba(239,83,80,.4)" })));
   const maD = (n) => cs.map((c, i) => i < n - 1 ? null
-    : { time: c.time, value: cs.slice(i - n + 1, i + 1).reduce((x, y) => x + y.close, 0) / n }).filter(Boolean);
+    : { time: c.time, value: cs.slice(i - n + 1, i + 1).reduce((x, y) => x + y.close, 0) / n }).filter(Boolean);  // cs times already lt()-shifted
   inst.ma7.setData(maD(7)); inst.ma25.setData(maD(25));
   const lb = bars[bars.length - 1];
   inst.last = { time: lb.t, open: lb.o, high: lb.h, low: lb.l, close: lb.c, v: lb.v || 0 };
@@ -519,7 +539,7 @@ function bnTickMain() {
   if (!inst || !inst.last || !(p > 0)) return;
   const l = inst.last;
   l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p);
-  try { inst.candles.update({ time: l.time, open: l.open, high: l.high, low: l.low, close: l.close }); }
+  try { inst.candles.update({ time: lt(l.time), open: l.open, high: l.high, low: l.low, close: l.close }); }
   catch { bnLoad(S.focusTf, inst); }   // bucket rolled: refetch, never freeze
 }
 
@@ -965,7 +985,7 @@ function quadChart(el, bucketSec = 60) {
   const inst = { chart, candles, last: null, _lines: [],
     setData(bars) {
       if (!bars?.length) return;
-      candles.setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
+      candles.setData(bars.map(b => ({ time: lt(b.time), open: b.open, high: b.high, low: b.low, close: b.close })));
       const lb = bars[bars.length - 1];
       inst.last = { time: lb.time, open: lb.open, high: lb.high, low: lb.low, close: lb.close };
       try { chart.timeScale().scrollToRealTime(); } catch {}
@@ -986,7 +1006,7 @@ function quadChart(el, bucketSec = 60) {
       else { const l = inst.last;
         l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p); }
       const l = inst.last;
-      try { candles.update({ time: l.time, open: l.open, high: l.high, low: l.low, close: l.close }); } catch {}
+      try { candles.update({ time: lt(l.time), open: l.open, high: l.high, low: l.low, close: l.close }); } catch {}
     } };
   return inst;
 }

@@ -60,6 +60,7 @@ class TargetState:
     status: str            # pending | locked | hit | invalidated
     direction: int = 0     # +1 / -1 at lock time (hit detection uses this)
     locked_at: float | None = None   # epoch seconds
+    hit_ts: float | None = None      # epoch seconds of first touch (B-3)
     locked_cci: float | None = None  # signed CCI at lock time (lock strength ref)
 
     def to_dict(self) -> dict[str, Any]:
@@ -70,6 +71,7 @@ class TargetState:
             "status": self.status,
             "direction": self.direction,
             "locked_at": self.locked_at,
+            "hit_ts": self.hit_ts,
             "locked_cci": self.locked_cci,
         }
 
