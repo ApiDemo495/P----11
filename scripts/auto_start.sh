@@ -104,6 +104,10 @@ bash scripts/make_port_public.sh || true
 # started before the health early-exit so it runs in every path
 nohup bash scripts/supervise.sh >/dev/null 2>&1 &
 
+# real backtest, at most daily, fully in the background (no-op where
+# Binance is unreachable — never fakes numbers)
+nohup bash scripts/run_backtest_once.sh >>data/backtest.log 2>&1 &
+
 if curl -sf -m 3 "$HEALTH_URL" >/dev/null 2>&1; then
   log "app already healthy on :$PORT — nothing to do"
   exit 0

@@ -3075,6 +3075,18 @@ async function pollChartLink() {
   } catch { /* endpoint warming up */ }
 }
 
+async function pollBacktest() {
+  try {
+    const d = await api("/api/backtest");
+    const box = $("#bt-panel"); if (!box) return;
+    if (!d.ok) { box.innerHTML = `<div class="dim pad">${esc(d.reason || "no real backtest yet")}</div>`; return; }
+    const row = (n, m) => m && m.n ? `<tr><td class="mono">${n}</td><td class="mono">${m.n}</td><td class="mono">${m.win_pct}%</td><td class="mono">${m.breakeven_pct}%</td><td class="mono" style="color:${m.ev_r >= 0 ? "var(--green)" : "var(--red)"}">${m.ev_r >= 0 ? "+" : ""}${m.ev_r}R</td><td class="mono">${m.profit_factor}</td><td class="mono">${m.max_dd_pct}%</td></tr>` : "";
+    box.innerHTML = `<table class="tbl"><thead><tr><th>ASSET</th><th>n</th><th>WIN%</th><th>BREAKEVEN</th><th>EV</th><th>PF</th><th>MAXDD</th></tr></thead><tbody>${Object.entries(d.per_asset || {}).map(([a, m]) => row(a, m)).join("")}${row("ALL", d.combined)}</tbody></table>`;
+    const meta = $("#bt-meta"); if (meta) meta.textContent = d.source || "";
+  } catch { /* warming up */ }
+}
+pollBacktest(); setInterval(pollBacktest, 300000);
+
 /* ═══════════ snapshot / tick plumbing ═══════════ */
 // s.serverOffset re-anchors on EVERY message (advice H-2): the countdown
 // never drifts with the client's wall clock.

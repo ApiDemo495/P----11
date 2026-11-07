@@ -74,3 +74,11 @@ def test_replay_scripted_logs_to_sqlite(tmp_path):
     assert tr is not None and tr.source == "discretionary"
     taken = load_filtered(db)
     assert len(taken) == 1 and taken[0].asset == "BTC"
+
+
+def test_backtest_endpoint_empty_state_is_honest(tmp_path, monkeypatch):
+    from app.main import backtest_report   # import BEFORE chdir
+    monkeypatch.chdir(tmp_path)            # no backtest/out here
+    import conftest
+    d = conftest.run_sync(backtest_report())
+    assert d["ok"] is False and "no real backtest" in d["reason"]

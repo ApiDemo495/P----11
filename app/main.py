@@ -733,6 +733,32 @@ async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONRes
                          "bucket_minutes": W, "bars": bars})
 
 
+@app.get("/api/backtest")
+async def backtest_report() -> dict:
+    """Real-backtest results (written by scripts/run_backtest_once.sh
+    where Binance is reachable). Honest empty state until a real run
+    exists — never synthetic numbers dressed as results."""
+    import csv as _csv
+    import os as _os
+    path = "backtest/out/mode_a_trades.csv"
+    if not _os.path.exists(path):
+        return {"ok": False, "reason": "no real backtest yet — it runs "
+                "automatically (max daily) where Binance is reachable"}
+    from backtest.analytics import by_asset, metrics
+    from backtest.runner import Trade
+    raw = []
+    with open(path) as f:
+        for r in _csv.DictReader(f):
+            raw.append(Trade(r["asset"], int(r["ts"]), r["direction"],
+                             float(r["entry"]), float(r["sl"]),
+                             float(r["tp"]), int(r["exit_ts"]),
+                             r["exit_reason"], float(r["r_gross"]),
+                             float(r["r_net"]), float(r["pnl"]),
+                             r.get("tier", ""), r.get("source", "raw")))
+    return {"ok": True, "source": "Binance 15m via CCXT",
+            "per_asset": by_asset(raw), "combined": metrics(raw)}
+
+
 @app.get("/api/chart-link")
 async def chart_link(symbol: str = "") -> JSONResponse:
     """NEW: measured chart<->price link per asset (docs11 Part D).
