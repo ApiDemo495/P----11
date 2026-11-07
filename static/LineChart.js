@@ -203,8 +203,18 @@ class PriceChart {
        band are annotations drawn ONTO that domain, never folded into
        it, or a TP 1.3% away compresses all price action flat.
        Off-scale levels render as edge tags with their real distance. */
-    if (m.fan?.pts?.length) for (const f of m.fan.pts) {
-      for (const k of ["lo2", "hi2", "mid"]) if (Number.isFinite(f[k])) { lo = Math.min(lo, f[k]); hi = Math.max(hi, f[k]); }
+    if (m.fan?.pts?.length) {
+      const mode = m.domainFan || "none";   // default: price data alone scales the chart (Binance-style)
+      const dataLo = lo, dataHi = hi, dRange = Math.max(1e-12, hi - lo);
+      for (const f of m.fan.pts) {
+        if (Number.isFinite(f.mid)) { lo = Math.min(lo, f.mid); hi = Math.max(hi, f.mid); }
+        if (mode === "inner") for (const k of ["lo2", "hi2"]) if (Number.isFinite(f[k])) {
+          // capped: the fan may widen the frame by at most 80% of the
+          // data range per side — never enough to flatten the price
+          lo = Math.min(lo, Math.max(f[k], dataLo - 0.55 * dRange));
+          hi = Math.max(hi, Math.min(f[k], dataHi + 0.55 * dRange));
+        }
+      }
     }
     const compact = !spark && (plotW < 300 || priceH < 130);
     if (!(hi > lo)) { hi = lo * 1.001 + 1e-9; lo = lo * 0.999; }
@@ -247,7 +257,7 @@ class PriceChart {
         g.fillStyle = dim; g.fillText(pcFmt(v, dec), padL + plotW + 5, y + 3);
       }
       /* ── time axis ── */
-      const { ticks } = pcTimeTicks(t0, t1, Math.max(2, Math.floor(plotW / 86)));
+      const { ticks } = pcTimeTicks(t0, t1, Math.max(2, Math.floor(plotW / 70)));
       g.fillStyle = dim; g.textAlign = "center";
       for (const t of ticks) g.fillText(pcFmtTime(t, t1 - t0), X(t), H - 5);
       g.textAlign = "left";
@@ -265,7 +275,7 @@ class PriceChart {
       g.strokeStyle = "rgba(230,185,61,.5)"; g.setLineDash([3, 3]);
       g.beginPath(); g.moveTo(x, padT); g.lineTo(x, padT + plotH); g.stroke(); g.setLineDash([]);
       if (!spark) { g.fillStyle = PC_GOLD; g.font = "bold 8px ui-monospace,monospace";
-        g.fillText("NOW", Math.max(padL + 1, x - 22), padT + 8); g.font = "10px ui-monospace,monospace"; }
+        g.fillText("NOW", Math.min(padL + plotW - 24, x + 5), padT + 9); g.font = "10px ui-monospace,monospace"; }
     }
 
     /* ── fan: nested band clipped to the price-led range; median dashed ── */
@@ -274,20 +284,14 @@ class PriceChart {
       g.beginPath(); g.moveTo(X(oT), Y(oP));
       f.forEach(p => g.lineTo(X(p.t), Y(p.hi)));
       for (let i = f.length - 1; i >= 0; i--) g.lineTo(X(f[i].t), Y(f[i].lo));
-      g.closePath(); g.fillStyle = "rgba(38,166,154,.10)"; g.fill();
+      g.closePath(); g.fillStyle = "rgba(38,166,154,.05)"; g.fill();
       if (f.some(p => Number.isFinite(p.lo2) && Number.isFinite(p.hi2))) {
         // inner band (middle ~50% of outcomes): darker = more likely
         g.beginPath(); g.moveTo(X(oT), Y(oP));
         f.forEach(p => { if (Number.isFinite(p.hi2)) g.lineTo(X(p.t), Y(p.hi2)); });
         for (let i = f.length - 1; i >= 0; i--) if (Number.isFinite(f[i].lo2)) g.lineTo(X(f[i].t), Y(f[i].lo2));
-        g.closePath(); g.fillStyle = "rgba(38,166,154,.17)"; g.fill();
+        g.closePath(); g.fillStyle = "rgba(38,166,154,.13)"; g.fill();
       }
-      g.beginPath(); g.moveTo(X(oT), Y(oP));
-      f.forEach(p => g.lineTo(X(p.t), Y(p.hi)));
-      g.strokeStyle = "rgba(38,166,154,.45)"; g.lineWidth = 1; g.stroke();
-      g.beginPath(); g.moveTo(X(oT), Y(oP));
-      f.forEach(p => g.lineTo(X(p.t), Y(p.lo)));
-      g.strokeStyle = "rgba(239,83,80,.45)"; g.stroke();
       if (f.some(p => Number.isFinite(p.mid))) {
         g.beginPath(); g.moveTo(X(oT), Y(oP));
         f.forEach(p => { if (Number.isFinite(p.mid)) g.lineTo(X(p.t), Y(p.mid)); });
@@ -312,6 +316,9 @@ class PriceChart {
 
     /* ── levels: in-range = line + direct tag; off-scale = edge tag ── */
     const offScale = [];
+    const levelYs = levels.map(L => ({ L, y: (L.p >= lo && L.p <= hi) ? Y(L.p) : null }));
+    const crowded = L => levelYs.some(o => o.L !== L && o.y != null &&
+      Math.abs(o.y - Y(L.p)) < 14);
     for (const L of levels) {
       if (L.p < lo || L.p > hi) { offScale.push(L); continue; }
       const y = Y(L.p);
@@ -324,7 +331,7 @@ class PriceChart {
         g.fillRect(padL + plotW + 1, y - 8, padR - 3, 15);
         g.fillStyle = "#0b0b14";
         g.fillText(L.label, padL + plotW + 4, y + 3);
-        if (!compact) { g.fillStyle = L.color; g.fillText(`${L.label} ${pcFmt(L.p, dec)}`, padL + 4, y - 3); }
+        if (!compact && !crowded(L)) { g.fillStyle = L.color; g.fillText(`${L.label} ${pcFmt(L.p, dec)}`, padL + 4, y - 3); }
         g.font = "10px ui-monospace,monospace";
       }
     }
@@ -382,9 +389,9 @@ class PriceChart {
       maPts.forEach((p, i) => i ? g.lineTo(X(p.t), Y(p.p)) : g.moveTo(X(p.t), Y(p.p)));
       g.strokeStyle = "rgba(235,235,250,.55)"; g.lineWidth = 1; g.stroke();
       const lp2 = maPts[maPts.length - 1];
-      if (!compact) {
+      if (!compact && Math.abs(Y(lp2.p) - Y(main.pts[main.pts.length - 1].p)) > 13) {
         g.fillStyle = "rgba(235,235,250,.75)"; g.font = "8px ui-monospace,monospace";
-        g.fillText("MA" + maN, Math.min(padL + plotW - 24, X(lp2.t) + 3), Y(lp2.p) - 3);
+        g.fillText("MA" + maN, Math.max(padL + 2, X(lp2.t) - 30), Y(lp2.p) - 3);
         g.font = "10px ui-monospace,monospace";
       }
     }
@@ -425,10 +432,11 @@ class PriceChart {
         if (above) { g.moveTo(padL + plotW - 5, ey + 3); g.lineTo(padL + plotW + 5, ey + 3); g.lineTo(padL + plotW, ey - 3); }
         else { g.moveTo(padL + plotW - 5, ey - 3); g.lineTo(padL + plotW + 5, ey - 3); g.lineTo(padL + plotW, ey + 3); }
         g.closePath(); g.fill();
+        if (compact) continue;   // small cards: arrow only — TP/SL values live in the card text
         g.fillRect(padL + plotW + 1, ey - 8, padR - 2, 15);
         g.fillStyle = "#0b0b14"; g.font = "bold 9px ui-monospace,monospace";
         g.fillText(L.label || "", padL + plotW + 4, ey + 3);
-        if (!compact && L.label) {
+        if (L.label) {
           const dist = lp.p ? (L.p / lp.p - 1) * 100 : 0;
           g.fillStyle = L.color; g.font = "8px ui-monospace,monospace"; g.textAlign = "right";
           g.fillText(`${L.label} ${pcFmt(L.p, dec)} ${above ? "▲" : "▼"} ${dist >= 0 ? "+" : ""}${dist.toFixed(2)}%`,
@@ -446,8 +454,11 @@ class PriceChart {
       for (const p of main.pts) { if (p.p > hp.p) hp = p; if (p.p < lpLow.p) lpLow = p; }
       g.fillStyle = dim; g.font = "8px ui-monospace,monospace";
       if (!compact && hp !== lp && hp.t !== lpLow.t) {
-        g.fillText("H " + pcFmt(hp.p, dec), Math.min(padL + plotW - 52, Math.max(padL, X(hp.t) - 8)), Math.max(8, Y(hp.p) - 4));
-        g.fillText("L " + pcFmt(lpLow.p, dec), Math.min(padL + plotW - 52, Math.max(padL, X(lpLow.t) - 8)), Math.min(padT + priceH - 2, Y(lpLow.p) + 10));
+        const nearLast = p => Math.abs(X(p.t) - lx) < 46 && Math.abs(Y(p.p) - ly) < 16;
+        if (!nearLast(hp))
+          g.fillText("H " + pcFmt(hp.p, dec), Math.min(padL + plotW - 52, Math.max(padL, X(hp.t) - 8)), Math.max(8, Y(hp.p) - 4));
+        if (!nearLast(lpLow) && Math.abs(Y(lpLow.p) - Y(hp.p)) > 12)
+          g.fillText("L " + pcFmt(lpLow.p, dec), Math.min(padL + plotW - 52, Math.max(padL, X(lpLow.t) - 8)), Math.min(padT + priceH - 12, Y(lpLow.p) + 10));
       }
       g.font = "10px ui-monospace,monospace";
     }

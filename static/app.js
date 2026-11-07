@@ -503,7 +503,7 @@ function renderBranches() {
           pts: b.fan.map(p2 => ({ t: tN + p2.f * Math.max(1, t1 - tN),
                                   lo: p2.q05, lo2: p2.q25, mid: p2.q50, hi2: p2.q75, hi: p2.q95 })) }
       : null,
-    nowT: tN, t0, t1, ma: 0,
+    nowT: tN, t0, t1, ma: 0, domainFan: "inner",
     ariaLabel: `${S.symbol} ${S.focusTf} probability chart: realised price ` +
       `with measured outcome fan to cycle end`,
     emptyText: "collecting realised path…",
