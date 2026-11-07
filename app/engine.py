@@ -4382,6 +4382,17 @@ class PredictionEngine:
                     self.start_analyse(SYMBOL_ORDER[0], "tf1")
                 except Exception:
                     log.exception("auto-predict analyse failed")
+            # BRAIN SELF-HEAL: whatever flipped the connectome to
+            # absent (failed build, dead worker, restart), retry the
+            # load every 60 s without the user hunting for RECONNECT.
+            try:
+                if now - getattr(self, "_last_brain_watch", 0) > 60:
+                    self._last_brain_watch = now
+                    _fw = getattr(self.brains, "fw", None)
+                    if _fw is not None and _fw.state == "absent":
+                        _fw.ensure()
+            except Exception:
+                pass
             prices = self.feed.prices()
             for symbol in SYMBOL_ORDER:
                 price = prices.get(symbol, 0.0)

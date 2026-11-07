@@ -202,7 +202,8 @@ class LineChart {
     let lo = Infinity, hi = -Infinity;
     for (const p of d.pts) { lo = Math.min(lo, p.p); hi = Math.max(hi, p.p); }
     for (const L of (d.levels || [])) if (Number.isFinite(L.p)) { lo = Math.min(lo, L.p); hi = Math.max(hi, L.p); }
-    if (d.fan) for (const f of d.fan) if (Number.isFinite(f[1]) && Number.isFinite(f[2])) { lo = Math.min(lo, f[2]); hi = Math.max(hi, f[1]); }
+    // the fan NEVER sets the range (its extremes squashed the price
+    // line into a corner): the cone is clipped to the plot below.
     if (!(hi > lo)) { hi = lo * 1.001; lo = lo * 0.999; }
     const pad = (hi - lo) * 0.08; hi += pad; lo -= pad;
     const t0 = d.t0, t1 = d.t1, X = t => padL + (t - t0) / Math.max(1, t1 - t0) * pw,
@@ -221,6 +222,7 @@ class LineChart {
         g.fillText(`${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`, X(t), H - 4); }
       g.textAlign = "left";
     }
+    g.save(); g.beginPath(); g.rect(padL, padT - 2, pw, ph + 4); g.clip();
     // future region shade (window not yet lived)
     if (d.nowX != null) { const x = X(d.nowX);
       g.fillStyle = "rgba(120,120,200,.05)"; g.fillRect(x, padT, padL + pw - x, ph);
@@ -251,13 +253,18 @@ class LineChart {
     g.lineTo(X(d.pts[d.pts.length - 1].t), padT + ph); g.lineTo(X(d.pts[0].t), padT + ph); g.closePath();
     g.fillStyle = grad; g.fill();
     g.beginPath(); d.pts.forEach((p, i) => i ? g.lineTo(X(p.t), Y(p.p)) : g.moveTo(X(p.t), Y(p.p)));
-    g.strokeStyle = col; g.lineWidth = 1.8; g.stroke(); g.lineWidth = 1;
+    g.strokeStyle = col; g.lineWidth = 2.2; g.stroke(); g.lineWidth = 1;
     // last price: dot + axis chip (always visible)
     const lp = d.pts[d.pts.length - 1], lx = X(lp.t), ly = Y(lp.p);
     g.fillStyle = col; g.beginPath(); g.arc(lx, ly, 3, 0, 7); g.fill();
-    if (!this.spark) { g.fillRect(padL + pw + 1, ly - 8, padR - 2, 16);
-      g.fillStyle = "#0b0b14"; g.font = "bold 9px ui-monospace,monospace";
-      g.fillText(px(lp.p), padL + pw + 4, ly + 3); g.font = "9px ui-monospace,monospace"; }
+    if (!this.spark) { g.fillRect(padL + pw + 1, ly - 9, padR - 2, 18);
+      g.fillStyle = "#0b0b14"; g.font = "bold 10px ui-monospace,monospace";
+      g.fillText(px(lp.p), padL + pw + 4, ly + 3.5); g.font = "9px ui-monospace,monospace"; }
+    g.restore();
+    // last-price dashed line across the plot (TradingView-style anchor)
+    g.strokeStyle = col; g.globalAlpha = .55; g.setLineDash([4, 4]);
+    g.beginPath(); g.moveTo(padL, ly); g.lineTo(padL + pw, ly); g.stroke();
+    g.setLineDash([]); g.globalAlpha = 1;
     // crosshair with time·price readout
     if (this.cross && !this.spark) { const { x, y } = this.cross;
       if (x >= padL && x <= padL + pw && y >= padT && y <= padT + ph) {
@@ -585,86 +592,85 @@ function renderBranches() {
   $("#branch-note").textContent = b.method === "empirical-first-touch"
     ? `measured: first-touch outcomes replayed over ${b.n} historical windows on this asset's own tape (both-barrier bars count as stop-first, ${b.ambig} ambiguous) · bands = empirical return quantiles · realised path in white`
     : "thin tape — driftless approximation until 20+ windows can be replayed · realised path in white";
-  // ---- canvas ----
-  const w = cvHost.clientWidth || 300, h = cvHost.clientHeight || 170;
-  let cv = cvHost.querySelector("canvas");
-  if (!cv) {
-    cvHost.innerHTML = "";
-    cv = document.createElement("canvas");
-    cv.style.cssText = "width:100%;height:100%;display:block";
-    cvHost.appendChild(cv);
+  // ---- probability bar: the answer in one glance ----
+  const bar = $("#branch-bar");
+  if (bar) {
+    const pt = Math.round((b.p_target_cond ?? b.p_target) * 100),
+          ps = Math.round(b.p_stop * 100), pb = Math.max(0, 100 - pt - ps);
+    const seg = (v, color, label) => v > 0 ? `<div style="flex:${v};background:${color};color:#0b0b14;font:700 10px ui-monospace,monospace;text-align:center;padding:4px 0;white-space:nowrap;overflow:hidden">${label} ${v}%</div>` : "";
+    bar.innerHTML = `<div style="display:flex;border-radius:6px;overflow:hidden;gap:1px">
+      ${seg(pt, "#26a69a", "TARGET FIRST")}${seg(pb, "#3a3f55", "NEITHER")}${seg(ps, "#ef5350", "STOP FIRST")}</div>
+      <div class="hint" style="margin-top:3px">of ${b.n} past windows on this asset with these TP/SL distances — green hit target first, red hit stop first, grey neither barrier was touched</div>`;
   }
-  cv.width = w * 2; cv.height = h * 2;
-  const g = cv.getContext("2d");
-  g.setTransform(2, 0, 0, 2, 0, 0);
+  // ---- fan chart: price (white) inside the measured future cone ----
+  const w = cvHost.clientWidth || 300, h = cvHost.clientHeight || 190;
+  let cv = cvHost.querySelector("canvas");
+  if (!cv) { cvHost.innerHTML = ""; cv = document.createElement("canvas");
+    cv.style.cssText = "width:100%;height:100%;display:block"; cvHost.appendChild(cv); }
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = w * dpr; cv.height = h * dpr;
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
   const t0 = d.cycle_start || (Date.now() / 1000 - 60);
   const t1 = d.cycle_end || (Date.now() / 1000 + b.rem_s);
-  // the fan is anchored at NOW (bands are quantiles of the REMAINING
-  // window from the current price) — the old code spread them across
-  // the whole cycle, so the cone floated away from the realised path
   const tN = b.now || (Date.now() / 1000);
-  const levels = [b.entry, b.tp, b.sl, ...b.bands.map(x => x.level)];
-  let lo = Math.min(...levels), hi = Math.max(...levels);
-  const pad = (hi - lo) * 0.12 || Math.abs(b.entry * 1e-3) || 1;
-  lo -= pad; hi += pad;
-  const X = t => ((t - t0) / Math.max(1, t1 - t0)) * (w - 42) + 1;
-  const Y = p2 => h - 14 - ((p2 - lo) / (hi - lo || 1)) * (h - 20);
-  const XF = f => X(tN + f * Math.max(1, t1 - tN));   // fan x at fraction f
-  // shaded EMPIRICAL cone (quantiles per elapsed fraction, measured
-  // on this asset's tape), rooted at (now, current price)
-  if (b.fan && b.fan.length > 2) {
-    for (const [hiK, loK, fill] of [["q95", "q05", "rgba(0,212,240,.08)"], ["q75", "q25", "rgba(0,212,240,.14)"]]) {
-      g.beginPath();
-      g.moveTo(X(tN), Y(b.entry));
-      b.fan.forEach(p => g.lineTo(XF(p.f), Y(p[hiK])));
-      for (let i = b.fan.length - 1; i >= 0; i--) g.lineTo(XF(b.fan[i].f), Y(b.fan[i][loK]));
-      g.closePath(); g.fillStyle = fill; g.fill();
-    }
-    g.beginPath(); g.moveTo(X(tN), Y(b.entry));
-    b.fan.forEach(p => g.lineTo(XF(p.f), Y(p.q50)));
-    g.strokeStyle = "rgba(216,216,232,.5)"; g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]);
-  } else {
-    const upper = b.bands.filter(x => x.f >= 0.5);
-    const lower = b.bands.filter(x => x.f <= 0.5);
-    g.beginPath();
-    g.moveTo(X(tN), Y(b.entry));
-    upper.forEach(x => g.lineTo(XF(x.f), Y(x.level)));
-    for (let i = lower.length - 1; i >= 0; i--) g.lineTo(XF(lower[i].f), Y(lower[i].level));
-    g.closePath();
-    g.fillStyle = "rgba(240,56,90,.08)"; g.fill();
-  }
-  // median band line
-  const med = b.bands.find(x => x.f === 0.5);
-  if (med) {
-    g.beginPath(); g.moveTo(X(tN), Y(b.entry)); g.lineTo(XF(med.f), Y(med.level));
-    g.strokeStyle = "rgba(216,216,232,.5)"; g.setLineDash([3, 3]); g.lineWidth = 1; g.stroke(); g.setLineDash([]);
-  }
-  // TP / SL / entry — TP and SL are FUTURE barriers: draw them from
-  // the now-line to the window end, not across the realised past
-  const hline = (lv, color, label, dash, fromX) => {
-    g.beginPath(); g.moveTo(fromX ?? X(t0), Y(lv)); g.lineTo(X(t1), Y(lv));
-    g.strokeStyle = color; g.lineWidth = 1.2; g.setLineDash(dash || [6, 4]); g.stroke(); g.setLineDash([]);
-    g.fillStyle = color; g.font = "9px monospace"; g.textAlign = "left";
-    g.fillText(`${label} ${px(lv)}`, (fromX ?? X(t0)) + 3, Y(lv) - 3);
-  };
-  hline(b.tp, "#22c98a", "TP →", [6, 4], X(tN));
-  hline(b.sl, "#f0385a", "SL →", [6, 4], X(tN));
-  hline(b.entry, "#d8d8e8", "now", [2, 3]);
-  // realised path (white) — candle series from the window start,
-  // not just ticks since page load (was starting mid-chart)
   const hist = realisedSeries(t0 - 1, Date.now() / 1000);
+  // range from the PRICE ACTION + barriers (never the fan extremes:
+  // they squashed the realised line into a corner for a day)
+  let lo = Infinity, hi = -Infinity;
+  for (const pp of hist) { lo = Math.min(lo, pp.p); hi = Math.max(hi, pp.p); }
+  for (const lv of [b.entry, b.tp, b.sl]) if (lv) { lo = Math.min(lo, lv); hi = Math.max(hi, lv); }
+  if (!(hi > lo)) { hi = (b.entry || 1) * 1.001; lo = (b.entry || 1) * 0.999; }
+  const pad = (hi - lo) * 0.1; lo -= pad; hi += pad;
+  const padR = 56, X = t => 2 + ((t - t0) / Math.max(1, t1 - t0)) * (w - padR - 4),
+        Y = p2 => 8 + (hi - p2) / (hi - lo) * (h - 24);
+  // grid + right price axis (readable 10px labels)
+  g.font = "10px ui-monospace,monospace"; g.textAlign = "left";
+  for (let i = 0; i <= 4; i++) { const p2 = lo + (hi - lo) * i / 4, y = Y(p2);
+    g.strokeStyle = "rgba(140,140,170,.13)"; g.beginPath(); g.moveTo(2, y); g.lineTo(w - padR, y); g.stroke();
+    g.fillStyle = "#9a9ab2"; g.fillText(px(p2), w - padR + 5, y + 3); }
+  // future cone (clipped to the plot so it can never squash the price)
+  g.save(); g.beginPath(); g.rect(2, 4, w - padR - 2, h - 20); g.clip();
+  if (b.fan && b.fan.length > 2) {
+    const XF = f => X(tN + f * Math.max(1, t1 - tN));
+    g.beginPath(); g.moveTo(X(tN), Y(hist.length ? hist[hist.length - 1].p : b.entry));
+    b.fan.forEach(p => g.lineTo(XF(p.f), Y(p.q95)));
+    for (let i = b.fan.length - 1; i >= 0; i--) g.lineTo(XF(b.fan[i].f), Y(b.fan[i].q05));
+    g.closePath(); g.fillStyle = "rgba(38,166,154,.13)"; g.fill();
+    g.beginPath(); g.moveTo(X(tN), Y(hist.length ? hist[hist.length - 1].p : b.entry));
+    b.fan.forEach(p => g.lineTo(XF(p.f), Y(p.q50)));
+    g.strokeStyle = "#7fd8cf"; g.setLineDash([4, 3]); g.lineWidth = 1.4; g.stroke(); g.setLineDash([]);
+  }
+  // realised price — thick white, the hero of this chart
   if (hist.length > 1) {
     g.beginPath();
     hist.forEach((pp, i) => { const xx = X(pp.t), yy = Y(pp.p); i ? g.lineTo(xx, yy) : g.moveTo(xx, yy); });
-    g.strokeStyle = "#ffffff"; g.lineWidth = 1.3; g.stroke();
+    g.strokeStyle = "#ffffff"; g.lineWidth = 2; g.stroke();
+    const lp = hist[hist.length - 1];
+    g.fillStyle = "#fff"; g.beginPath(); g.arc(X(lp.t), Y(lp.p), 3, 0, 7); g.fill();
   }
-  // now marker
+  g.restore();
+  // barriers with right-edge tags
+  const tag = (lv, color, label) => { if (!lv) return; const y = Y(lv);
+    g.strokeStyle = color; g.setLineDash([6, 4]); g.lineWidth = 1.3;
+    g.beginPath(); g.moveTo(2, y); g.lineTo(w - padR, y); g.stroke(); g.setLineDash([]);
+    g.fillStyle = color; g.fillRect(w - padR + 1, y - 8, padR - 3, 15);
+    g.fillStyle = "#0b0b14"; g.font = "bold 9px ui-monospace,monospace";
+    g.fillText(label, w - padR + 4, y + 3); g.font = "10px ui-monospace,monospace"; };
+  tag(b.tp, "#26a69a", "TP " + px(b.tp)); tag(b.sl, "#ef5350", "SL " + px(b.sl));
+  const ey = Y(b.entry);
+  g.strokeStyle = "rgba(201,162,39,.8)"; g.lineWidth = 1.2;
+  g.beginPath(); g.moveTo(2, ey); g.lineTo(w - padR, ey); g.stroke();
+  g.fillStyle = "#c9a227"; g.font = "bold 9px ui-monospace,monospace";
+  g.fillText("ENTRY " + px(b.entry), 5, ey - 4);
+  // now divider
   const nowX = X(Math.min(Date.now() / 1000, t1));
-  g.beginPath(); g.moveTo(nowX, 4); g.lineTo(nowX, h - 12);
-  g.strokeStyle = "rgba(201,162,39,.7)"; g.lineWidth = 1; g.stroke();
-  g.fillStyle = "#c9a227"; g.font = "9px monospace"; g.textAlign = "right";
-  g.fillText("now", nowX - 3, 12);
+  g.strokeStyle = "rgba(201,162,39,.55)"; g.setLineDash([3, 3]);
+  g.beginPath(); g.moveTo(nowX, 4); g.lineTo(nowX, h - 16); g.stroke(); g.setLineDash([]);
+  g.fillStyle = "#c9a227"; g.fillText("NOW", Math.max(4, nowX - 26), 13);
+  g.fillStyle = "#9a9ab2"; g.font = "9px ui-monospace,monospace";
+  g.fillText("← what already happened", 5, h - 4);
+  g.fillText("what history says can happen →", Math.max(120, w - padR - 190), h - 4);
 }
 
 /* ═══════ formula live-value ticker (raw → new) ═══════ */

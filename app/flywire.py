@@ -42,8 +42,8 @@ import numpy as np
 BUILD_VERSION = 1
 CACHE_DIR = Path(
     os.environ.get("CONNECTOME_CACHE",
-                   str(Path.home() / ".cache" / "drosophila-trader"
-                       / "connectome")))
+                   str(Path(__file__).resolve().parent.parent
+                       / "data" / "connectome")))
 PARQUET = "Connectivity_783.parquet"
 ANNOTATIONS = "Supplemental_file1_neuron_annotations.tsv"
 EXPECTED_MIN = {PARQUET: 90_000_000, ANNOTATIONS: 25_000_000}
