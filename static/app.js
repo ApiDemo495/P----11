@@ -3095,7 +3095,7 @@ function applySnapshot(snap) {
       (S.prices ||= {})[sym] = av.price;
   try { checkIssuedAlerts(snap); } catch (e) { /* alerts optional */ }
   S.serverOffset = (snap.ts ? snap.ts * 1000 : Date.now()) - Date.now();
-  renderBoot(snap);               // overlay FIRST — contract test guard
+  renderBoot(snap);   // overlay FIRST
   renderAlert(snap);
   try { renderQuads(); renderWhy(); renderRail(); } catch (e) { console.error("render", e); }
   try { renderBranches(); } catch (e) { console.error("branches", e); }
