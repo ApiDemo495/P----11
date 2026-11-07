@@ -319,7 +319,7 @@ def test_analyse_pipeline_stages_and_readonly():
     assert job["status"] == "done", job.get("error")
     order = [s["stage"] for s in job["stages"]]
     assert order == ["formulas", "emotions", "physics", "news", "hedge",
-                     "ai_review", "final"], order
+                     "ai_review", "recheck", "final"], order
     # every stage carries the calculation period (start/end/duration)
     for st in job["stages"]:
         assert st["t_start_ms"] <= st["t_end_ms"]
@@ -327,8 +327,10 @@ def test_analyse_pipeline_stages_and_readonly():
         assert st["summary"]
     # final box: signal + 4 TPs + SL + per-asset weightage + total time
     r = job["result"]
-    assert r["signal"] in ("BUY", "SELL", "FLAT")
-    assert len(r["tps"]) == 4
+    assert r["signal"] in ("BUY", "SELL", "FLAT", "NO TRADE")
+    assert r["recheck"] and "checks" in r["recheck"]  # recheck gate ran
+    assert (r["prediction"] is not None) == r["recheck"]["passed"]
+    assert len(r["tps"]) >= 1  # locked cycle targets (horizon last)
     assert r["sl"] is not None
     assert r["weightage"] and r["weightage_note"]
     assert r["elapsed_ms"] > 0
@@ -337,7 +339,7 @@ def test_analyse_pipeline_stages_and_readonly():
     types = [m["type"] for m in msgs]
     assert types[0] == "analyse_started"
     assert types[-1] == "analyse_done"
-    assert types.count("analyse_stage") == 7
+    assert types.count("analyse_stage") == 8  # + recheck stage (user: recheck everything before producing)
     # keyless AI stage is honest about skipping
     ai_stage = next(s for s in job["stages"] if s["stage"] == "ai_review")
     if not eng.agents.settings.get("gemini_key"):

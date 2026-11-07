@@ -127,6 +127,48 @@ STATE_DIRECTIONS = {
 }
 
 
+def _recheck_prediction(*, direction: int, conf: float, floor: float,
+                        feed_age_s, voters: dict, levels_ok: bool,
+                        ratio, lock_dir: int, tfs_computed: int) -> dict:
+    """The analysis RECHECK gate (user: calculate everything, take every
+    data, recheck everything, THEN produce a prediction). A prediction
+    is produced only when every check passes; otherwise the honest
+    output is NO TRADE with the failed checks named. Checks: live data
+    (feed <= 20 s old), all 4 timeframes computed, subsystem consensus
+    (>=3 of the fused/emotion/physics/news/hedge voters agree with the
+    direction), levels valid + exactly 2:1, confidence above the asset
+    floor, and no contradiction with the window's locked call."""
+    checks = []
+    def add(name, ok, detail):
+        checks.append({"name": name, "ok": bool(ok), "detail": detail})
+    add("live data", feed_age_s is not None and feed_age_s <= 20,
+        f"feed age {feed_age_s:.1f}s" if feed_age_s is not None else "no ticks yet")
+    add("all timeframes computed", tfs_computed >= 4,
+        f"{tfs_computed}/4 timeframes in this run")
+    agreeing = [k for k, v in voters.items()
+                if v and direction and (v > 0) == (direction > 0)]
+    add("subsystem consensus", direction != 0 and len(agreeing) >= 3,
+        f"{len(agreeing)}/{len(voters)} voters agree"
+        + (f" ({', '.join(agreeing)})" if agreeing else "")
+        if direction else "no direction to agree with")
+    add("levels valid + 2:1", levels_ok and ratio is not None
+        and abs(float(ratio) - 2.0) <= 0.01,
+        f"ratio {ratio}" if ratio is not None else "no levels")
+    add("confidence above floor", direction != 0 and conf > floor,
+        f"conf {conf:.3f} vs floor {floor:.3f}")
+    if lock_dir:
+        add("agrees with locked call", direction == lock_dir,
+            "locked " + ("BUY" if lock_dir > 0 else "SELL")
+            + " vs analysis " + ("BUY" if direction > 0 else
+                                  "SELL" if direction < 0 else "FLAT"))
+    failed = [c["name"] for c in checks if not c["ok"]]
+    return {"passed": not failed and direction != 0,
+            "checks": checks, "failed": failed,
+            "verdict": ("RECHECK PASSED — prediction produced" if not failed
+                        and direction != 0 else
+                        "NO TRADE — recheck failed: " + ", ".join(failed))}
+
+
 def _calibration_delta(audit: dict) -> float:
     """Additive correction for future P(target) forecasts, fitted ONLY
     from graded forecasts: systematically predict 62% but realise 54%
@@ -1751,7 +1793,7 @@ class PredictionEngine:
     # window boundary).
     # ==================================================================
     ANALYSE_STAGES = ("formulas", "emotions", "physics", "news", "hedge",
-                      "ai_review", "final")
+                      "ai_review", "recheck", "final")
 
     def start_analyse(self, symbol: str, tf: str = "tf1") -> dict:
         if self.analyse_job and self.analyse_job.get("status") == "running":
@@ -1979,6 +2021,47 @@ class PredictionEngine:
                         sl = float(_fin["sl"])
                         ratio_used = _fin.get("ratio")
                 levels_source = "fresh 2:1 block (no lock yet this window)"
+            _t_re = time.time()
+            # 6.5 ── RECHECK: every data source, every subsystem, then
+            # and only then a prediction (user order). The analysis may
+            # NOT contradict the locked call, may NOT issue on stale
+            # data, broken levels, a split vote, or sub-floor confidence.
+            _voters = {
+                "fused": int(res.get("direction") or 0),
+                "emotion": int((store.get("emotions") or {}).get(tf, {})
+                               .get("polarity") or 0),
+                "physics": (1 if (store.get("physics") or {}).get(tf, {})
+                            .get("ufp", 0) > 0 else
+                            -1 if (store.get("physics") or {}).get(tf, {})
+                            .get("ufp", 0) < 0 else 0),
+                "news": (1 if (store.get("news") or {}).get("niv", 0) > 0
+                         else -1 if (store.get("news") or {}).get("niv", 0) < 0
+                         else 0),
+                "hedge": (1 if (store.get("hedge") or {}).get(tf, {})
+                          .get("combined", 0) > 0 else
+                          -1 if (store.get("hedge") or {}).get(tf, {})
+                          .get("combined", 0) < 0 else 0),
+            }
+            _st = self.feed.state(symbol)
+            _age = (round(time.time() - float(_st.last_tick), 1)
+                    if getattr(_st, "last_tick", 0) else None)
+            _dir_lv = int(_lv["direction"]) if _lv else direction
+            _tp_lv = (tps[-1]["level"] if tps else None)
+            from .levels import valid as _lv_valid
+            _levels_ok = bool(_lv_valid({
+                "entry": entry_used, "tp": _tp_lv, "sl": sl,
+                "direction": _dir_lv}) if _tp_lv and sl else False)
+            recheck = _recheck_prediction(
+                direction=direction, conf=conf,
+                floor=float(res.get("asset_floor") or CONFIDENCE_FLOOR),
+                feed_age_s=_age, voters=_voters, levels_ok=_levels_ok,
+                ratio=ratio_used,
+                lock_dir=int(getattr(cyc, "direction", 0) or 0) if cyc else 0,
+                tfs_computed=len(res_pack))
+            await self._emit_stage(
+                job, "recheck", "done" if recheck["passed"] else "blocked",
+                _t_re, time.time(), recheck["verdict"],
+                {"checks": recheck["checks"], "voters": _voters})
             # per-asset weightage — every asset runs its OWN weights
             wts = damp_all(self.cci.get_weights(symbol, tf))
             top_w = sorted(wts.items(), key=lambda kv: -abs(kv[1]))[:8]
@@ -1995,6 +2078,15 @@ class PredictionEngine:
                 "sl": round(sl, 6) if sl else None,
                 "ratio": ratio_used,
                 "levels_source": levels_source,
+                "raw_signal": ("BUY" if direction > 0 else
+                               "SELL" if direction < 0 else "FLAT"),
+                "recheck": recheck,
+                "prediction": ({"direction": direction,
+                                "confidence": round(conf, 4),
+                                "entry": round(entry_used, 6),
+                                "tp": _tp_lv, "sl": round(sl, 6) if sl else None,
+                                "ratio": ratio_used}
+                               if recheck["passed"] else None),
                 "weightage": [{"id": str(k), "w": round(v, 5)}
                               for k, v in top_w],
                 "weightage_note": ("per-asset, per-timeframe weights — "
@@ -2011,6 +2103,9 @@ class PredictionEngine:
                                for e in job["stages"]],
                 },
             }
+            if not recheck["passed"]:
+                final["signal"] = "NO TRADE"
+                final["issued"] = False
             job["result"] = final
             job["status"] = "done"
             await self._emit_stage(

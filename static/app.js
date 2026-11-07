@@ -1206,6 +1206,11 @@ function onAnalyseDone(msg) {
       <div class="an-cell"><div class="k">LADDER</div><div class="v" style="font-size:10.5px;font-weight:400">${esc(r.ladder?.source || "—")}</div></div>
       <div class="an-w">weightage for ${msg.symbol} (per-asset mix): ${(r.weightage || []).map(w => `F${w.id} <b>${w.w}</b>`).join(" · ")}<br/><span class="dim">${esc(r.weightage_note || "")}</span></div>
       <div class="an-ai">AI review — ${esc(aiLine)}</div>
+      ${r.recheck ? `<div class="an-recheck" style="margin-top:6px;font-size:10.5px">
+        <b class="${r.recheck.passed ? "acc-up" : "acc-dn"}">${esc(r.recheck.verdict)}</b>
+        ${(r.recheck.checks || []).map(c => `<div class="kv"><span>${c.ok ? "✓" : "✗"} ${esc(c.name)}</span><b class="${c.ok ? "" : "acc-dn"}">${esc(c.detail)}</b></div>`).join("")}
+        ${r.prediction ? `<div class="hint">prediction produced: ${r.prediction.direction > 0 ? "BUY" : "SELL"} · entry ${px(r.prediction.entry)} · TP ${px(r.prediction.tp)} · SL ${px(r.prediction.sl)} · 1:${Number(r.prediction.ratio).toFixed(2)}</div>` : `<div class="hint">raw analysis read was ${esc(r.raw_signal || "—")} — not produced as a prediction (see failed checks above).</div>`}
+      </div>` : ""}
       <div class="an-period">calculation period: ${esc(period)} · total ${r.elapsed_ms} ms</div>
     </div></div>`;
   // SYNC: the analysis recomputes every subsystem — refetch whatever view
