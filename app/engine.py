@@ -1943,16 +1943,42 @@ class PredictionEngine:
             direction = int(res.get("direction") or 0)
             conf = float(res.get("confidence") or 0.0)
             minutes = TIMEFRAMES[tf]["targets"]
-            tps = []
-            for k, mins in enumerate(minutes, start=1):
-                lvl = self._project_level(price, direction or 1, conf, atr, mins)
-                tps.append({"k": k, "minutes": mins, "level": round(lvl, 6)})
+            # ONE source of truth for levels (user: "which is real?"):
+            # the LOCKED cycle levels — the same entry/TP/SL the chart,
+            # calls table and (armed) trader use. The old finale mixed
+            # confidence-projected TPs (conf~0 -> TP = entry) with a
+            # borrowed SL from a possibly opposite cycle: the millions
+            # of contradictions in one panel. No lock yet -> build ONE
+            # direction-aware 2:1 block anchored at the analysis entry.
             cyc = self.cycles.get((symbol, tf))
-            sl = None
-            if cyc is not None and cyc.sl:
-                sl = cyc.sl
-            elif direction != 0:
-                sl = price - direction * atr * 1.0
+            from .levels import from_cycle as _lv_from_cycle, freeze as _lv_freeze
+            _lv = _lv_from_cycle(cyc) if cyc is not None else None
+            if _lv:
+                entry_used = float(_lv["entry"])
+                tps = [{"k": t.k, "minutes": t.minutes,
+                        "level": round(float(t.level), 6)}
+                       for t in (cyc.targets or []) if t.level]
+                if not tps:
+                    tps = [{"k": 1, "minutes": minutes[-1],
+                            "level": round(float(_lv["tp"]), 6)}]
+                sl = float(_lv["sl"])
+                ratio_used = _lv.get("ratio")
+                levels_source = "locked cycle — same levels as chart/calls"
+            else:
+                entry_used = price
+                tps, sl, ratio_used = [], None, None
+                if direction != 0 and price > 0:
+                    from .moves_risk import risk_block as _rb
+                    _blk = _rb(price, direction, minutes[-1],
+                                       min(1.0, conf), [], [], [], atr=atr)
+                    _fin = _lv_freeze(price, direction, _blk) \
+                        if _blk else None
+                    if _fin:
+                        tps = [{"k": 1, "minutes": minutes[-1],
+                                "level": round(float(_fin["tp"]), 6)}]
+                        sl = float(_fin["sl"])
+                        ratio_used = _fin.get("ratio")
+                levels_source = "fresh 2:1 block (no lock yet this window)"
             # per-asset weightage — every asset runs its OWN weights
             wts = damp_all(self.cci.get_weights(symbol, tf))
             top_w = sorted(wts.items(), key=lambda kv: -abs(kv[1]))[:8]
@@ -1963,10 +1989,12 @@ class PredictionEngine:
                 "confidence": round(conf, 4),
                 "issued": bool(res.get("issued")),
                 "price": price,
+                "entry": round(entry_used, 6),
                 "atr": round(atr, 6),
                 "tps": tps,
                 "sl": round(sl, 6) if sl else None,
-                "ratio": None,
+                "ratio": ratio_used,
+                "levels_source": levels_source,
                 "weightage": [{"id": str(k), "w": round(v, 5)}
                               for k, v in top_w],
                 "weightage_note": ("per-asset, per-timeframe weights — "
@@ -3629,15 +3657,17 @@ class PredictionEngine:
         _prof = asset_profile(symbol)
         if _prof["sl_mult"] != 1.0 or _prof["tp_mult"] != 1.0:
             for _b in _blocks.values():
+                # asset nature scales the 1 unit (SL); TP re-derives as
+                # exactly 2 units so the 2:1 rule survives every profile
                 _b["sl_bps"] = round(_b["sl_bps"] * _prof["sl_mult"], 3)
-                _b["tp_bps"] = round(_b["tp_bps"] * _prof["tp_mult"], 3)
+                _b["tp_bps"] = round(2.0 * _b["sl_bps"], 3)
                 _b["tp"] = round(_price0 * (1 + _dir * _b["tp_bps"] / 1e4), 6)
                 _b["sl"] = round(_price0 * (1 - _dir * _b["sl_bps"] / 1e4), 6)
                 _b["rr"] = round(_b["tp_bps"] / _b["sl_bps"], 3) \
                     if _b["sl_bps"] else None
                 _b["note"] = (_b.get("note", "")
                               + f" · asset profile ×{_prof['sl_mult']} SL"
-                                f"/×{_prof['tp_mult']} TP ({symbol} nature)")
+                                f" TP = 2x unit ({symbol} nature)")
         _horizon_block = _blocks[_mins[-1]]     # horizon TP ALWAYS calculated FIRST
         for k, minutes in enumerate(_mins, start=1):
             if k == len(_mins):

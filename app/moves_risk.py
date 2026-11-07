@@ -28,7 +28,10 @@ from __future__ import annotations
 import math
 from typing import Any
 
-RR_TARGET = 1.5
+RR_TARGET = 2.0   # USER RULE: TP:SL = 2:1 exactly, everywhere, always.
+                  # SL is the 1 unit (measured q80 adverse excursion);
+                  # TP is 2 units. Neither can exceed its unit:
+                  # sl_bps is the measured unit, tp_bps = 2 x sl_bps.
 MIN_WINDOWS = 5
 
 
@@ -96,18 +99,16 @@ def risk_block(entry: float, direction: int, minutes: int, edge: float,
         tp_bps = RR_TARGET * sl_bps
     else:
         mae = st["mae_long_q80"] if s > 0 else st["mae_short_q80"]
+        # the 1 unit: measured adverse excursion (robust q80 quantile)
         sl_bps = max(1.0, mae)
-        f_edge = 0.8 + 0.4 * min(1.0, max(0.0, float(edge)))
-        tp_bps = min(max(RR_TARGET * sl_bps * f_edge, st["q50"]),
-                     st["q95"]) if st["q95"] > 0 else RR_TARGET * sl_bps * f_edge
-        if sl_bps > 0:
-            tp_bps = max(tp_bps, sl_bps * 1.0)       # rr never below 1.0
+        tp_bps = RR_TARGET * sl_bps          # exactly 2 units, no clamp
     sl_bps += half_spread
-    tp_bps += half_spread
+    tp_bps = RR_TARGET * sl_bps              # spread inside the unit:
+                                             # ratio stays exactly 2:1
     tp = entry * (1 + s * tp_bps / 1e4)
     sl = entry * (1 - s * sl_bps / 1e4)
     rr = (tp_bps / sl_bps) if sl_bps > 0 else 0.0
-    note = (f"{tp_bps:.0f} bps target / {sl_bps:.0f} bps stop = {rr:.2f}:1 — "
+    note = (f"{tp_bps:.0f} bps target / {sl_bps:.0f} bps stop = 2.00:1 (user rule) — "
             + (f"provisional (n={n} windows < {MIN_WINDOWS}, ATR fallback)"
                if provisional else
                f"q80 MAE of {n} windows (q50 {st['q50']:.0f} / "

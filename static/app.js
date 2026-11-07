@@ -1198,7 +1198,7 @@ function onAnalyseDone(msg) {
     <div class="an-signal ${dirCls}">
       <div class="big">${r.signal}</div>
       <div class="conf">confidence ${fx(r.confidence, 3)}${r.issued ? " · ISSUED" : " · below floor"}</div>
-      <div class="conf">entry ${px(r.price)} · ATR ${fmt(r.atr, 4)}</div>
+      <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? "1:" + Number(r.ratio).toFixed(2) : "—"} · levels: ${esc(r.levels_source || "locked cycle")}</div>
     </div>
     <div class="an-grid">
       ${r.tps.map(t => `<div class="an-cell"><div class="k">TP${t.k} · ${t.minutes}m</div><div class="v">${px(t.level)}</div></div>`).join("")}
