@@ -2956,6 +2956,17 @@ setInterval(() => {
     api("/api/snapshot").then(applySnapshot).catch(() => {});
   }
   if (_tickN % 5 === 0) pollChartLink();
+  if (_tickN % 30 === 15) {           // version watch: auto-reload
+    api("/api/health").then(h => {
+      if (!h.commit || h.commit === "?") return;
+      if (!S._commit) { S._commit = h.commit; return; }
+      if (h.commit !== S._commit && !S._reloaded) {
+        S._reloaded = true;
+        toast("new version live — refreshing…", "ok");
+        setTimeout(() => location.reload(), 600);
+      }
+    }).catch(() => {});
+  }
   // 2b) candle series refresh (~30 s): the realised line's backfill
   // must stay current or the charts drift from the tape again
   if (_tickN % 30 === 0) loadCandles().catch(() => {});

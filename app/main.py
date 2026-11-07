@@ -221,12 +221,27 @@ async def _on_feed_tick(symbol: str, price: float, volume: float) -> None:
 # ---------------------------------------------------------------------------
 # HTTP
 # ---------------------------------------------------------------------------
+def _git_commit() -> str:
+    try:
+        import subprocess as _sp
+        from pathlib import Path as _P
+        return _sp.run(["git", "rev-parse", "--short", "HEAD"],
+                       cwd=str(_P(__file__).parent.parent),
+                       capture_output=True, text=True, timeout=5).stdout.strip() or "?"
+    except Exception:
+        return "?"
+
+
+_COMMIT = _git_commit()
+
+
 @app.get("/api/health")
 async def health() -> dict:
     import time as _t
     age = round(_t.time() - getattr(engine, "last_window_ts", _t.time()), 1)
     return {
         "ok": True,
+        "commit": _COMMIT,
         "phase": engine.phase,
         "feed": feed.mode,
         "feed_stats": feed.stats(),

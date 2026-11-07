@@ -76,6 +76,26 @@ ensure_md_preview() {
 # setup/boot proceed in parallel
 ( ensure_md_preview ) >/dev/null 2>&1 &
 
+# ── auto-update (no commands, ever): a clean tree fast-forwards to
+# the branch tip; if the commit moved, the app restarts on new code.
+# A dirty tree is never touched. Log: data/auto_update.log ──
+mkdir -p data
+{
+  if command -v git >/dev/null 2>&1 && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+    _br="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+    if [ -n "$_br" ]; then
+      _before="$(git rev-parse HEAD 2>/dev/null || true)"
+      if git fetch -q origin "$_br" 2>>data/auto_update.log          && git pull -q --ff-only origin "$_br" 2>>data/auto_update.log; then
+        _after="$(git rev-parse HEAD 2>/dev/null || true)"
+        if [ -n "$_before" ] && [ "$_before" != "$_after" ]; then
+          log "code updated ${_before} -> ${_after} — restarting app"
+          stop_app
+        fi
+      fi
+    fi
+  fi
+} || true
+
 # port visibility on EVERY invocation — even (especially) when the
 # app is already healthy; the old order skipped this on early exit
 bash scripts/make_port_public.sh || true
