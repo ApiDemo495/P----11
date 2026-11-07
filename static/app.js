@@ -2955,7 +2955,7 @@ setInterval(() => {
   if (_tickN % 2 === 0 && Date.now() - S.lastMsgAt >= 4000) {
     api("/api/snapshot").then(applySnapshot).catch(() => {});
   }
-  if (_tickN % 5 === 0) pollChartLink();
+  if (_tickN % 5 === 0) { pollChartLink(); pollBacktest(); }
   if (_tickN % 30 === 15) {           // version watch: auto-reload
     api("/api/health").then(h => {
       if (!h.commit || h.commit === "?") return;
@@ -3076,6 +3076,9 @@ async function pollChartLink() {
 }
 
 async function pollBacktest() {
+  const now = Date.now();                    // 5-min self-throttle
+  if (S._btAt && now - S._btAt < 290000) return;
+  S._btAt = now;
   try {
     const d = await api("/api/backtest");
     const box = $("#bt-panel"); if (!box) return;
@@ -3085,7 +3088,7 @@ async function pollBacktest() {
     const meta = $("#bt-meta"); if (meta) meta.textContent = d.source || "";
   } catch { /* warming up */ }
 }
-pollBacktest(); setInterval(pollBacktest, 300000);
+pollBacktest();   // repeats via the tick loop below (one clock, H-2)
 
 /* ═══════════ snapshot / tick plumbing ═══════════ */
 // s.serverOffset re-anchors on EVERY message (advice H-2): the countdown

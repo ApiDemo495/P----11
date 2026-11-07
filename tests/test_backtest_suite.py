@@ -82,3 +82,17 @@ def test_backtest_endpoint_empty_state_is_honest(tmp_path, monkeypatch):
     import conftest
     d = conftest.run_sync(backtest_report())
     assert d["ok"] is False and "no real backtest" in d["reason"]
+
+
+def test_policy_gate_and_direction():
+    from backtest.policy import atr_pct_series, gate_ok, policy_direction
+    assert policy_direction({"tf4": {"direction": 1}}) == -1
+    assert policy_direction({"tf4": {"direction": -1}}) == 1
+    assert policy_direction({"tf4": {}}) == 0
+    shrinking = [Bar(i * 60, 100, 100 + max(0.3, 6 - i * 0.03),
+                      100 - max(0.3, 6 - i * 0.03), 100, 1.0)
+                 for i in range(200)]
+    assert atr_pct_series(shrinking)
+    assert not gate_ok(shrinking)                       # vol dying -> gated out
+    spike = shrinking[:-1] + [Bar(199 * 60, 100, 200, 50, 150, 1.0)]
+    assert gate_ok(spike)                               # vol spike passes

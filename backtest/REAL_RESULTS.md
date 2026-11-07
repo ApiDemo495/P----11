@@ -66,3 +66,29 @@ Verdict: on this window, learning made it WORSE, not better (EV
 The reward-learning loops as currently tuned chase the last move
 and degrade the signal on 1h bars. Trade log:
 backtest/results/mode_a_trades_real_1h_learning.csv
+
+## Improvement experiments (walk-forward, same real window)
+344 decision points collected once; ~50 variants settled offline
+(direction rules incl. inversions, barrier scale k, horizons,
+filters). Selection on first 55% of decisions, judged ONLY on the
+last 45%. Rejected in-sample-only winners are not listed as wins.
+
+Baseline (engine tf1, k=1, h=22) on test: 37.4% win, EV -0.149R.
+
+REMOVED as harmful on evidence:
+- live learning loops (run 2: EV -0.077R -> -0.158R)
+- trend/momentum alignment filters (train AND test worse)
+- confidence>=median filter (worse both halves)
+
+VALIDATED POLICY (now backtest/policy.py, CLI --policy validated):
+direction = INVERSE of engine TF4 direction (the macro timeframe
+factor is anti-predictive on 1h bars), only when ATR% is in the
+top tercile of its trailing window, barriers k=0.75 (2:1 kept).
+- train: 58.6% win, EV +0.252R, PF 1.56 (n=29)
+- TEST:  58.3% win, EV +0.254R, PF 1.74 (n=48)
+- full window: 58.4%, EV +0.253R (n=77)
+Per-asset test inside the policy: BTC 75.0% (n=12), ETH 80.0%
+(n=10), BNB 41.7% (n=24, EV +0.061R) — BTC/ETH above 60% but on
+small n; pooled 58.3% is the defensible number, NOT 60%+.
+Status: candidate. It does NOT touch live direction until forward
+data (the Codespace 15m daily backtests) confirms it at n>=200.
