@@ -7,7 +7,7 @@ LC = open("static/LineChart.js").read()
 
 
 def test_main_chart_uses_real_fan_keys():
-    assert "hi: p.q95" in JS and "lo: p.q05" in JS
+    assert "series(\"q50\")" in JS and "lo: p2.q05" in JS   # fan keys q05..q95 in both charts
     assert "p.q90" not in JS and "p.q10" not in JS
 
 

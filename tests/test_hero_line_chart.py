@@ -19,10 +19,13 @@ def test_fan_sigma_floored_by_measured_block():
 
 
 def test_own_main_chart_is_line_from_now():
+    """docs11-charts Part C supersedes the line-from-now hero: the OWN
+    main chart is server-tape candlesticks (Lightweight Charts) with
+    entry/TP/SL price lines and lock markers."""
     js = (ROOT / "static" / "app.js").read_text()
-    assert "function drawMainChart()" in js and "function _drawOwn()" in js
-    assert "PriceChart renderer (drawMainChart)" in js
-    assert "past[past.length - 1] = { t: now, p: price }" in js  # ends at live
+    assert "function drawMainChart()" in js and "function drawOwnChart()" in js
+    assert "addCandlestickSeries" in js and "createPriceLine" in js
+    assert "setMarkers" in js and "LOCK" in js
     assert "hero-chart" not in js and "drawHeroChart" not in js  # hero removed (user order)
 
 

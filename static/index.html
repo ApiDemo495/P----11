@@ -49,7 +49,7 @@
     <button id="auto-chip" class="btn-analyse btn-auto" title="AUTO-PREDICT: the analysis re-runs by itself so every tab is always fresh. Click to switch to MANUAL (▶ ANALYSE only).">AUTO: ON</button>
     <button id="btn-binance" class="btn-analyse" style="border-style:dashed" title="Binance execution (optional): opens Settings → Binance. Orders need enabled + keys + ARM + a qualifying issued prediction; sub-floor/random never executes.">⬢ CONNECT BINANCE</button>
     <button id="btn-analyse" class="btn-analyse" title="Run the staged analysis for this asset">▶ ANALYSE <span id="analyse-sym">BTC</span></button>
-    <span class="seg" id="seg-chart"><span class="seg-lbl">CHART</span><button data-chart="binance" class="seg-btn active">BINANCE</button><button data-chart="tv" class="seg-btn">TRADINGVIEW</button><button data-chart="own" class="seg-btn">OWN</button></span>
+    <span class="seg" id="seg-chart"><span class="seg-lbl">CHART</span><button data-chart="binance" class="seg-btn active">BINANCE</button><button data-chart="tv" class="seg-btn">TRADINGVIEW</button><button data-chart="own" class="seg-btn">OWN</button><button id="btn-fan" class="seg-btn hidden" title="expected-path fan inside the current window (q50 + q25/q75)">FAN</button></span>
   </div>
 
   <!-- alert bar -->
@@ -428,8 +428,8 @@
 </nav>
 
 <div id="toast-wrap"></div>
-<script src="/LineChart.js?v=2"></script>
+<script src="/LineChart.js?v=3"></script>
 <script src="/vendor/lightweight-charts.standalone.production.js"></script>
-<script type="module" src="/app.js?v=r27"></script>
+<script type="module" src="/app.js?v=r28"></script>
 </body>
 </html>

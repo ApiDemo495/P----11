@@ -26,7 +26,7 @@ def test_boot_overlay_updated_before_content_render():
     """applySnapshot must drive the boot overlay first; a render error can
     never freeze the initial-analysis page again."""
     i = APP_JS.index("function applySnapshot")
-    block = APP_JS[i:i + 400]
+    block = APP_JS[i:i + 700]
     assert "renderBoot" in block
     assert block.index("renderBoot") < block.index("renderQuads")
     assert "try { renderQuads" in block

@@ -269,6 +269,8 @@ async function loadSystemPanel() {
 /* Realised series for [t0, now]: candle closes (full-window backfill)
    merged with live ticks after the last bar. Shared by the hero and
    the probability chart so both lines start at the window start. */
+function serverNow() { return Date.now() / 1000 + (S.serverOff || 0); }
+
 function realisedSeries(t0, now) {
   const cs = (S.candleSeries && S.candleSeries.symbol === S.symbol)
     ? S.candleSeries.bars : [];
@@ -293,34 +295,127 @@ function drawMainChart() {
   if (_mainRaf) return;
   _mainRaf = requestAnimationFrame(() => { _mainRaf = 0; _drawOwn(); });
 }
-function _drawOwn() {
+function _drawOwn() { drawOwnChart(); }
+
+/* ═══════ OWN chart (docs11-charts Part C): candlesticks from the
+   server tape — the SAME stream that settles the levels — drawn with
+   the vendored Lightweight Charts. Autoscale comes from the candles
+   only; entry/TP/SL are price lines with axis tags (off-screen levels
+   keep their tag at the axis edge, per the library); lock/hit markers;
+   fan (q50 dashed + q25/q75) inside the current window only, toggle,
+   default OFF; volume histogram; OHLC crosshair legend; stale-tape
+   note on the chart itself (doc A-4). ═══════ */
+const Own = { inst: null, key: "", lineKey: "", markerKey: "" };
+function ownMake(el) {
+  const LW = window.LightweightCharts; if (!LW || !el) return null;
+  const chart = LW.createChart(el, {
+    layout: { background: { color: "transparent" }, textColor: "#8a8aa0", fontSize: 10 },
+    grid: { vertLines: { color: "rgba(140,140,170,.07)" }, horzLines: { color: "rgba(140,140,170,.07)" } },
+    timeScale: { timeVisible: true, secondsVisible: false, rightOffset: 6 },
+    rightPriceScale: { borderColor: "rgba(140,140,170,.25)", scaleMargins: { top: 0.08, bottom: 0.22 } },
+    crosshair: { mode: LW.CrosshairMode.Normal },
+    width: el.clientWidth || 300, height: el.clientHeight || 340,
+  });
+  const candles = chart.addCandlestickSeries({ upColor: "#26a69a", downColor: "#ef5350",
+    borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350" });
+  const vol = chart.addHistogramSeries({ priceScaleId: "", priceFormat: { type: "volume" } });
+  chart.priceScale("").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
+  const fanOpts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+  const fan50 = chart.addLineSeries({ ...fanOpts, color: "rgba(127,216,207,.9)", lineStyle: LW.LineStyle.Dashed });
+  const fan25 = chart.addLineSeries({ ...fanOpts, color: "rgba(38,166,154,.35)" });
+  const fan75 = chart.addLineSeries({ ...fanOpts, color: "rgba(38,166,154,.35)" });
+  const legend = document.createElement("div");
+  legend.style.cssText = "position:absolute;top:6px;left:8px;z-index:5;font:10px ui-monospace,monospace;color:#c9c9dc;pointer-events:none";
+  el.appendChild(legend);
+  const stale = document.createElement("div");
+  stale.style.cssText = "position:absolute;top:6px;right:70px;z-index:5;font:10px ui-monospace,monospace;color:#ef9a9a;pointer-events:none";
+  el.appendChild(stale);
+  chart.subscribeCrosshairMove(param => {
+    const bar = param?.seriesData?.get(candles);
+    legend.textContent = bar
+      ? `O ${px(bar.open)} H ${px(bar.high)} L ${px(bar.low)} C ${px(bar.close)}`
+      : "";
+  });
+  new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); } catch {} }).observe(el);
+  return { chart, candles, vol, fan50, fan25, fan75, legend, stale, lines: {}, last: null };
+}
+function ownSetLines(inst, d) {
+  const want = {};
+  if (d.entry) want.entry = { price: d.entry, color: "#c9d1d9", title: "ENTRY", style: 1 };
+  if (d.tp) want.tp = { price: d.tp, color: "#26a69a", title: "TP", style: 2 };
+  if (d.sl) want.sl = { price: d.sl, color: "#ef5350", title: "SL", style: 2 };
+  const key = JSON.stringify(want);
+  if (key === Own.lineKey) return;
+  Own.lineKey = key;
+  for (const k of Object.keys(inst.lines)) { try { inst.candles.removePriceLine(inst.lines[k]); } catch {} }
+  inst.lines = {};
+  const LW = window.LightweightCharts;
+  for (const [k, v] of Object.entries(want))
+    inst.lines[k] = inst.candles.createPriceLine({ price: v.price, color: v.color,
+      lineWidth: 1, lineStyle: v.style, axisLabelVisible: true, title: v.title });
+}
+function drawOwnChart() {
   const host = $("#chart-own"); if (!host) return;
   const a = S.snap?.assets?.[S.symbol]; if (!a) return;
   const d = a.tfs?.[S.focusTf]; if (!d) return;
-  const price = S.prices[S.symbol] ?? a.price; if (!price) return;
-  const now = Date.now() / 1000;
-  const t1 = d.cycle_end || (now + 600);
-  const t0 = d.cycle_start || (now - 600);
-  let past = realisedSeries(t0, now);
-  if (!past.length || now - past[past.length - 1].t > 2) past.push({ t: now, p: price });
-  else past[past.length - 1] = { t: now, p: price };
-  if (!host._pc) { host.innerHTML = ""; host._pc = new PriceChart(host); }
-  const b = d.branches;
-  const levels = [];
-  if (d.entry) levels.push({ p: d.entry, label: "ENTRY", color: "#e6b93d" });
-  if (d.tp) levels.push({ p: d.tp, label: "TP", color: "#26a69a", dash: true });
-  if (d.sl) levels.push({ p: d.sl, label: "SL", color: "#ef5350", dash: true });
-  host._pc.setModel({
-    series: [{ pts: past }],
-    levels,
-    fan: (b?.fan && b.fan.length > 2)
-      ? { originT: now, originP: price,
-          pts: b.fan.map(p => ({ t: now + p.f * Math.max(1, t1 - now),
-                                 lo: p.q05, lo2: p.q25, mid: p.q50, hi2: p.q75, hi: p.q95 })) }
-      : null,
-    nowT: now, t0, t1, ma: 20,
-    ariaLabel: `${S.symbol} ${S.focusTf.toUpperCase()} price chart`,
-  });
+  if (!Own.inst) { host.innerHTML = ""; Own.inst = ownMake(host); }
+  const inst = Own.inst; if (!inst) return;
+  const now = serverNow();
+  // stale tape state on the chart itself (doc A-4) — never a silent flat line
+  const age = a.feed_age_s;
+  inst.stale.textContent = (age != null && age > 15) ? `stale — last print ${Math.round(age)}s ago` : "";
+  const bars = (S.tfBars?.[S.focusTf] || []).filter(b2 => b2.close > 0);
+  const key = `${S.symbol}|${S.focusTf}|${d.cycle_start}`;
+  if (bars.length && key !== Own.key) {
+    Own.key = key;
+    const cs = bars.map(b2 => ({ time: b2.time, open: b2.open, high: b2.high, low: b2.low, close: b2.close }));
+    inst.candles.setData(cs);
+    inst.vol.setData(bars.map(b2 => ({ time: b2.time, value: b2.v || 0,
+      color: b2.close >= b2.open ? "rgba(38,166,154,.4)" : "rgba(239,83,80,.4)" })));
+    const lb = bars[bars.length - 1];
+    inst.last = { ...lb };
+    // frame: last ~3 windows of history + the current window's remainder
+    try { inst.chart.timeScale().setVisibleRange({
+      from: Math.max(cs[0].time, (d.cycle_start || cs[0].time) - 2 * Math.max(60, (d.cycle_end || 0) - (d.cycle_start || 0))),
+      to: d.cycle_end || cs[cs.length - 1].time }); } catch {}
+  }
+  // live candle from the tick stream (candles.update, never setData per tick)
+  const p = S.prices?.[S.symbol];
+  if (inst.last && p > 0) {
+    const l = inst.last, bucket = (S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60;
+    if (Math.floor(now / bucket) * bucket > l.time) { /* bucket rolled: loadCandles refetches */ }
+    else {
+      l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p);
+      try { inst.candles.update({ time: l.time, open: l.open, high: l.high, low: l.low, close: l.close }); } catch {}
+    }
+  }
+  ownSetLines(inst, d);
+  // markers: LOCK at the window boundary + settled hits (server-settled)
+  const bucket = (S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60;
+  const markers = [];
+  if (d.cycle_start) markers.push({ time: Math.floor(d.cycle_start / bucket) * bucket,
+    position: (d.direction || 0) < 0 ? "aboveBar" : "belowBar",
+    shape: (d.direction || 0) < 0 ? "arrowDown" : "arrowUp",
+    color: "#e6b93d", text: "LOCK" });
+  for (const t of (d.targets || []))
+    if (t.status === "hit" && t.hit_ts) markers.push({ time: Math.floor(t.hit_ts / bucket) * bucket,
+      position: "aboveBar", shape: "circle", color: "#22c98a", text: `TP${t.k} hit` });
+  const mk = JSON.stringify(markers);
+  if (mk !== Own.markerKey) { Own.markerKey = mk;
+    try { inst.candles.setMarkers(markers.sort((x, y) => x.time - y.time)); } catch {} }
+  // fan: in-window only, toggle, default off (doc C-4)
+  const b = d.branches, fanOn = !!S.fanOn;
+  const fanKey = fanOn && b?.fan?.length > 2 ? `${d.cycle_start}|${Math.round(now)}` : "";
+  if (fanKey !== (Own.fanKey || "")) {
+    Own.fanKey = fanKey;
+    if (!fanKey) { inst.fan50.setData([]); inst.fan25.setData([]); inst.fan75.setData([]); }
+    else {
+      const fT = f => Math.floor(now + f * Math.max(1, (d.cycle_end || now) - now));
+      const series = k => b.fan.map(p2 => ({ time: fT(p2.f), value: p2[k] }))
+        .filter((v, i, arr) => i === 0 || v.time > arr[i - 1].time);
+      try { inst.fan50.setData(series("q50")); inst.fan25.setData(series("q25")); inst.fan75.setData(series("q75")); } catch {}
+    }
+  }
 }
 
 /* ═══════ BINANCE chart: the chart you see on binance.com — Binance
@@ -805,6 +900,48 @@ function refreshActiveView(force) {
 }
 
 /* ═══════════ dashboard: quadrants ═══════════ */
+/* mini candle chart for the TF cards (doc C-5): candles + price lines
+   only — no volume, no fan, no noise line; scroll/scale disabled.
+   Keeps the setData/setLines/tick API the app already calls. */
+function quadChart(el) {
+  const LW = window.LightweightCharts;
+  const noop = { setData() {}, setLines() {}, tick() {} };
+  if (!LW || !el) return noop;
+  const chart = LW.createChart(el, {
+    layout: { background: { color: "transparent" }, textColor: "#8a8aa0", fontSize: 9 },
+    grid: { vertLines: { color: "rgba(140,140,170,.06)" }, horzLines: { color: "rgba(140,140,170,.06)" } },
+    timeScale: { timeVisible: true, secondsVisible: false },
+    rightPriceScale: { borderColor: "rgba(140,140,170,.25)" },
+    handleScroll: false, handleScale: false,
+    width: el.clientWidth || 170, height: el.clientHeight || 92,
+  });
+  const candles = chart.addCandlestickSeries({ upColor: "#26a69a", downColor: "#ef5350",
+    borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350" });
+  new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); } catch {} }).observe(el);
+  const inst = { chart, candles, last: null, _lines: [],
+    setData(bars) {
+      if (!bars?.length) return;
+      candles.setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
+      const lb = bars[bars.length - 1];
+      inst.last = { time: lb.time, open: lb.open, high: lb.high, low: lb.low, close: lb.close };
+      try { chart.timeScale().scrollToRealTime(); } catch {}
+    },
+    setLines(lines) {
+      for (const l of inst._lines) { try { candles.removePriceLine(l); } catch {} }
+      inst._lines = [];
+      for (const L of (lines || [])) if (Number.isFinite(L.price))
+        inst._lines.push(candles.createPriceLine({ price: L.price, color: L.color || "#c9a227",
+          lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: L.title || "" }));
+    },
+    tick(p) {
+      if (!inst.last || !(p > 0)) return;
+      const l = inst.last;
+      l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p);
+      try { candles.update({ time: l.time, open: l.open, high: l.high, low: l.low, close: l.close }); } catch {}
+    } };
+  return inst;
+}
+
 function buildQuads() {
   const grid = $("#quad-grid"); grid.innerHTML = "";
   TF.forEach(tf => {
@@ -822,15 +959,13 @@ function buildQuads() {
       <div class="q-chart" id="qc-${tf}"></div>
       <div class="q-tv hidden" id="qtv-${tf}"></div>
       <div class="q-bn hidden" id="qbn-${tf}"></div>
-      <div class="q-spark" id="qs-${tf}"></div>
       <div class="q-price" id="qp-${tf}">—</div>
       <div class="q-dir flat" id="qd-${tf}">—</div>
       <div class="q-tps" id="qt-${tf}"></div>
       <div class="q-foot"><span id="qf-${tf}"></span><span id="qa-${tf}"></span></div>`;
     grid.appendChild(q);
     q.addEventListener("click", () => { if (S.focusTf !== tf) setFocusTf(tf); });
-    S.charts[tf] = new PriceChart($("#qc-" + tf));
-    S.spark[tf] = new PriceChart($("#qs-" + tf), { spark: true, histogram: true });
+    S.charts[tf] = quadChart($("#qc-" + tf));
   });
   // main OWN chart is the PriceChart renderer (drawMainChart)
   // into the corner under a multi-hour trend
@@ -935,7 +1070,7 @@ const TV_SYMS = { BTC: "BINANCE:BTCUSDT", PAXG: "BINANCE:PAXGUSDT",
 const TV_INT = { tf1: "5", tf2: "15", tf3: "60", tf4: "240" };
 function applyChartSrc() {
   const mode = S.chartSrc || "binance";   // binance | tv | own
-  $$("#seg-chart .seg-btn").forEach(b =>
+  $$("#seg-chart .seg-btn[data-chart]").forEach(b =>
     b.classList.toggle("active", b.dataset.chart === mode));
   const own = $("#chart-own"), bn = $("#chart-binance"), wrap = $("#chart-tv");
   if (own) own.classList.toggle("hidden", mode !== "own");
@@ -949,16 +1084,17 @@ function applyChartSrc() {
   const fill = (el, tf) => { if (!el) return; const src = tvSrc(tf);
     if (el.dataset.src !== src) { el.dataset.src = src;
       el.innerHTML = `<iframe src="${src}" style="width:100%;height:100%;border:0" allowtransparency="true" scrolling="no" allowfullscreen></iframe>`; } };
+  const fb2 = $("#btn-fan");
+  if (fb2) { fb2.classList.toggle("hidden", mode !== "own"); fb2.classList.toggle("active", !!S.fanOn); }
   if (mode === "tv" && wrap) fill(wrap, S.focusTf);
   if (mode === "binance") bnEnsure();
   if (mode === "own") drawMainChart();
-  // every sub-timeframe card follows the same toggle: our PriceChart in
-  // OWN, Binance candles in BINANCE, TradingView widget in TV mode.
+  // every sub-timeframe card follows the same toggle: server-tape
+  // candles in OWN, Binance candles in BINANCE, TradingView in TV mode.
   for (const tf of TF) {
-    const o = $("#qc-" + tf), sp = $("#qs-" + tf),
+    const o = $("#qc-" + tf),
           slot = $("#qtv-" + tf), bslot = $("#qbn-" + tf);
     if (o) o.style.display = mode === "own" ? "" : "none";
-    if (sp) sp.style.display = mode === "own" ? "" : "none";
     if (slot) { slot.classList.toggle("hidden", mode !== "tv"); if (mode === "tv") fill(slot, tf); }
     if (bslot) bslot.classList.toggle("hidden", mode !== "binance");
   }
@@ -966,7 +1102,14 @@ function applyChartSrc() {
 function bindChartSrc() {
   try { S.chartSrc = localStorage.getItem("chartSrc") || "binance"; } catch { S.chartSrc = "binance"; }
   if (!["binance", "tv", "own"].includes(S.chartSrc)) S.chartSrc = "binance";
-  $$("#seg-chart .seg-btn").forEach(b => b.addEventListener("click", () => {
+  try { S.fanOn = localStorage.getItem("fanOn") === "1"; } catch { S.fanOn = false; }
+  const fb = $("#btn-fan");
+  if (fb) { fb.classList.toggle("active", !!S.fanOn);
+    fb.addEventListener("click", () => { S.fanOn = !S.fanOn;
+      try { localStorage.setItem("fanOn", S.fanOn ? "1" : "0"); } catch {}
+      fb.classList.toggle("active", !!S.fanOn); Own.fanKey = "__toggle";
+      try { drawMainChart(); } catch {} }); }
+  $$("#seg-chart .seg-btn[data-chart]").forEach(b => b.addEventListener("click", () => {
     S.chartSrc = b.dataset.chart;
     try { localStorage.setItem("chartSrc", S.chartSrc); } catch {}
     applyChartSrc();
@@ -1425,7 +1568,8 @@ async function loadCandles() {
     // EACH timeframe card aggregates the tape at its OWN interval
     // (user: every TF chart must be different — they were all the same
     // 1-minute series photocopied four times). Wider TF = wider bars.
-    const QINT = { tf1: 1, tf2: 3, tf3: 10, tf4: 30 };
+    const QINT = { tf1: 1, tf2: 1, tf3: 5, tf4: 5 };   // doc C-2 resolutions
+    S.tfBars = S.tfBars || {};
     const agg = (bars, mins) => {
       if (mins <= 1) return bars;
       const out = new Map();
@@ -1455,6 +1599,7 @@ async function loadCandles() {
           markers.push({ time: Math.floor(t.hit_ts / 60) * 60, above: true, color: "#22c98a", glyph: "▲" });
       });
       const mapped = bars.map(x => ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
+      S.tfBars[tf] = mapped;
       c.setData(mapped);
       // seed the realised-path history (hero line chart + branches):
       // without this the white path only existed from page load and
@@ -1471,7 +1616,6 @@ async function loadCandles() {
         // line begins at the window's left edge on a true time axis
         S.candleSeries = { symbol: S.symbol, bars: seeded };
       }
-      S.spark[tf]?.setData(bars.slice(-90).map(x => ({ time: x.t, open: 0, high: x.v || 0, low: 0, close: x.v || 0 })));
       // Binance-mode cards refresh on the same cadence (chart <-> price link)
       if (S.chartSrc === "binance") { try { bnEnsure(); } catch (e) {} }
     }));
@@ -2809,6 +2953,7 @@ function checkIssuedAlerts(snap) {
 function applySnapshot(snap) {
   if (!snap || snap.type !== "snapshot") return;
   S.snap = snap;
+  if (snap.ts) S.serverOff = snap.ts - Date.now() / 1000;   // server clock offset
   try { checkIssuedAlerts(snap); } catch (e) { /* alerts optional */ }
   S.serverOffset = (snap.ts ? snap.ts * 1000 : Date.now()) - Date.now();
   renderBoot(snap);               // overlay FIRST — contract test guard
