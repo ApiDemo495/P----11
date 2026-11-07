@@ -8,10 +8,10 @@ INDEX_HTML = (STATIC / "index.html").read_text()
 
 def test_no_tradingview_dependency():
     """Three sources, one toggle: Binance candles (vendored lib, Binance
-    klines), TradingView iframe (TV mode), own LineChart. No hero."""
+    klines), TradingView iframe (TV mode), own PriceChart. No hero."""
     assert "LightweightCharts" in APP_JS and "bnMake" in APP_JS
     assert "lightweight-charts" in INDEX_HTML
-    assert "class LineChart" in APP_JS and "hero-chart" not in APP_JS
+    assert "class PriceChart" in (STATIC / "LineChart.js").read_text() and "hero-chart" not in APP_JS
 
 
 def test_bottom_tab_bar_and_nine_views():
@@ -70,7 +70,7 @@ def test_per_tf_candle_endpoints():
     tape with high/low wicks drives all four cards; TP/lock overlays
     remain per-TF. The endpoint itself still accepts tf= aggregation.)"""
     assert "/api/candles?symbol=${S.symbol}&tf=tf1&n=260" in APP_JS
-    assert "d.pts[d.pts.length - 1]" in APP_JS  # v2 line engine (user ordered ChartX deleted)
+    assert "main.pts[main.pts.length - 1]" in (STATIC / "LineChart.js").read_text()  # PriceChart engine
     # every TF chart still receives data in the loop
     assert "S.charts[tf].setData" in APP_JS or "c.setData(" in APP_JS
 

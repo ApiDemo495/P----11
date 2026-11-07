@@ -149,154 +149,6 @@ const S = {
   newsSel: "BTC", histDay: null,
 };
 
-/* ═══════════ LineChart — own chart engine (v2, replaces ChartX) ═════
-   One engine for the OWN main chart + sub-timeframe quads + sparklines. Design rules
-   (user: "better than TradingView"): the PRICE IS ALWAYS VISIBLE —
-   right-hand price axis with ticks, a last-price chip pinned to the
-   axis, crosshair readout of time+price, dashed TP/SL/entry levels with
-   labels, and the empirical fan cone into the future half.     */
-class LineChart {
-  constructor(el, opts = {}) {
-    this.el = el; this.spark = !!opts.spark;
-    this.cv = document.createElement("canvas");
-    this.cv.style.cssText = "display:block;width:100%;height:100%";
-    el.appendChild(this.cv);
-    this.cross = null;
-    const upd = e => { const r = this.cv.getBoundingClientRect();
-      const t = (e.touches && e.touches[0]) || e;
-      this.cross = { x: t.clientX - r.left, y: t.clientY - r.top }; this.draw(); };
-    this.cv.addEventListener("mousemove", upd);
-    this.cv.addEventListener("touchmove", upd, { passive: true });
-    this.cv.addEventListener("mouseleave", () => { this.cross = null; this.draw(); });
-  }
-  set(data) { this.d = data; this.draw(); }
-  setData(bars) { // OHLC bars -> close line (quad/spark feed)
-    this.base = { pts: bars.map(b => ({ t: b.time > 1e12 ? b.time / 1000 : b.time, p: b.close, v: b.v || 0 })).filter(p => p.p > 0) };
-    if (this.base.pts.length) { this.base.t0 = this.base.pts[0].t; this.base.t1 = this.base.pts[this.base.pts.length - 1].t; }
-    this._sync(); }
-  setLines(ls) { this.lines = ls || []; this._sync(); }
-  setMarkers() { /* markers dropped in v2: levels+labels carry the info */ }
-  tick(p) { if (!this.base || !this.base.pts.length) return;
-    const now = Date.now() / 1000, last = this.base.pts[this.base.pts.length - 1];
-    if (now - last.t < 1) last.p = p; else this.base.pts.push({ t: now, p });
-    if (this.base.pts.length > 900) this.base.pts.splice(0, this.base.pts.length - 900);
-    this.base.t1 = now; this._sync(); }
-  _sync() { if (!this.base) return;
-    this.d = { ...this.base, levels: (this.lines || []).map(L => ({ p: L.price, tag: L.title || "", color: L.color, dash: L.dash })) };
-    this.draw(); }
-  draw() {
-    const d = this.d; if (!d || !d.pts || d.pts.length < 2) return;
-    const cv = this.cv, W = this.el.clientWidth || 300, H = this.el.clientHeight || 120;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
-    const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const root = getComputedStyle(document.documentElement);
-    const INK = root.getPropertyValue("--ink").trim() || "#e8e8f2",
-          DIM = root.getPropertyValue("--dim").trim() || "#8a8aa0",
-          UP = "#26a69a", DN = "#ef5350", GOLD = "#c9a227";
-    g.clearRect(0, 0, W, H);
-    const padR = this.spark ? 4 : 58, padL = 6, padT = 8, padB = this.spark ? 4 : 16;
-    const pw = W - padL - padR, ph = H - padT - padB;
-    d.pts = d.pts.filter(p => Number.isFinite(p.p) && Number.isFinite(p.t));
-    if (d.pts.length < 2) return;
-    let lo = Infinity, hi = -Infinity;
-    for (const p of d.pts) { lo = Math.min(lo, p.p); hi = Math.max(hi, p.p); }
-    for (const L of (d.levels || [])) if (Number.isFinite(L.p)) { lo = Math.min(lo, L.p); hi = Math.max(hi, L.p); }
-    // the fan NEVER sets the range (its extremes squashed the price
-    // line into a corner): the cone is clipped to the plot below.
-    if (!(hi > lo)) { hi = lo * 1.001; lo = lo * 0.999; }
-    const pad = (hi - lo) * 0.08; hi += pad; lo -= pad;
-    const hasVol = !this.spark && d.pts.some(p => (p.v || 0) > 0);
-    const phP = hasVol ? ph * 0.82 : ph;   // price pane; volume lives below
-    const t0 = d.t0, t1 = d.t1, X = t => padL + (t - t0) / Math.max(1, t1 - t0) * pw,
-          Y = p => padT + (hi - p) / (hi - lo) * phP;
-    // grid + price axis (the "no price visible" fix: always drawn)
-    g.font = "9px ui-monospace,monospace"; g.textAlign = "left";
-    const ticks = 4;
-    for (let i = 0; i <= ticks; i++) {
-      const p = lo + (hi - lo) * i / ticks, y = Y(p);
-      g.strokeStyle = "rgba(140,140,170,.14)"; g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + pw, y); g.stroke();
-      if (!this.spark) { g.fillStyle = DIM; g.fillText(px(p), padL + pw + 4, y + 3); }
-    }
-    if (!this.spark) { // time axis
-      g.fillStyle = DIM; g.textAlign = "center";
-      for (let i = 0; i <= 4; i++) { const t = t0 + (t1 - t0) * i / 4, dt = new Date(t * 1000);
-        g.fillText(`${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`, X(t), H - 4); }
-      g.textAlign = "left";
-    }
-    g.save(); g.beginPath(); g.rect(padL, padT - 2, pw, ph + 4); g.clip();
-    // future region shade (window not yet lived)
-    if (d.nowX != null) { const x = X(d.nowX);
-      g.fillStyle = "rgba(120,120,200,.05)"; g.fillRect(x, padT, padL + pw - x, ph);
-      g.strokeStyle = "rgba(160,160,220,.35)"; g.setLineDash([3, 3]);
-      g.beginPath(); g.moveTo(x, padT); g.lineTo(x, padT + ph); g.stroke(); g.setLineDash([]); }
-    // empirical fan cone
-    if (d.fan && d.fan.length > 1) {
-      g.beginPath();
-      d.fan.forEach((f, i) => i ? g.lineTo(X(f[0]), Y(f[1])) : g.moveTo(X(f[0]), Y(f[1])));
-      for (let i = d.fan.length - 1; i >= 0; i--) g.lineTo(X(d.fan[i][0]), Y(d.fan[i][2]));
-      g.closePath(); g.fillStyle = "rgba(38,166,154,.12)"; g.fill();
-      g.beginPath(); d.fan.forEach((f, i) => i ? g.lineTo(X(f[0]), Y(f[1])) : g.moveTo(X(f[0]), Y(f[1])));
-      g.strokeStyle = UP; g.globalAlpha = .5; g.stroke(); g.globalAlpha = 1;
-      g.beginPath(); d.fan.forEach((f, i) => i ? g.lineTo(X(f[0]), Y(f[2])) : g.moveTo(X(f[0]), Y(f[2])));
-      g.strokeStyle = DN; g.stroke();
-    }
-    // levels: entry gold solid, TP green dashed, SL red dashed + labels
-    for (const L of (d.levels || [])) { const y = Y(L.p); if (y < padT - 2 || y > padT + ph + 2) continue;
-      g.strokeStyle = L.color; g.setLineDash(L.dash ? [5, 4] : []);
-      g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + pw, y); g.stroke(); g.setLineDash([]);
-      g.fillStyle = L.color; g.font = "bold 9px ui-monospace,monospace";
-      g.fillText(`${L.tag} ${px(L.p)}`, padL + 3, y - 3); g.font = "9px ui-monospace,monospace"; }
-    // the line itself: gradient area + 1.8px stroke, coloured by window move
-    const up = d.pts[d.pts.length - 1].p >= d.pts[0].p, col = up ? UP : DN;
-    const grad = g.createLinearGradient(0, padT, 0, padT + ph);
-    grad.addColorStop(0, up ? "rgba(38,166,154,.25)" : "rgba(239,83,80,.25)"); grad.addColorStop(1, "rgba(0,0,0,0)");
-    g.beginPath(); d.pts.forEach((p, i) => i ? g.lineTo(X(p.t), Y(p.p)) : g.moveTo(X(p.t), Y(p.p)));
-    g.lineTo(X(d.pts[d.pts.length - 1].t), padT + ph); g.lineTo(X(d.pts[0].t), padT + ph); g.closePath();
-    g.fillStyle = grad; g.fill();
-    g.beginPath(); d.pts.forEach((p, i) => i ? g.lineTo(X(p.t), Y(p.p)) : g.moveTo(X(p.t), Y(p.p)));
-    g.strokeStyle = col; g.lineWidth = 2.2; g.stroke(); g.lineWidth = 1;
-    // MA overlay (Binance-style white moving-average line)
-    if (!this.spark && d.pts.length >= 10) {
-      const per = d.pts.length >= 40 ? 20 : 5;
-      g.beginPath(); let started = false, acc = 0;
-      d.pts.forEach((p, i) => { acc += p.p; if (i >= per) acc -= d.pts[i - per].p;
-        if (i >= per - 1) { const x = X(p.t), y = Y(acc / per);
-          started ? g.lineTo(x, y) : g.moveTo(x, y); started = true; } });
-      g.strokeStyle = "rgba(255,255,255,.6)"; g.lineWidth = 1; g.stroke();
-    }
-    // volume strip (Binance layout) — real bar volumes, up/down colours
-    if (hasVol) {
-      const vmax = Math.max(...d.pts.map(p => p.v || 0)) || 1;
-      const vBase = padT + ph, vH = ph - phP - 2, bw = Math.max(1, pw / d.pts.length - 0.5);
-      d.pts.forEach((p, i) => { const v = (p.v || 0) / vmax, x = X(p.t);
-        g.fillStyle = (i && p.p < d.pts[i - 1].p) ? "rgba(239,83,80,.55)" : "rgba(38,166,154,.55)";
-        g.fillRect(x - bw / 2, vBase - v * vH, bw, Math.max(0.5, v * vH)); });
-      g.fillStyle = DIM; g.font = "8px ui-monospace,monospace";
-      g.fillText("VOL", padL + 1, vBase - vH - 1); g.font = "9px ui-monospace,monospace";
-    }
-    // last price: dot + axis chip (always visible)
-    const lp = d.pts[d.pts.length - 1], lx = X(lp.t), ly = Y(lp.p);
-    g.fillStyle = col; g.beginPath(); g.arc(lx, ly, 3, 0, 7); g.fill();
-    if (!this.spark) { g.fillRect(padL + pw + 1, ly - 9, padR - 2, 18);
-      g.fillStyle = "#0b0b14"; g.font = "bold 10px ui-monospace,monospace";
-      g.fillText(px(lp.p), padL + pw + 4, ly + 3.5); g.font = "9px ui-monospace,monospace"; }
-    g.restore();
-    // last-price dashed line across the plot (TradingView-style anchor)
-    g.strokeStyle = col; g.globalAlpha = .55; g.setLineDash([4, 4]);
-    g.beginPath(); g.moveTo(padL, ly); g.lineTo(padL + pw, ly); g.stroke();
-    g.setLineDash([]); g.globalAlpha = 1;
-    // crosshair with time·price readout
-    if (this.cross && !this.spark) { const { x, y } = this.cross;
-      if (x >= padL && x <= padL + pw && y >= padT && y <= padT + ph) {
-        g.strokeStyle = "rgba(200,200,230,.4)"; g.setLineDash([3, 3]);
-        g.beginPath(); g.moveTo(x, padT); g.lineTo(x, padT + ph); g.moveTo(padL, y); g.lineTo(padL + pw, y); g.stroke(); g.setLineDash([]);
-        const ct = t0 + (x - padL) / pw * (t1 - t0), cp = hi - (y - padT) / ph * (hi - lo), dt = new Date(ct * 1000);
-        g.fillStyle = INK; g.fillText(`${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}:${String(dt.getSeconds()).padStart(2, "0")} · ${px(cp)}`, Math.min(x + 6, W - 120), 12); } }
-  }
-}
-
-
 /* ═══════════ shell: assets, tabs, focus bar ═══════════ */
 function buildRail() {
   const list = $("#asset-list"); list.innerHTML = "";
@@ -452,15 +304,23 @@ function _drawOwn() {
   let past = realisedSeries(t0, now);
   if (!past.length || now - past[past.length - 1].t > 2) past.push({ t: now, p: price });
   else past[past.length - 1] = { t: now, p: price };
-  if (!host._lc) { host.innerHTML = ""; host._lc = new LineChart(host); }
+  if (!host._pc) { host.innerHTML = ""; host._pc = new PriceChart(host); }
   const b = d.branches;
-  const fan = (b?.fan && b.fan.length > 2)
-    ? b.fan.map(p => [now + p.f * Math.max(1, t1 - now), p.q95, p.q05]) : null;
   const levels = [];
-  if (d.entry) levels.push({ p: d.entry, tag: "ENTRY", color: "#c9a227", dash: false });
-  if (d.tp) levels.push({ p: d.tp, tag: "TP", color: "#26a69a", dash: true });
-  if (d.sl) levels.push({ p: d.sl, tag: "SL", color: "#ef5350", dash: true });
-  host._lc.set({ pts: past, t0, t1, nowX: now, fan, levels });
+  if (d.entry) levels.push({ p: d.entry, label: "ENTRY", color: "#e6b93d" });
+  if (d.tp) levels.push({ p: d.tp, label: "TP", color: "#26a69a", dash: true });
+  if (d.sl) levels.push({ p: d.sl, label: "SL", color: "#ef5350", dash: true });
+  host._pc.setModel({
+    series: [{ pts: past }],
+    levels,
+    fan: (b?.fan && b.fan.length > 2)
+      ? { originT: now, originP: price,
+          pts: b.fan.map(p => ({ t: now + p.f * Math.max(1, t1 - now),
+                                 lo: p.q05, lo2: p.q25, mid: p.q50, hi2: p.q75, hi: p.q95 })) }
+      : null,
+    nowT: now, t0, t1, ma: 20,
+    ariaLabel: `${S.symbol} ${S.focusTf.toUpperCase()} price chart`,
+  });
 }
 
 /* ═══════ BINANCE chart: the chart you see on binance.com — Binance
@@ -589,6 +449,7 @@ function renderBranches() {
   const b = d?.branches;
   $("#branch-scope").textContent = `${S.symbol} · ${S.focusTf.toUpperCase()} · ${b?.method === "empirical-first-touch" ? `measured first-touch · n=${b.n}` : "approx (thin tape)"}`;
   if (!b || !a) {
+    cvHost._pc = null;
     stats.innerHTML = "";
     cvHost.innerHTML = `<div class="dim pad" style="font-size:11px">waiting for a direction + TP/SL on ${S.focusTf.toUpperCase()}…</div>`;
     $("#branch-note").textContent =
@@ -623,88 +484,30 @@ function renderBranches() {
       ${seg(pt, "#26a69a", "TARGET FIRST")}${seg(pb, "#3a3f55", "NEITHER")}${seg(ps, "#ef5350", "STOP FIRST")}</div>
       <div class="hint" style="margin-top:3px">of ${b.n} past windows on this asset with these TP/SL distances — green hit target first, red hit stop first, grey neither barrier was touched</div>`;
   }
-  // ---- fan chart: price (white) inside the measured future cone ----
-  const w = cvHost.clientWidth || 300, h = cvHost.clientHeight || 190;
-  let cv = cvHost.querySelector("canvas");
-  if (!cv) { cvHost.innerHTML = ""; cv = document.createElement("canvas");
-    cv.style.cssText = "width:100%;height:100%;display:block"; cvHost.appendChild(cv); }
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  cv.width = w * dpr; cv.height = h * dpr;
-  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.clearRect(0, 0, w, h);
+  // ---- probability chart: history + measured fan, drawn by the
+  // shared PriceChart engine (static/LineChart.js) ----
   const t0 = d.cycle_start || (Date.now() / 1000 - 60);
   const t1 = d.cycle_end || (Date.now() / 1000 + b.rem_s);
   const tN = b.now || (Date.now() / 1000);
   const hist = realisedSeries(t0 - 1, Date.now() / 1000);
-  // range from the PRICE ACTION + barriers (never the fan extremes:
-  // they squashed the realised line into a corner for a day)
-  let lo = Infinity, hi = -Infinity;
-  for (const pp of hist) { lo = Math.min(lo, pp.p); hi = Math.max(hi, pp.p); }
-  for (const lv of [b.entry, b.tp, b.sl]) if (lv) { lo = Math.min(lo, lv); hi = Math.max(hi, lv); }
-  if (!(hi > lo)) { hi = (b.entry || 1) * 1.001; lo = (b.entry || 1) * 0.999; }
-  const pad = (hi - lo) * 0.1; lo -= pad; hi += pad;
-  const padR = 56, X = t => 2 + ((t - t0) / Math.max(1, t1 - t0)) * (w - padR - 4),
-        Y = p2 => 8 + (hi - p2) / (hi - lo) * (h - 24);
-  // grid + right price axis (readable 10px labels)
-  g.font = "10px ui-monospace,monospace"; g.textAlign = "left";
-  for (let i = 0; i <= 4; i++) { const p2 = lo + (hi - lo) * i / 4, y = Y(p2);
-    g.strokeStyle = "rgba(140,140,170,.13)"; g.beginPath(); g.moveTo(2, y); g.lineTo(w - padR, y); g.stroke();
-    g.fillStyle = "#9a9ab2"; g.fillText(px(p2), w - padR + 5, y + 3); }
-  // future cone (clipped to the plot so it can never squash the price)
-  g.save(); g.beginPath(); g.rect(2, 4, w - padR - 2, h - 20); g.clip();
-  if (b.fan && b.fan.length > 2) {
-    const XF = f => X(tN + f * Math.max(1, t1 - tN));
-    g.beginPath(); g.moveTo(X(tN), Y(hist.length ? hist[hist.length - 1].p : b.entry));
-    b.fan.forEach(p => g.lineTo(XF(p.f), Y(p.q95)));
-    for (let i = b.fan.length - 1; i >= 0; i--) g.lineTo(XF(b.fan[i].f), Y(b.fan[i].q05));
-    g.closePath(); g.fillStyle = "rgba(38,166,154,.13)"; g.fill();
-    g.beginPath(); g.moveTo(X(tN), Y(hist.length ? hist[hist.length - 1].p : b.entry));
-    b.fan.forEach(p => g.lineTo(XF(p.f), Y(p.q50)));
-    g.strokeStyle = "#7fd8cf"; g.setLineDash([4, 3]); g.lineWidth = 1.4; g.stroke(); g.setLineDash([]);
-  }
-  // realised price — thick white with a Binance-style area gradient
-  if (hist.length > 1) {
-    const grad = g.createLinearGradient(0, 8, 0, h - 16);
-    grad.addColorStop(0, "rgba(240,185,11,.28)"); grad.addColorStop(1, "rgba(240,185,11,0)");
-    g.beginPath();
-    hist.forEach((pp, i) => { const xx = X(pp.t), yy = Y(pp.p); i ? g.lineTo(xx, yy) : g.moveTo(xx, yy); });
-    g.lineTo(X(hist[hist.length - 1].t), h - 16); g.lineTo(X(hist[0].t), h - 16); g.closePath();
-    g.fillStyle = grad; g.fill();
-    g.beginPath();
-    hist.forEach((pp, i) => { const xx = X(pp.t), yy = Y(pp.p); i ? g.lineTo(xx, yy) : g.moveTo(xx, yy); });
-    g.strokeStyle = "#ffffff"; g.lineWidth = 2; g.stroke();
-    // volume strip along the bottom, like Binance
-    if (hist.some(pp => (pp.v || 0) > 0)) {
-      const vmax = Math.max(...hist.map(pp => pp.v || 0)) || 1;
-      hist.forEach((pp, i) => { const vv = (pp.v || 0) / vmax;
-        g.fillStyle = (i && pp.p < hist[i - 1].p) ? "rgba(239,83,80,.5)" : "rgba(38,166,154,.5)";
-        g.fillRect(X(pp.t) - 1, h - 16 - vv * 22, 2, Math.max(0.5, vv * 22)); });
-    }
-    const lp = hist[hist.length - 1];
-    g.fillStyle = "#fff"; g.beginPath(); g.arc(X(lp.t), Y(lp.p), 3, 0, 7); g.fill();
-  }
-  g.restore();
-  // barriers with right-edge tags
-  const tag = (lv, color, label) => { if (!lv) return; const y = Y(lv);
-    g.strokeStyle = color; g.setLineDash([6, 4]); g.lineWidth = 1.3;
-    g.beginPath(); g.moveTo(2, y); g.lineTo(w - padR, y); g.stroke(); g.setLineDash([]);
-    g.fillStyle = color; g.fillRect(w - padR + 1, y - 8, padR - 3, 15);
-    g.fillStyle = "#0b0b14"; g.font = "bold 9px ui-monospace,monospace";
-    g.fillText(label, w - padR + 4, y + 3); g.font = "10px ui-monospace,monospace"; };
-  tag(b.tp, "#26a69a", "TP " + px(b.tp)); tag(b.sl, "#ef5350", "SL " + px(b.sl));
-  const ey = Y(b.entry);
-  g.strokeStyle = "rgba(201,162,39,.8)"; g.lineWidth = 1.2;
-  g.beginPath(); g.moveTo(2, ey); g.lineTo(w - padR, ey); g.stroke();
-  g.fillStyle = "#c9a227"; g.font = "bold 9px ui-monospace,monospace";
-  g.fillText("ENTRY " + px(b.entry), 5, ey - 4);
-  // now divider
-  const nowX = X(Math.min(Date.now() / 1000, t1));
-  g.strokeStyle = "rgba(201,162,39,.55)"; g.setLineDash([3, 3]);
-  g.beginPath(); g.moveTo(nowX, 4); g.lineTo(nowX, h - 16); g.stroke(); g.setLineDash([]);
-  g.fillStyle = "#c9a227"; g.fillText("NOW", Math.max(4, nowX - 26), 13);
-  g.fillStyle = "#9a9ab2"; g.font = "9px ui-monospace,monospace";
-  g.fillText("← what already happened", 5, h - 4);
-  g.fillText("what history says can happen →", Math.max(120, w - padR - 190), h - 4);
+  if (!cvHost._pc) { cvHost.innerHTML = ""; cvHost._pc = new PriceChart(cvHost); }
+  cvHost._pc.setModel({
+    series: [{ pts: hist, color: "#f2f2fa" }],
+    levels: [
+      ...(b.tp ? [{ p: b.tp, label: "TP", color: "#26a69a", dash: true }] : []),
+      ...(b.entry ? [{ p: b.entry, label: "ENTRY", color: "#e6b93d" }] : []),
+      ...(b.sl ? [{ p: b.sl, label: "SL", color: "#ef5350", dash: true }] : []),
+    ],
+    fan: (b.fan && b.fan.length > 2 && hist.length)
+      ? { originT: tN, originP: hist[hist.length - 1].p,
+          pts: b.fan.map(p2 => ({ t: tN + p2.f * Math.max(1, t1 - tN),
+                                  lo: p2.q05, lo2: p2.q25, mid: p2.q50, hi2: p2.q75, hi: p2.q95 })) }
+      : null,
+    nowT: tN, t0, t1, ma: 0,
+    ariaLabel: `${S.symbol} ${S.focusTf} probability chart: realised price ` +
+      `with measured outcome fan to cycle end`,
+    emptyText: "collecting realised path…",
+  });
 }
 
 /* ═══════ formula live-value ticker (raw → new) ═══════ */
@@ -1026,11 +829,10 @@ function buildQuads() {
       <div class="q-foot"><span id="qf-${tf}"></span><span id="qa-${tf}"></span></div>`;
     grid.appendChild(q);
     q.addEventListener("click", () => { if (S.focusTf !== tf) setFocusTf(tf); });
-    S.charts[tf] = new LineChart($("#qc-" + tf));
-    S.spark[tf] = new LineChart($("#qs-" + tf), { spark: true });
+    S.charts[tf] = new PriceChart($("#qc-" + tf));
+    S.spark[tf] = new PriceChart($("#qs-" + tf), { spark: true });
   });
-  // main OWN chart is the LineChart-from-now renderer (drawMainChart),
-  // (LineChart v2 line mode — candles crushed the live action)
+  // main OWN chart is the PriceChart renderer (drawMainChart)
   // into the corner under a multi-hour trend
   renderQuads(); loadCandles();
 }
@@ -1150,7 +952,7 @@ function applyChartSrc() {
   if (mode === "tv" && wrap) fill(wrap, S.focusTf);
   if (mode === "binance") bnEnsure();
   if (mode === "own") drawMainChart();
-  // every sub-timeframe card follows the same toggle: our LineChart in
+  // every sub-timeframe card follows the same toggle: our PriceChart in
   // OWN, Binance candles in BINANCE, TradingView widget in TV mode.
   for (const tf of TF) {
     const o = $("#qc-" + tf), sp = $("#qs-" + tf),
@@ -1654,7 +1456,6 @@ async function loadCandles() {
       });
       const mapped = bars.map(x => ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
       c.setData(mapped);
-      c.setMarkers(markers.slice(-36));
       // seed the realised-path history (hero line chart + branches):
       // without this the white path only existed from page load and
       // the forward fan floated with nothing behind it

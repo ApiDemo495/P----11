@@ -15,8 +15,9 @@ def test_branch_payload_carries_empirical_fan():
 
 def test_charts_use_fan_crosshair_riskcalc_alerts():
     js = (ROOT / "static" / "app.js").read_text()
-    assert "p.q95, p.q05" in js  # engine fan keys are q05/q95 (q90/q10 was the blank-chart bug)
-    assert "this.cross" in js  # LineChart v2 built-in crosshair (bindHeroCross deleted with hero)
+    assert "p.q95" in js and "p.q05" in js  # engine fan keys are q05/q95 (q90/q10 was the blank-chart bug)
+    lc = (ROOT / "static" / "LineChart.js").read_text()
+    assert "this.cross" in lc  # PriceChart magnet crosshair lives in LineChart.js
     assert "function renderRiskCalc()" in js
     assert "riskUsdt / dist" in js
     assert "checkIssuedAlerts" in js and "was === false" in js

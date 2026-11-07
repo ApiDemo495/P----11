@@ -15,9 +15,10 @@ def test_brain_error_never_raw():
 
 def test_chart_engine_replaced():
     js = open("static/app.js").read()
-    assert "class LineChart" in js
-    assert "new ChartX" not in js and "class ChartX" not in js
-    assert "last price" in js.lower() or "lp.p" in js  # axis chip drawn
+    lc = open("static/LineChart.js").read()
+    assert "class PriceChart" in lc and "new PriceChart" in js
+    assert "class LineChart" not in js and "class ChartX" not in js
+    assert "last-price" in lc and "pcFmt(lp.p, dec)" in lc  # axis tag drawn
     html = open("static/index.html").read()
     assert 'id="btn-binance"' in html and "CONNECT BINANCE" in html
     assert 'id="risk-apply"' in html

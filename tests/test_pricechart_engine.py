@@ -1,0 +1,33 @@
+"""PriceChart (static/LineChart.js) replaced the deleted LineChart v2
+and the hand-rolled probability canvas. Rules come from
+docs/line-chart-research.md."""
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+LC = (ROOT / "static" / "LineChart.js").read_text()
+JS = (ROOT / "static" / "app.js").read_text()
+
+
+def test_old_charts_deleted_new_engine_everywhere():
+    assert "class LineChart" not in JS and "class PriceChart" in LC
+    assert "new PriceChart" in JS                      # main + quads + spark
+    assert 'src="/LineChart.js' in (ROOT / "static" / "index.html").read_text()
+    assert "XF = f =>" not in JS                       # old fan canvas gone
+
+
+def test_research_rules_implemented():
+    assert "pcTickStep" in LC and "1/2/5" in LC        # Heckbert nice ticks
+    assert "pcDecimals(yStep)" in LC                   # precision from step
+    assert "pcLTTB" in LC                              # shape-preserving downsample
+    assert "3 * medianDt" in LC                        # gaps break the path
+    assert "fan is NEVER in the domain" in LC          # fan clipped, price leads
+    assert "magnet" in LC.lower()                      # crosshair snaps to real points
+    assert 'setAttribute("role", "img")' in LC and "aria-label" in LC
+    assert "devicePixelRatio" in LC                    # HiDPI
+    assert "VOL " in LC                                # volume sub-pane labelled
+
+
+def test_probability_chart_uses_shared_engine():
+    assert "cvHost._pc.setModel" in JS
+    assert "lo: p2.q05, lo2: p2.q25, mid: p2.q50, hi2: p2.q75, hi: p2.q95" in JS  # nested fan bands
+    assert "TARGET FIRST" in JS                        # one-glance bar kept

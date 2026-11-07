@@ -66,12 +66,15 @@ def test_branch_fan_anchored_at_now():
     eng = (ROOT / "app" / "engine.py").read_text()
     assert '"now": round(now, 3)' in eng
     js = (ROOT / "static" / "app.js").read_text()
-    assert "XF = f => X(tN + f *" in js          # fan rooted at now
-    assert 'tag(b.tp, "#26a69a", "TP " + px(b.tp))' in js  # barriers as right-axis tags (redesigned chart)
+    assert "originT: tN" in js                  # fan rooted at now (PriceChart model)
+    lc = (ROOT / "static" / "LineChart.js").read_text()
+    assert "levels: line + direct tag on the line + tag on the axis" in lc
+    assert '{ p: b.tp, label: "TP", color: "#26a69a", dash: true }' in js
 
 
 def test_chart_labels_and_liq_filter():
     js = (ROOT / "static" / "app.js").read_text()
-    assert 'w - padR + 5' in js                              # price labels on the right axis (redesigned chart)
+    lc = (ROOT / "static" / "LineChart.js").read_text()
+    assert "padL + plotW + 5" in lc                          # price labels on the right axis (PriceChart)
     assert "Math.abs(p - _ref) / _ref <= 0.02" in js      # far LIQ dropped
     assert "entry (locked)" in js and "from entry" in js  # anchor shown

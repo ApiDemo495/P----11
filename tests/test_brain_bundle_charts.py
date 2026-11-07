@@ -15,9 +15,11 @@ def test_brain_bundle_in_repo_and_restore():
 
 
 def test_binance_style_charts():
+    lc = open("static/LineChart.js").read()
     js = open("static/app.js").read()
-    assert "MA overlay (Binance-style" in js
-    assert "volume strip (Binance layout)" in js
-    assert "hasVol" in js and "ph * 0.82" in js
-    assert "Binance-style area gradient" in js
-    assert "p: b.close, v: b.v || 0" in js       # volume reaches the charts
+    assert "moving-average overlay" in lc
+    assert "volume sub-pane" in lc
+    assert "hasVol" in lc and "plotH * 0.84" in lc   # price pane 84%, volume below
+    assert "area fill" in lc
+    assert "p: b.close, v: b.v || 0" in lc       # volume reaches the charts
+    assert "p.close, v: x.v || 0" in js or "v: x.v || 0" in js

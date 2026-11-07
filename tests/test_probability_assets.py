@@ -74,6 +74,6 @@ def test_engine_wires_temper_before_issue():
 def test_charts_true_window_axis_and_series():
     js = (ROOT / "static" / "app.js").read_text()
     assert "function realisedSeries(" in js
-    assert "d.cycle_start" in js and "nowX: now" in js  # v2 hero: true window axis [cycle_start, cycle_end]
+    assert "d.cycle_start" in js and "nowT: now" in js  # PriceChart: true window axis + NOW divider
     assert "S.candleSeries = { symbol: S.symbol, bars: seeded }" in js
     assert "loadCandles().catch(() => {})" in js     # 30 s refresh wired

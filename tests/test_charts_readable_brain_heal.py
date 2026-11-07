@@ -15,12 +15,15 @@ def test_probability_bar_and_readable_fan_chart():
     js = open("static/app.js").read()
     assert 'id="branch-bar"' in html
     assert "TARGET FIRST" in js and "STOP FIRST" in js and "NEITHER" in js
-    assert "what already happened" in js and "what history says can happen" in js
-    assert 'g.lineWidth = 2; g.stroke()' in js   # price is the hero, thick
+    lc = open("static/LineChart.js").read()
+    assert "history solid, forecast median dashed" in lc
+    assert "lineWidth = spark ? 1.5 : 2" in lc   # price is the hero, thick
 
 
 def test_fan_never_sets_own_chart_range():
     js = open("static/app.js").read()
-    assert "the fan NEVER sets the range" in js
-    assert "g.lineWidth = 2.2" in js
-    assert "Number.isFinite(p.p)" in js          # NaN hardening retained
+    lc = open("static/LineChart.js").read()
+    assert "fan is NEVER in the domain" in lc
+    assert "clipped to the price-led range" in lc
+    lc = open("static/LineChart.js").read()
+    assert "Number.isFinite(p.p)" in lc          # NaN hardening retained in PriceChart
