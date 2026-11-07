@@ -371,21 +371,27 @@ function drawOwnChart() {
   const liveP = (S.prices?.[S.symbol] > 0) ? S.prices[S.symbol] : a.price;
   let bars = (S.tfBars?.[S.focusTf] || []).filter(b2 => b2.close > 0 && b2.time <= bt0);
   if (bars.length && liveP > 0) {
-    // bridge any tape gap with the browser's own price prints (same
-    // prices the header shows) so the candle series can never end
-    // minutes behind the quoted price
-    const ring = (S.priceHist || []).filter(pt => pt.t > bars[bars.length - 1].time && pt.t <= now && pt.p > 0);
-    const byBucket = new Map();
-    for (const pt of ring) {
+    // merge the browser's own price prints into the tape: prints in
+    // the last bar's bucket UPDATE that bar, later prints open new
+    // buckets — the series the chart receives is always unique +
+    // ascending and always ends at the live price. (The old bridge
+    // APPENDED a second bar at the last bar's own timestamp whenever
+    // prints fell inside the current bucket; LWC rejects such a
+    // series and the key-guard below then froze the first paint.)
+    const lastT = bars[bars.length - 1].time;
+    const byTime = new Map(bars.map(b2 => [b2.time, { ...b2 }]));
+    for (const pt of (S.priceHist || [])) {
+      if (!(pt.p > 0) || pt.t > now) continue;
       const bk = Math.floor(pt.t / bucket0) * bucket0;
-      const o = byBucket.get(bk);
-      if (!o) byBucket.set(bk, { time: bk, open: pt.p, high: pt.p, low: pt.p, close: pt.p, v: 0 });
+      if (bk < lastT) continue;
+      const o = byTime.get(bk);
+      if (!o) byTime.set(bk, { time: bk, open: pt.p, high: pt.p, low: pt.p, close: pt.p, v: 0 });
       else { o.high = Math.max(o.high, pt.p); o.low = Math.min(o.low, pt.p); o.close = pt.p; }
     }
-    bars = [...bars, ...[...byBucket.values()].sort((x, y) => x.time - y.time)];
+    bars = [...byTime.values()].sort((x, y) => x.time - y.time);
     const lb = bars[bars.length - 1];
     if (lb.time === bt0) { lb.close = liveP; lb.high = Math.max(lb.high, liveP); lb.low = Math.min(lb.low, liveP); }
-    else bars.push({ time: bt0, open: lb.close, high: Math.max(lb.close, liveP),
+    else if (bt0 > lb.time) bars.push({ time: bt0, open: lb.close, high: Math.max(lb.close, liveP),
                      low: Math.min(lb.close, liveP), close: liveP, v: 0 });
   }
   const key = `${S.symbol}|${S.focusTf}|${d.cycle_start}`;
@@ -394,19 +400,21 @@ function drawOwnChart() {
   // behind the live price within a minute and never caught up)
   const dataKey = bars.length ? `${key}|${bars[bars.length - 1].time}|${bars.length}` : "";
   if (bars.length && dataKey !== Own.key) {
-    Own.key = dataKey;
     const cs = bars.map(b2 => ({ time: b2.time, open: b2.open, high: b2.high, low: b2.low, close: b2.close }));
-    inst.candles.setData(cs);
-    inst.vol.setData(bars.map(b2 => ({ time: b2.time, value: b2.v || 0,
-      color: b2.close >= b2.open ? "rgba(38,166,154,.4)" : "rgba(239,83,80,.4)" })));
-    const lb = bars[bars.length - 1];
-    inst.last = { ...lb };
-    if (key !== Own.rangeKey) {   // reframe only on symbol/TF/window change
-      Own.rangeKey = key;
-      try { inst.chart.timeScale().setVisibleRange({
-        from: Math.max(cs[0].time, (d.cycle_start || cs[0].time) - 2 * Math.max(60, (d.cycle_end || 0) - (d.cycle_start || 0))),
-        to: d.cycle_end || cs[cs.length - 1].time }); } catch {}
-    }
+    try {
+      inst.candles.setData(cs);
+      inst.vol.setData(bars.map(b2 => ({ time: b2.time, value: b2.v || 0,
+        color: b2.close >= b2.open ? "rgba(38,166,154,.4)" : "rgba(239,83,80,.4)" })));
+      Own.key = dataKey;          // key set ONLY after a clean setData
+      const lb = bars[bars.length - 1];
+      inst.last = { ...lb };
+      if (key !== Own.rangeKey) {   // reframe only on symbol/TF/window change
+        Own.rangeKey = key;
+        try { inst.chart.timeScale().setVisibleRange({
+          from: Math.max(cs[0].time, (d.cycle_start || cs[0].time) - 2 * Math.max(60, (d.cycle_end || 0) - (d.cycle_start || 0))),
+          to: d.cycle_end || cs[cs.length - 1].time }); } catch {}
+      }
+    } catch { /* rejected series: leave Own.key stale, retry next paint */ }
   }
   // live candle from the tick stream (candles.update, never setData
   // per tick); on a bucket roll the live bar ADVANCES — open = prev
