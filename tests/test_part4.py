@@ -464,7 +464,7 @@ def test_ui_contract_static_assets():
     assert "#07070d" in css          # terminal background
     assert "var(--cyan)" in css and "var(--red)" in css
     js = open("static/app.js").read()
-    assert "LightweightCharts" not in js       # own ChartX canvas
+    assert "LightweightCharts" in js       # Binance-mode candles (vendored lib); OWN mode is our LineChart
     assert "class LineChart" in js
     assert "MIXED SIGNALS" not in js           # label comes from backend
 

@@ -67,11 +67,11 @@ def test_branch_fan_anchored_at_now():
     assert '"now": round(now, 3)' in eng
     js = (ROOT / "static" / "app.js").read_text()
     assert "XF = f => X(tN + f *" in js          # fan rooted at now
-    assert 'hline(b.tp, "#22c98a", "TP →"' in js  # barriers from now-line
+    assert 'tag(b.tp, "#26a69a", "TP " + px(b.tp))' in js  # barriers as right-axis tags (redesigned chart)
 
 
 def test_chart_labels_and_liq_filter():
     js = (ROOT / "static" / "app.js").read_text()
-    assert 'g.textAlign = "right";' in js                 # labels at scale
+    assert 'w - padR + 5' in js                              # price labels on the right axis (redesigned chart)
     assert "Math.abs(p - _ref) / _ref <= 0.02" in js      # far LIQ dropped
     assert "entry (locked)" in js and "from entry" in js  # anchor shown
