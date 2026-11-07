@@ -300,6 +300,7 @@ class PredictionEngine:
         # P(target-before-stop) is remembered and graded against the
         # realised first touch at settlement — the probability system
         # itself gets an accuracy score, not just the direction.
+        self._conf_hist: dict = {}
         self._prob_pred: dict = {}
         self._prob_audit = {"n": 0, "sum_pred": 0.0, "tp_first": 0,
                             "brier_sum": 0.0}
@@ -991,6 +992,40 @@ class PredictionEngine:
                 drpt=phys["drpt"],
                 gspi=phys["gspi"],
             )
+            # CONFIDENCE CALIBRATION (precision fix): the raw chain
+            # |CCI| x DRHE x penalties lands at ~0.001-0.03 in normal
+            # markets, so the 0.35 floor demanded near-unanimous
+            # extremes and NOTHING could ever issue ("no prediction
+            # for a day"). Confidence is now the MEASURED percentile
+            # of this score within its own recent history for this
+            # asset+TF: 0.35 means "stronger than ~65% of its own
+            # recent scores" — reachable when the signal is relatively
+            # strong, still gated by every check below. Until 50
+            # samples exist the raw value is used (legacy behaviour).
+            _hist = self._conf_hist.setdefault((symbol, tf), [])
+            _base_conf = float(pack["confidence"])
+            fin["confidence_raw"] = round(float(fin["confidence"]), 5)
+            # percentile pool: the ladder's own |score| history when it
+            # has >= 20 entries (it accumulates from the first GRC),
+            # else this run's base-confidence history. Either way the
+            # number is a measured rank, not a rescaled guess.
+            _pool = [abs(v) for v in
+                     self.score_hist.get((symbol, tf), [])
+                     if v is not None]
+            _rank_val = abs(float(pack["cci_adjusted"]))
+            if len(_pool) < 20:
+                _pool = list(_hist)
+                _rank_val = _base_conf
+            if len(_pool) >= 20:
+                _pct = sum(1 for v in _pool if v <= _rank_val) / len(_pool)
+                fin["confidence"] = round(_pct, 4)
+                fin["conf_percentile"] = round(_pct, 4)
+            else:
+                fin["conf_percentile"] = None
+            fin["conf_hist_n"] = len(_pool)
+            _hist.append(_base_conf)
+            if len(_hist) > 400:
+                del _hist[:-400]
             # advice §5.1: the emotion fusion weight is a CONFIDENCE
             # MODULATOR of ±15 %, never the direction ("formulas over
             # emotions" — after emotions out-voted the tape). Agreement

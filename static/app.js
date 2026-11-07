@@ -3153,3 +3153,19 @@ window.addEventListener("unhandledrejection", e => {
   paint(); window.__paintBinance = paint;
 })();
 
+
+// [brain-header-btn] one-click brain reconnect in the header.
+(() => {
+  const b = $("#btn-brain"); if (!b) return;
+  b.addEventListener("click", async () => {
+    b.textContent = "⟳ …";
+    try {
+      const r = await api("/api/brain/reconnect", { method: "POST" });
+      const fw = r.flywire || r;
+      toast(fw.state === "ready" ? "brain reconnected — vote live"
+            : "brain reconnect started — watch the chip (auto-retries too)",
+            fw.state === "ready" ? "ok" : "err");
+    } catch (e) { toast("brain reconnect failed — " + e.message, "err"); }
+    setTimeout(() => { b.textContent = "⟳ BRAIN"; }, 1500);
+  });
+})();

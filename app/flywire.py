@@ -418,6 +418,51 @@ class FlyWireBrain:
     def npz_path(self) -> Path:
         return CACHE_DIR / "flywire_783.npz"
 
+    def _purge_corrupt(self, exc) -> bool:
+        """A truncated/corrupt download used to poison EVERY rebuild:
+        the same unreadable parquet was retried forever ("brain absent
+        again and again for a day"). If the failure smells like a bad
+        artefact (thrift/deserialize/parquet), DELETE the cached files
+        so the next attempt re-downloads clean ones."""
+        t = str(exc).lower()
+        if not any(k in t for k in ("thrift", "deserialize", "parquet",
+                                    "page header", "magic", "stream")):
+            return False
+        purged = []
+        for name in (PARQUET, ANNOTATIONS):
+            for cand in (CACHE_DIR / name,
+                         (CACHE_DIR / name).with_suffix(
+                             (CACHE_DIR / name).suffix + ".part")):
+                try:
+                    if cand.exists():
+                        cand.unlink(); purged.append(str(cand))
+                except OSError:
+                    pass
+        try:
+            if self.npz_path().exists():
+                self.npz_path().unlink(); purged.append("npz")
+        except OSError:
+            pass
+        if purged:
+            _log(f"purged corrupt cache artefacts: {purged}")
+        return bool(purged)
+
+    def _schedule_retry(self) -> None:
+        """Bounded auto-retry when a build fails: up to 5 attempts,
+        3 minutes apart — a flaky download self-heals without the user
+        hunting for a RECONNECT button. Manual RECONNECT resets it."""
+        self._retry_n = getattr(self, "_retry_n", 0) + 1
+        if self._retry_n > 5:
+            _log("brain auto-retry exhausted (5) — use RECONNECT")
+            return
+        def _later():
+            time.sleep(180)
+            if self.state == "absent":
+                _log(f"brain auto-retry {self._retry_n}/5")
+                self.ensure()
+        threading.Thread(target=_later, name="flywire-retry",
+                         daemon=True).start()
+
     def ensure(self) -> None:
         """Hot-swap in the connectome without ever blocking first paint."""
         with self._lock:
@@ -439,6 +484,7 @@ class FlyWireBrain:
                 except Exception as exc:
                     self.last_error = f"load failed: {exc!r}"
                     _log(self.last_error)
+                    self._purge_corrupt(exc)
             # no valid cache: acquire + build in a worker (B-11)
             self.state = "building"
             self.progress = {"stage": "starting", "pct": 0.0}
@@ -523,6 +569,8 @@ class FlyWireBrain:
             self.last_error = repr(exc)
             self.progress = {"stage": "failed", "pct": 0.0}
             _log(f"build failed: {exc!r}")
+            self._purge_corrupt(exc)
+            self._schedule_retry()
             self.verify()
 
     def rebuild(self) -> dict:
@@ -533,6 +581,7 @@ class FlyWireBrain:
                         "progress": self.progress}
             self.state = "absent"
             self.last_error = None
+            self._retry_n = 0
         self.ensure()
         return {"ok": True, "state": self.state}
 
