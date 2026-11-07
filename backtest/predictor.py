@@ -10,6 +10,7 @@ native tape; the horizon is the app's TF1 window (22 bars).
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 
 from .slice import SliceView
@@ -39,6 +40,9 @@ class AppPredictor:
         self.engine = PredictionEngine(self.feed, _emit)
         self.tf = tf
         self._booted = False
+        # BACKTEST_RECORD=1 replays the app's live learning too (CCI
+        # weight updates, brain RPE, physics/emotion reward learning)
+        self.record = os.environ.get("BACKTEST_RECORD") == "1"
 
     def boot(self) -> None:
         async def _b():
@@ -66,7 +70,7 @@ class AppPredictor:
         st.live_open, st.live_high = bars[-1].o, bars[-1].h
         st.live_low = bars[-1].l
         st.day_open = bars[0].o
-        res = self.engine.compute_asset(symbol, record=False,
+        res = self.engine.compute_asset(symbol, record=self.record,
                                         display=False)[self.tf]
         direction = int(res.get("direction") or 0)
         if direction == 0:

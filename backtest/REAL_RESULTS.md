@@ -47,3 +47,22 @@ Win% intervals are Wilson 95% — with these n they are WIDE.
 Full trade log: backtest/results/mode_a_trades_real_1h.csv
 Reproduce (Codespace, Binance reachable):
   python -m backtest.cli --mode A --source ccxt --tf 15m
+
+## Second run — same data, LIVE LEARNING switched ON
+`BACKTEST_RECORD=1` (engine record=True: CCI weight learning, Brain-4,
+flywire RPE weight updates, physics alpha + emotion reward learning
+all active between decisions, as in the live app).
+
+| Asset | Win % | n | Breakeven % | EV (R) | PF | Max DD % |
+|---|---|---|---|---|---|---|
+| BTC | 43.68% | 87 | 51.09% | -0.090R | 0.742 | 11.72% |
+| ETH | 32.18% | 87 | 51.58% | -0.222R | 0.445 | 17.87% |
+| BNB | 39.08% | 87 | 52.41% | -0.171R | 0.583 | 15.82% |
+| PAXG | 36.78% | 87 | 49.74% | -0.150R | 0.588 | 14.81% |
+| ALL | 37.93% | 348 | 51.11% | -0.158R | 0.584 | 43.54% |
+
+Verdict: on this window, learning made it WORSE, not better (EV
+-0.077R -> -0.158R per trade; PAXG flipped from +0.077R to -0.150R).
+The reward-learning loops as currently tuned chase the last move
+and degrade the signal on 1h bars. Trade log:
+backtest/results/mode_a_trades_real_1h_learning.csv
