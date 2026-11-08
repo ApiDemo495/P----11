@@ -158,6 +158,13 @@ run_worker() {
   echo $! > "$PIDFILE"
 
   for _ in $(seq 1 240); do
+    _pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+    if [ -n "$_pid" ] && ! kill -0 "$_pid" 2>/dev/null; then
+      log "✗ engine process died during boot — placeholder back up with logs"
+      tail -n 25 "$LOG" 2>/dev/null
+      start_placeholder
+      return 1
+    fi
     if healthy; then
       log "✓ app healthy on http://0.0.0.0:$PORT (pid $(cat "$PIDFILE")) — total $(( $(date +%s) - T0 ))s"
       bash scripts/make_port_public.sh || true

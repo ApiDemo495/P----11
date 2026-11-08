@@ -55,3 +55,9 @@ def test_setup_can_never_gate_or_kill_the_boot():
     auto = (ROOT / "scripts" / "auto_start.sh").read_text()
     assert "attempting engine start anyway" in auto   # setup failure != dead port
     assert "cannot start" not in auto
+
+
+def test_engine_crash_restores_placeholder_fast():
+    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
+    assert "engine process died during boot" in auto
+    assert auto.count("start_placeholder") >= 3   # boot, provision, crash paths
