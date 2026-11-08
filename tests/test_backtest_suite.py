@@ -118,3 +118,16 @@ def test_settle_r_ratio_bounds():
     assert r4 is not None and 0.5 < r4 < 0.7
     r2 = settle_r(row, 1, 0.75, 2.0)
     assert r2 is not None and r4 < r2 < 2.0            # 2:1 TP-hit -> ~+2R
+
+
+def test_vote_direction_agreement():
+    from backtest.policy import vote_direction
+    from backtest.policy import VOTE_WEIGHTS
+    strong = {n: 1.0 for n in VOTE_WEIGHTS}
+    d, frac = vote_direction(strong)
+    assert d == 1 and frac >= 0.6
+    split = {n: (1.0 if n in ("F25", "F5", "F23") else -1.0)
+             for n in VOTE_WEIGHTS}
+    d2, frac2 = vote_direction(split)
+    assert d2 == 0 and frac2 < 0.6          # split vote -> no trade
+    assert vote_direction({})[0] == 0       # no components -> no trade

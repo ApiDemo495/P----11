@@ -233,18 +233,6 @@ def grid(rows):
     out["per_asset_best"] = {"chosen_on_train": chosen, "test": _m(agg)}
     return out
 
-
-if __name__ == "__main__":
-    raw = json.load(open("/home/user/P----11/.data_tmp/full_series.json"))
-    series = {s.replace("USDT", ""): [Bar(int(t), o, h, l, c, v)
-              for t, o, h, l, c, v in rows] for s, rows in raw.items()}
-    rows = collect_tp4(series, AppPredictor(), capture=True)
-    json.dump(rows, open("/home/user/P----11/.data_tmp/tp4_decisions.json", "w"))
-    print(f"decisions: {len(rows)}")
-    print(json.dumps(grid(rows), indent=1))
-    print(json.dumps(ablation_report(rows), indent=1))
-
-
 RS = (1.0, 1.5, 2.0, 3.0, 4.0)      # user bounds: 1:1 .. 4:1, pref 2:1
 
 
@@ -337,3 +325,15 @@ def ablation_report(rows):
                 "train": _m([x for x in tr if x is not None]),
                 "test": _m([x for x in te if x is not None])}
     return out
+
+
+if __name__ == "__main__":
+    raw = json.load(open("/home/user/P----11/.data_tmp/full_series.json"))
+    series = {s.replace("USDT", ""): [Bar(int(t), o, h, l, c, v)
+              for t, o, h, l, c, v in rows] for s, rows in raw.items()}
+    rows = collect_tp4(series, AppPredictor(), capture=True)
+    json.dump(rows, open("/home/user/P----11/.data_tmp/tp4_decisions.json", "w"))
+    print(f"decisions: {len(rows)}")
+    print(json.dumps(grid(rows), indent=1))
+    print(json.dumps(ablation_report(rows), indent=1))
+
