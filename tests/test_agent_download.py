@@ -93,40 +93,17 @@ def test_routes_exist():
     assert "/api/agents/local/install" in paths
 
 
-def test_catalog_default_is_qwen25_coder_3b():
-    assert ag.DEFAULT_MODEL_ID == "qwen25-coder-3b"
-    best = ag.model_by_id(None)
-    assert "Qwen2.5-Coder-3B" in best["label"]
-    ids = [m["id"] for m in ag.MODEL_CATALOG]
-    assert len(ids) >= 4 and len(set(ids)) == len(ids)   # multiple options
-    repo, fname, _ = ag.pick_local_model(8.0)            # Codespace tier
-    assert fname == best["file"]
+
+def test_preferred_model_is_qwen25_coder_3b():
+    repo, fname, label = ag.pick_local_model(8.0)      # Codespace tier
+    assert "Qwen2.5-Coder-3B" in label
+    assert fname == "qwen2.5-coder-3b-instruct-q4_k_m.gguf"
+    st = ag.AgentInstaller(ag.LocalModel(),
+                           runner=lambda c, say: 0).status()
+    assert "models" not in st                          # single option (old)
 
 
-def test_download_specific_model_by_id(tmp_path, monkeypatch):
-    seen = {}
 
-    def runner(cmd, say):
-        if any("download_models" in part for part in cmd):
-            seen["cmd"] = cmd
-            path = inst.model_file("qwen25-coder-1.5b")
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            open(path, "wb").write(b"GGUF-fake")
-        return 0
-
-    inst, local = _installer(tmp_path, monkeypatch, runner=runner)
-    inst.start("qwen25-coder-1.5b")
-    inst._thread.join(timeout=20)
-    st = inst.status()
-    assert st["state"] == "done", st
-    assert st["target"] == "qwen25-coder-1.5b"
-    assert local.model_id == "qwen25-coder-1.5b"
-    assert "--model" in seen["cmd"]
-    assert "qwen25-coder-1.5b" in seen["cmd"]
-    by_id = {m["id"]: m for m in st["models"]}
-    assert by_id["qwen25-coder-1.5b"]["present"] is True
-    assert by_id["qwen25-coder-3b"]["recommended"] is True
-    assert by_id["qwen25-coder-3b"]["present"] is False
 
 
 def _fake_gguf(path, payload=b"GGUF" + b"\x00" * 64):
@@ -153,7 +130,7 @@ def test_validation_catches_half_downloads(tmp_path, monkeypatch):
     assert inst.model_present() is True
 
 
-def test_boot_and_button_share_one_fetcher_lock(tmp_path, monkeypatch):
+def test_installer_fetcher_lock_is_exclusive(tmp_path, monkeypatch):
     inst, _ = _installer(tmp_path, monkeypatch, runner=lambda c, say: 0)
     fh = inst._grab_lock()
     assert fh is not None
@@ -168,9 +145,7 @@ def test_boot_and_button_share_one_fetcher_lock(tmp_path, monkeypatch):
     fh2.close()
 
 
-def test_prefetch_script_is_idempotent_wrapper():
-    from pathlib import Path
-    sh = Path("scripts/prefetch_agent.sh").read_text()
-    assert "download_agent.sh" in sh
-    auto = Path("scripts/download_agent.sh").read_text()
-    assert ".agent_download.lock" in auto        # shell takes the same flock
+
+
+
+

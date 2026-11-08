@@ -79,19 +79,13 @@ def test_boot_downloads_are_slim_and_deferred():
     assert "nice -n 19 bash -c" in setup              # opt-in AI stage is niced
 
 
-def test_boot_order_agent_then_app_then_backtest():
+
+def test_boot_has_no_agent_download():
     auto = (ROOT / "scripts" / "auto_start.sh").read_text()
-    assert "launch_agent_download" in auto
-    worker = auto.split("run_worker() {", 1)[1]
-    assert worker.index("launch_agent_download") < worker.index("start_placeholder")
-    dl = (ROOT / "scripts" / "download_agent.sh").read_text()
-    assert "qwen2.5-coder-3b-instruct-q4_k_m.gguf" in dl   # specified best model
-    assert ".setup_stamp" in dl          # waits for core pip — no pip race
-    assert "setup_ai.pid" in dl          # single shared download lock
+    assert "download_agent" not in auto        # agent is in-app only (old)
+    assert not (ROOT / "scripts" / "download_agent.sh").exists()
     bt = (ROOT / "scripts" / "run_backtest_once.sh").read_text()
-    assert "agent download still running" in bt   # backtest runs LAST
-    dm = (ROOT / "scripts" / "download_models.py").read_text()
-    assert "--model" in dm
+    assert "agent download" not in bt          # backtest: deferred only
 
 
 def test_no_editor_warning_generators():
@@ -104,3 +98,4 @@ def test_no_editor_warning_generators():
     tasks = json.loads((ROOT / ".vscode" / "tasks.json").read_text())
     auto = [t for t in tasks["tasks"] if t["label"].startswith("auto-start")]
     assert auto and "|| true" in auto[0]["command"]   # task terminal exits 0
+

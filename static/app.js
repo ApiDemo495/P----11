@@ -2667,39 +2667,34 @@ async function loadAgents() {
                        model: "downloading model", load: "loading agent" }[ins.phase] || "working";
     $("#ag-local").innerHTML = `
       <div class="kv-row">
-        <div class="kv"><span>model</span><b>${ins.model_label || lo.label || "—"}</b></div>
+        <div class="kv"><span>model</span><b>${lo.label || "—"}</b></div>
         <div class="kv"><span>available</span><b>${lo.available ? "yes" : "no"}</b></div>
         <div class="kv"><span>RAM tier</span><b>${lo.ram_gb ?? "?"} GB</b></div>
         <div class="kv"><span>last inference</span><b>${lo.last_ms ? lo.last_ms + " ms" : "—"}</b></div>
       </div>
-      ${installing
-        ? `<div class="hint" style="margin-top:8px">⬇ downloading <b>${esc(ins.model_label || "")}</b> — ${phaseTxt}… ${ins.elapsed_s ? Math.floor(ins.elapsed_s / 60) + "m " + (ins.elapsed_s % 60) + "s" : ""} — the app keeps running; this panel refreshes itself</div>
-           <div class="logic" style="max-height:110px;overflow:auto;font-size:10px">${(ins.log || []).slice(-6).map(esc).join("<br/>")}</div>`
-        : ins.state === "failed"
-        ? `<div class="hint" style="margin-top:8px">⚠ last attempt stopped: ${esc(ins.error || "unknown")} — pick a model below to retry/resume</div>` : ""}
-      ${lo.error && !installing ? `<div class="hint">${esc(lo.error)}</div>` : ""}
-      <div style="margin-top:10px;display:grid;gap:8px">
-        ${(ins.models || []).map(m => `
-          <div class="key-card" style="text-align:left">
-            <b>${esc(m.label)}</b> ${m.recommended ? `<span class="chip-ok">${esc(m.tag)}</span>` : `<span class="dim">${esc(m.tag)}</span>`}
-            ${m.selected && lo.available ? `<span class="chip-ok">● loaded</span>` : m.present ? `<span class="dim">downloaded</span>` : ""}
-            <div class="dim" style="font-size:10px;margin-top:3px">${esc(m.blurb)} · ${esc(m.size)} · needs ~${m.min_ram} GB RAM${m.fits_ram ? "" : " (more than this machine reports — still your choice)"}${m.present ? ` · ✓ sha ${esc(m.validation?.sha || "?")} · ${esc(m.validation?.source || "")}` : ""}</div>
-            <button class="btn ag-dl" data-model="${m.id}" ${installing ? "disabled" : ""} style="margin-top:6px">${installing ? "downloading…" : m.present ? (m.selected ? "reload" : "⬇ use this model") : "⬇ download"}</button>
-          </div>`).join("")}
-      </div>
-      ${ins.deps_installed ? "" : `<div class="hint" style="margin-top:6px">First download also installs the llama.cpp runtime (a 10–20 min compile on some machines is normal). Everything runs in the background.</div>`}
-      ${lo.available ? `<button class="btn test-slot" data-slot="local" style="margin-top:10px">test loaded agent</button>` : ""}
+      ${ins.validation?.present ? `<div class="hint" style="margin-top:6px">✓ sha ${esc(ins.validation.sha || "?")} · ${esc(ins.validation.source || "")}</div>` : ""}
+      ${ins.installed
+        ? `<div class="hint" style="margin-top:8px">✓ local agent downloaded${lo.available ? " and loaded" : " — press test to load it"}</div>
+           <button class="btn test-slot" data-slot="local" style="margin-top:10px">test</button>`
+        : installing
+        ? `<div class="hint" style="margin-top:8px">⬇ ${phaseTxt}… ${ins.elapsed_s ? Math.floor(ins.elapsed_s / 60) + "m " + (ins.elapsed_s % 60) + "s" : ""} — the app keeps running; this panel refreshes itself</div>
+           <div class="logic" style="max-height:110px;overflow:auto;font-size:10px">${(ins.log || []).slice(-6).map(esc).join("<br/>")}</div>
+           <button class="btn" disabled style="margin-top:10px">downloading…</button>`
+        : `<button class="btn" id="ag-download" style="margin-top:10px">⬇ DOWNLOAD LOCAL AGENT</button>
+           <div class="hint" style="margin-top:6px">One-time, on-demand: llama.cpp runtime + ${ins.model_label || "preferred model"} (${ins.model_size || ""}). Preferred model: Qwen2.5-Coder-3B. Runs in the background — nothing downloads at boot, and the app stays fully usable meanwhile.</div>
+           ${ins.state === "failed" ? `<div class="hint">⚠ last attempt stopped: ${esc(ins.error || "unknown")} — press download to retry/resume</div>` : ""}
+           ${lo.error ? `<div class="hint">${lo.error}</div>` : ""}`}
       `;
-    $$("#ag-local .ag-dl").forEach(b => b.addEventListener("click", async () => {
-      b.disabled = true; b.textContent = "starting…";
+    const dlBtn = $("#ag-download");
+    if (dlBtn) dlBtn.addEventListener("click", async () => {
+      dlBtn.disabled = true; dlBtn.textContent = "starting…";
       try {
-        const r = await api("/api/agents/local/install", { method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model_id: b.dataset.model }) });
-        toast("agent download started: " + (r.install?.model_label || b.dataset.model));
+        const r = await api("/api/agents/local/install", { method: "POST" });
+        toast(r.install?.state === "done" ? "local agent already downloaded"
+                                           : "local agent download started — watch this panel");
       } catch (e) { toast("download start failed: " + e.message, "err"); }
       loadAgents();
-    }));
+    });
     if (installing && S.view === "agents") {
       clearTimeout(window.__agPoll);
       window.__agPoll = setTimeout(() => { if (S.view === "agents") loadAgents(); }, 4000);

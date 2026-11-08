@@ -47,13 +47,12 @@ KEY_FIELDS = frozenset({"gemini_key", "backup1_key", "backup2_key",
                         "anthropic_key"})
 MODELS_DIR = "models"
 
-def resolve_model_path(model_id: str | None = None,
-                       local: "LocalModel | None" = None) -> str:
-    """THE one place a model id becomes a path (installer, loader,
-    UI and shell scripts all agree through here)."""
-    mid = model_id or (local.model_id if local is not None
-                       else DEFAULT_MODEL_ID)
-    return os.path.join(MODELS_DIR, model_by_id(mid)["file"])
+def resolve_model_path(local: "LocalModel | None" = None) -> str:
+    """THE one place the preferred model becomes a path (installer,
+    loader and UI all agree through here)."""
+    _, fname, _ = pick_local_model(local.ram_gb if local is not None
+                                   else 8.0)
+    return os.path.join(MODELS_DIR, fname)
 
 
 def model_sidecar(path: str) -> str:
@@ -113,84 +112,34 @@ def model_validation(path: str) -> dict:
 
 
 def pick_local_model(ram_gb: float):
-    """Default model when the user has not chosen: Qwen2.5-Coder-3B
-    (the specified best) on any machine that can hold it, else the
-    strongest coder that fits, else the lightest."""
-    best = model_by_id(DEFAULT_MODEL_ID)
-    if ram_gb >= best["min_ram"]:
-        return best["repo"], best["file"], best["label"]
-    for m in sorted(MODEL_CATALOG, key=lambda x: -x["min_ram"]):
-        if ram_gb >= m["min_ram"]:
-            return m["repo"], m["file"], m["label"]
-    m = MODEL_CATALOG[-1]
-    return m["repo"], m["file"], m["label"]
+    """(repo, filename, label) for the RAM tier — one source of truth.
+    Top tier is the preferred Qwen2.5-Coder-3B."""
+    for min_ram, r, f, lab in LOCAL_MODELS:
+        if ram_gb >= min_ram:
+            return r, f, lab
+    return LOCAL_MODELS[-1][1], LOCAL_MODELS[-1][2], LOCAL_MODELS[-1][3]
 
 GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
               "gemini-1.5-flash:generateContent?key={key}")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
-# Multiple downloadable local-agent models (Agents tab). The user
-# picked Qwen2.5-Coder-3B as the best/best-default: strongest coder
-# that still runs comfortably on a 4-core / 8 GB Codespace (it is
-# also the formula auditor's model). Others stay as options:
-# heavier 7B, lighter 1.5B / 0.5B, and the two legacy tiers.
-MODEL_CATALOG = [
-    {"id": "qwen25-coder-3b",
-     "repo": "Qwen/Qwen2.5-Coder-3B-Instruct-GGUF",
-     "file": "qwen2.5-coder-3b-instruct-q4_k_m.gguf",
-     "label": "Qwen2.5-Coder-3B-Instruct (Q4_K_M)",
-     "size": "~2.0 GB", "min_ram": 5,
-     "tag": "★ BEST — recommended",
-     "blurb": "best judgment per GB; the auditor's model; ideal on 8 GB"},
-    {"id": "qwen25-coder-7b",
-     "repo": "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
-     "file": "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
-     "label": "Qwen2.5-Coder-7B-Instruct (Q4_K_M)",
-     "size": "~4.7 GB", "min_ram": 9,
-     "tag": "strongest — heavy",
-     "blurb": "deepest reasoning; wants 12 GB+ RAM, slower on 4 cores"},
-    {"id": "qwen25-coder-1.5b",
-     "repo": "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF",
-     "file": "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
-     "label": "Qwen2.5-Coder-1.5B-Instruct (Q4_K_M)",
-     "size": "~1.0 GB", "min_ram": 3,
-     "tag": "balanced",
-     "blurb": "half the download of the 3B, still a real coder"},
-    {"id": "qwen2-05b",
-     "repo": "Qwen/Qwen2-0.5B-Instruct-GGUF",
-     "file": "qwen2-0_5b-instruct-q4_k_m.gguf",
-     "label": "Qwen2-0.5B-Instruct (Q4_K_M)",
-     "size": "~400 MB", "min_ram": 0,
-     "tag": "lightest — fastest",
-     "blurb": "tiny and quick; weakest judgment, fine as a smoke agent"},
-    {"id": "phi3-mini",
-     "repo": "microsoft/Phi-3-mini-4k-instruct-gguf",
-     "file": "Phi-3-mini-4k-instruct-q4k.gguf",
-     "label": "Phi-3-mini-4k-instruct (Q4_K_M)",
-     "size": "~2.4 GB", "min_ram": 7,
-     "tag": "legacy tier",
-     "blurb": "previous >=14 GB auto-tier, kept as an option"},
-    {"id": "TinyLlama",
-     "repo": "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF",
-     "file": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-     "label": "TinyLlama-1.1B-Chat-v1.0 (Q4_K_M)",
-     "size": "~670 MB", "min_ram": 2,
-     "tag": "legacy tier",
-     "blurb": "previous mid auto-tier, kept as an option"},
+LOCAL_MODELS = [
+    # (min_ram_gb, repo, file, label) — RAM tiers, as before, except
+    # the preferred/top tier is now the user's specified best model:
+    # Qwen2.5-Coder-3B (also the formula auditor's model).
+    (5, "Qwen/Qwen2.5-Coder-3B-Instruct-GGUF",
+     "qwen2.5-coder-3b-instruct-q4_k_m.gguf",
+     "Qwen2.5-Coder-3B-Instruct (Q4_K_M)"),
+    (0, "Qwen/Qwen2-0.5B-Instruct-GGUF", "qwen2-0_5b-instruct-q4_k_m.gguf",
+     "Qwen2-0.5B-Instruct (Q4_K_M)"),
 ]
-DEFAULT_MODEL_ID = "qwen25-coder-3b"     # user-specified best model
 
-# legacy shape kept for scripts/download_models.py compat
-LOCAL_MODELS = [(m["min_ram"], m["repo"], m["file"], m["label"])
-                for m in MODEL_CATALOG]
-
-
-def model_by_id(model_id: str | None) -> dict:
-    for m in MODEL_CATALOG:
-        if m["id"] == model_id:
-            return m
-    return MODEL_CATALOG[0]
+# approximate on-disk size per tier file (shown before downloading)
+MODEL_SIZE_HINT = {
+    "qwen2.5-coder-3b-instruct-q4_k_m.gguf": "~2.0 GB",
+    "qwen2-0_5b-instruct-q4_k_m.gguf": "~400 MB",
+}
 
 
 def _mask(key: str) -> str:
@@ -266,7 +215,6 @@ class LocalModel:
     def __init__(self) -> None:
         self.available = False
         self.label = "not loaded"
-        self.model_id = DEFAULT_MODEL_ID
         self.llm = None
         self.path = None
         self.ram_gb = _ram_gb()
@@ -298,10 +246,9 @@ class LocalModel:
             self.error = f"llama-cpp-python not installed ({e.__class__.__name__})"
             self.label = "unavailable"
             return
-        picked = model_by_id(self.model_id)
-        repo, fname, label = picked["repo"], picked["file"], picked["label"]
+        repo, fname, label = pick_local_model(self.ram_gb)
         self.label = label
-        path = resolve_model_path(self.model_id)
+        path = resolve_model_path(self)
         if os.path.exists(path) and not model_validation(path)["magic_ok"]:
             self.error = ("downloaded model file is corrupt (truncated?) "
                           "— re-download it from the Agents tab")
@@ -376,7 +323,7 @@ class AgentInstaller:
     this runs in a background thread, and the app keeps working:
       1) pip install -r requirements-agents.txt  (llama.cpp runtime —
          may compile for 10-20 min on some machines; that is normal)
-      2) scripts/download_models.py --model …    (chosen GGUF model)
+      2) scripts/download_models.py              (preferred GGUF model)
       3) load the model so the local agent slot goes live
     State + last log lines are reported honestly to the UI; a failure
     keeps the app in Drosophila mode and says why in plain words.
@@ -387,7 +334,6 @@ class AgentInstaller:
 
     def __init__(self, local: "LocalModel", runner=None) -> None:
         self.local = local
-        self.target_id = local.model_id  # which catalog model to fetch
         self._runner = runner            # injectable for tests
         self._lock = threading.Lock()
         self.state = "idle"              # idle|installing|done|failed
@@ -403,41 +349,30 @@ class AgentInstaller:
         import importlib.util
         return importlib.util.find_spec("llama_cpp") is not None
 
-    def model_file(self, model_id: str | None = None) -> str:
-        return resolve_model_path(model_id or self.target_id)
+    def model_file(self) -> str:
+        return resolve_model_path(self.local)
 
-    def model_present(self, model_id: str | None = None) -> bool:
-        v = model_validation(self.model_file(model_id))
+    def model_present(self) -> bool:
+        v = model_validation(self.model_file())
         return v["present"] and v["magic_ok"]
 
-    def installed(self, model_id: str | None = None) -> bool:
-        return self.deps_installed() and self.model_present(model_id)
+    def installed(self) -> bool:
+        return self.deps_installed() and self.model_present()
 
     def status(self) -> dict:
-        tgt = model_by_id(self.target_id)
+        _, fname, label = pick_local_model(self.local.ram_gb)
         running = self._thread is not None and self._thread.is_alive()
         state = "installing" if running else self.state
         if state == "idle" and self.installed():
             state = "done"
-        models = [{
-            "id": m["id"], "label": m["label"], "size": m["size"],
-            "min_ram": m["min_ram"], "tag": m["tag"], "blurb": m["blurb"],
-            "present": self.model_present(m["id"]),
-            "validation": model_validation(self.model_file(m["id"])),
-            "selected": self.local.model_id == m["id"],
-            "recommended": m["id"] == DEFAULT_MODEL_ID,
-            "fits_ram": self.local.ram_gb >= m["min_ram"],
-        } for m in MODEL_CATALOG]
         return {
             "state": state,
             "installed": self.installed(),
             "deps_installed": self.deps_installed(),
             "model_present": self.model_present(),
-            "model_label": tgt["label"],
-            "model_size": tgt["size"],
-            "target": self.target_id,
-            "default_model": DEFAULT_MODEL_ID,
-            "models": models,
+            "model_label": label,
+            "model_size": MODEL_SIZE_HINT.get(fname, ""),
+            "validation": model_validation(self.model_file()),
             "phase": self.phase if running else "",
             "error": self.error,
             "log": list(self.log),
@@ -446,32 +381,20 @@ class AgentInstaller:
         }
 
     # -- work -----------------------------------------------------------
-    def start(self, model_id: str | None = None) -> dict:
+    def start(self) -> dict:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 return self.status()                 # already downloading
-            if model_id:
-                self.target_id = model_by_id(model_id)["id"]
-            self.local.model_id = self.target_id
+            if self.installed():
+                self.state = "done"
+                return self.status()
             self.state, self.phase, self.error = "installing", "runtime", ""
             self.log.clear()
             self.started_at, self.finished_at = time.time(), 0.0
-            work = self._load_only if self.installed() else self._work
-            if work is self._load_only:
-                self.phase = "load"
-            self._thread = threading.Thread(target=work, daemon=True,
+            self._thread = threading.Thread(target=self._work, daemon=True,
                                             name="agent-installer")
             self._thread.start()
             return self.status()
-
-    def _load_only(self) -> None:
-        try:
-            self._say("model already downloaded — loading it")
-            self.local.try_load(force=True)
-            self.state = "done"
-        finally:
-            self.phase = ""
-            self.finished_at = time.time()
 
     def _say(self, line: str) -> None:
         line = str(line).rstrip()
@@ -564,8 +487,7 @@ class AgentInstaller:
                         "connection and press download again" % rc)
             self.phase = "model"
             rc = self._exec([sys_executable(),
-                             os.path.join("scripts", "download_models.py"),
-                             "--model", self.target_id])
+                             os.path.join("scripts", "download_models.py")])
             if rc != 0 or not self.model_present():
                 raise RuntimeError(
                     "model download did not finish — the hub may be "
@@ -665,17 +587,6 @@ class AgentManager:
         }
         self.load_settings()
 
-    def start_agent_download(self, model_id: str | None = None) -> dict:
-        """Agents-tab entry: choose a catalog model (default = the
-        specified best, Qwen2.5-Coder-3B), remember the choice, and
-        download it in the background."""
-        mid = model_by_id(model_id or self.settings.get(
-            "local_model_id") or DEFAULT_MODEL_ID)["id"]
-        self.settings["local_model_id"] = mid
-        self.local.model_id = mid
-        self.save_settings()
-        return self.installer.start(mid)
-
     # ---------------- settings ----------------
     def load_settings(self) -> None:
         try:
@@ -683,9 +594,6 @@ class AgentManager:
                 self.settings.update(json.load(fh))
         except (OSError, ValueError):
             pass
-        self.local.model_id = model_by_id(
-            self.settings.get("local_model_id") or DEFAULT_MODEL_ID)["id"]
-        self.installer.target_id = self.local.model_id
         self.scores = {k: dict(v) for k, v in
                        (self.settings.get("agent_scores") or {}).items()}
         self.auto_best = bool(self.settings.get("auto_best"))

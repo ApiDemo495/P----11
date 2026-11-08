@@ -1,14 +1,11 @@
 #!/usr/bin/env python
-"""Download a local-agent model from the app catalog (app/agents.py).
+"""Auto-download the preferred local AI model (app.agents tiers).
 
-    default          Qwen2.5-Coder-3B-Instruct Q4_K_M  (user-specified
-                     best model; also the formula auditor's model)
-    --model <id>     any MODEL_CATALOG id (qwen25-coder-7b,
-                     qwen25-coder-1.5b, qwen2-05b, phi3-mini, TinyLlama)
-    --ram <GB>       legacy RAM-tier auto-pick instead of the default
+    >= 5 GB  Qwen/Qwen2.5-Coder-3B-Instruct-GGUF  Q4_K_M  (preferred)
+    else     Qwen/Qwen2-0.5B-Instruct-GGUF       Q4_K_M
 
-Always exits 0 on SKIP (offline / hub unavailable) so the automated
-setup flow keeps going; prints a machine-readable status line.
+Always exits 0 on SKIP (offline / hub unavailable) so setup flows
+keep going; prints a machine-readable status line.
 """
 from __future__ import annotations
 
@@ -53,24 +50,20 @@ def main() -> int:
                     help="only print which model would be fetched")
     ap.add_argument("--force", action="store_true",
                     help="re-download even if the file exists")
-    ap.add_argument("--model", default=None,
-                    help="MODEL_CATALOG id (default: qwen25-coder-3b)")
     args = ap.parse_args()
 
-    from app.agents import MODELS_DIR, model_by_id, pick_local_model
+    from app.agents import LOCAL_MODELS, MODELS_DIR
 
     ram = args.ram if args.ram is not None else ram_gb()
-    if args.model:
-        m = model_by_id(args.model)
-        repo, fname, label = m["repo"], m["file"], m["label"]
-    elif args.ram is not None:
-        repo, fname, label = pick_local_model(ram)
-    else:
-        m = model_by_id(None)            # catalog default: Coder-3B
-        repo, fname, label = m["repo"], m["file"], m["label"]
+    repo, fname, label = None, None, None
+    for min_ram, r, f, lab in LOCAL_MODELS:
+        if ram >= min_ram:
+            repo, fname, label = r, f, lab
+            break
+    assert repo and fname and label
     path = os.path.join(MODELS_DIR, fname)
 
-    print(f"[model] detected RAM: {ram:.1f} GB -> model: {label}")
+    print(f"[model] detected RAM: {ram:.1f} GB -> tier: {label}")
     if args.dry_run:
         print(f"[model] DRY-RUN would fetch {repo}/{fname} -> {path}")
         return 0

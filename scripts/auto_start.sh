@@ -92,15 +92,7 @@ launch_backtest_deferred() {
     >>data/backtest.log 2>&1 9>&- &
 }
 
-# Boot order (user spec): 1) agent download FIRST (background,
-# niced, never blocks the app), 2) app auto-start, 3) backtest
-# last (deferred and it waits for the agent download to finish).
-launch_agent_download() {
-  setsid nohup bash scripts/download_agent.sh >/dev/null 2>&1 9>&- &
-}
-
 run_worker() {
-  launch_agent_download
   ( ensure_md_preview ) >/dev/null 2>&1 &
 
   # ── auto-update: clean tree fast-forwards; dirty tree untouched ──
