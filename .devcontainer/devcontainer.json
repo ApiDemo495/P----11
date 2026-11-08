@@ -15,9 +15,6 @@
   "postCreateCommand": "bash scripts/auto_start.sh",
   "postStartCommand": "bash scripts/auto_start.sh",
   "postAttachCommand": "bash scripts/auto_start.sh",
-  "remoteEnv": {
-    "INSTALL_AGENTS": "1"
-  },
   "customizations": {
     "vscode": {
       "extensions": [

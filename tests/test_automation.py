@@ -61,3 +61,17 @@ def test_engine_crash_restores_placeholder_fast():
     auto = (ROOT / "scripts" / "auto_start.sh").read_text()
     assert "engine process died during boot" in auto
     assert auto.count("start_placeholder") >= 3   # boot, provision, crash paths
+
+
+def test_boot_downloads_are_slim_and_deferred():
+    import json
+    d = json.loads((ROOT / ".devcontainer" / "devcontainer.json").read_text())
+    assert "INSTALL_AGENTS" not in json.dumps(d)      # no forced AI build/download
+    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
+    assert "sleep 600" in auto                        # backtest deferred past boot
+    assert "launch_backtest_deferred" in auto
+    bt = (ROOT / "scripts" / "run_backtest_once.sh").read_text()
+    assert ".setup_stamp" in bt                       # never races provisioning
+    assert ".backtest_running" in bt                  # no duplicate runners
+    setup = (ROOT / "scripts" / "setup.sh").read_text()
+    assert "nice -n 19 bash -c" in setup              # opt-in AI stage is niced

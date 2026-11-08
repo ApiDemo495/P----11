@@ -8,9 +8,15 @@ set -u
 cd "$(dirname "$0")/.."
 STAMP=data/.backtest_stamp
 mkdir -p data backtest/out
+if [ -f data/.backtest_running ] && kill -0 "$(cat data/.backtest_running 2>/dev/null)" 2>/dev/null; then
+  echo "backtest: already running — skipped"; exit 0
+fi
+echo $$ > data/.backtest_running
+trap 'rm -f data/.backtest_running' EXIT
 if [ -f "$STAMP" ] && [ $(( $(date +%s) - $(stat -c %Y "$STAMP" 2>/dev/null || echo 0) )) -lt 86400 ]; then
   echo "backtest: fresh enough, skipped"; exit 0
 fi
+[ -f .setup_stamp ] || { echo "backtest: env not ready — skipped"; exit 0; }
 PY=.venv/bin/python; [ -x "$PY" ] || PY=python3
 "$PY" -c "import ccxt" 2>/dev/null || "$PY" -m pip install -q -r requirements-backtest.txt 2>/dev/null
 "$PY" -c "import ccxt" 2>/dev/null || { echo "backtest: ccxt unavailable, skipped"; exit 0; }

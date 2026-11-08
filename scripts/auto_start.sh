@@ -84,6 +84,14 @@ ensure_md_preview() {
   python3 scripts/ensure_md_keybindings.py >> data/md_preview.log 2>&1 || true
 }
 
+# The daily backtest used to launch DURING boot and race pip/CPU
+# with provisioning ('things not properly downloading'). Now it is
+# deferred 10 minutes past a healthy boot and fully niced.
+launch_backtest_deferred() {
+  setsid nohup bash -c 'sleep 600; exec nice -n 19 bash scripts/run_backtest_once.sh' \
+    >>data/backtest.log 2>&1 9>&- &
+}
+
 run_worker() {
   ( ensure_md_preview ) >/dev/null 2>&1 &
 
@@ -107,10 +115,10 @@ run_worker() {
 
   bash scripts/make_port_public.sh || true
   setsid nohup bash scripts/supervise.sh >/dev/null 2>&1 9>&- &
-  setsid nohup bash scripts/run_backtest_once.sh >>data/backtest.log 2>&1 9>&- &
 
   if healthy; then
     stop_placeholder
+    launch_backtest_deferred
     log "app already healthy on :$PORT — nothing to do"
     return 0
   fi
@@ -168,6 +176,7 @@ run_worker() {
     if healthy; then
       log "✓ app healthy on http://0.0.0.0:$PORT (pid $(cat "$PIDFILE")) — total $(( $(date +%s) - T0 ))s"
       bash scripts/make_port_public.sh || true
+      launch_backtest_deferred
       return 0
     fi
     sleep 1

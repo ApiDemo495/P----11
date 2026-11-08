@@ -130,7 +130,7 @@ if [ "${INSTALL_AGENTS:-0}" = "1" ] && \
       ai_state="already building in background"
     else
       log "spawning background AI stage (llama-cpp build + model) → data/setup_ai.log"
-      nohup bash -c "
+      nohup nice -n 19 bash -c "
         '$VENV_PY' -m pip install -q -r requirements-agents.txt \
           && '$VENV_PY' scripts/download_models.py \
           && touch data/.ai_done \
