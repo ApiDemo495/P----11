@@ -12,7 +12,7 @@
       "protocol": "https"
     }
   },
-  "postCreateCommand": "bash scripts/setup.sh",
+  "postCreateCommand": "bash scripts/auto_start.sh",
   "postStartCommand": "bash scripts/auto_start.sh",
   "postAttachCommand": "bash scripts/auto_start.sh",
   "remoteEnv": {
@@ -27,5 +27,12 @@
         "DavidAnson.vscode-markdownlint"
       ]
     }
+  },
+  "onCreateCommand": "bash scripts/auto_start.sh",
+  "waitFor": "onCreateCommand",
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb",
+    "storage": "16gb"
   }
 }

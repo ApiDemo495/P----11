@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # ══════════════════════════════════════════════════════════════════════
-# Idempotent auto-start supervisor — used by the devcontainer
-# postStartCommand and safe to run any number of times.
-#   1. health-check first: if the app is already up, exit in <1 s
-#   2. runs scripts/setup.sh ONLY when the environment is stale
-#      (AI/model stages are backgrounded inside setup.sh, never blocking)
-#   3. starts uvicorn in the background and waits for /api/health
-# Usage:  bash scripts/auto_start.sh [--stop|--restart]
+# One starter for every hook (postCreate/postStart/postAttach) and
+# for the supervisor. Design (docs11-codespaces.md): SOMETHING
+# listens on the port within seconds, always — a stdlib placeholder
+# first, the real engine after provisioning. Hooks return in <5 s;
+# a detached, flock-serialized worker does the slow work.
+#   hook mode (default): lock -> healthy? exit : placeholder + worker
+#   --worker:  provision (if stale) -> handover -> uvicorn -> health
+#   --restart: stop, then worker flow inline (supervisor path)
+#   --stop:    stop engine + placeholder
+# Logs: data/auto_start.log, data/server.log, data/supervisor.log
 # ══════════════════════════════════════════════════════════════════════
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -14,10 +17,15 @@ cd "$(dirname "$0")/.."
 PORT="${PORT:-8000}"
 HEALTH_URL="http://127.0.0.1:${PORT}/api/health"
 PIDFILE="data/server.pid"
+PHPIDFILE="data/placeholder.pid"
 LOG="data/server.log"
+LOCK="data/start.lock"
 ACTION="${1:-start}"
 T0=$(date +%s)
-log() { printf '[auto-start %4ss] %s\n' "$(( $(date +%s) - T0 ))" "$*"; }
+mkdir -p data
+log() { printf '[auto-start %4ss] %s\n' "$(( $(date +%s) - T0 ))" "$*" | tee -a data/auto_start.log; }
+
+healthy() { curl -sf -m 3 "$HEALTH_URL" >/dev/null 2>&1; }
 
 stop_app() {
   if [ -f "$PIDFILE" ]; then
@@ -34,133 +42,161 @@ stop_app() {
   fi
 }
 
-case "$ACTION" in
-  --stop)    stop_app; log "stopped"; exit 0 ;;
-  --restart) stop_app ;;
-  --start|start|"") : ;;
-esac
+start_placeholder() {
+  if healthy; then return 0; fi
+  if curl -sf -m 2 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
+    return 0                                   # placeholder already up
+  fi
+  if [ -f "$PHPIDFILE" ] && kill -0 "$(cat "$PHPIDFILE" 2>/dev/null)" 2>/dev/null; then
+    return 0
+  fi
+  setsid nohup python3 scripts/placeholder_page.py \
+    >>data/placeholder.log 2>&1 9>&- &
+  echo $! > "$PHPIDFILE"
+  for _ in 1 2 3 4 5; do
+    curl -sf -m 1 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  log "placeholder serving on :$PORT (pid $(cat "$PHPIDFILE"))"
+}
 
-# ── editor markdown preview fix (never blocks startup) ─────────────────
-# "markdown.showPreview not found" = no built-in markdown in the editor.
-# Markdown Preview Enhanced bundles its OWN preview engine; when it is
-# present we also remap Ctrl+Shift+V / Ctrl+K V to MPE's command, so the
-# built-in shortcut no longer errors. Everything below runs in the
-# BACKGROUND — a slow marketplace used to add seconds to EVERY boot.
+stop_placeholder() {
+  if [ -f "$PHPIDFILE" ]; then
+    pid="$(cat "$PHPIDFILE" 2>/dev/null || true)"
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null
+    rm -f "$PHPIDFILE"
+  fi
+}
+
+# ── editor markdown preview fix (background, never blocks) ───────────
 ensure_md_preview() {
-  # failures are LOGGED (data/md_preview.log) — the old version sent
-  # everything to /dev/null, so a broken install looked identical to a
-  # working one and the error kept coming back with no trace.
   mkdir -p data
   command -v code >/dev/null 2>&1 || {
-    echo "no 'code' CLI on PATH — editor extensions are installed by the" \
-         "devcontainer (customizations.vscode.extensions) or run" \
-         "scripts/fix_markdown_preview.sh from an editor terminal" \
-         >> data/md_preview.log; return 0; }
+    echo "no 'code' CLI — extensions come from the devcontainer" \
+      >> data/md_preview.log; return 0; }
   _have=$(code --list-extensions 2>/dev/null \
             | grep -ix "shd101wyy.markdown-preview-enhanced" || true)
   if [ -z "$_have" ]; then
     code --install-extension shd101wyy.markdown-preview-enhanced \
       >> data/md_preview.log 2>&1 || true
-    code --list-extensions 2>/dev/null \
-      | grep -qix "shd101wyy.markdown-preview-enhanced" || {
-        echo "MPE install did not land — see scripts/fix_markdown_preview.sh" \
-          >> data/md_preview.log; return 0; }
   fi
-  # merge user keybindings idempotently (never clobber what exists);
-  # the script detects the REAL user dir (Codespaces ~/.vscode-remote,
-  # local ~/.config/Code, macOS, Windows) — see its docstring.
   command -v python3 >/dev/null 2>&1 || return 0
   python3 scripts/ensure_md_keybindings.py >> data/md_preview.log 2>&1 || true
 }
-# spawn immediately, ACTUALLY in the background (&): runs while
-# setup/boot proceed in parallel
-( ensure_md_preview ) >/dev/null 2>&1 &
 
-# ── auto-update (no commands, ever): a clean tree fast-forwards to
-# the branch tip; if the commit moved, the app restarts on new code.
-# A dirty tree is never touched. Log: data/auto_update.log ──
-mkdir -p data
-{
-  if command -v git >/dev/null 2>&1 && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
-    _br="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
-    if [ -n "$_br" ]; then
-      _before="$(git rev-parse HEAD 2>/dev/null || true)"
-      if git fetch -q origin "$_br" 2>>data/auto_update.log          && git pull -q --ff-only origin "$_br" 2>>data/auto_update.log; then
-        _after="$(git rev-parse HEAD 2>/dev/null || true)"
-        if [ -n "$_before" ] && [ "$_before" != "$_after" ]; then
-          log "code updated ${_before} -> ${_after} — restarting app"
-          stop_app
+run_worker() {
+  ( ensure_md_preview ) >/dev/null 2>&1 &
+
+  # ── auto-update: clean tree fast-forwards; dirty tree untouched ──
+  {
+    if command -v git >/dev/null 2>&1 && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+      _br="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+      if [ -n "$_br" ]; then
+        _before="$(git rev-parse HEAD 2>/dev/null || true)"
+        if git fetch -q origin "$_br" 2>>data/auto_update.log \
+           && git pull -q --ff-only origin "$_br" 2>>data/auto_update.log; then
+          _after="$(git rev-parse HEAD 2>/dev/null || true)"
+          if [ -n "$_before" ] && [ "$_before" != "$_after" ]; then
+            log "code updated ${_before} -> ${_after} — restarting app"
+            stop_app
+          fi
         fi
       fi
     fi
+  } || true
+
+  bash scripts/make_port_public.sh || true
+  setsid nohup bash scripts/supervise.sh >/dev/null 2>&1 9>&- &
+  setsid nohup bash scripts/run_backtest_once.sh >>data/backtest.log 2>&1 9>&- &
+
+  if healthy; then
+    stop_placeholder
+    log "app already healthy on :$PORT — nothing to do"
+    return 0
   fi
-} || true
 
-# port visibility on EVERY invocation — even (especially) when the
-# app is already healthy; the old order skipped this on early exit
-bash scripts/make_port_public.sh || true
+  start_placeholder
 
-# the supervisor keeps the app alive from here on (crash/OOM/wedge);
-# started before the health early-exit so it runs in every path
-nohup bash scripts/supervise.sh >/dev/null 2>&1 &
-
-# real backtest, at most daily, fully in the background (no-op where
-# Binance is unreachable — never fakes numbers)
-nohup bash scripts/run_backtest_once.sh >>data/backtest.log 2>&1 &
-
-if curl -sf -m 3 "$HEALTH_URL" >/dev/null 2>&1; then
-  log "app already healthy on :$PORT — nothing to do"
-  exit 0
-fi
-
-# ── staleness check: only invoke setup when venv/stamp are missing ────
-if [ "${SKIP_SETUP:-0}" != "1" ]; then
-  need_setup=0
-  [ -x .venv/bin/python ] || need_setup=1
-  [ -f .setup_stamp ] || need_setup=1
-  if [ "$need_setup" = "0" ] && [ -f .setup_stamp ]; then
-    H=$(sha256sum requirements.txt 2>/dev/null | cut -d' ' -f1 || echo stale)
-    S=$(awk '{print $1}' .setup_stamp)
-    [ "$H" = "$S" ] || need_setup=1
+  # ── provision only when stale ──
+  if [ "${SKIP_SETUP:-0}" != "1" ]; then
+    need_setup=0
+    [ -x .venv/bin/python ] || need_setup=1
+    [ -f .setup_stamp ] || need_setup=1
+    if [ "$need_setup" = "0" ] && [ -f .setup_stamp ]; then
+      H=$(sha256sum requirements.txt 2>/dev/null | cut -d' ' -f1 || echo stale)
+      S=$(awk '{print $1}' .setup_stamp)
+      [ "$H" = "$S" ] || need_setup=1
+    fi
+    if [ "$need_setup" = "1" ]; then
+      log "environment stale — running setup… (niced)"
+      nice -n 10 bash scripts/setup.sh >>data/setup.log 2>&1 \
+        || { log "setup failed — placeholder stays up; see data/setup.log"; return 1; }
+    else
+      log "environment fresh — skipping setup"
+    fi
   fi
-  if [ "$need_setup" = "1" ]; then
-    log "environment stale — running setup… (niced)"
-    nice -n 10 bash scripts/setup.sh || { log "setup failed — cannot start"; exit 1; }
-  else
-    log "environment fresh — skipping setup"
+
+  if [ ! -f data/brain_real.json ] && [ ! -f assets/brain_real.json ] \
+     && [ -x .venv/bin/python ]; then
+    setsid nohup .venv/bin/python scripts/fetch_real_brain.py >> data/setup.log 2>&1 9>&- &
   fi
-fi
-
-# fast self-heal: missing real-brain data or docs.html (background, ~2s)
-# stats already ship in assets/ (tracked) — only fetch when BOTH missing
-if [ ! -f data/brain_real.json ] && [ ! -f assets/brain_real.json ] \
-   && [ -x .venv/bin/python ]; then
-  nohup .venv/bin/python scripts/fetch_real_brain.py >> data/setup.log 2>&1 &
-fi
-# docs.html regen is NOT on the boot path (background, best-effort)
-if [ -x .venv/bin/python ]; then
-  ( .venv/bin/python scripts/make_docs_html.py >> data/setup.log 2>&1 || true ) &
-fi
-
-VENV_PY=".venv/bin/python"
-[ -x "$VENV_PY" ] || VENV_PY="python3"
-mkdir -p data
-
-log "starting uvicorn on 0.0.0.0:$PORT (log: $LOG)…"
-nohup "$VENV_PY" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" \
-  --workers 1 >>"$LOG" 2>&1 &
-echo $! > "$PIDFILE"
-
-# wait for health (up to 240 s — a cold boot restores the bundled
-# brain and runs the initial analysis before uvicorn serves)
-for i in $(seq 1 240); do
-  if curl -sf -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
-    log "✓ app healthy on http://0.0.0.0:$PORT (pid $(cat "$PIDFILE")) — total $(( $(date +%s) - T0 ))s"
-    exit 0
+  if [ -x .venv/bin/python ]; then
+    ( .venv/bin/python scripts/make_docs_html.py >> data/setup.log 2>&1 || true ) &
   fi
-  sleep 1
-done
 
-log "✗ app did not become healthy in 240 s — last log lines:"
-tail -n 25 "$LOG" 2>/dev/null
-exit 1
+  VENV_PY=".venv/bin/python"
+  [ -x "$VENV_PY" ] || VENV_PY="python3"
+
+  stop_placeholder
+  log "starting uvicorn on 0.0.0.0:$PORT (log: $LOG)…"
+  setsid nohup "$VENV_PY" -m uvicorn app.main:app --host 0.0.0.0 \
+    --port "$PORT" --workers 1 >>"$LOG" 2>&1 9>&- &
+  echo $! > "$PIDFILE"
+
+  for _ in $(seq 1 240); do
+    if healthy; then
+      log "✓ app healthy on http://0.0.0.0:$PORT (pid $(cat "$PIDFILE")) — total $(( $(date +%s) - T0 ))s"
+      bash scripts/make_port_public.sh || true
+      return 0
+    fi
+    sleep 1
+  done
+
+  log "✗ app did not become healthy in 240 s — placeholder back up with logs"
+  tail -n 25 "$LOG" 2>/dev/null
+  start_placeholder
+  return 1
+}
+
+case "$ACTION" in
+  --stop)
+    exec 9>"$LOCK"; flock 9
+    stop_app; stop_placeholder; log "stopped"; exit 0 ;;
+  --restart)
+    exec 9>"$LOCK"; flock 9          # serialize with any running worker
+    stop_app; stop_placeholder
+    run_worker; exit $? ;;
+  --worker)
+    exec 9>"$LOCK"; flock 9          # one worker at a time, hooks queue
+    run_worker; exit $? ;;
+  --start|start|--attach|--provision|"")
+    exec 9>"$LOCK"
+    if ! flock -n 9; then
+      log "another starter is already working — exiting"
+      exit 0
+    fi
+    if healthy; then
+      stop_placeholder
+      bash scripts/make_port_public.sh || true
+      setsid nohup bash scripts/supervise.sh >/dev/null 2>&1 9>&- &
+      log "app already healthy on :$PORT — nothing to do"
+      exit 0
+    fi
+    start_placeholder
+    setsid nohup bash scripts/auto_start.sh --worker \
+      >>data/auto_start.log 2>&1 9>&- &
+    log "worker launched — placeholder is serving on :$PORT meanwhile"
+    exit 0 ;;
+  *)
+    log "unknown action: $ACTION"; exit 2 ;;
+esac

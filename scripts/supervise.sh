@@ -17,6 +17,9 @@ log "supervisor started (pid $$)"
 fails=0
 while true; do
   sleep 30
+  if ! flock -n data/start.lock -c true 2>/dev/null; then
+    continue   # a starter holds the lock (provisioning/booting) — hands off
+  fi
   if curl -sf -m 5 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
     fails=0
   else

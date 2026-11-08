@@ -21,3 +21,27 @@ def test_health_reports_commit_and_client_reloads():
 def test_port_public_script_exists_and_never_fails():
     sh = (ROOT / "scripts" / "make_port_public.sh").read_text()
     assert "ports visibility" in sh and "exit 0" in sh
+
+
+def test_placeholder_binds_first_and_hooks_return_fast():
+    ph = ROOT / "scripts" / "placeholder_page.py"
+    assert ph.exists()
+    src = ph.read_text()
+    assert "http.server" in src and "import app" not in src  # stdlib only
+    assert '"/healthz"' in src or "healthz" in src
+    sh = (ROOT / "scripts" / "auto_start.sh").read_text()
+    assert "flock" in sh                       # one starter at a time
+    assert "placeholder_page.py" in sh         # placeholder before engine
+    assert "--worker" in sh                    # slow work detached
+    assert "setsid nohup" in sh                # survives the hook shell
+
+
+def test_devcontainer_opens_editor_immediately():
+    import json
+    d = json.loads((ROOT / ".devcontainer" / "devcontainer.json").read_text())
+    assert d["waitFor"] == "onCreateCommand"   # never stuck on provisioning
+    for hook in ("onCreateCommand", "postCreateCommand",
+                 "postStartCommand", "postAttachCommand"):
+        assert "auto_start.sh" in d[hook]
+    assert d["portsAttributes"]["8000"]["visibility"] == "public"
+    assert (ROOT / ".github" / "workflows" / "boot.yml").exists()
