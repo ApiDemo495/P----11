@@ -2683,7 +2683,7 @@ async function loadAgents() {
           <div class="key-card" style="text-align:left">
             <b>${esc(m.label)}</b> ${m.recommended ? `<span class="chip-ok">${esc(m.tag)}</span>` : `<span class="dim">${esc(m.tag)}</span>`}
             ${m.selected && lo.available ? `<span class="chip-ok">● loaded</span>` : m.present ? `<span class="dim">downloaded</span>` : ""}
-            <div class="dim" style="font-size:10px;margin-top:3px">${esc(m.blurb)} · ${esc(m.size)} · needs ~${m.min_ram} GB RAM${m.fits_ram ? "" : " (more than this machine reports — still your choice)"}</div>
+            <div class="dim" style="font-size:10px;margin-top:3px">${esc(m.blurb)} · ${esc(m.size)} · needs ~${m.min_ram} GB RAM${m.fits_ram ? "" : " (more than this machine reports — still your choice)"}${m.present ? ` · ✓ sha ${esc(m.validation?.sha || "?")} · ${esc(m.validation?.source || "")}` : ""}</div>
             <button class="btn ag-dl" data-model="${m.id}" ${installing ? "disabled" : ""} style="margin-top:6px">${installing ? "downloading…" : m.present ? (m.selected ? "reload" : "⬇ use this model") : "⬇ download"}</button>
           </div>`).join("")}
       </div>

@@ -127,3 +127,50 @@ def test_download_specific_model_by_id(tmp_path, monkeypatch):
     assert by_id["qwen25-coder-1.5b"]["present"] is True
     assert by_id["qwen25-coder-3b"]["recommended"] is True
     assert by_id["qwen25-coder-3b"]["present"] is False
+
+
+def _fake_gguf(path, payload=b"GGUF" + b"\x00" * 64):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(payload)
+
+
+def test_validation_catches_half_downloads(tmp_path, monkeypatch):
+    inst, _ = _installer(tmp_path, monkeypatch, runner=lambda c, say: 0)
+    path = inst.model_file()
+    v = ag.model_validation(path)
+    assert v["present"] is False and v["source"] == "absent"
+    _fake_gguf(path, b"PARTIAL-DOWNLOAD-not-a-model")
+    v = ag.model_validation(path)
+    assert v["present"] is True and v["magic_ok"] is False
+    assert "corrupt" in v["sha"]
+    assert inst.model_present() is False        # corrupt != downloaded
+    _fake_gguf(path)
+    ag.write_model_sidecar(path)
+    v = ag.model_validation(path)
+    assert v["magic_ok"] is True and v["sha"] == "ok"
+    assert "0 bytes fetched" in v["source"]
+    assert inst.model_present() is True
+
+
+def test_boot_and_button_share_one_fetcher_lock(tmp_path, monkeypatch):
+    inst, _ = _installer(tmp_path, monkeypatch, runner=lambda c, say: 0)
+    fh = inst._grab_lock()
+    assert fh is not None
+    try:
+        assert inst._grab_lock() is None         # second fetcher refused
+        got = inst._wait_lock_or_model(tries=1)
+        assert got == "timeout"                  # nothing landed; no race
+    finally:
+        fh.close()
+    fh2 = inst._grab_lock()                      # free again after release
+    assert fh2 is not None
+    fh2.close()
+
+
+def test_prefetch_script_is_idempotent_wrapper():
+    from pathlib import Path
+    sh = Path("scripts/prefetch_agent.sh").read_text()
+    assert "download_agent.sh" in sh
+    auto = Path("scripts/download_agent.sh").read_text()
+    assert ".agent_download.lock" in auto        # shell takes the same flock

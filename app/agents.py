@@ -47,6 +47,71 @@ KEY_FIELDS = frozenset({"gemini_key", "backup1_key", "backup2_key",
                         "anthropic_key"})
 MODELS_DIR = "models"
 
+def resolve_model_path(model_id: str | None = None,
+                       local: "LocalModel | None" = None) -> str:
+    """THE one place a model id becomes a path (installer, loader,
+    UI and shell scripts all agree through here)."""
+    mid = model_id or (local.model_id if local is not None
+                       else DEFAULT_MODEL_ID)
+    return os.path.join(MODELS_DIR, model_by_id(mid)["file"])
+
+
+def model_sidecar(path: str) -> str:
+    return path + ".sha256.json"
+
+
+def write_model_sidecar(path: str) -> dict:
+    """Hash a downloaded GGUF ONCE and record {sha256, size, mtime}
+    beside it, so later starts validate locally without re-hashing
+    2 GB and without touching the network."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    st = os.stat(path)
+    rec = {"sha256": h.hexdigest(), "size": st.st_size,
+           "mtime": int(st.st_mtime)}
+    try:
+        with open(model_sidecar(path), "w") as fh:
+            json.dump(rec, fh)
+    except OSError:
+        pass
+    return rec
+
+
+def model_validation(path: str) -> dict:
+    """Local-only validation (never a network call): file exists,
+    GGUF magic at offset 0, and the recorded sha still matches the
+    file's size+mtime. A half-finished download fails here and is
+    re-fetched instead of failing mysteriously at load time."""
+    out = {"present": False, "magic_ok": False, "bytes": 0,
+           "sha": "absent", "source": "absent"}
+    if not os.path.exists(path):
+        return out
+    out["present"] = True
+    out["bytes"] = os.path.getsize(path)
+    try:
+        with open(path, "rb") as fh:
+            out["magic_ok"] = fh.read(4) == b"GGUF"
+    except OSError:
+        pass
+    if not out["magic_ok"]:
+        out["sha"] = "corrupt — not a GGUF file"
+        return out
+    out["source"] = "on disk — 0 bytes fetched"
+    try:
+        with open(model_sidecar(path)) as fh:
+            rec = json.load(fh)
+        st = os.stat(path)
+        out["sha"] = ("ok" if rec.get("size") == st.st_size
+                      and rec.get("mtime") == int(st.st_mtime)
+                      else "unverified (file changed since download)")
+    except (OSError, ValueError):
+        out["sha"] = "unverified (no checksum record)"
+    return out
+
+
 def pick_local_model(ram_gb: float):
     """Default model when the user has not chosen: Qwen2.5-Coder-3B
     (the specified best) on any machine that can hold it, else the
@@ -236,7 +301,12 @@ class LocalModel:
         picked = model_by_id(self.model_id)
         repo, fname, label = picked["repo"], picked["file"], picked["label"]
         self.label = label
-        path = os.path.join(MODELS_DIR, fname)
+        path = resolve_model_path(self.model_id)
+        if os.path.exists(path) and not model_validation(path)["magic_ok"]:
+            self.error = ("downloaded model file is corrupt (truncated?) "
+                          "— re-download it from the Agents tab")
+            self.label = "unavailable"
+            return
         if not os.path.exists(path):
             try:
                 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -334,11 +404,11 @@ class AgentInstaller:
         return importlib.util.find_spec("llama_cpp") is not None
 
     def model_file(self, model_id: str | None = None) -> str:
-        return os.path.join(MODELS_DIR,
-                            model_by_id(model_id or self.target_id)["file"])
+        return resolve_model_path(model_id or self.target_id)
 
     def model_present(self, model_id: str | None = None) -> bool:
-        return os.path.exists(self.model_file(model_id))
+        v = model_validation(self.model_file(model_id))
+        return v["present"] and v["magic_ok"]
 
     def installed(self, model_id: str | None = None) -> bool:
         return self.deps_installed() and self.model_present(model_id)
@@ -353,6 +423,7 @@ class AgentInstaller:
             "id": m["id"], "label": m["label"], "size": m["size"],
             "min_ram": m["min_ram"], "tag": m["tag"], "blurb": m["blurb"],
             "present": self.model_present(m["id"]),
+            "validation": model_validation(self.model_file(m["id"])),
             "selected": self.local.model_id == m["id"],
             "recommended": m["id"] == DEFAULT_MODEL_ID,
             "fits_ram": self.local.ram_gb >= m["min_ram"],
@@ -427,8 +498,56 @@ class AgentInstaller:
             self._say(line)
         return proc.wait()
 
+    LOCK_FILE = os.path.join("data", ".agent_download.lock")
+
+    def _grab_lock(self):
+        """flock handle or None — the boot script takes the same
+        lock, so the boot download and this button can never run
+        two fetchers at once (the doc's 'two fetchers' bug)."""
+        try:
+            import fcntl
+            os.makedirs("data", exist_ok=True)
+            fh = open(self.LOCK_FILE, "a")
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                fh.close()
+                raise
+            return fh
+        except (OSError, ImportError):
+            return None
+
+    def _wait_lock_or_model(self, tries: int = 360):
+        """While another fetcher holds the lock: wait for it, but
+        bail out early if the model we want lands valid on disk.
+        Returns 'model' | 'lock' | 'timeout'."""
+        for _ in range(tries):
+            if self.model_present():
+                return "model"
+            fh = self._grab_lock()
+            if fh is not None:
+                return ("lock", fh)
+            time.sleep(10)
+        return "timeout"
+
     def _work(self) -> None:
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        lock_fh = self._grab_lock()
+        if lock_fh is None:
+            self._say("another agent download is already running "
+                      "(boot or a second press) — waiting for it")
+            got = self._wait_lock_or_model()
+            if got == "model":
+                lock_fh = self._grab_lock()      # may stay None; fine
+            elif got == "timeout":
+                self.state = "failed"
+                self.error = ("another download held the lock for over "
+                              "an hour — press download to try again")
+                self.phase = ""
+                self.finished_at = time.time()
+                return
+            else:
+                lock_fh = got[1]
         try:
             self.phase = "runtime"
             if self.deps_installed():
@@ -470,6 +589,11 @@ class AgentInstaller:
         finally:
             self.phase = ""
             self.finished_at = time.time()
+            if lock_fh is not None:
+                try:
+                    lock_fh.close()              # releases the flock
+                except OSError:
+                    pass
 
 
 def sys_executable() -> str:

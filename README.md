@@ -60,6 +60,34 @@ Environment:
 | `GEMINI_API_KEY`   | Google AI Studio key          | *(none)*          | primary agent (see `API_SETUP.md`)       |
 | `NEWSAPI_KEY`      | newsapi.org key               | *(none)*          | live news (else seeded/synthetic stream) |
 
+### Downloads — what is fetched once, and where it lives
+
+| asset | where it lives | per fresh Codespace |
+|---|---|---|
+| FlyWire brain + stats | **in git** (`assets/`) | 0 bytes — cloned with the repo |
+| core Python deps | `.venv` (stamp-cached) | one pip install, never repeated in the same Codespace |
+| local agent model (default ★ Qwen2.5-Coder-3B, ~2 GB) | `models/` (gitignored) | background download at boot — **first** job, before the backtest; app never waits for it |
+| other agent models (7B / 1.5B / 0.5B / Phi-3 / TinyLlama) | `models/` | only when you press download in the Agents tab |
+
+Downloads are validated **locally**: GGUF magic + a SHA-256 recorded
+beside the file at download time (`<file>.sha256.json`). A truncated
+file is detected and re-fetched, never silently "loaded". One flock
+(`data/.agent_download.lock`) is shared by the boot downloader and
+the in-app button, so two fetchers can never race.
+
+**Zero-download starts (optional):** enable Codespaces **prebuilds**
+for this branch (repo → Settings → Codespaces → Set up prebuild —
+your step, it spends Actions minutes), then point the prebuild's
+`updateContentCommand` at `bash scripts/prefetch_agent.sh`. The model
+is fetched once into the prebuild snapshot and is on disk at second
+0 of every new Codespace. Baking the 1.9 GB GGUF into a devcontainer
+image is deliberately not done: GGUF does not compress and it made
+Codespace creation sit on the image pull. Check prebuilds with:
+
+```bash
+gh api repos/ApiDemo495/P----11/codespaces/prebuilds --jq '.[] | {ref: .ref, status: .status, updated: .updated_at}'
+```
+
 The brain is the **real FlyWire v783 connectome** (138,639 neurons ·
 15.09 M connections) or it is **absent with weight 0** — there is no
 substitute matrix of any size. It downloads once (GitHub, size-checked),

@@ -74,9 +74,18 @@ def main() -> int:
     if args.dry_run:
         print(f"[model] DRY-RUN would fetch {repo}/{fname} -> {path}")
         return 0
+    from app.agents import model_validation, write_model_sidecar
     if os.path.exists(path) and not args.force:
-        print(f"[model] DONE already present: {path}")
-        return 0
+        v = model_validation(path)
+        if v["magic_ok"]:
+            if v["sha"].startswith("unverified"):
+                write_model_sidecar(path)   # record checksum once
+            print(f"[model] DONE already present: {path} "
+                  f"({v['bytes'] / 1e9:.2f} GB, sha {model_validation(path)['sha']}, "
+                  f"0 bytes fetched)")
+            return 0
+        print(f"[model] existing file is corrupt (not a GGUF) — re-fetching")
+        os.remove(path)
 
     try:
         from huggingface_hub import hf_hub_download  # type: ignore
@@ -89,7 +98,9 @@ def main() -> int:
     print(f"[model] downloading {repo}/{fname} …")
     try:
         got = hf_hub_download(repo_id=repo, filename=fname, local_dir=MODELS_DIR)
-        print(f"[model] DONE -> {got}")
+        rec = write_model_sidecar(got)
+        print(f"[model] DONE -> {got} (sha256 {rec['sha256'][:12]}…, "
+              f"{rec['size'] / 1e9:.2f} GB)")
         return 0
     except Exception as e:
         reason = e.__class__.__name__

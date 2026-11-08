@@ -23,6 +23,11 @@ if [ -f data/setup_ai.pid ] && kill -0 "$(cat data/setup_ai.pid 2>/dev/null)" 2>
 fi
 echo $$ > data/setup_ai.pid
 trap 'rm -f data/setup_ai.pid' EXIT
+# one fetcher only: same flock the in-app installer takes
+exec 9>data/.agent_download.lock
+if ! flock -n 9; then
+  echo "[agent] another agent download holds the lock — skipped" >> "$LOG"; exit 0
+fi
 
 # wait (max 30 min) for core provisioning so pip never races pip
 for _ in $(seq 1 360); do
