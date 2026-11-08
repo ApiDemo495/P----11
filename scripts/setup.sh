@@ -85,7 +85,7 @@ if [ "$FORCE" != "1" ] && [ -x .venv/bin/python ] \
 else
   log "installing core requirements… (niced — keeps the UI responsive)"
   if ! nice -n 10 "$VENV_PY" -m pip install -q --disable-pip-version-check \
-       --no-input -r requirements.txt; then
+       --no-input --retries 2 --timeout 30 -r requirements.txt; then
     warn "core dependency install FAILED — cannot start the app"
     exit 1
   fi

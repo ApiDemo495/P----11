@@ -117,3 +117,19 @@ def test_auto_update_survives_generated_docs_dirt():
     import re
     n = re.search(r"(\d+) tests", readme)
     assert n and (n.group(1) + " tests") in docs  # committed docs in sync
+
+
+def test_worker_steps_are_hang_proof():
+    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
+    assert "GIT_TERMINAL_PROMPT=0" in auto          # git can never prompt-wait
+    assert "timeout 30 git fetch" in auto
+    assert "timeout 900" in auto and "setup.sh" in auto
+    assert 'timeout 120 "$VENV_PY" -c "import app.main"' in auto
+    # pre-check happens BEFORE the placeholder is stopped
+    assert auto.index("import app.main") < auto.index("stop_placeholder\n  log \"starting uvicorn")
+    assert "did NOT bind" in auto                   # bind is verified, not claimed
+    assert "seq 1 120" in auto                      # dead window halved
+    sup = (ROOT / "scripts" / "supervise.sh").read_text()
+    assert "port $PORT empty" in sup                # supervisor refills dead port
+    setup = (ROOT / "scripts" / "setup.sh").read_text()
+    assert "--retries 2 --timeout 30" in setup

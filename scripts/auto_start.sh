@@ -13,6 +13,8 @@
 # ══════════════════════════════════════════════════════════════════════
 set -uo pipefail
 cd "$(dirname "$0")/.."
+export GIT_TERMINAL_PROMPT=0     # a detached worker must never wait
+                                 # forever on a git credential prompt
 
 PORT="${PORT:-8000}"
 HEALTH_URL="http://127.0.0.1:${PORT}/api/health"
@@ -54,10 +56,14 @@ start_placeholder() {
     >>data/placeholder.log 2>&1 9>&- &
   echo $! > "$PHPIDFILE"
   for _ in 1 2 3 4 5; do
-    curl -sf -m 1 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1 && break
+    if curl -sf -m 1 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
+      log "placeholder serving on :$PORT (pid $(cat "$PHPIDFILE"))"
+      return 0
+    fi
     sleep 1
   done
-  log "placeholder serving on :$PORT (pid $(cat "$PHPIDFILE"))"
+  log "WARN: placeholder did NOT bind on :$PORT — see data/placeholder.log"
+  tail -n 5 data/placeholder.log 2>/dev/null
 }
 
 stop_placeholder() {
@@ -112,8 +118,8 @@ run_worker() {
       _br="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
       if [ -n "$_br" ]; then
         _before="$(git rev-parse HEAD 2>/dev/null || true)"
-        if git fetch -q origin "$_br" 2>>data/auto_update.log \
-           && git pull -q --ff-only origin "$_br" 2>>data/auto_update.log; then
+        if timeout 30 git fetch -q origin "$_br" 2>>data/auto_update.log \
+           && timeout 30 git pull -q --ff-only origin "$_br" 2>>data/auto_update.log; then
           _after="$(git rev-parse HEAD 2>/dev/null || true)"
           if [ -n "$_before" ] && [ "$_before" != "$_after" ]; then
             log "code updated ${_before} -> ${_after} — restarting app"
@@ -149,7 +155,7 @@ run_worker() {
     fi
     if [ "$need_setup" = "1" ]; then
       log "environment stale — running setup… (niced)"
-      if ! nice -n 10 bash scripts/setup.sh >>data/setup.log 2>&1; then
+      if ! timeout 900 nice -n 10 bash scripts/setup.sh >>data/setup.log 2>&1; then
         # NON-FATAL (docs11 cause 1): a failed optional/pip step must
         # never leave nothing listening. Try the engine anyway; if
         # it cannot import, the placeholder returns with the logs.
@@ -171,13 +177,23 @@ run_worker() {
   VENV_PY=".venv/bin/python"
   [ -x "$VENV_PY" ] || VENV_PY="python3"
 
+  # Pre-check the engine can even IMPORT before touching the
+  # placeholder: deleted/broken code (the classic 502 cause) then
+  # leaves the status page up with the traceback instead of a
+  # dead port. Bounded so a hanging import cannot hold the lock.
+  if ! timeout 120 "$VENV_PY" -c "import app.main" >>"$LOG" 2>&1; then
+    log "✗ engine import failed/hung — placeholder stays up (see $LOG)"
+    tail -n 15 "$LOG" 2>/dev/null
+    return 1
+  fi
+
   stop_placeholder
   log "starting uvicorn on 0.0.0.0:$PORT (log: $LOG)…"
   setsid nohup "$VENV_PY" -m uvicorn app.main:app --host 0.0.0.0 \
     --port "$PORT" --workers 1 >>"$LOG" 2>&1 9>&- &
   echo $! > "$PIDFILE"
 
-  for _ in $(seq 1 240); do
+  for _ in $(seq 1 120); do
     _pid="$(cat "$PIDFILE" 2>/dev/null || true)"
     if [ -n "$_pid" ] && ! kill -0 "$_pid" 2>/dev/null; then
       log "✗ engine process died during boot — placeholder back up with logs"
@@ -193,8 +209,9 @@ run_worker() {
     sleep 1
   done
 
-  log "✗ app did not become healthy in 240 s — placeholder back up with logs"
+  log "✗ app did not become healthy in 120 s — killing hung engine, placeholder back up"
   tail -n 25 "$LOG" 2>/dev/null
+  stop_app
   start_placeholder
   return 1
 }

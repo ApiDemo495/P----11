@@ -20,6 +20,16 @@ while true; do
   if ! flock -n data/start.lock -c true 2>/dev/null; then
     continue   # a starter holds the lock (provisioning/booting) — hands off
   fi
+  # port completely empty (neither app nor placeholder answering)?
+  # refill it with the placeholder at once — the proxy must never
+  # find a dead port, whatever else is broken
+  if ! curl -sf -m 3 "http://127.0.0.1:$PORT/" >/dev/null 2>&1 \
+     && flock -n data/start.lock -c true 2>/dev/null; then
+    log "port $PORT empty — starting placeholder"
+    PORT="$PORT" python3 scripts/placeholder_page.py \
+      >> data/placeholder.log 2>&1 &
+    echo $! > data/placeholder.pid
+  fi
   if curl -sf -m 5 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
     fails=0
   else
