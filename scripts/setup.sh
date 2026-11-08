@@ -30,7 +30,7 @@ warn() { printf '[setup %4ss] WARN: %s\n' "$(( $(date +%s) - T0 ))" "$*"; }
 install_editor_extensions() {
 if command -v code >/dev/null 2>&1; then
   mkdir -p data
-  EXT_LIST="$(code --list-extensions 2>/dev/null || true)"
+  EXT_LIST="$(timeout 20 code --list-extensions 2>/dev/null || true)"
   for ext in shd101wyy.markdown-preview-enhanced yzhang.markdown-all-in-one; do
     if printf '%s\n' "$EXT_LIST" | grep -qix "$ext"; then
       :
@@ -40,7 +40,7 @@ if command -v code >/dev/null 2>&1; then
       warn "could not install $ext (log: data/md_preview.log)"
     fi
   done
-  if code --list-extensions 2>/dev/null \
+  if timeout 20 code --list-extensions 2>/dev/null \
        | grep -qix "shd101wyy.markdown-preview-enhanced"; then
     "$PYTHON_BIN" scripts/ensure_md_keybindings.py >> data/md_preview.log 2>&1 \
       || python3 scripts/ensure_md_keybindings.py >> data/md_preview.log 2>&1 || true
@@ -49,7 +49,7 @@ else
   warn "no 'code' CLI here — extensions come from the devcontainer"
 fi
 }
-( install_editor_extensions ) >> data/md_preview.log 2>&1 &
+( install_editor_extensions ) >> data/md_preview.log 2>&1 9>&- &
 
 req_hash() {
   # raw sha256 of the file contents (must match `sha256sum | cut` in

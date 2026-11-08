@@ -52,7 +52,7 @@ def test_devcontainer_opens_editor_immediately():
 def test_setup_can_never_gate_or_kill_the_boot():
     sh = (ROOT / "scripts" / "setup.sh").read_text()
     # marketplace installs are detached, never in the boot path
-    assert "install_editor_extensions ) >> data/md_preview.log 2>&1 &" in sh
+    assert "install_editor_extensions ) >> data/md_preview.log 2>&1 9>&- &" in sh
     assert "timeout 120 code --install-extension" in sh
     auto = (ROOT / "scripts" / "auto_start.sh").read_text()
     assert "attempting engine start anyway" in auto   # setup failure != dead port
@@ -133,3 +133,18 @@ def test_worker_steps_are_hang_proof():
     assert "port $PORT empty" in sup                # supervisor refills dead port
     setup = (ROOT / "scripts" / "setup.sh").read_text()
     assert "--retries 2 --timeout 30" in setup
+
+
+def test_boot_chain_needs_no_curl_and_lock_cannot_leak():
+    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
+    sup = (ROOT / "scripts" / "supervise.sh").read_text()
+    assert "http_check.py" in auto and "http_check.py" in sup
+    assert "curl -sf" not in auto and "curl -sf" not in sup  # python3 only
+    assert (ROOT / "scripts" / "http_check.py").exists()
+    # every background spawn closes the flock fd (9) so a hung child
+    # (e.g. the editor CLI during creation) can never hold the lock
+    assert "( ensure_md_preview ) >/dev/null 2>&1 9>&- &" in auto
+    setup = (ROOT / "scripts" / "setup.sh").read_text()
+    assert "9>&- &" in setup
+    assert "timeout 20 code --list-extensions" in setup
+    assert "timeout 20 code --list-extensions" in auto

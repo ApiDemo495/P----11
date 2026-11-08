@@ -27,7 +27,11 @@ T0=$(date +%s)
 mkdir -p data
 log() { printf '[auto-start %4ss] %s\n' "$(( $(date +%s) - T0 ))" "$*" | tee -a data/auto_start.log; }
 
-healthy() { curl -sf -m 3 "$HEALTH_URL" >/dev/null 2>&1; }
+# health probes use python3 stdlib ONLY (scripts/http_check.py):
+# curl is not guaranteed in a fresh devcontainer, and a blind
+# starter kills healthy engines in a loop
+healthy() { python3 scripts/http_check.py "$HEALTH_URL" 3; }
+placeholder_up() { python3 scripts/http_check.py "http://127.0.0.1:${PORT}/healthz" 2; }
 
 stop_app() {
   if [ -f "$PIDFILE" ]; then
@@ -46,7 +50,7 @@ stop_app() {
 
 start_placeholder() {
   if healthy; then return 0; fi
-  if curl -sf -m 2 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
+  if placeholder_up; then
     return 0                                   # placeholder already up
   fi
   if [ -f "$PHPIDFILE" ] && kill -0 "$(cat "$PHPIDFILE" 2>/dev/null)" 2>/dev/null; then
@@ -56,7 +60,7 @@ start_placeholder() {
     >>data/placeholder.log 2>&1 9>&- &
   echo $! > "$PHPIDFILE"
   for _ in 1 2 3 4 5; do
-    if curl -sf -m 1 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
+    if placeholder_up; then
       log "placeholder serving on :$PORT (pid $(cat "$PHPIDFILE"))"
       return 0
     fi
@@ -80,7 +84,7 @@ ensure_md_preview() {
   command -v code >/dev/null 2>&1 || {
     echo "no 'code' CLI — extensions come from the devcontainer" \
       >> data/md_preview.log; return 0; }
-  _have=$(code --list-extensions 2>/dev/null \
+  _have=$(timeout 20 code --list-extensions 2>/dev/null \
             | grep -ix "shd101wyy.markdown-preview-enhanced" || true)
   if [ -z "$_have" ]; then
     code --install-extension shd101wyy.markdown-preview-enhanced \
@@ -99,7 +103,7 @@ launch_backtest_deferred() {
 }
 
 run_worker() {
-  ( ensure_md_preview ) >/dev/null 2>&1 &
+  ( ensure_md_preview ) >/dev/null 2>&1 9>&- &
 
   # ── auto-update: clean tree fast-forwards; dirty tree untouched ──
   # Exception learned from a real Codespace: boot regenerates the
@@ -171,7 +175,7 @@ run_worker() {
     setsid nohup .venv/bin/python scripts/fetch_real_brain.py >> data/setup.log 2>&1 9>&- &
   fi
   if [ -x .venv/bin/python ]; then
-    ( .venv/bin/python scripts/make_docs_html.py >> data/setup.log 2>&1 || true ) &
+    ( .venv/bin/python scripts/make_docs_html.py >> data/setup.log 2>&1 || true ) 9>&- &
   fi
 
   VENV_PY=".venv/bin/python"
