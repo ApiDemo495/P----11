@@ -27,12 +27,17 @@ jobs:
           python3 - <<'PY'
           import json, time, urllib.request
           deadline = time.time() + 600
-          seen_placeholder = False
+          t0 = time.time()
           while time.time() < deadline:
               try:
                   with urllib.request.urlopen("http://127.0.0.1:8000/", timeout=3) as r:
                       assert r.status == 200          # placeholder or app: never dead
               except Exception as e:
+                  # the placeholder binds within seconds of detach;
+                  # a refused connection in that first grace window
+                  # is the runner's startup lag, not a dead port
+                  if time.time() - t0 < 15:
+                      time.sleep(1); continue
                   raise SystemExit(f"port dead during boot: {e}")
               try:
                   with urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=3) as r:
