@@ -91,3 +91,39 @@ def test_routes_exist():
     from app.main import app
     paths = {r.path for r in app.routes}
     assert "/api/agents/local/install" in paths
+
+
+def test_catalog_default_is_qwen25_coder_3b():
+    assert ag.DEFAULT_MODEL_ID == "qwen25-coder-3b"
+    best = ag.model_by_id(None)
+    assert "Qwen2.5-Coder-3B" in best["label"]
+    ids = [m["id"] for m in ag.MODEL_CATALOG]
+    assert len(ids) >= 4 and len(set(ids)) == len(ids)   # multiple options
+    repo, fname, _ = ag.pick_local_model(8.0)            # Codespace tier
+    assert fname == best["file"]
+
+
+def test_download_specific_model_by_id(tmp_path, monkeypatch):
+    seen = {}
+
+    def runner(cmd, say):
+        if any("download_models" in part for part in cmd):
+            seen["cmd"] = cmd
+            path = inst.model_file("qwen25-coder-1.5b")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "wb").write(b"GGUF-fake")
+        return 0
+
+    inst, local = _installer(tmp_path, monkeypatch, runner=runner)
+    inst.start("qwen25-coder-1.5b")
+    inst._thread.join(timeout=20)
+    st = inst.status()
+    assert st["state"] == "done", st
+    assert st["target"] == "qwen25-coder-1.5b"
+    assert local.model_id == "qwen25-coder-1.5b"
+    assert "--model" in seen["cmd"]
+    assert "qwen25-coder-1.5b" in seen["cmd"]
+    by_id = {m["id"]: m for m in st["models"]}
+    assert by_id["qwen25-coder-1.5b"]["present"] is True
+    assert by_id["qwen25-coder-3b"]["recommended"] is True
+    assert by_id["qwen25-coder-3b"]["present"] is False

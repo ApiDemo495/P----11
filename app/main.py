@@ -1213,15 +1213,16 @@ async def agents_local_install_status() -> JSONResponse:
 
 
 @app.post("/api/agents/local/install")
-async def agents_local_install_start() -> JSONResponse:
+async def agents_local_install_start(req: dict) -> JSONResponse:
     """Start (or report) the background local-agent download.
 
     Deliberately NOT done at boot any more: the user presses the
     button in the Agents tab, the download runs niced in the
     background, and the app keeps working in Drosophila mode
     until the local agent is ready."""
-    return JSONResponse({"ok": True,
-                         "install": engine.agents.installer.start()})
+    return JSONResponse({"ok": True, "install":
+                         engine.agents.start_agent_download(
+                             str(req.get("model_id") or "") or None)})
 
 
 @app.post("/api/agents/test/{slot}")

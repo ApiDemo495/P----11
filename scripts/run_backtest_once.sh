@@ -17,6 +17,12 @@ if [ -f "$STAMP" ] && [ $(( $(date +%s) - $(stat -c %Y "$STAMP" 2>/dev/null || e
   echo "backtest: fresh enough, skipped"; exit 0
 fi
 [ -f .setup_stamp ] || { echo "backtest: env not ready — skipped"; exit 0; }
+# boot order: agent download BEFORE backtest — wait for it (max 30 min)
+for _ in $(seq 1 60); do
+  if [ -f data/setup_ai.pid ] && kill -0 "$(cat data/setup_ai.pid 2>/dev/null)" 2>/dev/null; then
+    echo "backtest: agent download still running — waiting"; sleep 30
+  else break; fi
+done
 PY=.venv/bin/python; [ -x "$PY" ] || PY=python3
 "$PY" -c "import ccxt" 2>/dev/null || "$PY" -m pip install -q -r requirements-backtest.txt 2>/dev/null
 "$PY" -c "import ccxt" 2>/dev/null || { echo "backtest: ccxt unavailable, skipped"; exit 0; }
