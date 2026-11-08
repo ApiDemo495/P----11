@@ -54,8 +54,7 @@ class AppPredictor:
         asyncio.run(_b())
         self._booted = True
 
-    def pack(self, view: SliceView, symbol: str) -> dict:
-        """Full engine result pack for every timeframe (one pass)."""
+    def predict(self, view: SliceView, symbol: str) -> Signal | None:
         if not self._booted:
             self.boot()
         st = self.feed.state(symbol)
@@ -71,11 +70,8 @@ class AppPredictor:
         st.live_open, st.live_high = bars[-1].o, bars[-1].h
         st.live_low = bars[-1].l
         st.day_open = bars[0].o
-        return self.engine.compute_asset(symbol, record=self.record,
-                                         display=False)
-
-    def predict(self, view: SliceView, symbol: str) -> Signal | None:
-        res = self.pack(view, symbol)[self.tf]
+        res = self.engine.compute_asset(symbol, record=self.record,
+                                        display=False)[self.tf]
         direction = int(res.get("direction") or 0)
         if direction == 0:
             return None
