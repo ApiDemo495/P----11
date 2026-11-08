@@ -129,8 +129,12 @@ run_worker() {
     fi
     if [ "$need_setup" = "1" ]; then
       log "environment stale — running setup… (niced)"
-      nice -n 10 bash scripts/setup.sh >>data/setup.log 2>&1 \
-        || { log "setup failed — placeholder stays up; see data/setup.log"; return 1; }
+      if ! nice -n 10 bash scripts/setup.sh >>data/setup.log 2>&1; then
+        # NON-FATAL (docs11 cause 1): a failed optional/pip step must
+        # never leave nothing listening. Try the engine anyway; if
+        # it cannot import, the placeholder returns with the logs.
+        log "WARN: setup failed — attempting engine start anyway (see data/setup.log)"
+      fi
     else
       log "environment fresh — skipping setup"
     fi

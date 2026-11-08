@@ -45,3 +45,13 @@ def test_devcontainer_opens_editor_immediately():
         assert "auto_start.sh" in d[hook]
     assert d["portsAttributes"]["8000"]["visibility"] == "public"
     assert (ROOT / ".github" / "workflows" / "boot.yml").exists()
+
+
+def test_setup_can_never_gate_or_kill_the_boot():
+    sh = (ROOT / "scripts" / "setup.sh").read_text()
+    # marketplace installs are detached, never in the boot path
+    assert "install_editor_extensions ) >> data/md_preview.log 2>&1 &" in sh
+    assert "timeout 120 code --install-extension" in sh
+    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
+    assert "attempting engine start anyway" in auto   # setup failure != dead port
+    assert "cannot start" not in auto
