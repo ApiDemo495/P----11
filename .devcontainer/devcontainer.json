@@ -7,7 +7,6 @@
   "portsAttributes": {
     "8000": {
       "label": "Prediction App",
-      "visibility": "public",
       "onAutoForward": "openBrowser"
     }
   },

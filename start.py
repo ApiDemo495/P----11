@@ -291,27 +291,40 @@ def editor_extras() -> None:
 
 
 def make_port_public() -> None:
-    """Port must ALWAYS be public (user order). The devcontainer
-    requests visibility=public; this enforces it with the gh CLI
-    once the placeholder is up, so even the starting page is
-    reachable at the -8000.app.github.dev URL. Best-effort:
-    outside Codespaces it is a no-op."""
+    """Port must ALWAYS be public (user order). NOTE, verified
+    against the containers.dev spec: portsAttributes has NO
+    "visibility" property — Codespaces ignores it, so the ONLY
+    way to force public is the gh CLI. Retry for ~3 minutes:
+    the forwarded port may not be registered yet when the
+    placeholder first binds, and a single early attempt failing
+    silently is exactly how a Codespace stays private. Also
+    re-asserted once the app is healthy (serve loop)."""
     name = os.environ.get("CODESPACE_NAME")
     if not name:
         return
-    def work():
-        time.sleep(2)
+    def attempt() -> bool:
         try:
             r = subprocess.run(
                 ["gh", "codespace", "ports", "visibility",
                  f"{PORT}:public", "-c", name],
                 capture_output=True, text=True, timeout=25)
-            log("port visibility -> public"
-                if r.returncode == 0 else
-                f"port visibility: gh exited {r.returncode} (set it "
-                f"once in the Ports tab if the URL still refuses)")
+            if r.returncode == 0:
+                return True
+            log(f"port visibility attempt failed (gh {r.returncode}): "
+                f"{(r.stderr or r.stdout or '').strip()[:160]}")
         except Exception as e:
-            log(f"port visibility skipped ({e.__class__.__name__})")
+            log(f"port visibility attempt skipped "
+                f"({e.__class__.__name__})")
+        return False
+    def work():
+        time.sleep(2)
+        for i in range(6):
+            if attempt():
+                log("port visibility -> public ✓")
+                return
+            time.sleep(30)
+        log("WARN: could not force port public after 6 attempts — "
+            "set it once via Ports tab > Port Visibility > Public")
     threading.Thread(target=work, daemon=True).start()
 
 
@@ -390,6 +403,7 @@ def serve() -> int:
         if healthy():
             _state["stage"] = "live"
             log(f"✓ app healthy on http://0.0.0.0:{PORT}")
+            make_port_public()      # re-assert public on the real app
             fails = 0
         else:
             stop_engine(_child)

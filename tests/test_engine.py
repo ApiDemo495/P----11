@@ -91,8 +91,11 @@ def run(coro):
     return run_sync(coro)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def live_engine():
+    # function-scoped on purpose: tests manufacture cycle state
+    # (issued=True, target hits, active_k advances) — sharing one
+    # engine across tests made failures order-dependent
     engine, feed, emitted = make_engine()
 
     class H:
@@ -102,6 +105,17 @@ def live_engine():
     h.feed = feed
     h.emitted = emitted
     run(_boot(engine))
+
+    async def _freeze():
+        # determinism: the live GRC/tick loops would otherwise fire
+        # mid-test on the real 4-minute grid and re-lock the cycles
+        # the tests manufacture state on. Tests drive internals
+        # synchronously (direct _on_target_hit/_on_sl_hit calls).
+        for t in engine._tasks:
+            t.cancel()
+        await asyncio.gather(*engine._tasks, return_exceptions=True)
+        engine._tasks.clear()
+    run(_freeze())
     yield h
     run(engine.stop())
 

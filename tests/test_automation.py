@@ -81,10 +81,13 @@ def test_devcontainer_hooks_are_start_py_only():
     for hook in ("onCreateCommand", "postCreateCommand",
                  "postStartCommand", "postAttachCommand"):
         assert d[hook] == "python3 start.py --detach || true"
-    # user order: the port is ALWAYS public so the -8000 URL works
-    # in any browser tab (private ports 502 outside the editor auth)
-    assert d["portsAttributes"]["8000"]["visibility"] == "public"
-    assert "protocol" not in d["portsAttributes"]["8000"]  # plain HTTP app
+    # containers.dev spec: portsAttributes has NO visibility key —
+    # Codespaces ignores it. Public is enforced by start.py's gh CLI
+    # retries; the devcontainer must not pretend otherwise, and must
+    # never set protocol:https (forces public ports back to private
+    # per GitHub docs, and our app is plain HTTP).
+    assert "visibility" not in d["portsAttributes"]["8000"]
+    assert "protocol" not in d["portsAttributes"]["8000"]
     assert d["portsAttributes"]["8000"]["onAutoForward"] == "openBrowser"
     assert (ROOT / ".github" / "workflows" / "boot.yml").exists()
     assert (ROOT / "run.sh").read_text().count("start.py") >= 1
@@ -107,6 +110,8 @@ def test_port_made_public_from_inside():
     assert "def make_port_public" in src
     assert '"ports", "visibility"' in src
     assert "CODESPACE_NAME" in src       # no-op outside Codespaces
+    assert "range(6)" in src             # retries: port may register late
+    assert src.count("make_port_public()") >= 3  # boot + on-healthy
     assert "ensure_md_keybindings.py" in src   # orphan relinked
 
 
