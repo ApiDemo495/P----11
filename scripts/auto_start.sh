@@ -96,7 +96,18 @@ run_worker() {
   ( ensure_md_preview ) >/dev/null 2>&1 &
 
   # ── auto-update: clean tree fast-forwards; dirty tree untouched ──
+  # Exception learned from a real Codespace: boot regenerates the
+  # tracked docs.html, so the tree was dirty from minute one and
+  # the update NEVER ran again — the Codespace stayed on old code
+  # forever. Generated-only dirt is discarded; anything else still
+  # blocks (and is named in the log instead of skipped silently).
   {
+    if command -v git >/dev/null 2>&1; then
+      _gen_dirty="$(git diff --name-only 2>/dev/null | grep -vx docs.html || true)"
+      if [ -z "$_gen_dirty" ] && [ -n "$(git diff --name-only 2>/dev/null)" ]; then
+        git checkout -- docs.html 2>/dev/null || true
+      fi
+    fi
     if command -v git >/dev/null 2>&1 && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
       _br="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
       if [ -n "$_br" ]; then
@@ -110,6 +121,8 @@ run_worker() {
           fi
         fi
       fi
+    elif command -v git >/dev/null 2>&1; then
+      echo "$(date -Is) auto-update skipped — dirty tree: $(git status --porcelain 2>/dev/null | tr '\n' ' ')" >> data/auto_update.log
     fi
   } || true
 

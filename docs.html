@@ -52,7 +52,7 @@ pip install -r requirements.txt
 <p>provided), then run <code>./run.sh</code> and forward port <b>8000</b>.</p>
 <p>Run the test suite:</p>
 <pre><code>
-.venv/bin/python -m pytest -q    # 293 tests (honesty, parts 1-4, news, brain, order-book, UX sync, deep RL)
+.venv/bin/python -m pytest -q    # 357 tests (honesty, parts 1-4, news, brain, order-book, UX sync, deep RL)
 </code></pre>
 <p>Environment:</p>
 <table>
@@ -68,6 +68,26 @@ pip install -r requirements.txt
 <tr><td>`GEMINI_API_KEY`</td><td>Google AI Studio key</td><td>*(none)*</td><td>primary agent (see `API_SETUP.md`)</td></tr>
 <tr><td>`NEWSAPI_KEY`</td><td>newsapi.org key</td><td>*(none)*</td><td>live news (else seeded/synthetic stream)</td></tr>
 </table>
+<h5>Downloads — what is fetched once, and where it lives</h5>
+<table>
+<tr><td>asset</td><td>where it lives</td><td>per fresh Codespace</td></tr>
+<tr><td>FlyWire brain + stats</td><td>**in git** (`assets/`)</td><td>0 bytes — cloned with the repo</td></tr>
+<tr><td>core Python deps</td><td>`.venv` (stamp-cached)</td><td>one pip install, never repeated in the same Codespace</td></tr>
+<tr><td>local agent model (preferred: Qwen2.5-Coder-3B, ~2 GB)</td><td>`models/` (gitignored)</td><td>only when you press **⬇ DOWNLOAD LOCAL AGENT** in the Agents tab — nothing agent-sized downloads at boot</td></tr>
+</table>
+<p>Downloads are validated <b>locally</b>: GGUF magic + a SHA-256 recorded</p>
+<p>beside the file at download time (<code>&lt;file&gt;.sha256.json</code>). A truncated</p>
+<p>file is detected and re-fetched, never silently &quot;loaded&quot;. One flock</p>
+<p>(<code>data/.agent_download.lock</code>) is shared by the boot downloader and</p>
+<p>the in-app button, so two fetchers can never race.</p>
+<p><b>Zero-download starts (optional):</b> if you enable Codespaces</p>
+<p><b>prebuilds</b> for this branch (repo → Settings → Codespaces → Set</p>
+<p>up prebuild — your step, it spends Actions minutes) the whole</p>
+<p>workspace snapshot, including <code>models/</code>, is cloned at creation.</p>
+<p>Check prebuilds with:</p>
+<pre><code>
+gh api repos/ApiDemo495/P----11/codespaces/prebuilds --jq &#x27;.[] | {ref: .ref, status: .status, updated: .updated_at}&#x27;
+</code></pre>
 <p>The brain is the <b>real FlyWire v783 connectome</b> (138,639 neurons ·</p>
 <p>15.09 M connections) or it is <b>absent with weight 0</b> — there is no</p>
 <p>substitute matrix of any size. It downloads once (GitHub, size-checked),</p>
@@ -388,7 +408,7 @@ static/
                    contribution ticks, AUTO chip, gauges, news stream
   brains3d.js      Three.js 2×2 instanced brain visualization
   vendor/          three.module.js v0.160.1 (MIT, vendored — no CDN)
-tests/             293 tests: parts 1–4, honesty guards, news (docs11),
+tests/             357 tests: parts 1–4, honesty guards, news (docs11),
                    FlyWire brain (10), order-book layer (6), UX sync
 pytest.ini         pytest 9 + pytest-asyncio 1, strict asyncio mode,
                    plain `pytest` works (no cache plugin dependency)

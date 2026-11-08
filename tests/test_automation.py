@@ -99,3 +99,14 @@ def test_no_editor_warning_generators():
     auto = [t for t in tasks["tasks"] if t["label"].startswith("auto-start")]
     assert auto and "|| true" in auto[0]["command"]   # task terminal exits 0
 
+
+
+def test_auto_update_survives_generated_docs_dirt():
+    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
+    assert "grep -vx docs.html" in auto          # generated-only dirt discarded
+    assert "auto-update skipped — dirty tree" in auto  # blockers are named
+    docs = (ROOT / "docs.html").read_text()
+    readme = (ROOT / "README.md").read_text()
+    import re
+    n = re.search(r"(\d+) tests", readme)
+    assert n and (n.group(1) + " tests") in docs  # committed docs in sync
