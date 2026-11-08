@@ -181,3 +181,31 @@ def test_boot_overlay_dismissible_and_honest():
     # engine locks when computable, not only at the 4-minute cap
     eng = (root / "app" / "engine.py").read_text()
     assert "computable" in eng and "_enough_any" in eng
+
+
+def test_two_systems_toggle_and_confidence_pair():
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "static" / "index.html").read_text()
+    js = (root / "static" / "app.js").read_text()
+    eng = (root / "app" / "engine.py").read_text()
+    assert 'id="btn-system"' in html and "system_mode" in js
+    assert '"system_mode": "old"' in (root / "app" / "agents.py").read_text()
+    # confidence shown BOTH ways: strength + measured win-rate
+    assert "strength (voter agreement)" in js
+    assert "measured win-rate (this conf)" in js
+    # NEW system: forecast price at horizon end is the target
+    assert "cyc.forecast" in eng and '"mode": _mode' in eng
+    # below 1:1 -> watch-only, never a trade
+    assert "below_ratio_floor" in eng
+
+
+def test_ratio_band_measured_not_forced():
+    import random, sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.moves_risk import risk_block
+    random.seed(7)
+    closes = [100.0]; p = 100.0
+    for _ in range(600):
+        p *= (1 + random.gauss(0, 0.0015)); closes.append(p)
+    b = risk_block(closes[-1], 1, 22, 0.5, closes, closes, closes)
+    assert 1.0 <= b["rr"] <= 4.0 and "below_floor" in b

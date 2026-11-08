@@ -156,6 +156,15 @@ const S = {
 /* ═══════════ shell: assets, tabs, focus bar ═══════════ */
 document.addEventListener("DOMContentLoaded", () => {
   $("#btn-repair-link")?.addEventListener("click", () => repairChartLink(true));
+  $("#btn-system")?.addEventListener("click", async () => {
+    const next = S.systemMode === "new" ? "old" : "new";
+    try {
+      const r = await api("/api/settings", { method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ system_mode: next }) });
+      if (r?.ok) { S.systemMode = next; syncSystemBtn(); toast(`prediction system: ${next.toUpperCase()}`, "ok"); }
+    } catch (e) { toast("system switch failed", "bad"); }
+  });
   $("#boot-dismiss")?.addEventListener("click", () => {
     S.bootDismissed = true;
     $("#boot-overlay")?.classList.add("gone");
@@ -891,6 +900,9 @@ function renderHero() {
     stats.innerHTML = `
       <div class="kv"><span>call</span><b class="${dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat"}">${dir > 0 ? "▲ BULL" : dir < 0 ? "▼ BEAR" : "● FLAT"}${weak && dir ? "*" : ""}</b></div>
       <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} ${cyc?.issued ? "· ISSUED" : "· below floor"}</b></div>
+      <div class="kv"><span>strength (voter agreement)</span><b>${fx(cyc?.strength ?? res.strength ?? 0, 2)}</b></div>
+      <div class="kv"><span>measured win-rate (this conf)</span><b>${cyc?.winrate != null ? `${Math.round(cyc.winrate * 100)}% · n=${cyc.winrate_n}` : `collecting · n=${cyc?.winrate_n ?? 0}`}</b></div>
+      ${cyc?.forecast?.price ? `<div class="kv"><span>${cyc.forecast.mode === "new" ? "🎯 FORECAST (target)" : "forecast if NEW"} ${cyc.forecast.minutes}m</span><b>${px(cyc.forecast.price)} (${cyc.forecast.move_bps} bp)</b></div>` : ""}
       <div class="kv"><span>cci adj</span><b>${fx(res.cci_adjusted ?? 0, 4)}</b></div>
       <div class="kv"><span>countdown</span><b>${cyc?.countdown_s != null ? `${Math.floor(cyc.countdown_s / 60)}m ${cyc.countdown_s % 60}s` : "—"}</b></div>
       <div class="kv"><span>entry (locked)</span><b>${cyc?.entry ? px(cyc.entry) : (res.lock?.price ? px(res.lock.price) : "—")}</b></div>
@@ -2950,6 +2962,10 @@ async function loadSettings() {
   } catch { /* optional */ }
 }
 
+function syncSystemBtn() {
+  const b = $("#btn-system");
+  if (b) b.textContent = `SYSTEM: ${(S.systemMode || "old").toUpperCase()}`;
+}
 /* ═══════════ boot overlay + timers ═══════════ */
 let bootDeadline = 0;
 function renderBoot(snap) {
@@ -2993,6 +3009,9 @@ setInterval(() => {
       if (S.priceHist.length > 900) S.priceHist = S.priceHist.slice(-900);
     }
   } catch (e2) { /* ring optional */ }
+  if (S.snap?.system_mode && S.snap.system_mode !== S.systemMode) {
+    S.systemMode = S.snap.system_mode; syncSystemBtn();
+  }
   // 1) boot countdown
   const ov = $("#boot-overlay");
   if (ov && !ov.classList.contains("gone") && bootDeadline) {

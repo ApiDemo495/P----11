@@ -35,7 +35,9 @@ def test_grid_windows_and_lock_hold():
     eng.fresh_cycle("BTC", "tf1", now, res, reason="initial_lock")
     cyc = eng.cycles[("BTC", "tf1")]
     ws = 22 * 60
-    assert cyc.cycle_start % ws == 0                  # epoch grid, not now+W
+    # user rule: a timeframe is the horizon FROM the lock
+    # ('after 22 minutes, what price?') — lock-anchored, full W
+    assert cyc.cycle_start == now
     assert cyc.cycle_end == cyc.cycle_start + ws
     lk1 = dict(eng.locks[("BTC", "tf1")])
     # mid-window refash must NOT relock (signal integrity, B-1)

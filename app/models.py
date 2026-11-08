@@ -102,6 +102,10 @@ class TFCycle:
     safe_events: int = 0
     sl_observed: bool = False        # unissued cycle: SL crossed (one-shot event)
     risk: dict = field(default_factory=dict)   # measured-moves TP/SL block (frozen)
+    forecast: dict = field(default_factory=dict)  # NEW system: price at horizon end
+    strength: float = 0.0            # voter-agreement purity [0,1]
+    winrate: float | None = None     # measured hit-rate in this conf bucket
+    winrate_n: int = 0
     pending_reset: bool = False      # CLOSE POSITION -> fresh cycle at next GRC
     close_alert: bool = False        # one-shot UI flag
     safe_alert: bool = False         # one-shot UI flag
@@ -129,6 +133,10 @@ class TFCycle:
             "confidence": round(self.confidence, 4),
             "confidence_effective": round(eff, 4),
             "cci": round(self.cci, 4),
+            "forecast": self.forecast,
+            "strength": round(self.strength, 4),
+            "winrate": self.winrate,
+            "winrate_n": self.winrate_n,
             "drhe": round(self.drhe, 4),
             "issued": self.issued,
             "cycle_start": self.cycle_start,

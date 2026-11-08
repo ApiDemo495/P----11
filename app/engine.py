@@ -137,7 +137,7 @@ def _recheck_prediction(*, direction: int, conf: float, floor: float,
     output is NO TRADE with the failed checks named. Checks: live data
     (feed <= 20 s old), all 4 timeframes computed, subsystem consensus
     (>=3 of the fused/emotion/physics/news/hedge voters agree with the
-    direction), levels valid + exactly 2:1, confidence above the asset
+    direction), levels valid + ratio in [1:1, 4:1], confidence above the asset
     floor, and no contradiction with the window's locked call."""
     checks = []
     def add(name, ok, detail):
@@ -152,9 +152,10 @@ def _recheck_prediction(*, direction: int, conf: float, floor: float,
         f"{len(agreeing)}/{len(voters)} voters agree"
         + (f" ({', '.join(agreeing)})" if agreeing else "")
         if direction else "no direction to agree with")
-    add("levels valid + 2:1", levels_ok and ratio is not None
-        and abs(float(ratio) - 2.0) <= 0.01,
-        f"ratio {ratio}" if ratio is not None else "no levels")
+    add("levels valid + ratio ≥ 1:1", levels_ok and ratio is not None
+        and 1.0 <= float(ratio) <= 4.0,
+        f"ratio {ratio} (band 1:1–4:1, 2:1 preferred)"
+        if ratio is not None else "no levels")
     add("confidence above floor", direction != 0 and conf > floor,
         f"conf {conf:.3f} vs floor {floor:.3f}")
     if exp_bps is not None and exp_n >= 20:
@@ -1028,6 +1029,11 @@ class PredictionEngine:
             else:
                 fin["conf_percentile"] = None
             fin["conf_hist_n"] = len(_pool)
+            fin["strength"] = pack.get("strength", 0.0)
+            _wr, _wrn = self._measured_winrate(
+                symbol, tf, float(fin["confidence"]))
+            fin["winrate"] = _wr
+            fin["winrate_n"] = _wrn
             _hist.append(_base_conf)
             if len(_hist) > 400:
                 del _hist[:-400]
@@ -1213,6 +1219,9 @@ class PredictionEngine:
                 "cci": pack["cci"],
                 "cci_adjusted": pack["cci_adjusted"],
                 "confidence": fin["confidence"],
+                "strength": fin.get("strength", 0.0),
+                "winrate": fin.get("winrate"),
+                "winrate_n": fin.get("winrate_n", 0),
                 "base_confidence": pack["confidence"],
                 "direction": pack["direction"],
                 "issued": fin["issued"],
@@ -3681,6 +3690,24 @@ class PredictionEngine:
         state = window_state(ratio, drift)
         return state, context_key(symbol, tf, state.split("-")[0])
 
+    def _measured_winrate(self, symbol: str, tf: str,
+                          conf: float) -> tuple[float | None, int]:
+        """Measured strict-sign hit-rate of settled windows whose
+        locked confidence sat in this call's bucket (±0.1). Returns
+        (rate, n); (None, n) until n >= 10 — never invented."""
+        try:
+            ps = list(self.hist.ring(
+                self.hist.tf_key(symbol, tf, "calib_p"), 400))
+            hs = list(self.hist.ring(
+                self.hist.tf_key(symbol, tf, "calib_h"), 400))
+            pairs = [(p, h) for p, h in zip(ps, hs)
+                     if abs(p - conf) <= 0.1]
+            if len(pairs) < 10:
+                return None, len(pairs)
+            return round(sum(h for _, h in pairs) / len(pairs), 4), len(pairs)
+        except Exception:
+            return None, 0
+
     def _settle_and_lock(self, symbol: str, tf: str, now: float,
                          res: dict) -> None:
         """Settle the previous window in the ledger, then freeze the new
@@ -3909,6 +3936,14 @@ class PredictionEngine:
         _price0 = (float(_lock_now.get("price") or 0.0)
                    or res.get("_price", 0.0)
                    or self.feed.prices().get(symbol, 0.0))
+        # anchor sanity: at boot the lock can carry the backfill
+        # tape's end price while the live feed already trades far
+        # away (a 170k anchor under a 79k market froze a nonsense
+        # forecast/levels). If the anchor disagrees with the live
+        # price by >20%, the live price wins.
+        _live = float(self.feed.prices().get(symbol, 0.0) or 0.0)
+        if _live > 0 and _price0 > 0 and abs(_price0 / _live - 1.0) > 0.20:
+            _price0 = _live
         # MEASURED-MOVES TP/SL (docs11-charts B-1): levels come from
         # this asset's measured excursions at each horizon — q80 MAE
         # stop, clip(1.5·SL·f(edge), q50, q95) target — frozen here.
@@ -3937,10 +3972,13 @@ class PredictionEngine:
         _prof = asset_profile(symbol)
         if _prof["sl_mult"] != 1.0 or _prof["tp_mult"] != 1.0:
             for _b in _blocks.values():
-                # asset nature scales the 1 unit (SL); TP re-derives as
-                # exactly 2 units so the 2:1 rule survives every profile
+                # asset nature scales the 1 unit (SL); TP scales by the
+                # SAME factor so the block's measured ratio survives
                 _b["sl_bps"] = round(_b["sl_bps"] * _prof["sl_mult"], 3)
-                _b["tp_bps"] = round(2.0 * _b["sl_bps"], 3)
+                _b["tp_bps"] = round(_b["tp_bps"] * _prof["sl_mult"]
+                                     * (_prof["tp_mult"] / _prof["sl_mult"]), 3)
+                _b["below_floor"] = bool(
+                    _b["sl_bps"] > 0 and _b["tp_bps"] / _b["sl_bps"] < 1.0)
                 _b["tp"] = round(_price0 * (1 + _dir * _b["tp_bps"] / 1e4), 6)
                 _b["sl"] = round(_price0 * (1 - _dir * _b["sl_bps"] / 1e4), 6)
                 _b["rr"] = round(_b["tp_bps"] / _b["sl_bps"], 3) \
@@ -3979,7 +4017,12 @@ class PredictionEngine:
                 targets.append(
                     TargetState(k=k, minutes=minutes, level=None, status="pending")
                 )
-        _g_start, _g_end = self._grid_window(tf, now)
+        # window anchored to the LOCK (user: a timeframe is the time
+        # FROM the prediction — 'after 22 minutes, what price?').
+        # The epoch grid previously made the real duration anything
+        # from seconds to W (countdown drift). Settlement keying in
+        # _settle_and_lock keeps its own grid, unaffected.
+        _g_start, _g_end = now, now + W * 60
         cyc = TFCycle(
             symbol=symbol,
             tf=tf,
@@ -3993,12 +4036,47 @@ class PredictionEngine:
             p_side=float(res.get("p_side") or 0.5),
             cycle_start=_g_start,
             cycle_end=_g_end,
+            strength=float(res.get("strength") or 0.0),
+            winrate=res.get("winrate"),
+            winrate_n=int(res.get("winrate_n") or 0),
             targets=targets,
             active_k=1,   # every issued side is tracked + graded
             warning=warning,
             refreshed_at=now,
             qdpc_tau=res.get("qdpc_tau"),
         )
+        # ── NEW system (horizon forecast): the forecast price at the
+        # end of this timeframe IS the target; SL stays from the
+        # measured block. Magnitude = σ-scaled expected move, tilted
+        # by signal strength — labelled a model forecast, and graded
+        # against the realised price at the horizon like any call.
+        _mode = str(self.agents.settings.get("system_mode", "old"))
+        _sigma = max(float(_horizon_block.get("sigma_bps") or 0.0),
+                     float(_horizon_block.get("q50") or 0.0))
+        _mag = (0.35 + 0.65 * min(1.0, abs(float(res.get("cci_adjusted")
+                        or res.get("cci") or 0.0)) / 0.08)) * _sigma
+        _fc_price = round(_price0 * (1 + _dir * _mag / 1e4), 6) \
+            if _price0 > 0 else None
+        cyc.forecast = {
+            "mode": _mode, "price": _fc_price,
+            "move_bps": round(_mag, 2), "minutes": W,
+            "end_ts": _g_end,
+            "direction": (1 if (_fc_price or 0) >= _price0 else -1)
+            if _fc_price else int(_dir),
+        }
+        if _mode == "new" and _fc_price and _price0 > 0:
+            cyc.tp = _fc_price
+            cyc.tp_dist = abs(_fc_price - _price0)
+            if cyc.sl:
+                cyc.sl_dist = abs(_price0 - cyc.sl)
+                cyc.ratio = (round(cyc.tp_dist / cyc.sl_dist, 3)
+                             if cyc.sl_dist else None)
+            cyc.direction = cyc.forecast["direction"]
+        # user rule: below 1:1 is not worth trading -> watch-only
+        if (cyc.ratio is not None and cyc.ratio < 1.0):
+            cyc.tier = "watch-only"
+            cyc.events.append({"ts": now, "type": "below_ratio_floor",
+                               "ratio": cyc.ratio})
         cyc.events.append({"ts": now, "type": "cycle_fresh", "reason": reason})
         cyc.risk = dict(_horizon_block)
         self.cycles[(symbol, tf)] = cyc
@@ -4012,6 +4090,8 @@ class PredictionEngine:
             cyc.tp_dist = abs(_horizon_block["tp"] - _price0)
             cyc.sl_dist = abs(_price0 - _horizon_block["sl"])
             cyc.ratio = _horizon_block["rr"]
+        if cyc.ratio is None:
+            cyc.ratio = _horizon_block.get("rr")
         # OPTIONAL execution: the trader re-checks every safety gate
         # itself (disabled / unarmed / sub-floor / wrong-side levels
         # are refused + logged) — this hook can never fire a random
@@ -4680,6 +4760,8 @@ class PredictionEngine:
             "type": "snapshot",
             "ts": now,
             "phase": self.phase,
+            "system_mode": str(
+                self.agents.settings.get("system_mode", "old")),
             "grc": {
                 "count": self.grc_count,
                 "last": self.last_grc,

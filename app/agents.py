@@ -561,6 +561,10 @@ class AgentManager:
             # AUTO-PREDICT: the staged analysis re-runs by itself so the
             # views are always fresh; turn OFF for manual-only ▶ ANALYSE
             "auto_predict": True,
+            # two prediction systems: "old" (TP/SL ladder, default)
+            # or "new" (horizon forecast: price at timeframe end IS
+            # the target, SL kept). Toggled from the header button.
+            "system_mode": "old",
             "assets": list(SYMBOL_ORDER), "timeframes": list(TF_ORDER),
         }
         self.local = LocalModel()

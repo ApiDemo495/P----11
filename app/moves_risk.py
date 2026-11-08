@@ -28,10 +28,12 @@ from __future__ import annotations
 import math
 from typing import Any
 
-RR_TARGET = 2.0   # USER RULE: TP:SL = 2:1 exactly, everywhere, always.
-                  # SL is the 1 unit (measured q80 adverse excursion);
-                  # TP is 2 units. Neither can exceed its unit:
-                  # sl_bps is the measured unit, tp_bps = 2 x sl_bps.
+RR_TARGET = 2.0   # USER RULE (updated): ratio may live anywhere in
+                  # [1:1, 4:1]; 2:1 is the preferred/default. The TP is
+                  # the MEASURED favourable excursion clipped into that
+                  # band; a measured ratio below 1:1 is kept honest in
+                  # the block (below_floor) and the caller cuts the
+                  # cycle to watch-only — below 1:1 is not worth trading.
 MIN_WINDOWS = 5
 
 
@@ -95,20 +97,28 @@ def risk_block(entry: float, direction: int, minutes: int, edge: float,
         # ATR fallback — exists at window 1, labelled provisional (B-1)
         base = (atr / entry * math.sqrt(max(1, minutes)) * 1e4
                 if entry > 0 and atr > 0 else 10.0 * math.sqrt(max(1, minutes)))
-        sl_bps = max(2.0, 0.8 * base)
+        sl_bps = max(2.0, 0.8 * base) + half_spread
         tp_bps = RR_TARGET * sl_bps
     else:
         mae = st["mae_long_q80"] if s > 0 else st["mae_short_q80"]
         # the 1 unit: measured adverse excursion (robust q80 quantile)
-        sl_bps = max(1.0, mae)
-        tp_bps = RR_TARGET * sl_bps          # exactly 2 units, no clamp
-    sl_bps += half_spread
-    tp_bps = RR_TARGET * sl_bps              # spread inside the unit:
-                                             # ratio stays exactly 2:1
+        sl_bps = max(1.0, mae) + half_spread
+        # measured favourable excursion, edge-scaled, clipped to the
+        # asset's own q50..q95 move band (docstring design)
+        f_edge = 0.8 + 0.4 * max(0.0, min(1.0, edge))
+        tp_meas = 1.5 * sl_bps * f_edge
+        if st["q95"] > 0:
+            tp_meas = max(st["q50"], min(st["q95"], tp_meas))
+        tp_bps = tp_meas + half_spread
+        # band [1:1, 4:1]: above 4:1 the target is fantasy — cap it;
+        # below 1:1 keep the measured truth and flag it (watch-only)
+        if sl_bps > 0 and tp_bps / sl_bps > 4.0:
+            tp_bps = 4.0 * sl_bps
     tp = entry * (1 + s * tp_bps / 1e4)
     sl = entry * (1 - s * sl_bps / 1e4)
     rr = (tp_bps / sl_bps) if sl_bps > 0 else 0.0
-    note = (f"{tp_bps:.0f} bps target / {sl_bps:.0f} bps stop = 2.00:1 (user rule) — "
+    note = (f"{tp_bps:.0f} bps target / {sl_bps:.0f} bps stop = {rr:.2f}:1 "
+            f"(band 1:1–4:1, 2:1 preferred) — "
             + (f"provisional (n={n} windows < {MIN_WINDOWS}, ATR fallback)"
                if provisional else
                f"q80 MAE of {n} windows (q50 {st['q50']:.0f} / "
@@ -116,7 +126,8 @@ def risk_block(entry: float, direction: int, minutes: int, edge: float,
     return {"entry": round(entry, 6), "direction": s, "minutes": int(minutes),
             "tp": round(tp, 6), "sl": round(sl, 6),
             "tp_bps": round(tp_bps, 2), "sl_bps": round(sl_bps, 2),
-            "rr": round(rr, 3), "n": n, "provisional": provisional,
+            "rr": round(rr, 3), "below_floor": bool(rr < 1.0),
+            "n": n, "provisional": provisional,
             "sigma_bps": round(st["sigma_bps"], 2),
             "q50": round(st["q50"], 2), "q80": round(st["q80"], 2),
             "q95": round(st["q95"], 2), "note": note}

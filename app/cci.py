@@ -191,12 +191,21 @@ class CCIEngine:
             )
 
         confidence = abs(cci_adjusted) * min(1.0, max(0.0, drhe))
+        # strength = agreement purity: |net| / gross weighted mass.
+        # 1.0 = every weighted vote pointed the same way; ~0 = the
+        # voters cancelled out. Unlike |CCI| (a weighted MEAN whose
+        # scale depends on vote magnitudes, landing at 0.001-0.03),
+        # this spreads honestly over [0,1].
+        _gross = sum(abs(w.get(fid, 0.0) * val)
+                     for fid, val in scaled.items())
+        strength = (abs(cci_adjusted) / _gross) if _gross > 1e-12 else 0.0
         issued = confidence > CONFIDENCE_FLOOR
         return {
             "cci": cci,
             "cci_adjusted": cci_adjusted,
             "cci_reversed": cci_reversed,
             "confidence": confidence,
+            "strength": round(max(0.0, min(1.0, strength)), 4),
             "direction": _sign(cci_adjusted),
             "issued": issued,
             "drhe": drhe,

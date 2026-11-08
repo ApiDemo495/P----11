@@ -39,7 +39,12 @@ def test_split_vote_and_stale_feed_blocked():
 
 def test_broken_levels_blocked():
     r = _recheck_prediction(**{**GOOD, "levels_ok": False, "ratio": 1.2})
-    assert not r["passed"] and "levels valid + 2:1" in r["failed"]
+    assert not r["passed"] and "levels valid + ratio ≥ 1:1" in r["failed"]
+    # user rule: 1:1 is worth showing, below 1:1 is not a trade
+    r2 = _recheck_prediction(**{**GOOD, "ratio": 0.7})
+    assert not r2["passed"] and "levels valid + ratio ≥ 1:1" in r2["failed"]
+    r3 = _recheck_prediction(**{**GOOD, "ratio": 1.0})
+    assert "levels valid + ratio ≥ 1:1" not in r3["failed"]
 
 
 def test_negative_measured_expectancy_blocked():
