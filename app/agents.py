@@ -47,6 +47,22 @@ KEY_FIELDS = frozenset({"gemini_key", "backup1_key", "backup2_key",
                         "anthropic_key"})
 MODELS_DIR = "models"
 
+# approximate on-disk size of each tier's GGUF (shown in the UI so the
+# download button never surprises anyone)
+MODEL_SIZE_HINT = {
+    "Phi-3-mini-4k-instruct-q4k.gguf": "~2.4 GB",
+    "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf": "~670 MB",
+    "qwen2-0_5b-instruct-q4_k_m.gguf": "~400 MB",
+}
+
+
+def pick_local_model(ram_gb: float):
+    """(repo, filename, label) for the RAM tier — one source of truth."""
+    for min_ram, r, f, lab in LOCAL_MODELS:
+        if ram_gb >= min_ram:
+            return r, f, lab
+    return LOCAL_MODELS[-1][1], LOCAL_MODELS[-1][2], LOCAL_MODELS[-1][3]
+
 GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
               "gemini-1.5-flash:generateContent?key={key}")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
@@ -167,12 +183,7 @@ class LocalModel:
             self.error = f"llama-cpp-python not installed ({e.__class__.__name__})"
             self.label = "unavailable"
             return
-        repo, fname, label = None, None, None
-        for min_ram, r, f, lab in LOCAL_MODELS:
-            if self.ram_gb >= min_ram:
-                repo, fname, label = r, f, lab
-                break
-        assert repo and fname and label
+        repo, fname, label = pick_local_model(self.ram_gb)
         self.label = label
         path = os.path.join(MODELS_DIR, fname)
         if not os.path.exists(path):
@@ -236,6 +247,156 @@ def _ram_gb() -> float:
     return 4.0
 
 
+class AgentInstaller:
+    """One-click in-app download of the local agent (Agents tab button).
+
+    Boot never does this any more (it raced provisioning and half-
+    downloaded on slow links). The user presses DOWNLOAD LOCAL AGENT,
+    this runs in a background thread, and the app keeps working:
+      1) pip install -r requirements-agents.txt  (llama.cpp runtime —
+         may compile for 10-20 min on some machines; that is normal)
+      2) scripts/download_models.py              (RAM-tier GGUF model)
+      3) load the model so the local agent slot goes live
+    State + last log lines are reported honestly to the UI; a failure
+    keeps the app in Drosophila mode and says why in plain words.
+    """
+
+    LOG_FILE = os.path.join("data", "setup_ai.log")
+    DONE_FILE = os.path.join("data", ".ai_done")
+
+    def __init__(self, local: "LocalModel", runner=None) -> None:
+        self.local = local
+        self._runner = runner            # injectable for tests
+        self._lock = threading.Lock()
+        self.state = "idle"              # idle|installing|done|failed
+        self.phase = ""                  # runtime|model|load
+        self.started_at = 0.0
+        self.finished_at = 0.0
+        self.error = ""
+        self.log: deque = deque(maxlen=40)
+        self._thread: threading.Thread | None = None
+
+    # -- detection ------------------------------------------------------
+    def deps_installed(self) -> bool:
+        import importlib.util
+        return importlib.util.find_spec("llama_cpp") is not None
+
+    def model_file(self) -> str:
+        _, fname, _ = pick_local_model(self.local.ram_gb)
+        return os.path.join(MODELS_DIR, fname)
+
+    def model_present(self) -> bool:
+        return os.path.exists(self.model_file())
+
+    def installed(self) -> bool:
+        return self.deps_installed() and self.model_present()
+
+    def status(self) -> dict:
+        _, fname, label = pick_local_model(self.local.ram_gb)
+        running = self._thread is not None and self._thread.is_alive()
+        state = "installing" if running else self.state
+        if state == "idle" and self.installed():
+            state = "done"
+        return {
+            "state": state,
+            "installed": self.installed(),
+            "deps_installed": self.deps_installed(),
+            "model_present": self.model_present(),
+            "model_label": label,
+            "model_size": MODEL_SIZE_HINT.get(fname, ""),
+            "phase": self.phase if running else "",
+            "error": self.error,
+            "log": list(self.log),
+            "elapsed_s": int((time.time() - self.started_at))
+                         if running and self.started_at else 0,
+        }
+
+    # -- work -----------------------------------------------------------
+    def start(self) -> dict:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return self.status()                 # already downloading
+            if self.installed():
+                self.state = "done"
+                return self.status()
+            self.state, self.phase, self.error = "installing", "runtime", ""
+            self.log.clear()
+            self.started_at, self.finished_at = time.time(), 0.0
+            self._thread = threading.Thread(target=self._work, daemon=True,
+                                            name="agent-installer")
+            self._thread.start()
+            return self.status()
+
+    def _say(self, line: str) -> None:
+        line = str(line).rstrip()
+        if not line:
+            return
+        self.log.append(line[-300:])
+        try:
+            d = os.path.dirname(self.LOG_FILE)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            with open(self.LOG_FILE, "a") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass
+
+    def _exec(self, cmd: list) -> int:
+        if self._runner is not None:
+            return self._runner(cmd, self._say)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True,
+                                bufsize=1)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            self._say(line)
+        return proc.wait()
+
+    def _work(self) -> None:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        try:
+            self.phase = "runtime"
+            self._say("installing llama.cpp runtime (requirements-agents.txt)"
+                      " — a source build can take 10-20 min, that is normal")
+            rc = self._exec([sys_executable(), "-m", "pip", "install",
+                             "-r", "requirements-agents.txt"])
+            if rc != 0:
+                raise RuntimeError(
+                    "runtime install failed (pip exit %d) — check your "
+                    "connection and press download again" % rc)
+            self.phase = "model"
+            rc = self._exec([sys_executable(),
+                             os.path.join("scripts", "download_models.py")])
+            if rc != 0 or not self.model_present():
+                raise RuntimeError(
+                    "model download did not finish — the hub may be "
+                    "unreachable; press download again to resume")
+            try:
+                d = os.path.dirname(self.DONE_FILE)
+                if d:
+                    os.makedirs(d, exist_ok=True)
+                open(self.DONE_FILE, "a").close()
+            except OSError:
+                pass
+            self.phase = "load"
+            self._say("download complete — loading the local agent")
+            self.local.try_load(force=True)
+            self.state = "done"
+            self._say("local agent ready: %s" % self.local.label)
+        except Exception as e:                       # never break the app
+            self.state = "failed"
+            self.error = str(e)[:300]
+            self._say("download stopped: %s" % self.error)
+        finally:
+            self.phase = ""
+            self.finished_at = time.time()
+
+
+def sys_executable() -> str:
+    import sys
+    return sys.executable
+
+
 # Downloadable agent packs — import one with your key and the app routes
 # cycles to the best-performing agent automatically (auto-best).
 AGENT_CATALOG = [
@@ -277,6 +438,7 @@ class AgentManager:
             "assets": list(SYMBOL_ORDER), "timeframes": list(TF_ORDER),
         }
         self.local = LocalModel()
+        self.installer = AgentInstaller(self.local)
         self.calls: dict[str, deque] = {}        # key -> timestamps (1h window)
         self.paid: dict[str, bool] = {}
         self.last_good = {"gemini": None, "local": None}
@@ -569,6 +731,7 @@ class AgentManager:
                 "error": self.local.error,
                 "last": self.last_replies.get("local"),
                 "enabled": self.settings.get("local_enabled", True),
+                "install": self.installer.status(),
             },
             "active": self.active_slot,
             "warning": self.warning,

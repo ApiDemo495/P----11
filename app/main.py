@@ -1205,6 +1205,25 @@ async def agents_auto(req: dict) -> JSONResponse:
     return JSONResponse(engine.agents.set_auto(bool(req.get("enabled"))))
 
 
+@app.get("/api/agents/local/install")
+async def agents_local_install_status() -> JSONResponse:
+    """In-app local-agent download: state, phase, plain-word error, log."""
+    return JSONResponse({"ok": True,
+                         "install": engine.agents.installer.status()})
+
+
+@app.post("/api/agents/local/install")
+async def agents_local_install_start() -> JSONResponse:
+    """Start (or report) the background local-agent download.
+
+    Deliberately NOT done at boot any more: the user presses the
+    button in the Agents tab, the download runs niced in the
+    background, and the app keeps working in Drosophila mode
+    until the local agent is ready."""
+    return JSONResponse({"ok": True,
+                         "install": engine.agents.installer.start()})
+
+
 @app.post("/api/agents/test/{slot}")
 async def agents_test(slot: str) -> JSONResponse:
     if slot not in ("gemini", "backup1", "backup2", "backup3", "local"):

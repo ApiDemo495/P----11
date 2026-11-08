@@ -2661,15 +2661,43 @@ async function loadAgents() {
         <button class="btn test-slot" data-slot="${["gemini", "backup1", "backup2", "backup3"][i]}" style="margin-top:10px">test</button>
       </div>`).join("");
     const lo = a.local || {};
+    const ins = lo.install || {};
+    const installing = ins.state === "installing";
+    const phaseTxt = { runtime: "installing llama.cpp runtime (may compile 10–20 min — normal)",
+                       model: "downloading model", load: "loading agent" }[ins.phase] || "working";
     $("#ag-local").innerHTML = `
       <div class="kv-row">
-        <div class="kv"><span>model</span><b>${lo.label || "—"}</b></div>
+        <div class="kv"><span>model</span><b>${ins.model_label || lo.label || "—"}</b></div>
         <div class="kv"><span>available</span><b>${lo.available ? "yes" : "no"}</b></div>
         <div class="kv"><span>RAM tier</span><b>${lo.ram_gb ?? "?"} GB</b></div>
         <div class="kv"><span>last inference</span><b>${lo.last_ms ? lo.last_ms + " ms" : "—"}</b></div>
       </div>
-      ${lo.error ? `<div class="hint">${lo.error}</div>` : ""}
-      <button class="btn test-slot" data-slot="local" style="margin-top:10px">test</button>`;
+      ${ins.installed
+        ? `<div class="hint" style="margin-top:8px">✓ local agent downloaded${lo.available ? " and loaded" : " — press test to load it"}</div>
+           <button class="btn test-slot" data-slot="local" style="margin-top:10px">test</button>`
+        : installing
+        ? `<div class="hint" style="margin-top:8px">⬇ ${phaseTxt}… ${ins.elapsed_s ? Math.floor(ins.elapsed_s / 60) + "m " + (ins.elapsed_s % 60) + "s" : ""} — the app keeps running; this panel refreshes itself</div>
+           <div class="logic" style="max-height:110px;overflow:auto;font-size:10px">${(ins.log || []).slice(-6).map(esc).join("<br/>")}</div>
+           <button class="btn" disabled style="margin-top:10px">downloading…</button>`
+        : `<button class="btn" id="ag-download" style="margin-top:10px">⬇ DOWNLOAD LOCAL AGENT</button>
+           <div class="hint" style="margin-top:6px">One-time, on-demand: llama.cpp runtime + ${ins.model_label || "RAM-tier model"} (${ins.model_size || ""}). Runs in the background — nothing downloads at boot any more, and the app stays fully usable meanwhile.</div>
+           ${ins.state === "failed" ? `<div class="hint">⚠ last attempt stopped: ${esc(ins.error || "unknown")} — press download to retry/resume</div>` : ""}
+           ${lo.error ? `<div class="hint">${lo.error}</div>` : ""}`}
+      `;
+    const dlBtn = $("#ag-download");
+    if (dlBtn) dlBtn.addEventListener("click", async () => {
+      dlBtn.disabled = true; dlBtn.textContent = "starting…";
+      try {
+        const r = await api("/api/agents/local/install", { method: "POST" });
+        toast(r.install?.state === "done" ? "local agent already downloaded"
+                                           : "local agent download started — watch this panel");
+      } catch (e) { toast("download start failed: " + e.message, "err"); }
+      loadAgents();
+    });
+    if (installing && S.view === "agents") {
+      clearTimeout(window.__agPoll);
+      window.__agPoll = setTimeout(() => { if (S.view === "agents") loadAgents(); }, 4000);
+    }
     const sig = d.signal || {};
     $("#ag-signal").innerHTML = sig.source && sig.source !== "none"
       ? `<div class="kv-row">
