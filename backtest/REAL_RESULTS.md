@@ -175,3 +175,16 @@ CLI --policy changed-vote. tau=0.4 had a prettier forward number
 worst-direction performance, not by the best-looking number.
 Status: cross-validated candidate, NOT live. The next honest
 judge is untouched forward data.
+
+## WIN-RATE CHECK (fresh end-to-end run, shipped predictor classes)
+Last 1 year, TP4, trade-by-trade through the actual predictor
+classes (not offline settles):
+- CHANGED-VOTE: ALL 62.63% win, EV +0.311R, PF 2.26 (n=99)
+  BNB 62.1% (29) | BTC 70.8% (24) | ETH 47.1% (17) | PAXG 65.5% (29)
+- TP4 POLICY (reference): ALL 63.16%, EV +0.288R, PF 2.13 (n=95)
+  BNB 71.4% (28) | BTC 70.8% (24) | ETH 50.0% (16) | PAXG 55.6% (27)
+Caveat: this full-year pass includes the window the vote weights
+were fitted on (first 55%), so it is partly in-sample; the clean
+walk-forward estimate for changed-vote remains 63.3% pooled OOS
+(n=49, CI 49.3-75.4). The fresh run landing at 62.6% is consistent
+with it, not a replacement for it. ETH is the weak asset in both.
