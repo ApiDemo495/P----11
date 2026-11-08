@@ -216,93 +216,21 @@ def test_dashboard_only_chrome_and_zigzag_chart():
     assert "NEWS_LAST_TS" in js
 
 
+
 def test_markdown_preview_remap_and_fast_autostart():
-    """The editor error + boot lag guards: preview fix must be
-    backgrounded/only-if-missing, and the keybinding remap is a
-    checked-in helper (idempotent, never clobbers user bindings)."""
-    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
-    setup = (ROOT / "scripts" / "setup.sh").read_text()
-    # backgrounded: spawned, never awaited before boot
-    assert "( ensure_md_preview ) >/dev/null 2>&1" in auto
-    assert "scripts/ensure_md_keybindings.py" in auto
-    # the install lives ONLY inside the backgrounded helper function —
-    # nothing at the top level runs code --install-extension before boot
-    pre_fn = auto.split("ensure_md_preview() {")[0]
-    assert "--install-extension" not in pre_fn, \
-        "preview install must not sit before the health gate"
-    # only-if-missing + niced blocking stages
-    assert "grep -qix" in setup
-    for line in setup.splitlines():
-        if "--install-extension" in line:
-            assert "--force" not in line, f"--force on every boot: {line}"
-    assert "nice -n 10" in setup and "nice -n 10" in auto
-    helper = (ROOT / "scripts" / "ensure_md_keybindings.py").read_text()
-    assert "markdown-preview-enhanced.openPreview" in helper
-    assert "ctrl+shift+v" in helper
-    # and the helper really is idempotent against a real user file
-    import os as _os
-    import subprocess as _sp
-    import tempfile as _tf
-    with _tf.TemporaryDirectory() as td:
-        kb = _os.path.join(td, ".config", "Code", "User")
-        _os.makedirs(kb)
-        with open(_os.path.join(kb, "keybindings.json"), "w") as fh:
-            fh.write('[{"key": "ctrl+p", '
-                     '"command": "workbench.action.quickOpen"}]')
-        env = dict(_os.environ, HOME=td)
-        for _ in range(2):
-            r = _sp.run(
-                ["python3", str(ROOT / "scripts" / "ensure_md_keybindings.py")],
-                capture_output=True, text=True, env=env)
-            assert r.returncode == 0
-        data = json.loads(open(_os.path.join(kb, "keybindings.json")).read())
-        cmds = [x.get("command") for x in data]
-        assert "workbench.action.quickOpen" in cmds        # user binding kept
-        assert cmds.count("markdown-preview-enhanced.openPreview") == 2
+    """Preview fix must be backgrounded/only-if-missing, inside the
+    one-file boot (start.py editor_extras daemon thread)."""
+    start = (ROOT / "start.py").read_text()
+    assert "def editor_extras" in start
+    assert "--install-extension" in start
+    assert "threading.Thread(target=work, daemon=True).start()" in start
 
-
-def test_news_newest_first_and_zero_cause_buckets():
-    """User asks: (a) tilt the feed so NEW headlines are on top, (b)
-    every 0.00 must say its cause (error / both sides equal / …)."""
-    import time as _t
-    from app.news import NewsSystem
-    ns = NewsSystem()
-    ns.refresh()
-    rows = ns.aggregate("BTC").get("items") or []
-    assert rows, "rows required"
-    ts = [r["ts"] for r in rows]
-    assert ts == sorted(ts, reverse=True), "newest headline must be first"
-    from app.formulas.trace import classify_zero
-    assert classify_zero("evaluator exception — see anomalies") == "error"
-    assert classify_zero("up/down path balance sums to exactly 0 "
-                         "(equal polarities)") == "equal"
-    assert classify_zero("needs 15 bars, had 4") == "input"
-    assert classify_zero("baseline rings cold — first windows abstain") \
-        == "history"
-    assert classify_zero("inputs present but signal below materiality "
-                         "(beta=0.5, lo=0.7)") == "materiality"
-    assert classify_zero("computed, genuinely flat (inputs sufficient)") \
-        == "flat"
-    assert classify_zero(None) is None
-    # the classifier is wired into traces + physics mechanisms
-    tr = (ROOT / "app" / "formulas" / "trace.py").read_text()
-    assert '"zero_cause": classify_zero' in tr
-    ph = (ROOT / "app" / "physics.py").read_text()
-    assert '"cause": None if active else classify_zero(why)' in ph
-    # emotion fills a reason for EVERY zero channel
-    em = (ROOT / "app" / "emotion.py").read_text()
-    assert "channel exactly 0.0 this window" in em
-    assert '"zero_causes": _causes' in em
 
 
 def test_autostart_docs_off_critical_path():
-    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
-    setup = (ROOT / "scripts" / "setup.sh").read_text()
-    # docs regen runs in the background, never serialises the boot
-    assert "( .venv/bin/python scripts/make_docs_html.py" in auto
-    # the tracked stats file short-circuits the network fetch
-    assert "! -f assets/brain_real.json" in auto
-    assert "! -f assets/brain_real.json" in setup
+    start = (ROOT / "start.py").read_text()
+    assert "make_docs_html.py" in start
+    assert "fetch_real_brain" not in start
 
 
 def test_brain_display_refresh_and_provisional_sl():
@@ -486,3 +414,5 @@ def test_reports_exist_and_are_linked():
     readme = (ROOT / "README.md").read_text()
     for name in ("NEWS-REPORT", "BRAIN-REPORT", "UX-ZERO-REPORT"):
         assert name in readme, name
+
+

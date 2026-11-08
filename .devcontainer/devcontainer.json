@@ -8,13 +8,15 @@
     "8000": {
       "label": "Prediction App",
       "visibility": "private",
-      "onAutoForward": "openPreview",
+      "onAutoForward": "notify",
       "protocol": "https"
     }
   },
-  "postCreateCommand": "bash scripts/auto_start.sh || true",
-  "postStartCommand": "bash scripts/auto_start.sh || true",
-  "postAttachCommand": "bash scripts/auto_start.sh || true",
+  "onCreateCommand": "python3 start.py --detach || true",
+  "postCreateCommand": "python3 start.py --detach || true",
+  "postStartCommand": "python3 start.py --detach || true",
+  "postAttachCommand": "python3 start.py --detach || true",
+  "waitFor": "onCreateCommand",
   "customizations": {
     "vscode": {
       "extensions": [
@@ -25,8 +27,6 @@
       ]
     }
   },
-  "onCreateCommand": "bash scripts/auto_start.sh || true",
-  "waitFor": "onCreateCommand",
   "hostRequirements": {
     "cpus": 2,
     "memory": "8gb",

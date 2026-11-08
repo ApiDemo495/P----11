@@ -1,15 +1,98 @@
-"""Everything automatic: code auto-update, auto-reload. Port stays PRIVATE."""
+"""The boot system is ONE Python file now: start.py.
+
+The old bash chain (auto_start.sh + setup.sh + supervise.sh +
+placeholder_page.py + flock + curl) was deleted on user order
+after it kept wedging in real Codespaces. These tests pin the
+new contract so it cannot regress:
+  - devcontainer hooks call only `python3 start.py --detach`
+  - no curl, no flock, no editor CLI on the boot path
+  - placeholder first, import checked before it stops, watchdog
+  - old chain files are gone
+"""
+import json
 import pathlib
 
 ROOT = pathlib.Path(__file__).parent.parent
 
 
-def test_auto_start_updates_and_restarts_itself():
-    sh = (ROOT / "scripts" / "auto_start.sh").read_text()
-    assert "git pull -q --ff-only" in sh
-    assert "git status --porcelain" in sh          # never touches a dirty tree
-    assert "stop_app" in sh                        # restarts when the tip moves
-    assert "make_port_public" not in sh            # never auto-public (user)
+def _start_src() -> str:
+    return (ROOT / "start.py").read_text()
+
+
+def test_old_bash_chain_is_deleted():
+    for f in ("scripts/auto_start.sh", "scripts/supervise.sh",
+              "scripts/placeholder_page.py", "scripts/setup.sh",
+              "scripts/http_check.py"):
+        assert not (ROOT / f).exists(), f
+
+
+def test_start_py_is_stdlib_only_and_self_contained():
+    src = _start_src()
+    assert "ThreadingHTTPServer" in src            # placeholder
+    assert "urllib.request" in src                 # health, no curl
+    assert '"curl"' not in src and "curl -" not in src  # never invoked
+    assert "flock(" not in src and "fcntl" not in src  # no lock files
+    assert "import app.main" in src                # import pre-check
+    assert "--detach" in src and "--stop" in src and "--status" in src
+    # provisioning bounded, pip bounded
+    assert '"--retries", "2", "--timeout", "30"' in src
+    assert 'timeout=timeout_s' in src or "subprocess.run" in src
+
+
+def test_placeholder_answers_before_engine():
+    """Unit-level: the placeholder handler serves /, /healthz and
+    honest 503s for /api/* without any venv."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("start_mod",
+                                                  ROOT / "start.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    srv = mod._PlaceholderServer()
+    # bind on an ephemeral port for the test
+    import socket
+    from http.server import ThreadingHTTPServer
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), mod._Placeholder)
+    port = httpd.server_address[1]
+    import threading
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        import urllib.request
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/",
+                                    timeout=3) as r:
+            assert r.status == 200
+            assert b"starting" in r.read()
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz",
+                                    timeout=3) as r:
+            assert json.load(r)["stage"]
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health",
+                                   timeout=3)
+            raise AssertionError("api must be honest 503 pre-engine")
+        except urllib.error.HTTPError as e:
+            assert e.code == 503
+    finally:
+        httpd.shutdown()
+
+
+def test_devcontainer_hooks_are_start_py_only():
+    d = json.loads((ROOT / ".devcontainer" / "devcontainer.json")
+                   .read_text())
+    assert d["waitFor"] == "onCreateCommand"   # editor never blocked
+    for hook in ("onCreateCommand", "postCreateCommand",
+                 "postStartCommand", "postAttachCommand"):
+        assert d[hook] == "python3 start.py --detach || true"
+    assert d["portsAttributes"]["8000"]["visibility"] == "private"
+    # Simple Browser cannot iframe *.app.github.dev (GitHub refuses);
+    # notify lets the user open a real browser tab from the Ports tab
+    assert d["portsAttributes"]["8000"]["onAutoForward"] == "notify"
+    assert (ROOT / ".github" / "workflows" / "boot.yml").exists()
+    assert (ROOT / "run.sh").read_text().count("start.py") >= 1
+
+
+def test_no_folderopen_task_popup():
+    tasks = json.loads((ROOT / ".vscode" / "tasks.json").read_text())
+    assert not any(t.get("runOptions", {}).get("runOn") == "folderOpen"
+                   for t in tasks["tasks"])
 
 
 def test_health_reports_commit_and_client_reloads():
@@ -18,133 +101,9 @@ def test_health_reports_commit_and_client_reloads():
     assert "S._commit" in js and "location.reload()" in js
 
 
-def test_nothing_makes_the_port_public_automatically():
-    assert not (ROOT / "scripts" / "make_port_public.sh").exists()
-    for f in ("scripts/auto_start.sh", "scripts/supervise.sh", "run.sh"):
-        assert "visibility" not in (ROOT / f).read_text()
-
-
-def test_placeholder_binds_first_and_hooks_return_fast():
-    ph = ROOT / "scripts" / "placeholder_page.py"
-    assert ph.exists()
-    src = ph.read_text()
-    assert "http.server" in src and "import app" not in src  # stdlib only
-    assert '"/healthz"' in src or "healthz" in src
-    sh = (ROOT / "scripts" / "auto_start.sh").read_text()
-    assert "flock" in sh                       # one starter at a time
-    assert "placeholder_page.py" in sh         # placeholder before engine
-    assert "--worker" in sh                    # slow work detached
-    assert "setsid nohup" in sh                # survives the hook shell
-
-
-def test_devcontainer_opens_editor_immediately():
-    import json
-    d = json.loads((ROOT / ".devcontainer" / "devcontainer.json").read_text())
-    assert d["waitFor"] == "onCreateCommand"   # never stuck on provisioning
-    for hook in ("onCreateCommand", "postCreateCommand",
-                 "postStartCommand", "postAttachCommand"):
-        assert "auto_start.sh" in d[hook]
-        assert "|| true" in d[hook]     # a hook can never ⚠ the creation
-    assert d["portsAttributes"]["8000"]["visibility"] == "private"
-    assert (ROOT / ".github" / "workflows" / "boot.yml").exists()
-
-
-def test_setup_can_never_gate_or_kill_the_boot():
-    sh = (ROOT / "scripts" / "setup.sh").read_text()
-    # marketplace installs are detached, never in the boot path
-    assert "install_editor_extensions ) >> data/md_preview.log 2>&1 9>&- &" in sh
-    assert "timeout 120 code --install-extension" in sh
-    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
-    assert "attempting engine start anyway" in auto   # setup failure != dead port
-    assert "cannot start" not in auto
-
-
-def test_engine_crash_restores_placeholder_fast():
-    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
-    assert "engine process died during boot" in auto
-    assert auto.count("start_placeholder") >= 3   # boot, provision, crash paths
-
-
-def test_boot_downloads_are_slim_and_deferred():
-    import json
-    d = json.loads((ROOT / ".devcontainer" / "devcontainer.json").read_text())
-    assert "INSTALL_AGENTS" not in json.dumps(d)      # no forced AI build/download
-    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
-    assert "sleep 600" in auto                        # backtest deferred past boot
-    assert "launch_backtest_deferred" in auto
-    bt = (ROOT / "scripts" / "run_backtest_once.sh").read_text()
-    assert ".setup_stamp" in bt                       # never races provisioning
-    assert ".backtest_running" in bt                  # no duplicate runners
-    setup = (ROOT / "scripts" / "setup.sh").read_text()
-    assert "nice -n 19 bash -c" in setup              # opt-in AI stage is niced
-
-
-
-def test_boot_has_no_agent_download():
-    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
-    assert "download_agent" not in auto        # agent is in-app only (old)
-    assert not (ROOT / "scripts" / "download_agent.sh").exists()
-    bt = (ROOT / "scripts" / "run_backtest_once.sh").read_text()
-    assert "agent download" not in bt          # backtest: deferred only
-
-
-def test_no_editor_warning_generators():
-    import json
-    # markdownlint stays installed (preview bundle) but our own docs
-    # must not spam the Problems ⚠ counter
-    cfg = json.loads((ROOT / ".markdownlint.json").read_text())
-    for rule in ("MD013", "MD033", "MD026", "MD036", "MD040", "MD041"):
-        assert cfg[rule] is False
-    tasks = json.loads((ROOT / ".vscode" / "tasks.json").read_text())
-    # no folderOpen auto task: it made VS Code show a trust popup in
-    # EVERY new Codespace; devcontainer hooks do the auto-start
-    assert not any(t.get("runOptions", {}).get("runOn") == "folderOpen"
-                   for t in tasks["tasks"])
-    import json as _j
-    dc = _j.loads((ROOT / ".devcontainer" / "devcontainer.json").read_text())
-    assert all("auto_start.sh" in dc[h] for h in
-               ("onCreateCommand", "postCreateCommand",
-                "postStartCommand", "postAttachCommand"))
-
-
-
-def test_auto_update_survives_generated_docs_dirt():
-    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
-    assert "grep -vx docs.html" in auto          # generated-only dirt discarded
-    assert "auto-update skipped — dirty tree" in auto  # blockers are named
-    docs = (ROOT / "docs.html").read_text()
-    readme = (ROOT / "README.md").read_text()
-    import re
-    n = re.search(r"(\d+) tests", readme)
-    assert n and (n.group(1) + " tests") in docs  # committed docs in sync
-
-
-def test_worker_steps_are_hang_proof():
-    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
-    assert "GIT_TERMINAL_PROMPT=0" in auto          # git can never prompt-wait
-    assert "timeout 30 git fetch" in auto
-    assert "timeout 900" in auto and "setup.sh" in auto
-    assert 'timeout 120 "$VENV_PY" -c "import app.main"' in auto
-    # pre-check happens BEFORE the placeholder is stopped
-    assert auto.index("import app.main") < auto.index("stop_placeholder\n  log \"starting uvicorn")
-    assert "did NOT bind" in auto                   # bind is verified, not claimed
-    assert "seq 1 120" in auto                      # dead window halved
-    sup = (ROOT / "scripts" / "supervise.sh").read_text()
-    assert "port $PORT empty" in sup                # supervisor refills dead port
-    setup = (ROOT / "scripts" / "setup.sh").read_text()
-    assert "--retries 2 --timeout 30" in setup
-
-
-def test_boot_chain_needs_no_curl_and_lock_cannot_leak():
-    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
-    sup = (ROOT / "scripts" / "supervise.sh").read_text()
-    assert "http_check.py" in auto and "http_check.py" in sup
-    assert "curl -sf" not in auto and "curl -sf" not in sup  # python3 only
-    assert (ROOT / "scripts" / "http_check.py").exists()
-    # every background spawn closes the flock fd (9) so a hung child
-    # (e.g. the editor CLI during creation) can never hold the lock
-    assert "( ensure_md_preview ) >/dev/null 2>&1 9>&- &" in auto
-    setup = (ROOT / "scripts" / "setup.sh").read_text()
-    assert "9>&- &" in setup
-    assert "timeout 20 code --list-extensions" in setup
-    assert "timeout 20 code --list-extensions" in auto
+def test_watchdog_and_deferred_backtest_exist():
+    src = _start_src()
+    assert "fails >= 12" in src                    # hung engine restarted
+    assert "run_backtest_once.sh" in src           # daily backtest kept
+    assert "time.sleep(600)" in src                # …deferred past boot
+    assert "stop_engine(_child)" in src

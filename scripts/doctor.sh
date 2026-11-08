@@ -9,7 +9,7 @@ echo "── doctor: $(date) ─────────────────
 if [ -f data/server.pid ] && kill -0 "$(cat data/server.pid)" 2>/dev/null; then
   echo "✓ server process alive (pid $(cat data/server.pid))"
 else
-  echo "✗ server process NOT running → bash scripts/auto_start.sh --restart"
+  echo "✗ server process NOT running → python3 start.py --detach"
 fi
 curl -sf -m 3 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 \
   && echo "✓ /api/health answers on :$PORT" \

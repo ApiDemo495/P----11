@@ -86,7 +86,7 @@ No API key required for either.
 
 ### 5a. Response agent — llama-cpp (auto-picked by RAM)
 
-Installed by `scripts/setup.sh` via `requirements-agents.txt`
+Installed from the Agents tab (⬇ DOWNLOAD LOCAL AGENT) via `requirements-agents.txt`
 (`llama-cpp-python`, `huggingface-hub`); the model downloads on first
 launch through `scripts/download_models.py`:
 

@@ -529,7 +529,7 @@ async def system_status() -> JSONResponse:
                 stderr=_sp.DEVNULL, timeout=2).decode().strip()
             if cnt.isdigit() and int(cnt) > 0:
                 upd = (f" · UPDATE PENDING — {cnt} commit(s) behind "
-                       f"(pull, then bash scripts/auto_start.sh --restart)")
+                       f"(pull, then python3 start.py --detach)")
         except Exception:
             pass
         row("code", not upd, f"build {build}{upd or ' · up to date'}",

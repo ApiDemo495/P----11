@@ -193,9 +193,11 @@ def test_j_ops_endpoints_present():
               "/placeholder", "/api/settings/effects", "/api/news/status",
               "/api/brain/wiring", "/api/brain/status"):
         assert p in routes, p
-    # run.sh carries the supervise contract
+    # supervision contract lives in start.py now (run.sh delegates)
     rs = open("run.sh").read()
-    assert "--supervise" in rs and "exit 75" in rs and "9>&-" in rs
+    assert "start.py" in rs
+    sp = open("start.py").read()
+    assert "stop_engine(_child)" in sp and "fails >= 12" in sp
 
 
 # ── K: config timeframe keys ───────────────────────────────────────────

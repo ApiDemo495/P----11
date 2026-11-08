@@ -132,10 +132,8 @@ def test_markdown_preview_fixed_all_paths():
     dc = _json.load(open(root / ".devcontainer" / "devcontainer.json"))
     dc_exts = dc["customizations"]["vscode"]["extensions"]
     assert "shd101wyy.markdown-preview-enhanced" in dc_exts
-    setup = (root / "scripts" / "setup.sh").read_text()
-    auto = (root / "scripts" / "auto_start.sh").read_text()
-    assert "markdown-preview-enhanced" in setup and "--install-extension" in setup
-    assert "markdown-preview-enhanced" in auto and "--install-extension" in auto
+    start = (root / "start.py").read_text()
+    assert "markdown-preview-enhanced" in start and "--install-extension" in start
     # in-app viewer still the zero-dependency path
     from fastapi.testclient import TestClient
     from app.main import app
@@ -155,14 +153,14 @@ def test_docs_html_zero_extension_viewer():
     assert (root / "scripts" / "make_docs_html.py").exists()
 
 
+
 def test_setup_is_fast_by_default_ai_opt_in():
     """The 10-20 min llama-cpp source build + model downloads must be
-    OFF by default (INSTALL_AGENTS=1 to enable) so Codespaces boots in
-    ~1 min; core app + real-brain fetch + docs run in foreground."""
+    OFF by default so Codespaces boots in ~1 min; provisioning lives
+    in start.py and installs core requirements only."""
     from pathlib import Path as _P
     root = _P(__file__).resolve().parent.parent
-    setup = (root / "scripts" / "setup.sh").read_text()
-    assert 'INSTALL_AGENTS' in setup and 'ai_state="skipped (opt-in' in setup
-    assert "fetch_real_brain" in setup and "make_docs_html" in setup
-    auto = (root / "scripts" / "auto_start.sh").read_text()
-    assert "fetch_real_brain" in auto
+    start = (root / "start.py").read_text()
+    assert "requirements.txt" in start and "requirements-agents" not in start
+    assert "--retries" in start and "make_docs_html" in start
+

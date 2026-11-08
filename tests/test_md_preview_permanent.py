@@ -54,35 +54,36 @@ def test_keybindings_never_clobber_existing():
                for x in arr)                   # ours added alongside
 
 
-def test_folder_open_task_is_the_everywhere_autostart():
+def test_autostart_is_devcontainer_hooks_not_a_task():
+    # the folderOpen task made VS Code show a trust popup in every
+    # new Codespace; start.py via devcontainer hooks replaced it
     tasks = json.loads((ROOT / ".vscode" / "tasks.json").read_text())
     auto = [t for t in tasks["tasks"]
             if t.get("runOptions", {}).get("runOn") == "folderOpen"]
-    assert auto and "auto_start.sh" in auto[0]["command"]
+    assert not auto
     fix = [t for t in tasks["tasks"]
            if "fix_markdown_preview.sh" in t.get("command", "")]
     assert fix, "a one-click Fix Markdown Preview task must exist"
 
 
-def test_devcontainer_attach_and_autodownload():
+def test_devcontainer_hooks_cover_attach_and_start():
     cfg = json.loads((ROOT / ".devcontainer" / "devcontainer.json").read_text())
     # postStart only fires on container start; postAttach covers every
     # re-attach (the gap that made auto-start look dead)
-    assert cfg["postAttachCommand"] == "bash scripts/auto_start.sh"
-    assert cfg["postStartCommand"] == "bash scripts/auto_start.sh"
-    # auto-download of agent deps + model is ON in the container
-    # (still background/non-blocking inside setup.sh; the script's own
-    # default stays opt-in for bare-metal runs)
-    assert cfg["remoteEnv"]["INSTALL_AGENTS"] == "1"
+    for hook in ("onCreateCommand", "postCreateCommand",
+                 "postStartCommand", "postAttachCommand"):
+        assert cfg[hook] == "python3 start.py --detach || true"
+    # agent deps + model are NOT auto-downloaded at boot (user order);
+    # they download from the Agents tab button only
+    assert "INSTALL_AGENTS" not in json.dumps(cfg)
 
 
-def test_autostart_md_fix_is_backgrounded_and_logged():
-    auto = (ROOT / "scripts" / "auto_start.sh").read_text()
-    assert "( ensure_md_preview ) >/dev/null 2>&1 &" in auto   # real &
-    assert "md_preview.log" in auto                            # not silent
-    setup = (ROOT / "scripts" / "setup.sh").read_text()
-    assert "md_preview.log" in setup
-    assert "fix_markdown_preview.sh" in setup
+def test_editor_extras_live_in_start_py_background():
+    src = (ROOT / "start.py").read_text()
+    assert "def editor_extras" in src
+    assert "--install-extension" in src          # MPE/Markdown All-in-One
+    assert "daemon=True" in src                  # thread, never gates boot
+    assert "make_docs_html.py" in src            # docs regen off critical path
 
 
 def test_fix_script_exists_and_is_valid():

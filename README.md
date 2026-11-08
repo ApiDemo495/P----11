@@ -32,12 +32,16 @@ single-process web service with a live streaming dashboard.
 ## Quick start
 
 ```bash
-pip install -r requirements.txt
-./run.sh                       # serves on http://localhost:8000
+python3 start.py               # placeholder instantly, app when ready
 ```
 
-GitHub Codespaces: open the repo in a Codespace (`.devcontainer/` is
-provided), then run `./run.sh` and forward port **8000**.
+GitHub Codespaces: just open the repo in a Codespace — `start.py`
+auto-runs via the devcontainer hooks (placeholder within seconds,
+engine after one pip install, watchdog after that). Open the app
+from the **Ports tab → globe icon (Open in Browser)**: the
+in-editor Simple Browser cannot display forwarded ports (GitHub
+refuses to iframe them), which looks like a dead page even when
+the app is perfectly healthy.
 
 Run the test suite:
 
@@ -504,9 +508,8 @@ automatically:
 
 | Entry point | What it does |
 |-------------|--------------|
-| `./run.sh` | Foreground start: runs `scripts/setup.sh` if the stamp/venv is stale, then serves on `PORT` (default **8000**). `SKIP_SETUP=1` to bypass. |
-| `scripts/setup.sh` | Idempotent bootstrap: `.venv` → `requirements.txt` (hard) → `requirements-agents.txt` incl. **cmake + llama-cpp-python + huggingface-hub** (best-effort) → `data/`, `data/history/`, `models/` → **`scripts/download_models.py`** (auto-picks Phi-3-mini ≥14 GB / TinyLlama ≥7 GB / Qwen2-0.5B, downloads from the HF Hub) → hourly `learning_cron` crontab entry (best-effort). Fast no-op via `.setup_stamp`; `FORCE=1` re-runs everything. |
-| `scripts/auto_start.sh` | Background supervisor (devcontainer `postStartCommand`): health-check → setup (only when stale, **niced** so the UI stays responsive) → `nohup` uvicorn → waits for `/api/health`. The editor-preview fix (install MPE only if missing + Ctrl+Shift+V remap) runs **in the background and never delays the boot**. `--stop` / `--restart` supported. |
+| `./run.sh` | Thin wrapper: foreground `python3 start.py` (placeholder → provision → import-check → uvicorn → watchdog) on `PORT` (default **8000**). |
+| `start.py` | The entire boot system in one stdlib-only Python file: placeholder binds the port instantly, venv+core pip provision (stamp-cached, bounded), `import app.main` must pass before the placeholder stops, uvicorn child supervised (crash/hang restart), daily backtest deferred 10 min. `--detach` for hooks, `--stop`, `--status`. |
 | devcontainer | `postCreateCommand` = full setup, `postStartCommand` **and `postAttachCommand`** = auto-start (attach is what actually fires on every re-open; `remoteEnv INSTALL_AGENTS=1` turns the background agent-deps + model download ON in the container) — opening the Codespace brings the app up by itself. Outside dev containers, the **folder-open VS Code task** in `.vscode/tasks.json` runs the same auto-start in any editor (allow automatic tasks once when VS Code asks). Note: lifecycle commands only take effect after a container **Rebuild** in an existing Codespace. |
 | In-process hourly loop | `main.py` runs a wall-clock safety net every 10 min: if the macro learning cycle is >60 min old it fires macro + deep + save directly — learning keeps running even without system cron (mirrors `scripts/learning_cron.sh`). |
 
@@ -734,7 +737,7 @@ Start under the supervisor (single instance, health loop, exit 75 on a
 hung boot):
 
 ```bash
-./run.sh --supervise
+python3 start.py
 ```
 
 ## Deep audit bundle — uncertainty, expectancy, forecast grading, stale-tape safety

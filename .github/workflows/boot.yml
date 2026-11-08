@@ -1,38 +1,50 @@
 name: boot
-# Catches "fresh Codespace shows 502" before the user does: install,
-# import, bind, answer — on every push to the app branch.
 on:
   push:
-    branches: [arena/605bdcca-p-11]
+    branches: ["arena/**"]
 jobs:
   boot:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: scripts parse
+      - name: devcontainer sanity
         run: |
-          for f in scripts/*.sh; do bash -n "$f"; done
-          python3 -c "import ast; ast.parse(open('scripts/placeholder_page.py').read())"
-          python3 -c "import json; d=json.load(open('.devcontainer/devcontainer.json')); assert d['waitFor']=='onCreateCommand'; assert d['portsAttributes']['8000']['visibility']=='private'"
-      - name: placeholder binds instantly and never 502s
+          python3 -c "
+          import json
+          d = json.load(open('.devcontainer/devcontainer.json'))
+          assert d['waitFor'] == 'onCreateCommand'
+          for h in ('onCreateCommand','postCreateCommand','postStartCommand','postAttachCommand'):
+              assert 'start.py --detach' in d[h], h
+          assert d['portsAttributes']['8000']['visibility'] == 'private'
+          print('devcontainer OK')"
+      - name: boot via start.py (the exact Codespace path)
         run: |
-          PORT=8001 python3 scripts/placeholder_page.py &
-          sleep 1
-          curl -fsS http://127.0.0.1:8001/healthz
-          curl -fsS http://127.0.0.1:8001/ | grep -q "starting"
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/api/health)" = "503"
-          kill %1
-      - name: install + import
-        run: |
-          pip install -r requirements.txt
-          python -c "import app.main"
-      - name: boot the real server and curl it
-        run: |
-          SKIP_SETUP=1 nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/boot.log 2>&1 &
-          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8000/api/health && break || sleep 2; done
-          curl -fsS http://127.0.0.1:8000/api/health
-          curl -fsS -o /dev/null http://127.0.0.1:8000/
-          tail -5 /tmp/boot.log
+          python3 start.py --detach
+          python3 - <<'PY'
+          import json, time, urllib.request
+          deadline = time.time() + 600
+          seen_placeholder = False
+          while time.time() < deadline:
+              try:
+                  with urllib.request.urlopen("http://127.0.0.1:8000/", timeout=3) as r:
+                      assert r.status == 200          # placeholder or app: never dead
+              except Exception as e:
+                  raise SystemExit(f"port dead during boot: {e}")
+              try:
+                  with urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=3) as r:
+                      if json.load(r).get("ok"):
+                          print("app healthy")
+                          break
+              except Exception:
+                  pass
+              time.sleep(5)
+          else:
+              raise SystemExit("app never became healthy")
+          PY
+      - name: stop
+        if: always()
+        run: python3 start.py --stop || true
