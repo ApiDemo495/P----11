@@ -62,6 +62,7 @@
       <div class="boot-title">INITIAL ANALYSIS</div>
       <ul id="boot-checks">
         <li data-k="price"><i></i>Price feed</li>
+        <li data-k="bars"><i></i>History bars</li>
         <li data-k="formulas"><i></i>Formulas</li>
         <li data-k="brains"><i></i>Drosophila brain</li>
         <li data-k="emotions"><i></i>Emotions</li>
@@ -72,8 +73,11 @@
         <li data-k="aggregation"><i></i>Aggregation</li>
       </ul>
       <div id="boot-warning" class="hidden">PARTIAL INIT — confidence reduced</div>
+      <button id="boot-dismiss" type="button">VIEW DASHBOARD →</button>
+      <div class="boot-hint">analysis keeps running in the background</div>
     </div>
   </div>
+  <button id="boot-chip" type="button" class="hidden">⏳ analysis …</button>
 
   <!-- ═══ VIEW: DASHBOARD ═══ -->
   <section class="view active" id="view-dashboard">

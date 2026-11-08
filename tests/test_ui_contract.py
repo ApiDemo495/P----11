@@ -164,3 +164,20 @@ def test_setup_is_fast_by_default_ai_opt_in():
     assert "requirements.txt" in start and "requirements-agents" not in start
     assert "--retries" in start and "make_docs_html" in start
 
+
+
+def test_boot_overlay_dismissible_and_honest():
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "static" / "index.html").read_text()
+    js = (root / "static" / "app.js").read_text()
+    css = (root / "static" / "style.css").read_text()
+    # user can always reach the dashboard during initial analysis
+    assert 'id="boot-dismiss"' in html and 'id="boot-chip"' in html
+    assert "S.bootDismissed" in js
+    # the invisible blocker is now shown: history bars is a real item
+    assert 'data-k="bars"' in html
+    # overlay must not be a near-black wall
+    assert "rgba(5,5,10,.94)" not in css
+    # engine locks when computable, not only at the 4-minute cap
+    eng = (root / "app" / "engine.py").read_text()
+    assert "computable" in eng and "_enough_any" in eng

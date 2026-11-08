@@ -156,6 +156,16 @@ const S = {
 /* ═══════════ shell: assets, tabs, focus bar ═══════════ */
 document.addEventListener("DOMContentLoaded", () => {
   $("#btn-repair-link")?.addEventListener("click", () => repairChartLink(true));
+  $("#boot-dismiss")?.addEventListener("click", () => {
+    S.bootDismissed = true;
+    $("#boot-overlay")?.classList.add("gone");
+    $("#boot-chip")?.classList.remove("hidden");
+  });
+  $("#boot-chip")?.addEventListener("click", () => {
+    S.bootDismissed = false;
+    $("#boot-chip")?.classList.add("hidden");
+    $("#boot-overlay")?.classList.remove("gone");
+  });
 });
 function buildRail() {
   const list = $("#asset-list"); list.innerHTML = "";
@@ -2944,13 +2954,23 @@ async function loadSettings() {
 let bootDeadline = 0;
 function renderBoot(snap) {
   const ov = $("#boot-overlay");
-  if (snap.phase !== "analysis") { ov.classList.add("gone"); return; }
+  const chip = $("#boot-chip");
+  if (snap.phase !== "analysis") {
+    ov.classList.add("gone"); chip?.classList.add("hidden"); return;
+  }
+  if (S.bootDismissed) {          // user chose the dashboard; never re-block
+    ov.classList.add("gone");
+    if (chip) { chip.classList.remove("hidden"); chip.textContent = `⏳ analysis ${$("#boot-clock")?.textContent || ""} — details`; }
+    return;
+  }
   ov.classList.remove("gone");
   const an = snap.analysis || {};
   bootDeadline = Date.now() + (an.remaining_s ?? 0) * 1000;
   const rem = an.remaining_s ?? 0;
   $("#boot-clock").textContent = `${Math.floor(rem / 60)}:${String(Math.floor(rem % 60)).padStart(2, "0")}`;
   const ready = an.readiness || {};
+  if (chip && snap.phase === "analysis" && S.bootDismissed)
+    chip.textContent = `⏳ analysis ${Math.floor((an.remaining_s ?? 0) / 60)}:${String(Math.floor((an.remaining_s ?? 0) % 60)).padStart(2, "0")} — details`;
   $$("#boot-checks li").forEach(li => {
     const k = li.dataset.k;
     const ok = ready[k] === true || k === "price" ||

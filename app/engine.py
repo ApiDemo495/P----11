@@ -4042,11 +4042,19 @@ class PredictionEngine:
             now = time.time()
             self._update_readiness()
             ready = all(self.readiness.values())
+            # computable = everything except full-history bars, with
+            # at least MIN_BARS_COMPUTE bars present. Locking then
+            # (with warning if bars are still short) beats holding
+            # the user behind a 4-minute overlay for one slow item.
+            core = all(v for k, v in self.readiness.items()
+                       if k != "bars")
+            computable = core and getattr(self, "_enough_any", False)
             expired = now >= self.phase_deadline
 
-            if ready or expired:
-                self.phase_warning = not ready
-                await self._lock_initial(warning=not ready)
+            if ready or computable or expired:
+                warn = not ready
+                self.phase_warning = warn
+                await self._lock_initial(warning=warn)
                 break
 
             if now - last_beat >= 1.0:
@@ -4070,6 +4078,7 @@ class PredictionEngine:
             for s in SYMBOL_ORDER
         )
         self.readiness["bars"] = bars_ok
+        self._enough_any = enough_any
         self.readiness["brains"] = self.brains.ready
         self.readiness["emotions"] = self.emotions.ready
         self.readiness["news"] = self.news.ready
