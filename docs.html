@@ -45,11 +45,15 @@ after doc changes with <code>python3 scripts/make_docs_html.py</code></div>
 <p>---</p>
 <h4>Quick start</h4>
 <pre><code>
-pip install -r requirements.txt
-./run.sh                       # serves on http://localhost:8000
+python3 start.py               # placeholder instantly, app when ready
 </code></pre>
-<p>GitHub Codespaces: open the repo in a Codespace (<code>.devcontainer/</code> is</p>
-<p>provided), then run <code>./run.sh</code> and forward port <b>8000</b>.</p>
+<p>GitHub Codespaces: just open the repo in a Codespace — <code>start.py</code></p>
+<p>auto-runs via the devcontainer hooks (placeholder within seconds,</p>
+<p>engine after one pip install, watchdog after that). Open the app</p>
+<p>from the <b>Ports tab → globe icon (Open in Browser)</b>: the</p>
+<p>in-editor Simple Browser cannot display forwarded ports (GitHub</p>
+<p>refuses to iframe them), which looks like a dead page even when</p>
+<p>the app is perfectly healthy.</p>
 <p>Run the test suite:</p>
 <pre><code>
 .venv/bin/python -m pytest -q    # 357 tests (honesty, parts 1-4, news, brain, order-book, UX sync, deep RL)
@@ -550,9 +554,8 @@ pytest.ini         pytest 9 + pytest-asyncio 1, strict asyncio mode,
 <p>automatically:</p>
 <table>
 <tr><td>Entry point</td><td>What it does</td></tr>
-<tr><td>`./run.sh`</td><td>Foreground start: runs `scripts/setup.sh` if the stamp/venv is stale, then serves on `PORT` (default **8000**). `SKIP_SETUP=1` to bypass.</td></tr>
-<tr><td>`scripts/setup.sh`</td><td>Idempotent bootstrap: `.venv` → `requirements.txt` (hard) → `requirements-agents.txt` incl. **cmake + llama-cpp-python + huggingface-hub** (best-effort) → `data/`, `data/history/`, `models/` → **`scripts/download_models.py`** (auto-picks Phi-3-mini ≥14 GB / TinyLlama ≥7 GB / Qwen2-0.5B, downloads from the HF Hub) → hourly `learning_cron` crontab entry (best-effort). Fast no-op via `.setup_stamp`; `FORCE=1` re-runs everything.</td></tr>
-<tr><td>`scripts/auto_start.sh`</td><td>Background supervisor (devcontainer `postStartCommand`): health-check → setup (only when stale, **niced** so the UI stays responsive) → `nohup` uvicorn → waits for `/api/health`. The editor-preview fix (install MPE only if missing + Ctrl+Shift+V remap) runs **in the background and never delays the boot**. `--stop` / `--restart` supported.</td></tr>
+<tr><td>`./run.sh`</td><td>Thin wrapper: foreground `python3 start.py` (placeholder → provision → import-check → uvicorn → watchdog) on `PORT` (default **8000**).</td></tr>
+<tr><td>`start.py`</td><td>The entire boot system in one stdlib-only Python file: placeholder binds the port instantly, venv+core pip provision (stamp-cached, bounded), `import app.main` must pass before the placeholder stops, uvicorn child supervised (crash/hang restart), daily backtest deferred 10 min. `--detach` for hooks, `--stop`, `--status`.</td></tr>
 <tr><td>devcontainer</td><td>`postCreateCommand` = full setup, `postStartCommand` **and `postAttachCommand`** = auto-start (attach is what actually fires on every re-open; `remoteEnv INSTALL_AGENTS=1` turns the background agent-deps + model download ON in the container) — opening the Codespace brings the app up by itself. Outside dev containers, the **folder-open VS Code task** in `.vscode/tasks.json` runs the same auto-start in any editor (allow automatic tasks once when VS Code asks). Note: lifecycle commands only take effect after a container **Rebuild** in an existing Codespace.</td></tr>
 <tr><td>In-process hourly loop</td><td>`main.py` runs a wall-clock safety net every 10 min: if the macro learning cycle is >60 min old it fires macro + deep + save directly — learning keeps running even without system cron (mirrors `scripts/learning_cron.sh`).</td></tr>
 </table>
@@ -744,7 +747,7 @@ curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&
 <p>Start under the supervisor (single instance, health loop, exit 75 on a</p>
 <p>hung boot):</p>
 <pre><code>
-./run.sh --supervise
+python3 start.py
 </code></pre>
 <h4>Deep audit bundle — uncertainty, expectancy, forecast grading, stale-tape safety</h4>
 <ul>
@@ -1003,7 +1006,7 @@ curl -X PUT localhost:8000/api/settings -H &#x27;Content-Type: application/json&
 <h4>5. Local Model Dependencies (two independent local models)</h4>
 <p>No API key required for either.</p>
 <h5>5a. Response agent — llama-cpp (auto-picked by RAM)</h5>
-<p>Installed by <code>scripts/setup.sh</code> via <code>requirements-agents.txt</code></p>
+<p>Installed from the Agents tab (⬇ DOWNLOAD LOCAL AGENT) via <code>requirements-agents.txt</code></p>
 <p>(<code>llama-cpp-python</code>, <code>huggingface-hub</code>); the model downloads on first</p>
 <p>launch through <code>scripts/download_models.py</code>:</p>
 <ul>
