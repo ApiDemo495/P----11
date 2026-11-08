@@ -66,3 +66,44 @@ class PolicyPredictor(AppPredictor):
                       entry + d * 2 * risk * K,
                       float(pack["tf1"].get("confidence") or 0.0),
                       str(pack["tf1"].get("tier") or "") + "+policy")
+
+
+# ── TP4 policy (247-bar macro timeframe, last-1-year validated) ──────
+
+H4 = 247
+K4 = 0.75
+
+
+def tp4_direction(pack: dict, rsi: float) -> tuple[int, str]:
+    """RSI-extreme mean reversion overrides; otherwise the engine's
+    own TF4 (macro thesis) direction stands."""
+    if rsi <= 30:
+        return 1, "rsi_revert"
+    if rsi >= 70:
+        return -1, "rsi_revert"
+    return int((pack.get("tf4") or {}).get("direction") or 0), "tf4"
+
+
+class TP4PolicyPredictor(AppPredictor):
+    """One TP4 trade at a time over a 247-bar horizon. Validated on
+    the last 1 year of real 1h data (walk-forward test 61.0% win,
+    EV +0.238R, n=41 — see REAL_RESULTS.md). Candidate, not live."""
+
+    def predict(self, view: SliceView, symbol: str) -> Signal | None:
+        from .experiment import _rsi
+        from app.moves_risk import risk_block
+        pack = self.pack(view, symbol)
+        d, rule = tp4_direction(pack, _rsi(view.closes))
+        if d == 0:
+            return None
+        entry = view.bars[-1].c
+        blk = risk_block(entry, d, H4,
+                         float(pack["tf4"].get("confidence") or 0.0),
+                         view.closes, view.highs, view.lows)
+        if blk.get("sl") is None:
+            return None
+        risk = abs(entry - float(blk["sl"]))
+        return Signal(d, entry, entry - d * risk * K4,
+                      entry + d * 2 * risk * K4,
+                      float(pack["tf4"].get("confidence") or 0.0),
+                      f"tp4:{rule}")

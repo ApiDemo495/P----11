@@ -92,3 +92,32 @@ Per-asset test inside the policy: BTC 75.0% (n=12), ETH 80.0%
 small n; pooled 58.3% is the defensible number, NOT 60%+.
 Status: candidate. It does NOT touch live direction until forward
 data (the Codespace 15m daily backtests) confirms it at n>=200.
+
+## TP4 TIMEFRAME — last 1 year (2025-10-01 -> 2026-09-30), real 1h data
+The goal restated by the user: win rate on the TP4 timeframe
+(tf4, 247-bar macro window), not sub-timeframes. 140 non-overlapping
+TP4 decisions across BTC/ETH/BNB/PAXG, engine pack at each, levels
+from moves_risk(minutes=247), one trade at a time. Walk-forward:
+select on first 55% of the year, judge on last 45% only.
+
+BASELINE (app's raw TF4 direction, k=1):
+- train 54.9% win EV +0.245R (n=51) -> TEST 48.6% EV +0.004R PF 1.02 (n=35)
+At its native horizon TF4 is NOT anti-predictive (the sub-TF
+inversion result was a horizon-mismatch artifact) — but alone it
+decays to breakeven out-of-sample.
+
+TP4 POLICY (backtest/policy.py TP4PolicyPredictor): at RSI(14)
+extremes (<=30 long / >=70 short) a mean-reversion direction
+OVERRIDES; otherwise the engine TF4 direction stands; barriers
+k=0.75 of the 247-bar q80-MAE stop, TP = 2x SL.
+- train: 65.5% win, EV +0.393R, PF 2.78 (n=55)
+- TEST:  61.0% win (95% CI 45.7-74.3), EV +0.238R, PF 1.93 (n=41)
+- full year: 63.5% win (CI 53.6-72.5), EV +0.327R, PF 2.39 (n=96)
+Per-asset TEST: BNB 69.2% (n=13), ETH 80.0% (n=5), BTC 54.5%
+(n=11), PAXG 50.0% (n=12). RSI-revert alone was robust at every
+barrier scale (test 73-80%, n=15) but fires rarely (34/140).
+Honesty flags: the combined rule was assembled AFTER its two
+components validated, so its test half is supportive, not
+pristine; one split, one year, CIs wide. Status: candidate for
+forward confirmation (Codespace runs), NOT yet live direction.
+Trade log: backtest/results/tp4_policy_trades.csv (with split tags).

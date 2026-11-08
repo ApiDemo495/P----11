@@ -96,3 +96,12 @@ def test_policy_gate_and_direction():
     assert not gate_ok(shrinking)                       # vol dying -> gated out
     spike = shrinking[:-1] + [Bar(199 * 60, 100, 200, 50, 150, 1.0)]
     assert gate_ok(spike)                               # vol spike passes
+
+
+def test_tp4_direction_override():
+    from backtest.policy import tp4_direction
+    pack = {"tf4": {"direction": -1}}
+    assert tp4_direction(pack, 25.0) == (1, "rsi_revert")    # oversold -> long
+    assert tp4_direction(pack, 75.0) == (-1, "rsi_revert")   # overbought -> short
+    assert tp4_direction(pack, 50.0) == (-1, "tf4")          # else macro stands
+    assert tp4_direction({"tf4": {}}, 50.0) == (0, "tf4")
