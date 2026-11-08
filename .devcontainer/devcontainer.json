@@ -12,9 +12,9 @@
       "protocol": "https"
     }
   },
-  "postCreateCommand": "bash scripts/auto_start.sh",
-  "postStartCommand": "bash scripts/auto_start.sh",
-  "postAttachCommand": "bash scripts/auto_start.sh",
+  "postCreateCommand": "bash scripts/auto_start.sh || true",
+  "postStartCommand": "bash scripts/auto_start.sh || true",
+  "postAttachCommand": "bash scripts/auto_start.sh || true",
   "customizations": {
     "vscode": {
       "extensions": [
@@ -25,7 +25,7 @@
       ]
     }
   },
-  "onCreateCommand": "bash scripts/auto_start.sh",
+  "onCreateCommand": "bash scripts/auto_start.sh || true",
   "waitFor": "onCreateCommand",
   "hostRequirements": {
     "cpus": 2,

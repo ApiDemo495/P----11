@@ -44,6 +44,7 @@ def test_devcontainer_opens_editor_immediately():
     for hook in ("onCreateCommand", "postCreateCommand",
                  "postStartCommand", "postAttachCommand"):
         assert "auto_start.sh" in d[hook]
+        assert "|| true" in d[hook]     # a hook can never ⚠ the creation
     assert d["portsAttributes"]["8000"]["visibility"] == "private"
     assert (ROOT / ".github" / "workflows" / "boot.yml").exists()
 
@@ -91,3 +92,15 @@ def test_boot_order_agent_then_app_then_backtest():
     assert "agent download still running" in bt   # backtest runs LAST
     dm = (ROOT / "scripts" / "download_models.py").read_text()
     assert "--model" in dm
+
+
+def test_no_editor_warning_generators():
+    import json
+    # markdownlint stays installed (preview bundle) but our own docs
+    # must not spam the Problems ⚠ counter
+    cfg = json.loads((ROOT / ".markdownlint.json").read_text())
+    for rule in ("MD013", "MD033", "MD026", "MD036", "MD040", "MD041"):
+        assert cfg[rule] is False
+    tasks = json.loads((ROOT / ".vscode" / "tasks.json").read_text())
+    auto = [t for t in tasks["tasks"] if t["label"].startswith("auto-start")]
+    assert auto and "|| true" in auto[0]["command"]   # task terminal exits 0
