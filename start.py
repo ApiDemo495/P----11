@@ -277,10 +277,41 @@ def editor_extras() -> None:
         except Exception:
             pass
         try:
+            subprocess.run([sys.executable,
+                            "scripts/ensure_md_keybindings.py"],
+                           capture_output=True, timeout=30)
+        except Exception:
+            pass
+        try:
             subprocess.run([sys.executable, "scripts/make_docs_html.py"],
                            capture_output=True, timeout=60)
         except Exception:
             pass
+    threading.Thread(target=work, daemon=True).start()
+
+
+def make_port_public() -> None:
+    """Port must ALWAYS be public (user order). The devcontainer
+    requests visibility=public; this enforces it with the gh CLI
+    once the placeholder is up, so even the starting page is
+    reachable at the -8000.app.github.dev URL. Best-effort:
+    outside Codespaces it is a no-op."""
+    name = os.environ.get("CODESPACE_NAME")
+    if not name:
+        return
+    def work():
+        time.sleep(2)
+        try:
+            r = subprocess.run(
+                ["gh", "codespace", "ports", "visibility",
+                 f"{PORT}:public", "-c", name],
+                capture_output=True, text=True, timeout=25)
+            log("port visibility -> public"
+                if r.returncode == 0 else
+                f"port visibility: gh exited {r.returncode} (set it "
+                f"once in the Ports tab if the URL still refuses)")
+        except Exception as e:
+            log(f"port visibility skipped ({e.__class__.__name__})")
     threading.Thread(target=work, daemon=True).start()
 
 
@@ -323,6 +354,7 @@ def serve() -> int:
         fh.write(str(os.getpid()))
     placeholder = _PlaceholderServer()
     placeholder.start()
+    make_port_public()
     editor_extras()
     git_update()
 

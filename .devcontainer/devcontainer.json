@@ -7,9 +7,8 @@
   "portsAttributes": {
     "8000": {
       "label": "Prediction App",
-      "visibility": "private",
-      "onAutoForward": "notify",
-      "protocol": "https"
+      "visibility": "public",
+      "onAutoForward": "openBrowser"
     }
   },
   "onCreateCommand": "python3 start.py --detach || true",

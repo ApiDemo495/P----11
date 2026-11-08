@@ -213,7 +213,7 @@ async def _news_ticker() -> None:
 async def _hourly_learning_loop() -> None:
     """Section 10 background safety net: guarantees the macro cycle fires
     at least once per wall-clock hour even if GRCs stall (the engine
-    itself also triggers it every 15 GRCs).  Mirrors scripts/learning_cron.sh
+    itself also triggers it every 15 GRCs).  in-process hourly loop
     without needing system cron."""
     while True:
         await asyncio.sleep(600)          # check every 10 minutes

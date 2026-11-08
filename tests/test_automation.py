@@ -81,10 +81,11 @@ def test_devcontainer_hooks_are_start_py_only():
     for hook in ("onCreateCommand", "postCreateCommand",
                  "postStartCommand", "postAttachCommand"):
         assert d[hook] == "python3 start.py --detach || true"
-    assert d["portsAttributes"]["8000"]["visibility"] == "private"
-    # Simple Browser cannot iframe *.app.github.dev (GitHub refuses);
-    # notify lets the user open a real browser tab from the Ports tab
-    assert d["portsAttributes"]["8000"]["onAutoForward"] == "notify"
+    # user order: the port is ALWAYS public so the -8000 URL works
+    # in any browser tab (private ports 502 outside the editor auth)
+    assert d["portsAttributes"]["8000"]["visibility"] == "public"
+    assert "protocol" not in d["portsAttributes"]["8000"]  # plain HTTP app
+    assert d["portsAttributes"]["8000"]["onAutoForward"] == "openBrowser"
     assert (ROOT / ".github" / "workflows" / "boot.yml").exists()
     assert (ROOT / "run.sh").read_text().count("start.py") >= 1
 
@@ -99,6 +100,14 @@ def test_health_reports_commit_and_client_reloads():
     assert '"commit": _COMMIT' in (ROOT / "app" / "main.py").read_text()
     js = (ROOT / "static" / "app.js").read_text()
     assert "S._commit" in js and "location.reload()" in js
+
+
+def test_port_made_public_from_inside():
+    src = _start_src()
+    assert "def make_port_public" in src
+    assert '"ports", "visibility"' in src
+    assert "CODESPACE_NAME" in src       # no-op outside Codespaces
+    assert "ensure_md_keybindings.py" in src   # orphan relinked
 
 
 def test_watchdog_and_deferred_backtest_exist():

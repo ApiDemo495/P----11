@@ -19,7 +19,7 @@ jobs:
           assert d['waitFor'] == 'onCreateCommand'
           for h in ('onCreateCommand','postCreateCommand','postStartCommand','postAttachCommand'):
               assert 'start.py --detach' in d[h], h
-          assert d['portsAttributes']['8000']['visibility'] == 'private'
+          assert d['portsAttributes']['8000']['visibility'] == 'public'
           print('devcontainer OK')"
       - name: boot via start.py (the exact Codespace path)
         run: |
