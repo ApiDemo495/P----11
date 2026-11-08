@@ -72,6 +72,11 @@ class PolicyPredictor(AppPredictor):
 
 H4 = 247
 K4 = 0.75
+R4 = 2.0        # TP:SL ratio — user bounds [1:1, 4:1], preference 2:1.
+                # Ratio grid measured (REAL_RESULTS): win% identical
+                # across 1:1..4:1 (TP rarely binds at TP4), EV best at
+                # 1.5:1 (+0.172R vs +0.153R at 2:1, within noise) —
+                # the user's preferred 2:1 is kept.
 
 
 def tp4_direction(pack: dict, rsi: float) -> tuple[int, str]:
@@ -104,6 +109,6 @@ class TP4PolicyPredictor(AppPredictor):
             return None
         risk = abs(entry - float(blk["sl"]))
         return Signal(d, entry, entry - d * risk * K4,
-                      entry + d * 2 * risk * K4,
+                      entry + d * R4 * risk * K4,
                       float(pack["tf4"].get("confidence") or 0.0),
                       f"tp4:{rule}")

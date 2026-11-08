@@ -121,3 +121,36 @@ components validated, so its test half is supportive, not
 pristine; one split, one year, CIs wide. Status: candidate for
 forward confirmation (Codespace runs), NOT yet live direction.
 Trade log: backtest/results/tp4_policy_trades.csv (with split tags).
+
+## ABLATION — every formula/component/brain at TP4 + ratio grid
+140 TP4 decisions re-collected with the fusion's exact inputs
+captured per decision (comp dict: F1-F27, C31-35, BRAIN, EMOTION,
+PHYSICS, NEWS, HEDGE, TRACER + FlyWire/consensus sub-signals).
+Each component standalone as direction (sign), k=0.75, walk-forward.
+
+- No single component is strong: best train-validated F25 -> test
+  45.3% (EV +0.072R); F2/F5/F17/F23 test EV +0.10..0.14R at
+  47-56% win. BRAIN consensus standalone: test 50.0%, EV -0.033R;
+  FlyWire vote: 48.4%, EV +0.049R — the brain alone is a coin flip
+  at TP4; its value (if any) is only inside the fusion.
+- Always ZERO at tf4 (removal candidates — they never vote at the
+  macro timeframe): F1, F6, F7, F9, F18, F27, C31, C32, C33, C34, C35.
+- Ensembles of train-validated components: equal-vote test 36.5%
+  (worse — weak voters dilute), top-5 42.2% EV +0.121R, EV-weighted
+  43.8%, top-5 + RSI override 54.7% EV +0.281R PF 2.26 (n=64) —
+  best EV, still below the TP4 policy's win rate.
+- Volatility gate at TP4: REJECTED (test 33%/25%, tiny n) — the
+  tf1-era gate does not transfer horizons.
+- RATIO GRID (user bounds 1:1..4:1, pref 2:1), TP4 policy, test:
+  win% is 56.8% at EVERY ratio (TP rarely binds; timeouts decide),
+  EV: 1:1 +0.073R | 1.5:1 +0.172R | 2:1 +0.153R | 3:1 +0.107R |
+  4:1 +0.107R. 1.5:1 and 2:1 are within noise of each other; the
+  policy keeps the preferred 2:1 (R4 in policy.py, bounds enforced
+  by test).
+- RERUN VARIANCE DISCLOSURE: this identical re-collection moved
+  the TP4 policy's test reading from 61.0% (n=41, first run) to
+  56.8% (n=44). The engine contains nondeterministic elements
+  (RL mix selection), so a single run's win% carries run variance
+  on top of sampling variance. Defensible pooled TP4 estimate
+  today: ~55-61% win, EV positive — NOT a proven 60-80%.
+Trade log (run 2): backtest/results/tp4_policy_trades_run2.csv

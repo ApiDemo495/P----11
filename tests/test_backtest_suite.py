@@ -105,3 +105,16 @@ def test_tp4_direction_override():
     assert tp4_direction(pack, 75.0) == (-1, "rsi_revert")   # overbought -> short
     assert tp4_direction(pack, 50.0) == (-1, "tf4")          # else macro stands
     assert tp4_direction({"tf4": {}}, 50.0) == (0, "tf4")
+
+
+def test_settle_r_ratio_bounds():
+    from backtest.tp4 import settle_r
+    fut = [[103.0, 99.0, 101.0]] + [[101.0, 101.0, 101.0]] * 246
+    row = {"asset": "BTC", "ts": 0, "entry": 100.0,
+           "risks": {"1": 2.0, "-1": 2.0}, "fut": fut}
+    r1 = settle_r(row, 1, 0.75, 1.0)    # TP dist == SL dist (1:1)
+    assert r1 is not None and abs(r1 - 1.0) < 0.1       # TP hit -> +1R minus friction
+    r4 = settle_r(row, 1, 0.75, 4.0)    # TP far -> timeout at 101
+    assert r4 is not None and 0.5 < r4 < 0.7
+    r2 = settle_r(row, 1, 0.75, 2.0)
+    assert r2 is not None and r4 < r2 < 2.0            # 2:1 TP-hit -> ~+2R

@@ -20,8 +20,80 @@ YEAR_START = 1759276800       # 2025-10-01 00:00 UTC
 YEAR_END = 1790812800         # 2026-09-30 00:00 UTC (last bar < this)
 
 
-def collect_tp4(series, predictor: AppPredictor, warmup=600):
+def _flat(d, prefix="", out=None, depth=0):
+    """Numeric leaves of a nested result dict -> flat ablation inputs."""
+    out = {} if out is None else out
+    if depth > 2 or not isinstance(d, dict):
+        return out
+    for k, v in d.items():
+        key = f"{prefix}{k}"
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[key] = float(v)
+        elif isinstance(v, dict):
+            _flat(v, key + ".", out, depth + 1)
+        elif isinstance(v, list):
+            for i, item in enumerate(v[:6]):
+                if isinstance(item, (int, float)):
+                    out[f"{key}[{i}]"] = float(item)
+                elif isinstance(item, dict):
+                    _flat(item, f"{key}[{i}].", out, depth + 1)
+    return out
+
+
+def _install_capture(predictor):
+    """Wrap (not modify) engine methods to record, per (symbol, tf),
+    the exact fusion inputs + brain/physics/emotion outputs of the
+    pass that produced the pack. Returns the capture dict."""
+    eng = predictor.engine
+    cap: dict = {}
+    orig_cci = eng.cci.compute
+    def cci_wrap(symbol, tf, comp, *a, **kw):
+        cap[("comp", symbol, tf)] = {int(k): float(v) for k, v in comp.items()}
+        return orig_cci(symbol, tf, comp, *a, **kw)
+    eng.cci.compute = cci_wrap
+    orig_brains = eng.brains.evaluate
+    def brains_wrap(symbol, tf, *a, **kw):
+        ret = orig_brains(symbol, tf, *a, **kw)
+        cap[("brain", symbol, tf)] = _flat(ret)
+        return ret
+    eng.brains.evaluate = brains_wrap
+    orig_phys = eng.physics.evaluate
+    def phys_wrap(symbol, tf, *a, **kw):
+        ret = orig_phys(symbol, tf, *a, **kw)
+        cap[("phys", symbol, tf)] = _flat(ret)
+        return ret
+    eng.physics.evaluate = phys_wrap
+    orig_emo = eng.emotions.compute
+    def emo_wrap(ctx, *a, **kw):          # compute(ctx, market, ...)
+        ret = orig_emo(ctx, *a, **kw)
+        cap[("emo", ctx.symbol, ctx.tf)] = _flat(ret)
+        return ret
+    eng.emotions.compute = emo_wrap
+    return cap
+
+
+SPECIAL = {97: "BRAIN", 98: "EMOTION", 99: "PHYSICS"}
+
+
+def _comp_names(comp: dict) -> dict:
+    try:
+        from app import config as _cfg
+        for name in ("NEWS_COMPONENT_ID", "HEDGE_COMPONENT_ID",
+                     "TRACER_COMPONENT_ID"):
+            if hasattr(_cfg, name):
+                SPECIAL[int(getattr(_cfg, name))] = name.replace(
+                    "_COMPONENT_ID", "")
+    except Exception:
+        pass
+    return {SPECIAL.get(int(k), f"F{int(k)}" if int(k) <= 30
+                        else f"C{int(k)}"): float(v)
+            for k, v in comp.items()}
+
+
+def collect_tp4(series, predictor: AppPredictor, warmup=600,
+                capture: bool = False):
     from app.moves_risk import risk_block
+    cap = _install_capture(predictor) if capture else {}
     rows = []
     for asset, bars in series.items():
         ds = DataSlice(bars)
@@ -40,7 +112,7 @@ def collect_tp4(series, predictor: AppPredictor, warmup=600):
                 if blk.get("sl") is not None:
                     risks[str(d)] = abs(entry - float(blk["sl"]))
             if len(risks) == 2:
-                rows.append({
+                row = {
                     "asset": asset, "t": i, "ts": bars[i].t, "entry": entry,
                     "dirs": {tf: int(pack[tf].get("direction") or 0)
                              for tf in ("tf1", "tf2", "tf3", "tf4")},
@@ -52,7 +124,14 @@ def collect_tp4(series, predictor: AppPredictor, warmup=600):
                     "atr_pct": round(_atr_pct(view.bars), 3),
                     "risks": risks,
                     "fut": [[b.h, b.l, b.c]
-                            for b in ds.future(i, i + H4 + 1)]})
+                            for b in ds.future(i, i + H4 + 1)]}
+                if capture:
+                    row["comp"] = _comp_names(
+                        cap.get(("comp", asset, "tf4")) or {})
+                    row["brain"] = cap.get(("brain", asset, "tf4")) or {}
+                    row["phys"] = cap.get(("phys", asset, "tf4")) or {}
+                    row["emo"] = cap.get(("emo", asset, "tf4")) or {}
+                rows.append(row)
             i += H4
     return rows
 
@@ -156,10 +235,105 @@ def grid(rows):
 
 
 if __name__ == "__main__":
-    raw = json.load(open("/home/user/realdata/full_series.json"))
+    raw = json.load(open("/home/user/P----11/.data_tmp/full_series.json"))
     series = {s.replace("USDT", ""): [Bar(int(t), o, h, l, c, v)
               for t, o, h, l, c, v in rows] for s, rows in raw.items()}
-    rows = collect_tp4(series, AppPredictor())
-    json.dump(rows, open("/home/user/realdata/tp4_decisions.json", "w"))
+    rows = collect_tp4(series, AppPredictor(), capture=True)
+    json.dump(rows, open("/home/user/P----11/.data_tmp/tp4_decisions.json", "w"))
     print(f"decisions: {len(rows)}")
     print(json.dumps(grid(rows), indent=1))
+    print(json.dumps(ablation_report(rows), indent=1))
+
+
+RS = (1.0, 1.5, 2.0, 3.0, 4.0)      # user bounds: 1:1 .. 4:1, pref 2:1
+
+
+def settle_r(row, direction, k, r, h=H4):
+    """TP4 barriers with TP = r x SL distance (r within [1, 4])."""
+    if direction == 0:
+        return None
+    risk = row["risks"][str(direction)]
+    entry = row["entry"]
+    sl = entry - direction * risk * k
+    tp = entry + direction * r * risk * k
+    fut = [Bar(row["ts"], 0.0, fh, fl, fc) for fh, fl, fc in row["fut"]]
+    exit_price = fut[h - 1].c
+    for b in fut[:h]:
+        if (b.l <= sl if direction > 0 else b.h >= sl):
+            exit_price = sl
+            break
+        if (b.h >= tp if direction > 0 else b.l <= tp):
+            exit_price = tp
+            break
+    rr = direction * (exit_price - entry) / (risk * k)
+    return rr - (entry * FRICTION_BPS[row["asset"]] / 1e4) / (risk * k)
+
+
+def _sign(v):
+    return 1 if v > 0 else -1 if v < 0 else 0
+
+
+def ablation_report(rows):
+    """Every formula/component/brain as a standalone TP4 direction,
+    then ensembles of the components that validated on train."""
+    train, test = split(rows)
+    names = sorted({n for r in rows for n in (r.get("comp") or {})})
+    per_comp = {}
+    for n in names:
+        tr = [settle_r(r, _sign((r.get("comp") or {}).get(n, 0.0)), 0.75, 2.0)
+              for r in train]
+        te = [settle_r(r, _sign((r.get("comp") or {}).get(n, 0.0)), 0.75, 2.0)
+              for r in test]
+        per_comp[n] = {"train": _m([x for x in tr if x is not None]),
+                       "test": _m([x for x in te if x is not None])}
+    good = [n for n, v in per_comp.items()
+            if (v["train"]["ev_r"] or -9) > 0 and v["train"]["n"] >= 20]
+    good.sort(key=lambda n: -(per_comp[n]["train"]["ev_r"] or 0))
+
+    def ensemble(part, members, weighted=False):
+        vals = []
+        for r in part:
+            comp = r.get("comp") or {}
+            if weighted:
+                s = sum((per_comp[n]["train"]["ev_r"] or 0)
+                        * _sign(comp.get(n, 0.0)) for n in members)
+            else:
+                s = sum(_sign(comp.get(n, 0.0)) for n in members)
+            vals.append(settle_r(r, _sign(s), 0.75, 2.0))
+        return _m([x for x in vals if x is not None])
+
+    def with_rsi(part, members):
+        vals = []
+        for r in part:
+            d = rule_dir(r, "rsi_revert")
+            if d == 0:
+                comp = r.get("comp") or {}
+                d = _sign(sum(_sign(comp.get(n, 0.0)) for n in members))
+            vals.append(settle_r(r, d, 0.75, 2.0))
+        return _m([x for x in vals if x is not None])
+
+    out = {"components": per_comp, "validated_on_train": good,
+           "ensemble_good_equal": {"train": ensemble(train, good),
+                                   "test": ensemble(test, good)},
+           "ensemble_top5": {"train": ensemble(train, good[:5]),
+                             "test": ensemble(test, good[:5])},
+           "ensemble_weighted": {"train": ensemble(train, good, True),
+                                 "test": ensemble(test, good, True)},
+           "ensemble_plus_rsi": {"train": with_rsi(train, good),
+                                 "test": with_rsi(test, good)}}
+    # ratio grid for the headline policies (user: 1:1..4:1, pref 2:1)
+    def policy_dir(r, kind):
+        if kind == "tf4":
+            return r["dirs"]["tf4"]
+        d = rule_dir(r, "rsi_revert")
+        return d if d != 0 else r["dirs"]["tf4"]
+    out["ratio_grid"] = {}
+    for kind in ("tf4", "combined"):
+        out["ratio_grid"][kind] = {}
+        for rr in RS:
+            tr = [settle_r(r, policy_dir(r, kind), 0.75, rr) for r in train]
+            te = [settle_r(r, policy_dir(r, kind), 0.75, rr) for r in test]
+            out["ratio_grid"][kind][str(rr)] = {
+                "train": _m([x for x in tr if x is not None]),
+                "test": _m([x for x in te if x is not None])}
+    return out

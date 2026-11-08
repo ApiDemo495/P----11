@@ -31,3 +31,6 @@ data.pre-r2-1347/
 backtest/cache/
 backtest/out/
 backtest/replay.db
+
+.data_tmp/
+.venv/
