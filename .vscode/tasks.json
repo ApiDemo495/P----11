@@ -2,24 +2,6 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "auto-start app (folder open)",
-      "detail": "Idempotent: exits in <1s when the app is already healthy. This is the auto-start that works in EVERY VS Code (local, Remote, Codespaces) \u2014 devcontainer postStartCommand only fires inside a dev container. VS Code asks once to allow automatic tasks; allow it and every folder open starts the app.",
-      "type": "shell",
-      "command": "bash scripts/auto_start.sh || true",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "silent",
-        "panel": "dedicated",
-        "close": true
-      },
-      "problemMatcher": [],
-      "runOptions": {
-        "runOn": "folderOpen"
-      }
-    },
-    {
       "label": "Fix Markdown Preview (permanent)",
       "detail": "Installs Markdown Preview Enhanced and remaps Ctrl+Shift+V / Ctrl+K V to it in the real user keybindings file for this editor.",
       "type": "shell",

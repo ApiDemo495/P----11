@@ -96,8 +96,15 @@ def test_no_editor_warning_generators():
     for rule in ("MD013", "MD033", "MD026", "MD036", "MD040", "MD041"):
         assert cfg[rule] is False
     tasks = json.loads((ROOT / ".vscode" / "tasks.json").read_text())
-    auto = [t for t in tasks["tasks"] if t["label"].startswith("auto-start")]
-    assert auto and "|| true" in auto[0]["command"]   # task terminal exits 0
+    # no folderOpen auto task: it made VS Code show a trust popup in
+    # EVERY new Codespace; devcontainer hooks do the auto-start
+    assert not any(t.get("runOptions", {}).get("runOn") == "folderOpen"
+                   for t in tasks["tasks"])
+    import json as _j
+    dc = _j.loads((ROOT / ".devcontainer" / "devcontainer.json").read_text())
+    assert all("auto_start.sh" in dc[h] for h in
+               ("onCreateCommand", "postCreateCommand",
+                "postStartCommand", "postAttachCommand"))
 
 
 
