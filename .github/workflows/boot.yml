@@ -16,7 +16,7 @@ jobs:
         run: |
           for f in scripts/*.sh; do bash -n "$f"; done
           python3 -c "import ast; ast.parse(open('scripts/placeholder_page.py').read())"
-          python3 -c "import json; d=json.load(open('.devcontainer/devcontainer.json')); assert d['waitFor']=='onCreateCommand'; assert d['portsAttributes']['8000']['visibility']=='public'"
+          python3 -c "import json; d=json.load(open('.devcontainer/devcontainer.json')); assert d['waitFor']=='onCreateCommand'; assert d['portsAttributes']['8000']['visibility']=='private'"
       - name: placeholder binds instantly and never 502s
         run: |
           PORT=8001 python3 scripts/placeholder_page.py &

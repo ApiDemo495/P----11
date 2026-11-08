@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # NEW: one-command diagnosis for "the page isn't working" in a Codespace.
 #   bash scripts/doctor.sh
-# Checks process, port, health, chart link, port visibility, log tail.
+# Checks process, port, health, chart link, log tail.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 PORT="${PORT:-8000}"
@@ -21,6 +21,6 @@ if command -v gh >/dev/null 2>&1 && [ -n "${CODESPACE_NAME:-}" ]; then
   gh codespace ports -c "$CODESPACE_NAME" 2>/dev/null | grep -E "^\s*$PORT\b" || true
 fi
 echo "── port visibility ─────────────────────────────"
-tail -n 2 data/port_visibility.log 2>/dev/null || echo "(no record — run scripts/make_port_public.sh)"
+echo "private by design (auto-public removed by user request)"
 echo "── last server log lines ───────────────────────"
 tail -n 15 data/server.log 2>/dev/null || echo "(no data/server.log)"

@@ -1,4 +1,4 @@
-"""Everything automatic: code auto-update, public port, auto-reload."""
+"""Everything automatic: code auto-update, auto-reload. Port stays PRIVATE."""
 import pathlib
 
 ROOT = pathlib.Path(__file__).parent.parent
@@ -9,7 +9,7 @@ def test_auto_start_updates_and_restarts_itself():
     assert "git pull -q --ff-only" in sh
     assert "git status --porcelain" in sh          # never touches a dirty tree
     assert "stop_app" in sh                        # restarts when the tip moves
-    assert "make_port_public.sh" in sh
+    assert "make_port_public" not in sh            # never auto-public (user)
 
 
 def test_health_reports_commit_and_client_reloads():
@@ -18,9 +18,10 @@ def test_health_reports_commit_and_client_reloads():
     assert "S._commit" in js and "location.reload()" in js
 
 
-def test_port_public_script_exists_and_never_fails():
-    sh = (ROOT / "scripts" / "make_port_public.sh").read_text()
-    assert "ports visibility" in sh and "exit 0" in sh
+def test_nothing_makes_the_port_public_automatically():
+    assert not (ROOT / "scripts" / "make_port_public.sh").exists()
+    for f in ("scripts/auto_start.sh", "scripts/supervise.sh", "run.sh"):
+        assert "visibility" not in (ROOT / f).read_text()
 
 
 def test_placeholder_binds_first_and_hooks_return_fast():
@@ -43,7 +44,7 @@ def test_devcontainer_opens_editor_immediately():
     for hook in ("onCreateCommand", "postCreateCommand",
                  "postStartCommand", "postAttachCommand"):
         assert "auto_start.sh" in d[hook]
-    assert d["portsAttributes"]["8000"]["visibility"] == "public"
+    assert d["portsAttributes"]["8000"]["visibility"] == "private"
     assert (ROOT / ".github" / "workflows" / "boot.yml").exists()
 
 

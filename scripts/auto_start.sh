@@ -121,7 +121,6 @@ run_worker() {
     fi
   } || true
 
-  bash scripts/make_port_public.sh || true
   setsid nohup bash scripts/supervise.sh >/dev/null 2>&1 9>&- &
 
   if healthy; then
@@ -183,8 +182,7 @@ run_worker() {
     fi
     if healthy; then
       log "✓ app healthy on http://0.0.0.0:$PORT (pid $(cat "$PIDFILE")) — total $(( $(date +%s) - T0 ))s"
-      bash scripts/make_port_public.sh || true
-      launch_backtest_deferred
+          launch_backtest_deferred
       return 0
     fi
     sleep 1
@@ -215,8 +213,7 @@ case "$ACTION" in
     fi
     if healthy; then
       stop_placeholder
-      bash scripts/make_port_public.sh || true
-      setsid nohup bash scripts/supervise.sh >/dev/null 2>&1 9>&- &
+          setsid nohup bash scripts/supervise.sh >/dev/null 2>&1 9>&- &
       log "app already healthy on :$PORT — nothing to do"
       exit 0
     fi
