@@ -154,24 +154,3 @@ Each component standalone as direction (sign), k=0.75, walk-forward.
   on top of sampling variance. Defensible pooled TP4 estimate
   today: ~55-61% win, EV positive — NOT a proven 60-80%.
 Trade log (run 2): backtest/results/tp4_policy_trades_run2.csv
-
-## VOTE MANIPULATION — weighted vote + 60% agreement (both-directions)
-User authorized manipulating vote percentages. Method: 15 voters =
-only components with positive train EV (dead F1/F6/F7/F9/F18/F27/
-C31-35 removed), each weighted by its clipped train EV; a trade
-needs >=60% of total vote weight agreeing; RSI-extreme override
-kept; TP4 geometry k=0.75, 2:1. Fitted on first 55% of the year,
-judged on last 45% — AND reverse-fitted (fit 2nd half, judge 1st)
-as a robustness gate. The train-best-by-EV config (logistic,
-72.2% train) FAILED reverse (37.0%) and was rejected; the shipped
-config is the one that validated in BOTH directions:
-- forward test: 70.0% win (CI 48.1-85.5), EV +0.475R, n=20
-- reverse test: 62.5% win (CI 42.7-78.8), EV +0.210R, n=24
-- POOLED out-of-sample: 65.9% win (CI 51.1-78.1), EV +0.330R,
-  PF 2.63, n=44
-Shipped as backtest/policy.py VoteEnsemblePredictor (weights are
-the train55 fit, provenance in code), CLI: --policy vote.
-Status: cross-validated candidate, still NOT live — both halves
-have now been used for fitting/validation, so the next honest
-test is untouched forward data (Codespace daily runs). Claims of
-60-80%: pooled point estimate is 65.9%; the CI includes below-60.
