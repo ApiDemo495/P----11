@@ -75,7 +75,9 @@ last 45%. Rejected in-sample-only winners are not listed as wins.
 
 Baseline (engine tf1, k=1, h=22) on test: 37.4% win, EV -0.149R.
 
-REMOVED as harmful on evidence:
+TESTED AND NOT ADOPTED (nothing was removed from the app —
+every formula/component still computes and votes; these were
+backtest-only hypotheses that failed out-of-sample):
 - live learning loops (run 2: EV -0.077R -> -0.158R)
 - trend/momentum alignment filters (train AND test worse)
 - confidence>=median filter (worse both halves)
@@ -133,8 +135,9 @@ Each component standalone as direction (sign), k=0.75, walk-forward.
   47-56% win. BRAIN consensus standalone: test 50.0%, EV -0.033R;
   FlyWire vote: 48.4%, EV +0.049R — the brain alone is a coin flip
   at TP4; its value (if any) is only inside the fusion.
-- Always ZERO at tf4 (removal candidates — they never vote at the
-  macro timeframe): F1, F6, F7, F9, F18, F27, C31, C32, C33, C34, C35.
+- Always ZERO at tf4 (measured fact only — they are KEPT and
+  still compute; values may be changed in future, never removed):
+  F1, F6, F7, F9, F18, F27, C31, C32, C33, C34, C35.
 - Ensembles of train-validated components: equal-vote test 36.5%
   (worse — weak voters dilute), top-5 42.2% EV +0.121R, EV-weighted
   43.8%, top-5 + RSI override 54.7% EV +0.281R PF 2.26 (n=64) —

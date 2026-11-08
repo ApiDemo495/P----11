@@ -1,8 +1,12 @@
 """Validated policy (walk-forward winner, see REAL_RESULTS.md).
 
-What the experiments REMOVED/CHANGED vs the raw app signal:
-1. The engine's TF4 (macro timeframe) direction is ANTI-predictive
-   on 1h bars — the policy trades its INVERSE.
+How this backtest-only policy differs from the raw app signal
+(the app's formulas are ALL intact — every component still
+computes and votes in the live fusion; nothing is removed,
+per the user's standing rule: change values, never remove):
+1. The engine's TF4 (macro timeframe) direction measured
+   ANTI-predictive on 1h bars — the policy trades its INVERSE
+   (a sign change of the value, not a removal).
 2. Trades only in high-volatility regimes (current ATR% in the top
    tercile of its own trailing 120 bars): direction signals in
    quiet regimes measured as noise.
