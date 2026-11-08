@@ -118,3 +118,17 @@ def test_settle_r_ratio_bounds():
     assert r4 is not None and 0.5 < r4 < 0.7
     r2 = settle_r(row, 1, 0.75, 2.0)
     assert r2 is not None and r4 < r2 < 2.0            # 2:1 TP-hit -> ~+2R
+
+
+def test_changed_vote_all_components_vote():
+    from backtest.policy import CHANGED_VOTE_TAU, CHANGED_VOTE_WEIGHTS
+    from backtest.vote_lab import changed_vote
+    assert len(CHANGED_VOTE_WEIGHTS) == 37          # nobody removed
+    assert all(abs(w) >= 0.005 for w in CHANGED_VOTE_WEIGHTS.values())
+    flipped = [n for n, w in CHANGED_VOTE_WEIGHTS.items() if w < 0]
+    assert "BRAIN" in flipped and "NEWS" in flipped  # changed, not dropped
+    # every voter aligned with its (possibly flipped) weight -> full agreement
+    comp = {n: (1.0 if w > 0 else -1.0) for n, w in CHANGED_VOTE_WEIGHTS.items()}
+    d, frac = changed_vote(comp, CHANGED_VOTE_WEIGHTS, CHANGED_VOTE_TAU)
+    assert d == 1 and frac >= CHANGED_VOTE_TAU
+    assert changed_vote({}, CHANGED_VOTE_WEIGHTS)[0] == 0

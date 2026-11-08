@@ -35,7 +35,8 @@ def main(argv=None) -> int:
     ap.add_argument("--source", choices=["ccxt", "sim"], default="sim")
     ap.add_argument("--tf", default="15m")
     ap.add_argument("--bars", type=int, default=900)
-    ap.add_argument("--policy", choices=["baseline", "validated"],
+    ap.add_argument("--policy", choices=["baseline", "validated",
+                                         "changed-vote"],
                     default="baseline")
     ap.add_argument("--report", default="")
     args = ap.parse_args(argv)
@@ -49,6 +50,10 @@ def main(argv=None) -> int:
         from .policy import PolicyPredictor
         pred = PolicyPredictor()
         print("[policy] validated: inverse-TF4 + high-vol gate + k=0.75")
+    if getattr(args, "policy", "baseline") == "changed-vote":
+        from .policy import ChangedVotePredictor
+        pred = ChangedVotePredictor()
+        print("[policy] changed-vote: ALL 37 components vote, weights changed")
 
     if args.report:
         from .replay import load_filtered

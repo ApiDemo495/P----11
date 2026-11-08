@@ -157,3 +157,21 @@ Each component standalone as direction (sign), k=0.75, walk-forward.
   on top of sampling variance. Defensible pooled TP4 estimate
   today: ~55-61% win, EV positive — NOT a proven 60-80%.
 Trade log (run 2): backtest/results/tp4_policy_trades_run2.csv
+
+## VOTE v2 — change every weight, remove NOTHING (user's corrected rule)
+All 37 fusion components vote. Changed: each weight = its own
+clipped train EV; the 11 anti-predictive voters (BRAIN, EMOTION,
+F8, F10, F13, F15, F16, F24, HEDGE, NEWS, TRACER) got NEGATIVE
+weights (their votes are flipped — changed, not dropped);
+near-zero voters keep a 0.005 floor (nobody zeroed). Trade needs
+>=50% of total |weight| agreeing; RSI override kept; k=0.75, 2:1.
+Walk-forward both directions (fit logic: backtest/vote_lab.py):
+- forward test: 72.2% win, EV +0.606R, PF 7.76 (n=18)
+- reverse test: 58.1% win, EV +0.123R, PF 1.37 (n=31)
+- POOLED OOS: 63.3% win (95% CI 49.3-75.4), EV +0.300R, PF 2.23 (n=49)
+Shipped: ChangedVotePredictor (weights = train55 fit, in code),
+CLI --policy changed-vote. tau=0.4 had a prettier forward number
+(78.3%) but a weaker reverse (54.3%); tau=0.5 was selected by
+worst-direction performance, not by the best-looking number.
+Status: cross-validated candidate, NOT live. The next honest
+judge is untouched forward data.

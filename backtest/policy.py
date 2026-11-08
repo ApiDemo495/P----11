@@ -116,3 +116,93 @@ class TP4PolicyPredictor(AppPredictor):
                       entry + d * R4 * risk * K4,
                       float(pack["tf4"].get("confidence") or 0.0),
                       f"tp4:{rule}")
+
+
+# ── Changed-vote ensemble (TP4): ALL components vote, weights changed ──
+# Second vote attempt, built to the user's corrected rule: nothing
+# is removed. All 37 fusion components vote; the 11 measured
+# anti-predictive ones (BRAIN, EMOTION, F8, F10, F13, F15, F16,
+# F24, HEDGE, NEWS, TRACER) carry NEGATIVE weights — their votes
+# are flipped (changed), not dropped. Near-zero voters keep the
+# 0.005 floor weight. Weights fitted on the first 55% of the
+# 2025-10..2026-09 year (fit logic: backtest/vote_lab.py).
+# Walk-forward both directions: fwd 72.2% (n=18), rev 58.1%
+# (n=31), pooled OOS 63.3% win / EV +0.300R / PF 2.23 (n=49).
+CHANGED_VOTE_WEIGHTS = {
+    "BRAIN": -0.043,
+    "C31": 0.005,
+    "C32": 0.005,
+    "C33": 0.005,
+    "C34": 0.005,
+    "C35": 0.005,
+    "EMOTION": -0.045,
+    "F1": 0.005,
+    "F10": -0.026,
+    "F11": 0.01,
+    "F12": 0.047,
+    "F13": -0.042,
+    "F14": 0.014,
+    "F15": -0.073,
+    "F16": -0.017,
+    "F17": 0.021,
+    "F18": 0.005,
+    "F19": 0.033,
+    "F2": 0.036,
+    "F20": 0.01,
+    "F22": 0.068,
+    "F23": 0.123,
+    "F24": -0.179,
+    "F25": 0.22,
+    "F26": 0.083,
+    "F27": 0.005,
+    "F3": 0.007,
+    "F4": 0.087,
+    "F5": 0.139,
+    "F6": 0.005,
+    "F7": 0.005,
+    "F8": -0.089,
+    "F9": 0.005,
+    "HEDGE": -0.181,
+    "NEWS": -0.15,
+    "PHYSICS": 0.01,
+    "TRACER": -0.137
+}
+CHANGED_VOTE_TAU = 0.5
+
+
+class ChangedVotePredictor(AppPredictor):
+    """TP4 changed-vote: RSI-extreme override, else the all-voters
+    weighted vote at >=50% |weight| agreement. Fusion inputs are
+    captured via backtest.tp4 wrappers (engine untouched)."""
+
+    def __init__(self, tf: str = "tf4"):
+        super().__init__(tf)
+        self._cap = None
+
+    def predict(self, view: SliceView, symbol: str) -> Signal | None:
+        from .experiment import _rsi
+        from .tp4 import _comp_names, _install_capture
+        from .vote_lab import changed_vote
+        from app.moves_risk import risk_block
+        if self._cap is None:
+            self._cap = _install_capture(self)
+        pack = self.pack(view, symbol)
+        d, rule = tp4_direction(pack, _rsi(view.closes))
+        if d == 0:
+            comp = _comp_names(self._cap.get(("comp", symbol, "tf4")) or {})
+            d, _frac = changed_vote(comp, CHANGED_VOTE_WEIGHTS,
+                                    CHANGED_VOTE_TAU)
+            rule = "changed-vote"
+            if d == 0:
+                return None
+        entry = view.bars[-1].c
+        blk = risk_block(entry, d, H4,
+                         float(pack["tf4"].get("confidence") or 0.0),
+                         view.closes, view.highs, view.lows)
+        if blk.get("sl") is None:
+            return None
+        risk = abs(entry - float(blk["sl"]))
+        return Signal(d, entry, entry - d * risk * K4,
+                      entry + d * R4 * risk * K4,
+                      float(pack["tf4"].get("confidence") or 0.0),
+                      f"tp4:{rule}")
