@@ -34,3 +34,4 @@ backtest/replay.db
 
 .data_tmp/
 .venv/
+backtest/results/*.jsonl

@@ -239,3 +239,70 @@ Trade log: `backtest/results/per_tf_full_engine_real.csv` (893 rows).
   win% is the headline, bps the context. Neither is a promise.
 - Order-book/news features cannot be replayed from klines and are
   absent — "all features" means all features a tape can feed.
+
+## Fourth run — accuracy research + component fixes (2026-11-09)
+
+Question: "make accuracy up to 80%, real not false." Research first
+(MDPI confidence-threshold framework; Lopez de Prado meta-labeling
+reproductions; regime-aware forecasting literature), then measurement.
+Consensus of the literature: 80%+ direction accuracy exists ONLY on
+selectively executed subsets (~12% coverage, calibrated probabilities)
+— never on all predictions. Meta-labeling is a precision filter
+(+5-6pp on a primary that already has edge), not an alpha source.
+
+### What the audit found (all walk-forward, no fold trained on itself)
+Datasets: (a) 2,694 full-engine decisions, 4 assets x 4 TFs, 1h bars,
+2025-04 -> 2026-09; (b) 9,706 full-engine decisions, BTC 1m (native
+tape), Aug-Sep 2026, validated Binance Vision data.
+- Baseline all-windows accuracy: 48-53% per fold (1h), 46-53% (1m).
+  The Jul-Sep 2026 window that produced ~53-56% in run 3 does NOT
+  generalise: a 55/45 split of that same window reads 54.7% train ->
+  44.6% test. Regime luck, not edge.
+- The old exec gate was decorative: it passed 99% of windows, and its
+  subset scored like the baseline (49.3%). Confidence, strength,
+  p_side, brain agreement, cross-TF agreement (4/4 agree = WORSE,
+  47.6%), hour-of-day, vol quintiles: no gate held up out-of-sample.
+  A logistic meta-model actively selected losers OOS (22-40%).
+- ONE stable effect: short-horizon mean reversion. Past-W momentum
+  sign accuracy 47.6% pooled (all 5 folds <50%); fading it = 52.4%
+  (all folds >50%), strongest TF4 54.0%.
+- Component audit: F4 SATD, F13 DIQ, F22 BAPR (momentum-confirmation
+  by design) were anti-predictive in EVERY fold on native 1m tape
+  (47.7-48.3% pooled). CCI raw, brains, emotion, news: ~50%, unstable
+  sign across folds. No component is a hidden gold mine.
+
+### Fixes shipped (change-only: nothing removed, every voter votes)
+1. SIGN_REVERSALS {F4, F13, F22} in app/formulas — the three
+   consistently anti-predictive momentum confirmers now vote as the
+   mean-reversion signals the tape says they are (full weight kept).
+2. Momentum-chase execution veto in engine: a side is always issued,
+   but execution (exec_ok) is watch-only when the side chases the
+   window's own momentum by >1 vol-scaled SD (mom_chase_z, exposed
+   in the API payload). Gate coverage 99% -> 72%.
+3. tests/test_engine.py SL-close test now manufactures a STRONG
+   opposite recalc explicitly (sub-floor flips are SAFE-branch by
+   design; the flips changed the fixture's score magnitude).
+
+### Verified before/after (same tape, aligned 7,508 decisions)
+| metric | before | after |
+|---|---|---|
+| all-windows win% | 49.3 | 50.6 |
+| Sep segment (last 40%) win% | 50.3 | 53.2 |
+| TF4 win% | 47.8 | 50.4 |
+| exec_ok coverage | 99% | 72% |
+| exec_ok win% (Sep) | 50.2 | 52.8 |
+| mean net bps/window | -10.6 | -11.9 |
+
+### The part nobody should skip
+Win% rose; net bps did NOT. At 22-247-minute horizons the average
+window move barely exceeds the 12bp friction, so direction accuracy
+alone is not money — TP/SL geometry and selectivity decide EV
+(run 1: EV -0.077R with learning ON worse, -0.158R). And 80%
+all-windows accuracy was not found, here or in the literature,
+because it does not exist on liquid markets at these horizons.
+Anyone quoting it is quoting a selective subset, a fitted window,
+or a fabrication. The honest road upward from ~51-53%: more regimes
+of native-1m evidence (the live Codespace ledger now accumulates
+exactly that, graded), per-regime gates re-validated walk-forward,
+and execution selectivity reported WITH its coverage — never instead
+of it.

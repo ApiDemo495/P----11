@@ -312,6 +312,9 @@ def test_sl_close_branch_invalidates_and_waits_for_grc(live_engine):
     def flipped(s, t):
         r = dict(real(s, t))
         r["direction"] = -cyc.direction
+        # a STRONG opposite recalc (above the noise floor) — a sub-floor
+        # flip is a weak lean and takes the SAFE branch by design
+        r["cci_adjusted"] = -cyc.direction * 0.5
         return r
     engine._event_result = flipped
     emitted.clear()

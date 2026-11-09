@@ -72,6 +72,18 @@ FORMULA_FUNCTIONS = {
 # Formulas bounded to [-1, +1] (DRHE is the documented exception)
 DIRECTIONAL_FORMULAS: list[int] = [f for f in list(FORMULA_FUNCTIONS) if f != 20]
 
+# MEASURED SIGN REVERSALS (2026-11-09, backtest/REAL_RESULTS.md S4):
+# F4 SATD, F13 DIQ and F22 BAPR are momentum-confirmation signals by
+# design, and on the app's native 1-minute tape they were
+# ANTI-predictive in every one of 10 walk-forward folds (9,706 graded
+# full-engine decisions, BTC Aug-Sep 2026: pooled sign accuracy
+# 47.7-48.3%, no fold above 49.1%) - at 22-247-minute horizons this
+# market systematically fades the move these formulas confirm.
+# Their votes are REVERSED, never removed: each still computes and
+# votes at full weight, now as the mean-reversion voter the tape
+# says it actually is.
+SIGN_REVERSALS: dict[int, int] = {4: -1, 13: -1, 22: -1}
+
 # intermediate key -> (ring name, maxlen) : pre-normalization scalars that feed
 # the rolling baselines referenced by the formulas themselves.
 _INTERMEDIATE_RINGS: dict[str, tuple[str, int]] = {
@@ -112,7 +124,7 @@ def compute_all(ctx: FormulaContext, record: bool = False,
             if anomalies is not None:
                 anomalies.append((fid, "nan", None))
             val = 0.0
-        out[fid] = val
+        out[fid] = val * SIGN_REVERSALS.get(fid, 1)
 
     if record:
         hist = ctx.hist

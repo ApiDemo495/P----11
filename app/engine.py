@@ -1125,8 +1125,31 @@ class PredictionEngine:
             # different units into one veto and silenced the app for
             # days. It survives only as exec_ok (trader/size gate);
             # `issued` now means "a side was issued", which is always.
+            # MOMENTUM-CHASE VETO (2026-11-09, REAL_RESULTS.md §4):
+            # on the native 1m tape, windows whose issued side CHASES
+            # the window's own momentum by >1 vol-scaled SD are the
+            # measured losers (past-W momentum sign accuracy 47.6%
+            # pooled, all 5 folds <50% — this market fades the chase
+            # at 22–247m horizons). The side is still ISSUED (every
+            # window gets a side); only EXECUTION is gated to
+            # watch-only, exactly like the <1:1 ratio rule.
+            _chase_z = 0.0
+            try:
+                _P = ctxs[tf].P
+                if len(_P) > 8 and _P[0]:
+                    _mom = _P[-1] / _P[0] - 1.0
+                    _rets = [(_P[i] - _P[i - 1]) / _P[i - 1]
+                             for i in range(1, len(_P)) if _P[i - 1]]
+                    _sd = _std_pop(_rets) if _rets else 0.0
+                    if _sd > 0:
+                        _chase_z = (_dir_final * _mom
+                                    / (_sd * (len(_P) ** 0.5)))
+            except Exception:
+                _chase_z = 0.0
+            fin["mom_chase_z"] = round(float(_chase_z), 3)
             fin["exec_ok"] = bool(fin.get("issued") and _dir_final != 0
-                                  and fin["confidence"] > fin["asset_floor"])
+                                  and fin["confidence"] > fin["asset_floor"]
+                                  and _chase_z <= 1.0)
             fin["issued"] = True
             _tier = self._tier_for(symbol, tf, float(_beh["score"]))
             fin.update(_tier)
@@ -1228,6 +1251,7 @@ class PredictionEngine:
                 "direction": pack["direction"],
                 "issued": fin["issued"],
                 "exec_ok": fin.get("exec_ok"),
+                "mom_chase_z": fin.get("mom_chase_z"),
                 "tier": fin.get("tier"),
                 "p_side": fin.get("p_side"),
                 "raw_score": fin.get("raw_score"),
