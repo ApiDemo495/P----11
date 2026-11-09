@@ -126,10 +126,56 @@ async def _boot() -> None:
     try:
         await feed.start()
         await engine.start()
+        _spawn_history_seed()
         await clock.start()
         log.info("application booted (feed=%s)", feed.mode)
     except Exception:
         log.exception("background boot failed — shell stays up")
+
+
+def _spawn_history_seed() -> None:
+    """24h warm-history seed (app/history_seed.py): once a day, in
+    the background, once the engine is live — and only on a REAL
+    feed (a sim tape dressed as backtest history would be a lie)
+    while the settlement ledger is still thin."""
+    import os as _os
+    import threading as _th
+    import time as _time
+
+    def work():
+        _time.sleep(30)                     # let the app settle first
+        try:
+            stamp = "data/.history_seed_stamp"
+            fresh = (_os.path.exists(stamp)
+                     and _time.time() - _os.path.getmtime(stamp) < 86400)
+            rows = sum(len(v) for v in engine.ledger.rows.values())
+            if fresh and rows >= 20:
+                engine.seed_info = {"state": "fresh", "rows": rows}
+                return
+            if getattr(feed, "mode", "sim") != "binance":
+                engine.seed_info = {"state": "skipped-sim",
+                                    "why": "seed needs a real Binance tape"}
+                return
+            engine.seed_info = {"state": "seeding"}
+            from .history_seed import seed_history
+            engine.seed_info = {"state": "done",
+                                **seed_history(engine, hours=24)}
+            _os.makedirs("data", exist_ok=True)
+            open(stamp, "a").close()
+        except Exception:
+            log.exception("history seed failed")
+            engine.seed_info = {"state": "failed"}
+
+    _th.Thread(target=work, daemon=True, name="history-seed").start()
+
+
+@app.get("/api/history/seed")
+async def history_seed_status() -> JSONResponse:
+    return JSONResponse({"ok": True,
+                         "seed": getattr(engine, "seed_info",
+                                         {"state": "pending"}),
+                         "ledger_rows": sum(
+                             len(v) for v in engine.ledger.rows.values())})
 
 
 @app.on_event("startup")

@@ -1558,7 +1558,7 @@ function renderLedger() {
       : (st.enough ? `${Math.round(st.rate * 100)}%` : `${Math.round(st.rate * 100)}% <span class="dim">(n&lt;${led.min_n}: not enough windows)</span>`);
     return `<tr class="${sym === S.symbol ? "focus-row" : ""}">
       <td class="mono">${sym}</td><td class="mono">${tf.toUpperCase()}</td>
-      <td class="mono">${st.n}</td>
+      <td class="mono" title="${st.seeded ? st.seeded + " of these settled rows are 🌱 seeded (24h real-tape replay)" : "all rows settled live"}">${st.n}${st.seeded ? ` <span class="dim">🌱${st.seeded}</span>` : ""}</td>
       <td class="mono acc-up">${st.wins}</td><td class="mono acc-dn">${st.losses}</td>
       <td class="mono">${st.skipped}</td>
       <td class="mono">${rateTxt}</td>
@@ -2790,6 +2790,28 @@ async function loadAgents() {
 /* ═══════════ HISTORY ═══════════ */
 async function loadHistory() {
   try {
+    // 24h warm-history seed status — the banner explains WHERE the
+    // history below came from (real replayed tape vs live windows)
+    try {
+      const sd = await api("/api/history/seed");
+      const s = sd.seed || {};
+      const el = $("#seed-banner");
+      if (el) {
+        if (s.state === "done") {
+          el.innerHTML = `<div class="pad"><b>🌱 24H WARM-HISTORY SEED</b> — replayed the real backfilled 1m tape through the app's own formulas: ` +
+            `<b>${s.settled ?? 0} windows settled</b> · <b>${s.graded ?? 0} graded</b> into the ledger, formula leaderboard, calibration rings and confidence pools ` +
+            `<span class="dim">(formulas-only replay — brains / book-physics / news need live state and are never faked; seeded ledger rows are flagged)</span></div>`;
+        } else if (s.state === "seeding" || s.state === "pending") {
+          el.innerHTML = `<div class="pad"><b>🌱 24H WARM-HISTORY SEED</b> — <span class="dim">replaying the last 24h of tape in the background… reload in a moment</span></div>`;
+        } else if (s.state === "skipped-sim") {
+          el.innerHTML = `<div class="pad"><b>🌱 24H WARM-HISTORY SEED</b> — <span class="acc-warn">skipped: feed is simulated — sim history dressed as a backtest would be a lie. Connect Binance for the real seed.</span></div>`;
+        } else if (s.state === "fresh") {
+          el.innerHTML = `<div class="pad"><b>🌱 24H WARM-HISTORY SEED</b> — <span class="dim">already seeded in the last 24h (${s.rows ?? sd.ledger_rows ?? 0} ledger rows) — history below includes the replayed tape, flagged per row.</span></div>`;
+        } else if (s.state === "failed") {
+          el.innerHTML = `<div class="pad"><b>🌱 24H WARM-HISTORY SEED</b> — <span class="acc-warn">seed failed this boot — history fills from live windows only; check server log.</span></div>`;
+        }
+      }
+    } catch { /* banner optional */ }
     const [days, lb] = await Promise.all([api("/api/history/days"), api("/api/history/leaderboard")]);
     const dd = days.days || [];
     const box = $("#hs-days");

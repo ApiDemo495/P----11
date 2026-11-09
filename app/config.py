@@ -187,7 +187,7 @@ LEVEL_BASE_SCALE = 0.25           # provisional TP/SL base distance scale (F29 s
 # ---------------------------------------------------------------------------
 BINANCE_REST = "https://api.binance.com"
 BINANCE_WS = "wss://stream.binance.com:9443/stream"
-BACKFILL_BARS = 1000              # 1m klines backfilled at startup
+BACKFILL_BARS = 1500              # 1m klines at startup = 25h tape (24h seed + context)
 MIN_BARS_FULL_WINDOW = TIMEFRAMES["tf4"]["minutes"] + 1   # 248
 MIN_BARS_COMPUTE = 30             # below this a formula pass returns zeros
 FEED_MODE = "auto"                # auto | binance | sim   (auto falls back to simulator)

@@ -178,3 +178,26 @@ def test_learning_grades_previous_pass_not_current():
     seg = src[i:i + 4000]
     assert "record_micro(" in seg
     assert "_prev[0]" in seg and "_prev[1]" in seg
+
+
+def test_history_seed_replays_real_windows():
+    """24h warm-history: seeded windows must be real graded history
+    (ledger rows flagged seeded, accuracy rings fed) — and never
+    from a partial window."""
+    from tests.test_engine import make_engine, _boot, run
+    from app.history_seed import seed_history
+    eng, _f, _e = make_engine(); run(_boot(eng))
+    stats = seed_history(eng, hours=6)
+    assert stats["settled"] > 0 and stats["graded"] > 0
+    # the ledger file is shared across tests — judge only seeded rows
+    rows = [r for v in eng.ledger.rows.values() for r in v
+            if r.get("seeded")]
+    assert len(rows) >= stats["settled"] - 4  # last window per TF settles too
+    assert any(r["result"] in ("win", "loss") for r in rows)
+    # EVERY timeframe must seed — tf1/tf2 feed exactly W+1 bars like
+    # the live path; a 60-bar floor silently dropped them before
+    tfs_seeded = {k.split("|")[1] for k, v in eng.ledger.rows.items()
+                  if any(r.get("seeded") for r in v)}
+    assert tfs_seeded == {"tf1", "tf2", "tf3", "tf4"}, tfs_seeded
+    src = (ROOT / "app" / "history_seed.py").read_text()
+    assert "formulas-only" in src and "sim" in src.lower()

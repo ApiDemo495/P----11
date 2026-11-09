@@ -81,7 +81,8 @@ class SettlementLedger:
 
     def settle(self, symbol: str, tf: str, entry: float, settle_price: float,
                side: int, window_end: float | None = None,
-               level_outcome: str | None = None) -> dict:
+               level_outcome: str | None = None,
+               seeded: bool = False, conf: float | None = None) -> dict:
         """Grade one completed window. side==0 -> skipped (never a win)."""
         if side == 0 or not entry or not settle_price:
             result = "skip"
@@ -94,6 +95,8 @@ class SettlementLedger:
         row = {"ts": time.time(), "window_end": window_end or time.time(),
                "entry": round(entry, 6), "settle": round(settle_price, 6),
                "side": int(side), "result": result,
+               "seeded": bool(seeded),
+               "conf": (round(conf, 4) if conf is not None else None),
                # docs11-charts B-3: window outcome AND level outcome are
                # two separate columns (TP first / SL first / neither)
                "level_outcome": level_outcome}
@@ -147,6 +150,7 @@ class SettlementLedger:
                              if _lv else None),
             "n": n, "wins": wins, "losses": losses,
             "ties": 0,                     # ties are graded as losses
+            "seeded": sum(1 for r in rows if r.get("seeded")),
             "skipped": skipped,
             "rate": round(wins / n, 4) if n else None,
             "enough": n >= MIN_N_RATE,
