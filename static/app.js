@@ -532,8 +532,9 @@ function bnMake(el, mini) {
     rightPriceScale: { borderColor: "rgba(140,140,170,.25)" },
     width: el.clientWidth || 300, height: el.clientHeight || (mini ? 142 : 340),
   });
-  const candles = chart.addCandlestickSeries({ upColor: "#26a69a", downColor: "#ef5350",
-    borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350" });
+  // user: Binance LINE chart, not candles — closes as a line
+  const candles = chart.addLineSeries({ color: "#f0b90b", lineWidth: 2,
+    priceLineVisible: true, lastValueVisible: true });
   const vol = chart.addHistogramSeries({ priceScaleId: "", priceFormat: { type: "volume" } });
   chart.priceScale("").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
   const ma = (color) => chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
@@ -544,7 +545,7 @@ function bnMake(el, mini) {
 function bnFeed(inst, bars) {
   if (!inst || !bars.length) return;
   const cs = bars.map(b => ({ time: lt(b.t), open: b.o, high: b.h, low: b.l, close: b.c }));
-  inst.candles.setData(cs);
+  inst.candles.setData(cs.map(c => ({ time: c.time, value: c.close })));
   inst.vol.setData(bars.map(b => ({ time: lt(b.t), value: b.v || 0,
     color: b.c >= b.o ? "rgba(38,166,154,.4)" : "rgba(239,83,80,.4)" })));
   const maD = (n) => cs.map((c, i) => i < n - 1 ? null
@@ -579,7 +580,7 @@ function bnTickMain() {
   if (!inst || !inst.last || !(p > 0)) return;
   const l = inst.last;
   l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p);
-  try { inst.candles.update({ time: lt(l.time), open: l.open, high: l.high, low: l.low, close: l.close }); }
+  try { inst.candles.update({ time: lt(l.time), value: l.close }); }
   catch { bnLoad(S.focusTf, inst); }   // bucket rolled: refetch, never freeze
 }
 
@@ -963,7 +964,30 @@ function renderHero() {
       dash: t.status !== "locked",
     });
   });
-  S.charts.hero?.setLines(lines);
+  S.charts.hero?.setLines(S.showLines === false ? [] : lines);
+  bnDrawLines(lines);
+}
+
+/* TP/SL/entry lines on the Binance LINE chart (the TV widget cannot
+   take external lines; OWN + Binance-line can) */
+function bnDrawLines(lines) {
+  const inst = Bn.main; if (!inst) return;
+  if (!lines) {   // rebuild from the focus cycle
+    const cyc = S.snap?.assets?.[S.symbol]?.tfs?.[S.focusTf];
+    lines = [];
+    if (cyc?.entry) lines.push({ price: cyc.entry, color: "#e8e8f0", title: "ENTRY" });
+    if (cyc?.tp) lines.push({ price: cyc.tp, color: "#22c98a", title: "TP" });
+    if (cyc?.sl) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL" });
+    for (const t of (cyc?.targets || [])) if (t.level)
+      lines.push({ price: t.level, color: "#c9a227", title: `TP${t.k}` });
+  }
+  for (const l of inst._lines || []) { try { inst.candles.removePriceLine(l); } catch {} }
+  inst._lines = [];
+  if (S.showLines === false) return;
+  for (const L of lines || []) if (Number.isFinite(L.price))
+    inst._lines.push(inst.candles.createPriceLine({ price: L.price,
+      color: L.color || "#c9a227", lineWidth: 1, lineStyle: 2,
+      axisLabelVisible: true, title: L.title || "" }));
 }
 
 function bindAllTf() {
@@ -1022,13 +1046,13 @@ function quadChart(el, bucketSec = 60) {
     handleScroll: false, handleScale: false,
     width: el.clientWidth || 170, height: el.clientHeight || 92,
   });
-  const candles = chart.addCandlestickSeries({ upColor: "#26a69a", downColor: "#ef5350",
-    borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350" });
+  const candles = chart.addLineSeries({ color: "#38bdf8", lineWidth: 1,
+    priceLineVisible: false, lastValueVisible: true });
   new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); } catch {} }).observe(el);
   const inst = { chart, candles, last: null, _lines: [],
     setData(bars) {
       if (!bars?.length) return;
-      candles.setData(bars.map(b => ({ time: lt(b.time), open: b.open, high: b.high, low: b.low, close: b.close })));
+      candles.setData(bars.map(b => ({ time: lt(b.time), value: b.close })));
       const lb = bars[bars.length - 1];
       inst.last = { time: lb.time, open: lb.open, high: lb.high, low: lb.low, close: lb.close };
       try { chart.timeScale().scrollToRealTime(); } catch {}
@@ -1049,7 +1073,7 @@ function quadChart(el, bucketSec = 60) {
       else { const l = inst.last;
         l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p); }
       const l = inst.last;
-      try { candles.update({ time: lt(l.time), open: l.open, high: l.high, low: l.low, close: l.close }); } catch {}
+      try { candles.update({ time: lt(l.time), value: l.close }); } catch {}
     } };
   return inst;
 }
@@ -1215,6 +1239,13 @@ function bindChartSrc() {
   try { S.chartSrc = localStorage.getItem("chartSrc") || "binance"; } catch { S.chartSrc = "binance"; }
   if (!["binance", "tv", "own"].includes(S.chartSrc)) S.chartSrc = "binance";
   try { S.fanOn = localStorage.getItem("fanOn") === "1"; } catch { S.fanOn = false; }
+  try { S.showLines = localStorage.getItem("showLines") !== "0"; } catch { S.showLines = true; }
+  const lb = $("#btn-lines");
+  if (lb) { lb.classList.toggle("active", !!S.showLines);
+    lb.addEventListener("click", () => { S.showLines = !S.showLines;
+      try { localStorage.setItem("showLines", S.showLines ? "1" : "0"); } catch {}
+      lb.classList.toggle("active", !!S.showLines);
+      try { drawMainChart(); bnDrawLines(); } catch {} }); }
   const fb = $("#btn-fan");
   if (fb) { fb.classList.toggle("active", !!S.fanOn);
     fb.addEventListener("click", () => { S.fanOn = !S.fanOn;
@@ -1508,7 +1539,7 @@ function renderWhy() {
           if (!f) return "";
           const tip = (f.top_channels || []).map(c => `F${c.fid} ${c.value >= 0 ? "+" : ""}${fmt(c.value, 3)}`).join(" · ");
           return f.ready
-            ? `<div class="kv" style="margin-top:6px"><span title="${esc(tip)}">brain +${fmt(f.vote, 3)} <span class="dim">(FlyWire v783 · conf ${fmt(f.conf, 2)}${tip ? " · hover for top channels" : ""})</span></span><b class="${f.vote >= 0 ? "up" : "down"}">${f.vote >= 0 ? "approach" : "avoid"}</b></div>`
+            ? `<div class="kv" style="margin-top:6px"><span title="${esc(tip)}">brain ${f.vote >= 0 ? "+" : ""}${fmt(f.vote, 3)} <span class="dim">(FlyWire v783 · conf ${fmt(f.conf, 2)}${tip ? " · hover for top channels" : ""})</span></span><b class="${f.vote >= 0 ? "up" : "down"}">${f.vote >= 0 ? "approach (leans in · bullish)" : "avoid (leans away · bearish)"}</b></div>`
             : `<div class="kv" style="margin-top:6px"><span>brain</span><b class="down" title="${esc(f.reason || "")}">absent (${esc(f.reason || "vote withheld")}) — weight 0</b></div>`;
         })()}
         <div class="hint">4-vote double-check: PCV + agent + brain (+ emotion/physics here) must agree to issue.</div>
@@ -1681,7 +1712,12 @@ async function loadCandles() {
     // (user: every TF chart must be different — they were all the same
     // 1-minute series photocopied four times). Wider TF = wider bars.
     const QINT = { tf1: 1, tf2: 1, tf3: 5, tf4: 5 };   // doc C-2 resolutions
+    const QWIN = { tf1: 22, tf2: 44, tf3: 130, tf4: 247 };  // own horizon each
     S.tfBars = S.tfBars || {};
+    const _cut = (bars, tf) => {
+      const w = (QWIN[tf] || 60) * 60, tmax = bars.length ? bars[bars.length - 1].t : 0;
+      return bars.filter(b => b.t >= tmax - w);
+    };
     const agg = (bars, mins) => {
       if (mins <= 1) return bars;
       const out = new Map();
@@ -1710,7 +1746,7 @@ async function loadCandles() {
         if (t.status === "hit" && t.hit_ts)
           markers.push({ time: Math.floor(t.hit_ts / 60) * 60, above: true, color: "#22c98a", glyph: "▲" });
       });
-      const mapped = bars.map(x => ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
+      const mapped = _cut(bars, tf).map(x => ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
       S.tfBars[tf] = mapped;
       c.setData(mapped);
       // seed the realised-path history (hero line chart + branches):
@@ -2315,7 +2351,7 @@ async function loadBrains() {
         <div class="logic">specialty vote ${fmt(inst.signal ?? 0, 3)} · hormone ${fmt(inst.h_signal, 3)}</div>
         <div class="logic">${inst.backend === "flywire-v783-real" ? `🧠 ${Number(inst.neurons).toLocaleString()} real neurons · ${Number(inst.synapses).toLocaleString()} real synapses (FlyWire v783)` : "synthetic graph — real circuit not ready"}</div>
         <div class="kv-row">
-          <div class="kv"><span>state</span><b>${inst.dominant || "—"}</b></div>
+          <div class="kv"><span>${inst.id === "DB-3" ? "state" : inst.id === "DB-1" ? "pattern" : inst.id === "DB-2" ? "experience" : "learn thrust"}</span><b>${inst.dominant ?? (inst.id === "DB-1" ? fmt(inst.pattern, 3) : inst.id === "DB-2" ? fmt(inst.experience, 3) : fmt(inst.signal, 3))}</b></div>
           <div class="kv"><span>experience</span><b>${fmt(inst.experience, 3)}</b></div>
         </div>
         <div class="kv-row" style="margin-top:8px">
@@ -2525,7 +2561,7 @@ async function loadBrains() {
       const pp = w.push_pull || {};
       $("#br-wiring").innerHTML = `<div class="kv-row">
         <div class="kv"><span>channels oriented</span><b class="${w.all_oriented ? "acc-up" : "acc-dn"}">${(w.channels || []).length - (w.misoriented || 0)}/${(w.channels || []).length}${(w.calibrated || []).length ? ` · calibrated ${w.calibrated.length}` : ""}</b></div>
-        <div class="kv"><span>push-pull odd-sum</span><b class="${pp.odd_ok ? "acc-up" : "acc-dn"}">${fmt(pp.odd_sum, 4)}</b></div>
+        <div class="kv"><span>push-pull odd-sum (0 = perfect ✓)</span><b class="${pp.odd_ok ? "acc-up" : "acc-dn"}">${fmt(pp.odd_sum, 4)}${pp.odd_ok ? " ✓" : ""}</b></div>
         <div class="kv"><span>DC offset removed</span><b>${fmt(pp.dc_offset, 4)}</b></div>
         <div class="kv"><span>+1 probe reads</span><b>${pp.oriented ? "approach ✓" : "WRONG VALENCE ✗"}</b></div>
       </div>
@@ -2639,8 +2675,9 @@ async function loadAgents() {
           <div class="dim" style="font-size:10px;margin-top:4px">score ${pk.score != null
             ? `${Math.round(pk.score * 100)}% over ${pk.samples} outcomes`
             : (pk.samples ? `${pk.samples} samples` : "no outcomes yet")}${pk.imported ? " · IMPORTED" : ""}</div>
-          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
-            <button class="btn" data-dl="${pk.id}">download pack</button>
+          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;align-items:center">
+            <input type="password" class="key-in" data-key-for="${pk.id}" placeholder="paste ${pk.name} API key" style="flex:1;min-width:130px">
+            <button class="btn" data-install="${pk.id}">⬇ install in app</button>
           </div>
           <div class="dim" style="font-size:9.5px;margin-top:6px"><a href="${pk.setup}" target="_blank" rel="noopener">get API key ↗</a></div>
         </div>`).join("")}
@@ -2656,20 +2693,19 @@ async function loadAgents() {
         loadAgents();
       } catch (e) { toast("auto toggle failed: " + e.message, "err"); }
     });
-    $$("#ag-packs [data-dl]").forEach(b => b.addEventListener("click", async () => {
+    $$("#ag-packs [data-install]").forEach(b => b.addEventListener("click", async () => {
+      const key = $(`#ag-packs [data-key-for="${b.dataset.install}"]`)?.value?.trim();
+      if (!key) { toast("paste the API key first — use 'get API key ↗' below the card", "err"); return; }
+      b.disabled = true; b.textContent = "installing…";
       try {
-        const r = await fetch("/api/agents/pack/" + b.dataset.dl);
+        const r = await fetch("/api/agents/import", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pack_id: b.dataset.install, key }) });
         const d = await r.json();
-        if (!d.ok) throw new Error("pack");
-        const blob = new Blob([JSON.stringify(d.pack, null, 2)],
-                              { type: "application/json" });
-        const a2 = document.createElement("a");
-        a2.href = URL.createObjectURL(blob);
-        a2.download = `agent-pack-${b.dataset.dl}.json`;
-        a2.click();
-        URL.revokeObjectURL(a2.href);
-        toast("pack downloaded — import with your key below");
-      } catch (e) { toast("download failed", "err"); }
+        if (!d.ok) throw new Error(d.error || "import failed");
+        toast(`${b.dataset.install} agent installed in-app ✓ — press TEST on its slot`);
+        loadAgents();
+      } catch (e) { toast("install failed: " + e.message, "err"); b.disabled = false; b.textContent = "⬇ install in app"; }
     }));
 
     const slots = a.slots || [];

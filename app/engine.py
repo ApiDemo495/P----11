@@ -3060,8 +3060,13 @@ class PredictionEngine:
         price = prices.get(symbol, 0.0)
         record = empty_record(now)
         record["prices"] = {s: round(p, 6) for s, p in prices.items()}
-        prev_price = self.cci.prev_price.get(symbol)
-        move_sign = _sign(price - prev_price) if prev_price else 0
+        # GRADE THE PREVIOUS PASS, not this one. The old code read
+        # cci.prev_price AFTER this pass's compute had overwritten
+        # it with the current price — the 'move' was always 0, so
+        # every formula scored a miss forever (leaderboard 0.0000).
+        _grade = getattr(self, "_grade_prev", None)
+        if _grade is None:
+            _grade = self._grade_prev = {}
         for tf in TF_ORDER:
             res = res_pack.get(tf)
             if not res:
@@ -3084,11 +3089,16 @@ class PredictionEngine:
                        for f, v in (res.get("adj") or {}).items()}
             brain_sigs = [float(inst.get("h_signal", 0.0))
                           for inst in res.get("brain", {}).get("instances", [])]
-            self.learning.record_micro(
-                symbol, tf, move_sign, signals, sub, brain_sigs,
-                1 if target_hit else None,
-                1 if sl_hit else None,
-            )
+            _prev = _grade.get((symbol, tf))
+            if _prev and price > 0 and _prev[1] > 0:
+                _ms = _sign(price - _prev[1])
+                if _ms:
+                    self.learning.record_micro(
+                        symbol, tf, _ms, _prev[0], sub, _prev[2],
+                        1 if target_hit else None,
+                        1 if sl_hit else None,
+                    )
+            _grade[(symbol, tf)] = (signals, price, brain_sigs)
             if res.get("direction") and prev_price:
                 self.learning.feed_return(symbol, tf, price / prev_price - 1.0)
             # --- Section 13 per-GRC record ------------------------------

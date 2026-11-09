@@ -479,7 +479,12 @@ class AgentInstaller:
                 self._say("installing llama.cpp runtime "
                           "(requirements-agents.txt) — a source build can "
                           "take 10-20 min, that is normal")
+                # prebuilt CPU wheel first: a source build of
+                # llama-cpp-python takes 10-20 min and fails without
+                # a full toolchain — the wheel installs in ~1 min
                 rc = self._exec([sys_executable(), "-m", "pip", "install",
+                                 "--extra-index-url",
+                                 "https://abetlen.github.io/llama-cpp-python/whl/cpu",
                                  "-r", "requirements-agents.txt"])
                 if rc != 0:
                     raise RuntimeError(

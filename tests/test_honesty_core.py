@@ -1,5 +1,8 @@
 """Advice Part C: lock, ledger, grid, veto, feed/news honesty, watchdog."""
 import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 # ── ledger: strict sign, ties=loss, skips, streaks (G-1/0.4) ──
@@ -128,7 +131,8 @@ def test_brain_status_has_verification_steps():
     eng, _f, _e = make_engine(); run(_boot(eng))
     st = eng.brains.status()
     steps = st.get("verify") or []
-    assert len(steps) == 5
+    assert len(steps) >= 5
+    assert any(v["step"] == "four-brain backend" for v in steps)
     assert all("step" in s and "ok" in s and "detail" in s for s in steps)
     assert steps[0]["ok"] is True                       # real hemibrain data
 
@@ -160,3 +164,17 @@ def test_ui_honesty_guards():
     # no eval / location.href navigation (H guards)
     assert "eval(" not in js.replace("eval(", "", 1) or True
     assert 'location.href = "/"' not in js
+
+
+def test_learning_grades_previous_pass_not_current():
+    """The leaderboard was 0.0000 forever: _record_learning read
+    cci.prev_price AFTER the compute pass overwrote it with the
+    current price, so the graded 'move' was always 0 and every
+    formula scored a miss. It must grade the PREVIOUS pass's
+    signals against the move since that pass."""
+    src = (ROOT / "app" / "engine.py").read_text()
+    assert "_grade_prev" in src
+    i = src.index("def _record_learning")
+    seg = src[i:i + 4000]
+    assert "record_micro(" in seg
+    assert "_prev[0]" in seg and "_prev[1]" in seg
