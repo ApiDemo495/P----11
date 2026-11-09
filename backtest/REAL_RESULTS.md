@@ -188,3 +188,54 @@ were fitted on (first 55%), so it is partly in-sample; the clean
 walk-forward estimate for changed-vote remains 63.3% pooled OOS
 (n=49, CI 49.3-75.4). The fresh run landing at 62.6% is consistent
 with it, not a replacement for it. ETH is the weak asset in both.
+
+## Third run — FULL engine, per asset x per TF (2026-11-09)
+
+Run: `backtest/per_tf_real.py` (this repo), same validated Binance
+Vision 1h mirror data (zero gaps; series 2026-05-08 -> 2026-09-30,
+decisions in the last 2,000 bars, every 22 bars, 80 packs/asset).
+Predictor = `PredictionEngine.compute_asset` with ALL tape-runnable
+features voting (37 formulas, CCI fusion + ladder, four real FlyWire
+brains, physics/emotion stacks; learning frozen between decisions).
+Cross-asset states are set to the same decision bar for every pack
+(an earlier draft of this run let relative-strength features read a
+stale future state — caught and fixed before quoting any number).
+Settlement per TF over its own window: strict sign, tie = loss;
+TP/SL first-touch from the app risk block; friction charged in bps.
+Trade log: `backtest/results/per_tf_full_engine_real.csv` (893 rows).
+
+| Asset | TF | Win % | 95% CI | n | TP/SL/neither | net bps/window |
+|---|---|---|---|---|---|---|
+| BTC | tf1 (22b) | 54.24 | 41.7–66.3 | 59 | 4/5/50 | +16.7 |
+| BTC | tf2 (44b) | 47.46 | 35.3–60.0 | 59 | 6/4/49 | +33.6 |
+| BTC | tf3 (130b) | 50.00 | 37.9–62.1 | 62 | 8/3/51 | +139.3 |
+| BTC | tf4 (247b) | 51.72 | 39.2–64.1 | 58 | 9/3/46 | +223.6 |
+| ETH | tf1 | 46.67 | 32.9–60.9 | 45 | 4/4/37 | +28.6 |
+| ETH | tf2 | 48.89 | 35.0–63.0 | 45 | 4/1/40 | +75.6 |
+| ETH | tf3 | 61.70 | 47.4–74.2 | 47 | 6/2/39 | +278.5 |
+| ETH | tf4 | 69.57 | 55.2–80.9 | 46 | 8/1/37 | +582.4 |
+| BNB | tf1 | 48.39 | 36.4–60.6 | 62 | 5/9/48 | -1.4 |
+| BNB | tf2 | 60.00 | 47.9–71.0 | 65 | 7/9/49 | +46.8 |
+| BNB | tf3 | 62.32 | 50.5–72.8 | 69 | 12/10/47 | +132.5 |
+| BNB | tf4 | 64.18 | 52.2–74.6 | 67 | 15/7/45 | +193.1 |
+| PAXG | tf1 | 46.67 | 32.9–60.9 | 45 | 2/11/32 | -34.2 |
+| PAXG | tf2 | 42.00 | 29.4–55.8 | 50 | 2/8/40 | -18.7 |
+| PAXG | tf3 | 50.00 | 37.3–62.7 | 56 | 4/6/46 | -18.3 |
+| PAXG | tf4 | 37.93 | 26.6–50.8 | 58 | 5/13/40 | -17.9 |
+| ALL | tf1 | 49.29 | 42.6–56.0 | 211 | | |
+| ALL | tf2 | 50.23 | 43.7–56.8 | 219 | | |
+| ALL | tf3 | 55.98 | 49.6–62.2 | 234 | | |
+| ALL | tf4 | 55.46 | 49.0–61.8 | 229 | | |
+
+### Reading it honestly
+- ONE ~83-day regime on 1h bars (TF = 22/44/130/247 *hours* here),
+  n=45–69 per cell: almost every cell's CI includes 50%. Only
+  ETH tf4 and BNB tf3/tf4 sit clearly above coin-flip, and TF3/TF4
+  windows overlap (decisions every 22 bars), so their effective n
+  is smaller than printed.
+- PAXG is below 50% on all four TFs with negative net bps — on this
+  window the full engine LOSING on PAXG is the measured fact.
+- Long-TF net bps for BTC/ETH/BNB are flattered by regime drift;
+  win% is the headline, bps the context. Neither is a promise.
+- Order-book/news features cannot be replayed from klines and are
+  absent — "all features" means all features a tape can feed.
