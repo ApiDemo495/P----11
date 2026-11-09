@@ -1158,7 +1158,8 @@ class PredictionEngine:
                 # brain.md §9: every prediction card carries the REAL
                 # circuit's vote + its confidence (absent = null/0)
                 "flywire": br.get("flywire"),
-                "values": {i["id"]: round(i["h_signal"], 5) for i in br["instances"]},
+                "values": {i["id"]: round(i.get("signal", 0.0), 5)
+                           for i in br["instances"]},
                 "instances": [
                     {k: (round(v, 5) if isinstance(v, float) else v)
                      for k, v in inst.items() if k != "weight_adj"}

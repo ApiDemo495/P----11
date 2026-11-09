@@ -47,6 +47,8 @@ from .config import (
 from .formulas._helpers import pearson, sign
 
 BRAIN_IDS = ["DB-1", "DB-2", "DB-3", "DB-4"]
+_STATE_DIR = {"accumulation": 1, "markup": 1, "distribution": -1,
+              "markdown": -1, "ranging": 0}
 THING2_ROLES = {
     "DB-1": "Market Pattern Analyzer",
     "DB-2": "User Experience Predictor",
@@ -574,8 +576,30 @@ class BrainSystem:
                     if wid in weight_adj:
                         weight_adj[wid] += (acc - 0.5) * 0.05
 
+            # ── per-instance SPECIALTY signal ─────────────────────
+            # The four brains were specified to work DIFFERENTLY,
+            # but the vote used to read the same hormone signal from
+            # all four — near-clones voting one constant bias. Each
+            # instance now votes from its own readout, each centred
+            # on zero by construction (no resting-bias offset):
+            #   DB-1 pattern: learned valences x pattern-MBON activity
+            #   DB-2 experience: LH reward/risk balance around 0.5
+            #   DB-3 state: dominant market-state direction x its mass
+            #   DB-4 learning: its own weight-adjustment thrust
+            if brain.id == "DB-1":
+                _sig = pattern_signal
+            elif brain.id == "DB-2":
+                _sig = (experience - 0.5) * 2.0
+            elif brain.id == "DB-3":
+                _sig = (_STATE_DIR.get(BRAIN_MARKET_STATES[dom_idx], 0)
+                        * dist[dom_idx])
+            else:  # DB-4
+                _sig = math.tanh(4.0 * (sum(weight_adj.values())
+                                        / max(1, len(weight_adj))))
             results.append({
                 "id": brain.id,
+                "role": brain.role,
+                "signal": round(max(-1.0, min(1.0, float(_sig))), 5),
                 "hormone_state": h_state,   # raw; display layers round
                 "h_signal": max(-1.0, min(1.0, h_signal)),
                 "hormones": hormones,
@@ -593,15 +617,14 @@ class BrainSystem:
         # Section 10: learned per-brain influence weights (renormalized)
         wts = self._influence.get((symbol, tf), [0.25, 0.25, 0.25, 0.25])
         w_tot = sum(wts) or 1.0
-        mean_signal = sum(r["h_signal"] * wts[i]
+        # consensus = influence-weighted mean of the four DIFFERENT
+        # specialty signals (h_signal remains as a display hormone)
+        mean_signal = sum(r["signal"] * wts[i]
                           for i, r in enumerate(results)) / w_tot
-        # push-pull readout (deviation 22-D / error A-2): subtract the
-        # calibrated resting offset so score is an odd function of input
-        mean_signal = max(-1.0, min(1.0,
-                          mean_signal - getattr(self, "_dc_offset", 0.0)))
+        mean_signal = max(-1.0, min(1.0, mean_signal))
         polarity = 1 if mean_signal > 1e-6 else (-1 if mean_signal < -1e-6 else 0)
-        agree = sum(1 for r in results if r["h_signal"] != 0
-                    and (r["h_signal"] > 0) == (mean_signal > 0))
+        agree = sum(1 for r in results if r["signal"] != 0
+                    and (r["signal"] > 0) == (mean_signal > 0))
         avg_hormones = {
             k: sum(r["hormones"][k] for r in results) / 4.0
             for k in ("dopamine", "serotonin", "octopamine", "tyramine")

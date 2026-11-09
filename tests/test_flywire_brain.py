@@ -325,3 +325,19 @@ def test_fusion_weight_absent_vs_ready(brain):
     w2 = eng.brain_fusion_weight("BTC", "tf1")
     assert abs(w2 - 0.25 * 1.4) < 1e-9
     eng.brains.fw.state = saved
+
+
+def test_four_brains_vote_from_their_own_specialty():
+    """The starting spec: 4 brains working DIFFERENTLY. Each instance
+    must carry its own specialty signal (pattern / experience /
+    state / learning); the consensus is their mean — not four copies
+    of one hormone readout."""
+    root = Path(__file__).resolve().parents[1]
+    src = (root / "app" / "brain.py").read_text()
+    for bid in ("DB-1", "DB-2", "DB-3", "DB-4"):
+        assert f'brain.id == "{bid}"' in src or bid == "DB-4"
+    assert '"signal": round(' in src
+    assert 'r["signal"] * wts[i]' in src          # consensus over specialties
+    assert 'r["h_signal"] * wts[i]' not in src    # not the clone readout
+    js = (root / "static" / "app.js").read_text()
+    assert "specialty vote" in js
