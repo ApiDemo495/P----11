@@ -1151,6 +1151,18 @@ class PredictionEngine:
                                   and fin["confidence"] > fin["asset_floor"]
                                   and _chase_z <= 1.0)
             fin["issued"] = True
+            # ADVANCED MATHEMATICS LAYER (user-approved items 3-7, 9,
+            # 11-16, 20-21): additional voters blended into the fused
+            # score (nothing existing is removed or muted), soft
+            # gates + RQA scaling confidence, HAR/EVT/RMT sizing.
+            _adv = self._advanced_for(symbol, tf, ctxs[tf])
+            fin["advanced_vote"] = _adv["vote"]
+            fin["adv_soft_gate"] = _adv["soft_gate"]
+            fin["confidence"] = max(0.0, min(1.0,
+                float(fin["confidence"]) * _adv["soft_gate"]
+                * _adv["rqa_mult"]))
+            _beh = dict(_beh)
+            _beh["score"] = float(_beh["score"]) + 0.18 * _adv["vote"]
             _tier = self._tier_for(symbol, tf, float(_beh["score"]))
             fin.update(_tier)
             fin["raw_score"] = round(float(_beh["score"]), 5)
@@ -1463,6 +1475,20 @@ class PredictionEngine:
                 # Hawkes boundary intensity — printed features, never
                 # silently absorbed into the score
                 results[tf]["learners"] = self._learners(symbol, tf, ctxs[tf])
+                results[tf]["advanced"] = _adv
+                # adaptive conformal band (ACI state per asset/TF,
+                # updated at settlement — see _settle hook)
+                _cf = getattr(self, "_conformal", {}).get((symbol, tf))
+                if _cf and _cf.get("q"):
+                    _px = float(ctxs[tf].P[-1]) if ctxs[tf].P else 0.0
+                    results[tf]["conformal"] = {
+                        "q_bps": round(float(_cf["q"]) * 1e4, 1),
+                        "lo": round(_px * (1 - float(_cf["q"])), 6),
+                        "hi": round(_px * (1 + float(_cf["q"])), 6),
+                        "n": int(_cf.get("n", 0)),
+                        "coverage": (round(_cf["hits"] / _cf["n"], 3)
+                                     if _cf.get("n") else None),
+                        "target_coverage": 0.8}
                 try:
                     _gv = self.genesis.live_score(
                         self._genesis_values.get((symbol, tf)) or {})
@@ -1484,6 +1510,24 @@ class PredictionEngine:
                     "behavior": results[tf].get("behavior"),
                     "ladder": dict(results[tf]["ladder"]),
                     "mass": results[tf]["mass"],
+                    "advanced": {
+                        "vote": _adv.get("vote"),
+                        "soft_gate": _adv.get("soft_gate"),
+                        "rqa_mult": _adv.get("rqa_mult"),
+                        "size_mult": _adv.get("size_mult"),
+                        "modules": {
+                            k: {"vote": (v or {}).get("vote"),
+                                "gate": (v or {}).get("gate"),
+                                "regime": (v or {}).get("regime"),
+                                "hurst": (v or {}).get("hurst")}
+                            for k, v in (_adv.get("modules")
+                                         or {}).items()},
+                        "har_rv": _adv.get("har_rv"),
+                        "evt": _adv.get("evt"),
+                        "rmt_mode_share": (_adv.get("rmt") or {})
+                        .get("mode_share"),
+                        "conformal": results[tf].get("conformal"),
+                    },
                     "genesis": dict(results[tf].get("genesis") or {}),
                     "learners": dict(results[tf].get("learners") or {}),
                     "brain": brain_consensus,
@@ -2431,6 +2475,50 @@ class PredictionEngine:
                     "secrets": "/api/secrets/status (no secrets in files)",
                 }}
 
+    def _sig_weight(self) -> float:
+        """Signature voter weight: STRICT floor 0.15 until >=500
+        walk-forward graded samples prove accuracy > 52% (user
+        directive) — then it may earn 0.6, never more."""
+        try:
+            n = hits = 0
+            for s in SYMBOL_ORDER:
+                for t in TF_ORDER:
+                    ring = list(self.hist.ring(
+                        self.hist.tf_key(s, t, "adv_sig"), 600))
+                    n += len(ring)
+                    hits += sum(ring)
+            if n >= 500 and hits / n > 0.52:
+                return 0.6
+        except Exception:
+            pass
+        return 0.15
+
+    def _advanced_for(self, symbol: str, tf: str, ctx) -> dict:
+        """Advanced mathematics layer (app/advanced.py) — computed
+        once per (asset, TF) pass; failures degrade to a neutral
+        block, never to a crashed prediction."""
+        try:
+            from .advanced import advanced_block, rmt_block
+            others = {}
+            series = {}
+            for s in SYMBOL_ORDER:
+                st = self.feed.state(s)
+                closes = list(st.closes or [])
+                series[s] = closes
+                if s != symbol:
+                    others[s] = closes
+            rmt = rmt_block(series)
+            return advanced_block(
+                symbol, tf, ctx, others=others,
+                full_closes=series.get(symbol) or list(ctx.P or []),
+                sig_weight=self._sig_weight(), rmt=rmt)
+        except Exception:
+            log.exception("advanced block failed %s/%s", symbol, tf)
+            return {"vote": 0.0, "signs": {}, "modules": {},
+                    "soft_gate": 1.0, "rqa_mult": 1.0, "har_rv": {},
+                    "evt": {}, "rmt": None, "size_mult": 1.0,
+                    "weights": {}}
+
     def _learners(self, symbol: str, tf: str, ctx) -> dict:
         """§8.6: edge guard (flat windows), temporal twin (segmented vs
         single-leg variance), BOCPD run-length clock (hazard 1/14), Hawkes
@@ -3122,7 +3210,28 @@ class PredictionEngine:
                         1 if target_hit else None,
                         1 if sl_hit else None,
                     )
+                    # grade the ADVANCED modules' previous-pass signs
+                    # the same walk-forward way (signature promotion
+                    # and module honesty both read these rings)
+                    _ag = getattr(self, "_adv_grade", None)
+                    if _ag is None:
+                        _ag = self._adv_grade = {}
+                    _psigns, _pprice = _ag.get((symbol, tf), ({}, 0.0))
+                    for _mod, _s in (_psigns or {}).items():
+                        if _s:
+                            self.hist.ring(self.hist.tf_key(
+                                symbol, tf, f"adv_{_mod}"), 600).append(
+                                1.0 if _s == _ms else 0.0)
+                    if _psigns.get("signature"):
+                        self.hist.ring(self.hist.tf_key(
+                            symbol, tf, "adv_sig"), 600).append(
+                            1.0 if _psigns["signature"] == _ms else 0.0)
             _grade[(symbol, tf)] = (signals, price, brain_sigs)
+            _ag2 = getattr(self, "_adv_grade", None)
+            if _ag2 is None:
+                _ag2 = self._adv_grade = {}
+            _ag2[(symbol, tf)] = (
+                (res.get("advanced") or {}).get("signs") or {}, price)
             if res.get("direction") and prev_price:
                 self.learning.feed_return(symbol, tf, price / prev_price - 1.0)
             # --- Section 13 per-GRC record ------------------------------
@@ -3780,6 +3889,20 @@ class PredictionEngine:
                 price, int(prev.get("side") or 0),
                 window_end=float(prev.get("window_end") or 0),
                 level_outcome=_lvl)
+            # adaptive conformal state: learn this window's realised
+            # |return| so the next band is honest (Gibbs-Candes ACI)
+            try:
+                _entry = float(prev.get("price") or 0.0)
+                if _entry > 0 and price > 0:
+                    from .advanced import conformal_update
+                    _cf_all = getattr(self, "_conformal", None)
+                    if _cf_all is None:
+                        _cf_all = self._conformal = {}
+                    _cf_all[(symbol, tf)] = conformal_update(
+                        _cf_all.get((symbol, tf), {}),
+                        abs(price / _entry - 1.0))
+            except Exception:
+                pass
             # close the trading book for this asset if a position was
             # opened under the optional execution module
             try:
@@ -4143,6 +4266,15 @@ class PredictionEngine:
                 "entry": float(_price0 or 0), "tp": cyc.tp, "sl": cyc.sl,
                 "tp_bps": _horizon_block.get("tp_bps"),
                 "sl_bps": _horizon_block.get("sl_bps"),
+                # advanced sizing layers: HAR-RV + EVT + RMT mode
+                # dampen size (never lever up); EVT also bounds the
+                # catastrophic stop distance actually placed
+                "size_mult": float(((self.last_result.get(
+                    (symbol, tf)) or {}).get("advanced") or {})
+                    .get("size_mult", 1.0)),
+                "sl_max_bps": float((((self.last_result.get(
+                    (symbol, tf)) or {}).get("advanced") or {})
+                    .get("evt") or {}).get("cat_stop_bps") or 0.0),
                 "window_end": _g_end})
         except Exception:
             log.exception("trading consider failed")
@@ -4776,6 +4908,26 @@ class PredictionEngine:
                                 "p_target": _praw,
                                 "p_target_cal": _pcal,
                                 "method": bs.get("method")}
+                if d:
+                    _lr = self.last_result.get((symbol, tf)) or {}
+                    _adv2 = _lr.get("advanced")
+                    if _adv2:
+                        d["advanced"] = {
+                            "vote": _adv2.get("vote"),
+                            "soft_gate": _adv2.get("soft_gate"),
+                            "rqa_mult": _adv2.get("rqa_mult"),
+                            "size_mult": _adv2.get("size_mult"),
+                            "modules": {
+                                k: {"vote": (v or {}).get("vote"),
+                                    "gate": (v or {}).get("gate")}
+                                for k, v in (_adv2.get("modules")
+                                             or {}).items()},
+                            "har_rv": _adv2.get("har_rv"),
+                            "evt": _adv2.get("evt"),
+                            "rmt_mode_share": (_adv2.get("rmt") or {})
+                            .get("mode_share"),
+                            "conformal": _lr.get("conformal"),
+                        }
                 tfs[tf] = d
             assets[symbol] = {
                 "price": price,

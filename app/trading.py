@@ -206,7 +206,20 @@ class Trader:
                 risk_usdt = float(cfg["equity_usdt"]) * float(cfg.get("risk_pct") or 1.0) / 100.0
                 notional = min(risk_usdt / dist, notional,
                                float(cfg["equity_usdt"]))
+        # advanced sizing dampener (HAR-RV vol + EVT tail + RMT
+        # market mode): can only shrink the order, never lever it up
+        _sm = float(sig.get("size_mult") or 1.0)
+        notional *= max(0.25, min(1.0, _sm))
         qty = round(notional / entry, 6)
+        # EVT catastrophic-stop bound: the protective stop actually
+        # placed is never wider than the measured 1-in-100 tail
+        _sl_price = float(sig["sl"])
+        _max_bps = float(sig.get("sl_max_bps") or 0.0)
+        if _max_bps > 0 and _sl_price > 0:
+            _dist = abs(entry - _sl_price) / entry * 1e4
+            if _dist > _max_bps:
+                _sl_price = entry * (1 - sig["direction"]
+                                     * _max_bps / 1e4)
         side = "BUY" if sig["direction"] > 0 else "SELL"
         close = "SELL" if side == "BUY" else "BUY"
         entry_o = self._signed("POST", "/fapi/v1/order", {
@@ -214,7 +227,7 @@ class Trader:
             "quantity": qty})
         sl_o = self._signed("POST", "/fapi/v1/order", {
             "symbol": sym, "side": close, "type": "STOP_MARKET",
-            "stopPrice": round(float(sig["sl"]), 2), "closePosition": "true"})
+            "stopPrice": round(float(_sl_price), 2), "closePosition": "true"})
         tp_o = self._signed("POST", "/fapi/v1/order", {
             "symbol": sym, "side": close, "type": "TAKE_PROFIT_MARKET",
             "stopPrice": round(float(sig["tp"]), 2), "closePosition": "true"})

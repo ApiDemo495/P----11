@@ -1543,6 +1543,24 @@ function renderWhy() {
             : `<div class="kv" style="margin-top:6px"><span>brain</span><b class="down" title="${esc(f.reason || "")}">absent (${esc(f.reason || "vote withheld")}) — weight 0</b></div>`;
         })()}
         <div class="hint">4-vote double-check: PCV + agent + brain (+ emotion/physics here) must agree to issue.</div>
+        ${(() => {
+          const a = s.advanced; if (!a) return "";
+          const mv = Object.entries(a.modules || {}).map(([k, v]) =>
+            `<span class="vote ${v.vote > 0 ? "pos" : v.vote < 0 ? "neg" : ""}" title="${k} vote ${fmt(v.vote, 3)}${v.regime ? " · regime " + v.regime : ""}${v.hurst != null ? " · H=" + fmt(v.hurst, 2) : ""}">${k}</span>`).join("");
+          const cf = a.conformal;
+          return `<h5 style="margin-top:12px">ADVANCED MATH LAYER</h5>
+          <div class="kv-row">
+            <div class="kv"><span>advanced vote (blended in)</span><b class="${a.vote > 0 ? "up" : a.vote < 0 ? "down" : ""}">${a.vote > 0 ? "+" : ""}${fmt(a.vote, 3)}</b></div>
+            <div class="kv"><span>soft gate × (entropy·OU·BOCPD)</span><b>${fmt(a.soft_gate, 2)}</b></div>
+            <div class="kv"><span>RQA confidence ×</span><b>${fmt(a.rqa_mult, 2)}</b></div>
+            <div class="kv"><span>size × (HAR·EVT·RMT)</span><b>${fmt(a.size_mult, 2)}</b></div>
+            ${a.rmt_mode_share != null ? `<div class="kv"><span>market-mode share</span><b>${fmt(a.rmt_mode_share, 2)}</b></div>` : ""}
+            ${a.evt?.q99_bps ? `<div class="kv"><span>EVT 1-in-100 move</span><b>${fmt(a.evt.q99_bps, 0)} bps</b></div>` : ""}
+            ${cf ? `<div class="kv"><span>conformal 80% band</span><b>±${fmt(cf.q_bps, 0)} bps (n=${cf.n})</b></div>` : ""}
+          </div>
+          <div class="votes">${mv}</div>
+          <div class="hint">kalman · fracdiff · bocpd · entropy · ou/hurst · jumps · pairs-ou · wavelet · signature(floor) · rmt-residual — every module votes; soft gates only scale confidence/size, never veto a side.</div>`;
+        })()}
       </div>
     </div>
     ${synBlock ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line2)"><h5>GROQ COMMITTEE SYNTHESIS</h5>${synBlock}</div>` : ""}`;
