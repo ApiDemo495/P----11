@@ -341,3 +341,21 @@ def test_four_brains_vote_from_their_own_specialty():
     assert 'r["h_signal"] * wts[i]' not in src    # not the clone readout
     js = (root / "static" / "app.js").read_text()
     assert "specialty vote" in js
+
+
+def test_four_brains_run_on_real_flywire_neurons():
+    """User: 'no neurons no synapses no cells'. The four brains must
+    run on REAL FlyWire v783 subcircuits (real root_ids, real
+    synapse edges), not the synthetic rng.randrange graph; the
+    synthetic path may remain only as a labelled fallback."""
+    root = Path(__file__).resolve().parents[1]
+    rb = (root / "app" / "real_brains.py").read_text()
+    assert "fw.W" in rb and "root_id" in rb
+    for bid in ("DB-1", "DB-2", "DB-3", "DB-4"):
+        assert f'"{bid}"' in rb
+    brain = (root / "app" / "brain.py").read_text()
+    assert "_real_circuits" in brain and "_evaluate_real" in brain
+    assert '"backend": "flywire-v783-real"' in brain
+    assert "synthetic graph (real circuit not ready" in brain
+    js = (root / "static" / "app.js").read_text()
+    assert "real neurons" in js and "real synapses" in js

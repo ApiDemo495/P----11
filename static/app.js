@@ -2313,6 +2313,7 @@ async function loadBrains() {
       const h = inst.hormones || {};
       card.innerHTML = `<h4><span>${inst.id} · ${esc(inst.role || "")}</span><span>${(inst.signal ?? 0) >= 0 ? "+" : ""}${fmt(inst.signal ?? 0, 4)}</span></h4>
         <div class="logic">specialty vote ${fmt(inst.signal ?? 0, 3)} · hormone ${fmt(inst.h_signal, 3)}</div>
+        <div class="logic">${inst.backend === "flywire-v783-real" ? `🧠 ${Number(inst.neurons).toLocaleString()} real neurons · ${Number(inst.synapses).toLocaleString()} real synapses (FlyWire v783)` : "synthetic graph — real circuit not ready"}</div>
         <div class="kv-row">
           <div class="kv"><span>state</span><b>${inst.dominant || "—"}</b></div>
           <div class="kv"><span>experience</span><b>${fmt(inst.experience, 3)}</b></div>

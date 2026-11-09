@@ -1155,6 +1155,7 @@ class PredictionEngine:
                 "strength": br["strength"],
                 "agreement": br["agreement"],
                 "consensus": br["consensus"],
+                "backend": br.get("backend", "synthetic-graph"),
                 # brain.md §9: every prediction card carries the REAL
                 # circuit's vote + its confidence (absent = null/0)
                 "flywire": br.get("flywire"),

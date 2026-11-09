@@ -28,9 +28,12 @@ B3 Market State Observer, B4 Auto-Learning Controller.
 """
 from __future__ import annotations
 
+import logging
 import math
 import random
 import time
+
+log = logging.getLogger("brain")
 
 from .config import (
     BRAIN_CLUSTER_UNITS,
@@ -307,6 +310,8 @@ class BrainSystem:
         self._influence: dict[tuple[str, str], list[float]] = {}
         self._inhibited: dict[tuple[str, int], float] = {}   # (tf, fid)->until
         self._macro_metrics: dict[int, float] = {}           # fid -> accuracy
+        self._real = None            # RealBrains once FlyWire is ready
+        self._real_failed = False
 
     # ------------------------------------------------------------------
     @property
@@ -388,6 +393,67 @@ class BrainSystem:
         }
 
     # ------------------------------------------------------------------
+    def _real_circuits(self):
+        """The four brains on REAL FlyWire neurons, built once the
+        circuit is ready. None while absent/building/failed — the
+        caller then uses the legacy synthetic graph and the UI
+        labels it synthetic (never quoting real counts for it)."""
+        if self._real is not None or self._real_failed:
+            return self._real
+        try:
+            if self.fw.state != "ready":
+                return None
+            from .real_brains import RealBrains
+            self._real = RealBrains(self.fw)
+        except Exception:
+            log.exception("real brain circuit build failed — "
+                          "synthetic fallback (labelled)")
+            self._real_failed = True
+            return None
+        return self._real
+
+    def _evaluate_real(self, real, symbol: str, tf: str,
+                       thing2: dict, advance: bool,
+                       raws: dict | None) -> dict:
+        from .config import BRAIN_MARKET_STATES, WEIGHT_IDS
+        results = [real.evaluate_instance(b.id, symbol, tf, thing2,
+                                          advance=advance)
+                   for b in self.instances]
+        wts = self._influence.get((symbol, tf), [0.25, 0.25, 0.25, 0.25])
+        w_tot = sum(wts) or 1.0
+        mean_signal = max(-1.0, min(1.0,
+                          sum(r["signal"] * wts[i]
+                              for i, r in enumerate(results)) / w_tot))
+        polarity = 1 if mean_signal > 1e-6 else \
+            (-1 if mean_signal < -1e-6 else 0)
+        agree = sum(1 for r in results if r["signal"] != 0
+                    and (r["signal"] > 0) == (mean_signal > 0))
+        db3 = results[2]
+        state_dist = db3.get("state_dist") or {
+            s_: 0.2 for s_ in BRAIN_MARKET_STATES}
+        hormones_avg = {
+            k: round(sum(r["hormones"][k] for r in results) / 4.0, 4)
+            for k in ("dopamine", "serotonin", "octopamine", "tyramine")}
+        return {
+            "backend": "flywire-v783-real",
+            "flywire": self._flywire_eval(symbol, tf, raws, hormones_avg),
+            "instances": results,
+            "consensus": round(mean_signal, 5),
+            "polarity": polarity,
+            "strength": min(1.0, abs(mean_signal)),
+            "agreement": agree / 4.0,
+            "hormones_avg": hormones_avg,
+            "experience": results[1].get("experience", 0.5),
+            "state_dist": state_dist,
+            "dominant": db3.get("dominant")
+                        or max(BRAIN_MARKET_STATES,
+                               key=lambda s_: state_dist[s_]),
+            "p_dominant": db3.get("p_dominant")
+                          or max(state_dist.values()),
+            "weight_adj": results[3].get("weight_adj")
+                          or {wid: 0.0 for wid in WEIGHT_IDS},
+        }
+
     def _flywire_eval(self, symbol: str, tf: str,
                       raws: dict | None,
                       hormones: dict | None = None) -> dict:
@@ -448,6 +514,10 @@ class BrainSystem:
         affinity: formula id -> boosted input when |F| > 0.7 (else absent)
         thing2:   per-brain extras {tp_dist, sl_dist, trend_stats, perf}
         """
+        real = self._real_circuits()
+        if real is not None:
+            return self._evaluate_real(real, symbol, tf, thing2,
+                                       advance, raws)
         conn = self.connectome
         hormones = self.hormone_inputs(market)
         # map raw hormone drives into the sigmoid-relevant input range
@@ -907,6 +977,17 @@ class BrainSystem:
              "ok": self.connectome.edge_count > 0,
              "detail": f'{self.connectome.unit_count} units · '
                        f'{self.connectome.edge_count} edges'},
+            {"step": "four-brain backend",
+             "ok": self._real is not None,
+             "detail": (f"REAL FlyWire v783 neurons: "
+                        + ", ".join(
+                            f"{k} {v['neurons']}n/{v['synapses']}s"
+                            for k, v in
+                            self._real.summary()["circuits"].items())
+                        if self._real is not None else
+                        "synthetic graph (real circuit not ready yet — "
+                        "counts above describe the hemibrain statistics "
+                        "file, NOT the graph the brains run on)")},
             {"step": "instances ready", "ok": all(b.ready for b in self.instances),
              "detail": f'{sum(1 for b in self.instances if b.ready)}/4 brains'},
         ]
