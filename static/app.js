@@ -2116,7 +2116,7 @@ async function loadPhysics() {
       <div class="kv"><span>GSPI ×(1−x)</span><b>${fmt(ph.gspi, 4)}</b></div>
       <div class="kv"><span>TME → CCI id 99</span><b>${fmt(ph.tme, 4)}</b></div>
       <div class="kv"><span>alpha mixing</span><b>${fmt(Object.values(ph.alpha || {})[0], 4)}</b></div>`;
-    const bgn = S.snap?.bgn || {};
+    const bgn = (S.snap?.bgn || {})[S.symbol] || {};   // selected asset — no asset is hard-coded
     $("#ph-bgn").innerHTML = `<div class="cell h">β</div>` +
       TF.map(t => `<div class="cell h">${t.toUpperCase()}</div>`).join("") +
       TF.map(t => `<div class="cell h">${t.toUpperCase()}</div>` + TF.map(t2 =>
@@ -2845,7 +2845,7 @@ async function loadHistory() {
             return `<div class="kv"><span>${m}</span>` + (enough
               ? `<b class="${d.acc >= 0.55 ? "acc-up" : d.acc <= 0.45 ? "acc-dn" : ""}">${(d.acc * 100).toFixed(1)}% <span class="dim" style="font-weight:400">n=${d.n} · weight ×${d.scale}</span></b>`
               : `<b class="dim">— n=${d.n} (needs ≥8)</b>`) + `</div>`; }).join("")
-            + `<div class="hint">Walk-forward graded: module sign locked one pass, settled against the realised bar. Weight scale follows accuracy (50% → ×1.0, bounded 0.5–1.5, arms at n≥40). Path-signature: ${adv.signature_samples || 0}/500 graded → ${adv.signature_floor ? "<b>floor weight</b> (unproven)" : "<b>earned weight</b>"}${adv.conformal && adv.conformal.q_bps != null ? ` · conformal q ${adv.conformal.q_bps} bps (n=${adv.conformal.n})` : ""}</div>`;
+            + `<div class="hint">Walk-forward graded: module sign locked one pass, settled against the realised bar. Weight scale is SIGNED and learned per asset+TF: acc 50% → ×+0.5, 65% → ×+1.5, below 50% the module votes FLIPPED (×−0.5…−1.5); arms at n≥40. Path-signature: ${adv.signature_samples || 0}/500 graded → ${adv.signature_floor ? "<b>floor weight</b> (unproven)" : "<b>earned weight</b>"}${adv.conformal && adv.conformal.q_bps != null ? ` · conformal q ${adv.conformal.q_bps} bps (n=${adv.conformal.n})` : ""}</div>`;
         }
       }
     } catch { /* scoreboard optional */ }

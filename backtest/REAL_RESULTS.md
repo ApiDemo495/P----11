@@ -413,3 +413,32 @@ Aug 22m 52.4% / Sep 22m 49.6% / Aug 130m 50.4% / Sep 130m 48.7%
 (flat-weight equivalent). Still no claim of a stable edge —
 September remains at/below coin-flip; what improved is that the
 numbers are now computed correctly and weighted by measurement.
+
+## 8. De-specialization (2026-11-10): nothing is special
+
+User correction: BTC was the pairs reference and the sole weight-
+derivation tape; 22m/130m were the only measured horizons and the
+reversal gate privileged <=44m. All removed:
+- Pairs: every asset (BTC included) is now faded vs the
+  leave-one-out equal-weight basket of the OTHER assets (rebased
+  log prices, intercept included). No numeraire asset.
+- Hard-coded sign reversals deleted. Sign is a LEARNED quantity:
+  per (asset, TF, module) signed scales from that module's own
+  graded ring — acc >53% earns up to +1.5x, acc <47% flips to
+  -1.5x, 47-53% is a deadband (raw sign, floor 0.5x); arms at
+  n>=40. Identical rule for every asset/horizon/module.
+  Signature joins after its mandated 500 engine-wide samples.
+- Base weights re-derived pooled over ALL FOUR horizons
+  (22/44/130/247): ou_hurst 1.26, entropy 0.92, bocpd 0.80,
+  kalman 0.79, fracdiff 0.73... (formula in app/advanced.py).
+- Snapshot BGN matrix and brain-influence summaries are no
+  longer BTC-only (BGN follows the selected asset).
+
+Measured (BTC 1m, all horizons, expanding-window scale sim):
+raw composite 48.0-50.9% per cell; signed-adaptive helps some
+cells (22m Aug 52.9, 44m Sep 50.6) and hurts others (22m Sep
+48.0) — adaptation can chase regimes, which is why the live
+rule has the 47-53% deadband. No cell shows a stable edge; the
+point of this change is correctness of treatment — every asset
+and horizon is measured, weighted and sign-learned by the same
+rule, and each asset's modules answer to that asset's own tape.

@@ -2541,33 +2541,59 @@ class PredictionEngine:
         return 0.15
 
     def _adv_weight_scales(self, symbol: str, tf: str) -> dict:
-        """Per-module scale from its walk-forward accuracy ring:
-        acc 50% -> 1.0x, 60% -> 1.2x, 40% -> 0.8x (bounded
-        [0.5, 1.5], needs n>=40 graded samples to move at all)."""
+        """SIGNED per-module scales from each module's own
+        walk-forward accuracy ring for THIS asset+TF — the same
+        rule for every asset, timeframe and module (nothing is
+        special, nothing is hard-coded):
+          acc 65% -> +1.5x, acc 50% -> +0.5x (neutral floor),
+          acc 35% -> -1.5x (anti-predictive: votes flipped).
+        s = clamp((acc - 0.5) * 6, -1.5, 1.5), magnitude floored
+        at 0.5 so every voter keeps voting; arms at n>=40 graded
+        samples, before that the module votes raw at scale +1.
+        Signature joins the same rule once the engine-wide
+        adv_sig count reaches the user-mandated 500 graded
+        samples; until then it stays at its floor weight, raw."""
         scales: dict[str, float] = {}
         try:
+            sig_ready = False
+            try:
+                _sn = sum(len(list(self.hist.ring(self.hist.tf_key(
+                    s2, t2, "adv_sig"), 600)))
+                    for s2 in SYMBOL_ORDER for t2 in TF_ORDER)
+                sig_ready = _sn >= 500
+            except Exception:
+                sig_ready = False
             for mod in ("kalman", "fracdiff", "bocpd", "entropy",
                         "ou_hurst", "jumps", "pairs_ou", "wavelet",
-                        "rmt_residual"):
+                        "rmt_residual", "signature"):
+                if mod == "signature" and not sig_ready:
+                    continue
                 ring = list(self.hist.ring(
                     self.hist.tf_key(symbol, tf, f"adv_{mod}"), 600))
                 if len(ring) >= 40:
                     acc = sum(ring) / len(ring)
-                    scales[mod] = max(0.5, min(1.5, 0.6 + acc * 0.8))
+                    # deadband 47-53%: inside it the estimate is
+                    # within noise of a coin flip — keep the raw
+                    # sign at floor weight instead of flipping on
+                    # noise. Outside it, scale/flip by evidence.
+                    if acc < 0.47:
+                        scales[mod] = -max(0.5, min(
+                            1.5, abs((acc - 0.5) * 6.0)))
+                    elif acc > 0.53:
+                        scales[mod] = max(0.5, min(
+                            1.5, (acc - 0.5) * 6.0))
+                    else:
+                        scales[mod] = 0.5
         except Exception:
             pass
         return scales
 
     def _adv_blend_k(self, symbol: str, tf: str) -> float:
-        """Scale-matched blend coefficient for the advanced vote.
-
-        The old flat 0.18 was a weightage error: cci scores live in
-        +/-0.1..0.3 while the advanced vote spans +/-1, so 0.18 let
-        one ~50% layer outweigh the whole 36-formula score. The
-        coefficient now tracks the score's own measured scale
-        (median |score| of the last 60 windows): the advanced layer
-        earns roughly a one-third say at its typical |vote| ~0.3,
-        bounded [0.04, 0.15], 0.08 before any history exists."""
+        """Scale-matched blend coefficient for the advanced vote:
+        0.6 * median|score| of the last 60 windows, bounded
+        [0.04, 0.15] (0.08 before any history) — the vote spans
+        +/-1 while CCI scores live in +/-0.1..0.3, so a flat
+        coefficient would let one layer outweigh the whole score."""
         hist = [abs(v) for v in
                 (self.score_hist.get((symbol, tf), []) or [])
                 if v is not None]
@@ -5129,8 +5155,10 @@ class PredictionEngine:
             "assets": assets,
             "prob_audit": self.prob_audit_summary(),
             "bgn": {
-                tf: {t2: round(v, 4) for t2, v in row.items()}
-                for tf, row in (self.bgn.last_matrix.get("BTC") or {}).items()
+                sym: {
+                    tf: {t2: round(v, 4) for t2, v in row.items()}
+                    for tf, row in (mat or {}).items()}
+                for sym, mat in (self.bgn.last_matrix or {}).items()
             },
             "weights": {
                 str(f): round(
@@ -5212,9 +5240,11 @@ class PredictionEngine:
                              max(0.0, self.learning.last_deep_ts
                                  + 247 * 60 - now) / 60, 1)},
                 "brain_influence": {
-                    tf: [round(x, 4) for x in
-                         self.learning.brain_influence("BTC", tf)]
-                    for tf in TF_ORDER
+                    sym: {
+                        tf: [round(x, 4) for x in
+                             self.learning.brain_influence(sym, tf)]
+                        for tf in TF_ORDER}
+                    for sym in SYMBOL_ORDER
                 },
                 "formula_accuracy": {
                     str(f): (round(a, 4) if (a := self.learning.formula_accuracy(f)) is not None else None)

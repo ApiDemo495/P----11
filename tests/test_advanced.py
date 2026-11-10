@@ -273,3 +273,50 @@ def test_ou_deviation_half_life_finite():
     out = ou_hurst_block([math.exp(v) for v in lp], 22)
     assert out["half_life_bars"] < 60      # ~ln2/ln(1/0.9) = 6.6
     assert abs(out["z"]) > 0.1             # z actually moves now
+
+
+def test_pairs_basket_works_for_btc_too():
+    # no asset is the reference: BTC fades vs the peer basket.
+    # Common factor f; every asset = level + beta*f + OU spread.
+    rnd = random.Random(11)
+    f = [0.0]
+    for _ in range(239):
+        f.append(f[-1] + rnd.gauss(0, 0.002))
+    series = {}
+    for name, (lvl, beta) in {"ETH": (8.0, 0.9), "BNB": (6.5, 1.1),
+                              "PAXG": (7.8, 0.7)}.items():
+        sp, s = 0.0, []
+        for i in range(240):
+            sp = 0.92 * sp + rnd.gauss(0, 0.002)
+            s.append(math.exp(lvl + beta * f[i] + sp))
+        series[name] = s
+    sp, btc = 0.0, []
+    for i in range(240):
+        sp = 0.92 * sp + rnd.gauss(0, 0.002)
+        btc.append(math.exp(11.0 + f[i] + sp))
+    btc[-1] *= math.exp(0.05)        # BTC stretched above basket
+    out = pairs_vote("BTC", btc, series)
+    assert out.get("ref", "").startswith("basket")
+    assert out["vote"] < 0           # fades its own stretch
+
+
+def test_signed_scale_flips_module_contribution():
+    P = _trend(300, 0.0009, 0.0005, seed=5)
+    ctx = SimpleNamespace(P=P, V=P, W=22, p=P[-1])
+    raw = advanced_block("BTCUSDT", "tf1", ctx, full_closes=P,
+                         minutes=22)
+    flipped = advanced_block(
+        "BTCUSDT", "tf1", ctx, full_closes=P, minutes=22,
+        weight_scales={k: -1.5 for k in raw["modules"]})
+    assert raw["vote"] != 0
+    assert flipped["vote"] == -raw["vote"] or \
+        (flipped["vote"] * raw["vote"] < 0
+         and abs(abs(flipped["vote"]) - abs(raw["vote"])) < 0.05)
+    # magnitude floor: a tiny supplied scale still votes at 0.5x
+    tiny = advanced_block("BTCUSDT", "tf1", ctx, full_closes=P,
+                          minutes=22,
+                          weight_scales={"kalman": -0.05})
+    assert tiny["weights"]["kalman"] < 0
+    from app.advanced import MODULE_WEIGHTS
+    assert abs(tiny["weights"]["kalman"]) \
+        >= 0.5 * MODULE_WEIGHTS["kalman"] - 1e-9

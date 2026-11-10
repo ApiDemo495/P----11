@@ -394,16 +394,35 @@ def jumps_vote(P: list[float]) -> dict:
 # ---------------------------------------------------------------- pairs OU
 def pairs_vote(symbol: str, P: list[float],
                others: dict[str, list[float]]) -> dict:
-    ref = others.get("BTC")
-    if symbol == "BTC" or not ref or len(P) < 60 or len(ref) < 60:
-        return {"vote": 0.0, "why": "no ref"}
-    n = min(len(P), len(ref), 240)
-    x = [math.log(v) for v in ref[-n:] if v > 0]
-    y = [math.log(v) for v in P[-n:] if v > 0]
-    n = min(len(x), len(y))
+    """Cointegration fade vs the leave-one-out market basket.
+
+    No asset is special: the reference for X is the equal-weight
+    basket of every OTHER asset (log prices rebased to the window
+    start, so levels never enter), and X is faded when its spread
+    vs that basket stretches. BTC gets a pairs vote exactly like
+    every other asset."""
+    peers = []
+    for s2, series in (others or {}).items():
+        if s2 != symbol and series and len(series) >= 60:
+            peers.append(series)
+    if len(P) < 60 or not peers:
+        return {"vote": 0.0, "why": "no peers"}
+    n = min([len(P)] + [len(x) for x in peers] + [240])
     if n < 60:
         return {"vote": 0.0, "why": "thin"}
-    x, y = x[-n:], y[-n:]
+
+    def rebased(series):
+        lp = [math.log(v) for v in series[-n:] if v > 0]
+        return [v - lp[0] for v in lp]
+
+    y = rebased(P)
+    xs = [rebased(x) for x in peers]
+    n = min([len(y)] + [len(x) for x in xs])
+    if n < 60:
+        return {"vote": 0.0, "why": "thin"}
+    y = y[-n:]
+    basket = [sum(x[i] for x in xs) / len(xs) for i in range(n)]
+    x = basket
     mx = sum(x) / n
     my = sum(y) / n
     den = sum((v - mx) ** 2 for v in x) or EPS
@@ -424,7 +443,8 @@ def pairs_vote(symbol: str, P: list[float],
     z = (spread[-1] - ms) / sds
     vote = -_tanh(z / 1.6) * min(1.0, 130.0 / max(hl, 1.0))
     return {"vote": round(vote, 4), "z": round(z, 2),
-            "half_life_bars": round(hl, 1), "beta": round(beta, 3)}
+            "half_life_bars": round(hl, 1), "beta": round(beta, 3),
+            "ref": f"basket({len(peers)} peers)"}
 
 
 # ---------------------------------------------------------------- wavelet
@@ -658,27 +678,22 @@ def conformal_update(state: dict, abs_ret: float, alpha: float = 0.2,
 
 
 # ---------------------------------------------------------------- composite
-# Base weights from MEASURED walk-forward accuracy on real BTC 1m,
-# formula w = clamp(1 + 20*(acc - 0.5), 0.5, 1.5). Two experiments
-# (REAL_RESULTS S7): (a) weights fit on Aug alone did NOT hold on
-# Sep (Aug +0.4/+0.7pp, Sep -0.3/-0.5pp — month rankings shuffle),
-# so these use the POOLED Aug+Sep accuracy (n-weighted, ~5,900
-# decisions/horizon): the evidence is mild, so the tilts are mild.
-#   kalman .506 -> 1.13    ou_hurst .504 -> 1.08
-#   fracdiff .503 -> 1.06  jumps .503 -> 1.06 (sparse voter)
-#   wavelet .500 -> 0.99   entropy .499 -> 0.98
-#   bocpd .494 -> 0.87     pairs_ou unmeasured (needs a ref asset;
-#                          BTC-only tape) -> neutral 0.80, graded
-#                          live on the alt assets
-# The live grade-driven scales multiply these base weights, so any
-# module can still earn up to 1.5x or fall to the 0.5x floor from
-# its own settled history. Signature measured .519 pooled — the
-# most consistent module after its area fix — but stays at the
-# user-mandated floor until the ENGINE's own rings reach n>=500.
+# Base weights from MEASURED walk-forward accuracy, pooled over
+# ALL FOUR horizons (22/44/130/247 — no horizon is privileged) on
+# real BTC 1m, formula w = clamp(1 + 20*(acc - 0.5), 0.5, 1.5):
+#   ou_hurst .513 -> 1.26   jumps .498 -> 0.95 (sparse)
+#   entropy .496 -> 0.92    wavelet .494 -> 0.88
+#   bocpd .490 -> 0.80      kalman .490 -> 0.79
+#   fracdiff .487 -> 0.73   signature .482 (floor-locked anyway)
+#   pairs_ou: needs peers (basket) — unmeasurable on a BTC-only
+#   tape -> neutral 0.80. These base weights are IDENTICAL for
+#   every asset: each asset then earns its own signed scale per
+#   (asset, TF) from its live adv_* rings — no asset's tape is
+#   imposed on another. See REAL_RESULTS S8.
 MODULE_WEIGHTS = {
-    "kalman": 1.13, "fracdiff": 1.06, "jumps": 1.06,
-    "wavelet": 0.99, "ou_hurst": 1.08, "pairs_ou": 0.80,
-    "entropy": 0.98, "bocpd": 0.87, "rmt_residual": 0.35,
+    "ou_hurst": 1.26, "jumps": 0.95, "entropy": 0.92,
+    "wavelet": 0.88, "bocpd": 0.80, "kalman": 0.79,
+    "fracdiff": 0.73, "pairs_ou": 0.80, "rmt_residual": 0.35,
     "signature": 0.15,          # floor until validated (engine raises)
 }
 
@@ -715,35 +730,21 @@ def advanced_block(symbol: str, tf: str, ctx, others: dict | None = None,
         rmt_res = float(rmt["residual_vote"].get(symbol, 0.0) or 0.0)
     mods["rmt_residual"] = {"vote": round(rmt_res, 4)}
 
-    # MEASURED SIGN REVERSALS (real BTC 1m walk-forward, Aug–Sep
-    # 2026, both horizons, consistent with the full-engine audit's
-    # all-folds momentum anti-prediction): the trend-following
-    # modules' raw signs are anti-predictive on this tape, so their
-    # votes enter reversed — changed, never removed; each still
-    # carries its (grade-scaled) floor weight, and the adv_* rings
-    # grade the REVERSED sign so the scales keep auditing it.
-    # the trend trio reverses only at SHORT horizons (<=44m: the
-    # reversion regime); at 130m+ the flip measured a wash, so the
-    # original signs stand there. signature is anti-predictive at
-    # every measured horizon/month, so it reverses at all horizons
-    # (still floor-weighted until its 500 graded samples judge it).
-    _rev = ("kalman", "fracdiff", "wavelet") if minutes <= 44 else ()
-    for _name in _rev + ("signature",):
-        if _name in mods and mods[_name].get("vote"):
-            mods[_name] = dict(mods[_name])
-            mods[_name]["vote"] = round(
-                -float(mods[_name]["vote"]), 4)
-            mods[_name]["reversed"] = True
-
     weights = dict(MODULE_WEIGHTS)
     weights["signature"] = min(float(sig_weight), 0.15) \
         if sig_weight <= 0.15 else min(float(sig_weight), 0.6)
-    # walk-forward grade-driven scaling (engine supplies, from the
-    # adv_* accuracy rings): proven modules earn up to 1.5x, weak
-    # ones fall to 0.5x — the floor keeps every voter voting
+    # walk-forward SIGNED grade scales (engine supplies, per
+    # asset+TF from the adv_* rings): magnitude in [0.5, 1.5] by
+    # measured accuracy; NEGATIVE when the module's raw sign was
+    # anti-predictive there (acc < 50%) — it then votes flipped.
+    # Same rule for every module, asset and horizon; arming needs
+    # n>=40 graded samples (engine-side), before that scale is +1.
     for _k, _sc in (weight_scales or {}).items():
-        if _k in weights and _k != "signature":
-            weights[_k] = weights[_k] * max(0.5, min(1.5, float(_sc)))
+        if _k in weights:
+            _s = max(-1.5, min(1.5, float(_sc)))
+            if 0.0 < abs(_s) < 0.5:
+                _s = 0.5 if _s > 0 else -0.5
+            weights[_k] = weights[_k] * _s
     num = den = 0.0
     signs: dict[str, int] = {}
     for name, blk in mods.items():
@@ -751,7 +752,7 @@ def advanced_block(symbol: str, tf: str, ctx, others: dict | None = None,
         w = weights.get(name, 0.5)
         num += w * v
         if v != 0.0:
-            den += w          # abstentions do not dilute the mean
+            den += abs(w)     # abstentions do not dilute the mean
         signs[name] = _sign(v)
     vote = num / den if den else 0.0
 
