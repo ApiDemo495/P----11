@@ -36,8 +36,17 @@ jobs:
                   # the placeholder binds within seconds of detach;
                   # a refused connection in that first grace window
                   # is the runner's startup lag, not a dead port
-                  if time.time() - t0 < 15:
+                  if time.time() - t0 < 90:
                       time.sleep(1); continue
+                  # dump the boot/server logs before dying so a
+                  # failure is diagnosable from the job log itself
+                  for f in ("data/boot.log", "data/server.log"):
+                      try:
+                          print(f"--- tail {f} ---")
+                          print("".join(open(f, errors="replace")
+                                        .readlines()[-40:]))
+                      except OSError:
+                          print(f"--- no {f} ---")
                   raise SystemExit(f"port dead during boot: {e}")
               try:
                   with urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=3) as r:
@@ -48,6 +57,13 @@ jobs:
                   pass
               time.sleep(5)
           else:
+              for f in ("data/boot.log", "data/server.log"):
+                  try:
+                      print(f"--- tail {f} ---")
+                      print("".join(open(f, errors="replace")
+                                    .readlines()[-40:]))
+                  except OSError:
+                      print(f"--- no {f} ---")
               raise SystemExit("app never became healthy")
           PY
       - name: stop
