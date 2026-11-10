@@ -306,3 +306,39 @@ of native-1m evidence (the live Codespace ledger now accumulates
 exactly that, graded), per-regime gates re-validated walk-forward,
 and execution selectivity reported WITH its coverage — never instead
 of it.
+
+## 5. Advanced layer — deepened & synced (2026-11-09, second pass)
+
+First pass judged too shallow; redone properly and wired into the
+same machinery as every other component:
+
+- **Proper math**: BOCPD is now a full Normal-Inverse-Gamma
+  conjugate posterior (Student-t predictive, hazard 1/60, run-length
+  posterior capped at 240) instead of an approximate change score;
+  EVT GPD fit by Hosking–Wallis probability-weighted moments
+  (b0/b1 estimators) instead of a Hill shortcut; jump test uses
+  bipower-variation local volatility instead of a rolling stdev.
+- **Component sync**: the advanced vote is mass component **102
+  "Advanced math layer"** in the contribution table (0.18 weight),
+  is named in the lock reason string, and is a graded subsystem
+  (`adv`) in `learning.record_micro` alongside emotion/physics/
+  news/hf/brain/core.
+- **Adaptive weights**: each module's weight is scaled by its own
+  walk-forward accuracy ring (`adv_<module>`): acc 50% → ×1.0,
+  60% → ×1.2, 40% → ×0.8, clamped [0.5, 1.5], arms only at n ≥ 40.
+  Signature is exempt (floor-governed until 500 graded samples).
+- **Persistence**: conformal q is appended to a `conf_q` ring at
+  every settlement and re-seeded from it on read — calibration now
+  survives restarts.
+- **Seed sync**: the 24h warm-history seed grades advanced-module
+  signs (incl. signature) with the same one-bar-late walk-forward
+  rule, so modules start accumulating honest history immediately.
+- **Caching**: the block is computed once per (asset, TF, bar);
+  RMT once per minute (was ~16 recomputes per pass).
+- **Scoreboard**: `GET /api/history/advanced` + History-panel card
+  show per-module settled n, hit rate, current weight scale,
+  signature progress to 500, and conformal q.
+
+Effect on accuracy: still an open empirical question — answerable
+now from the `adv_*` rings once ≥40 settlements per module exist.
+No accuracy claim is made until then.

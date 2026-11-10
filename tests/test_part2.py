@@ -259,9 +259,11 @@ def test_brain_instances_and_hormone_directions():
         res = bs.evaluate("BTC", "tf1", market, affinity, thing2, advance=False)
         assert len(res["instances"]) == 4
         assert [i["id"] for i in res["instances"]] == ["DB-1", "DB-2", "DB-3", "DB-4"]
-        # consensus = mean of the four H signals
-        mean_h = sum(i["h_signal"] for i in res["instances"]) / 4.0
-        assert res["consensus"] == pytest.approx(mean_h, abs=1e-4)
+        # consensus = influence-weighted mean of the four DIFFERENT
+        # specialty signals (fresh system: equal influence -> plain
+        # mean); h_signal is a display hormone readout only
+        mean_sig = sum(i["signal"] for i in res["instances"]) / 4.0
+        assert res["consensus"] == pytest.approx(mean_sig, abs=1e-4)
         for inst in res["instances"]:
             assert -1.0 <= inst["h_signal"] <= 1.0
             assert 0.0 < inst["hormone_state"] < 1.0

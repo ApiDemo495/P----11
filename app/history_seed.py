@@ -79,13 +79,34 @@ def seed_history(engine, hours: int = 24) -> dict:
             prev = None        # (signals, cci, conf, dir, entry, tp, sl, start_i)
             settled = graded = 0
 
+            def _adv_signs(start_i, ctx):
+                """Advanced-module signs for the call locked at
+                start_i — graded with the same walk-forward rule as
+                everything else, so modules (incl. the signature
+                voter) accumulate honest history from the seed."""
+                try:
+                    from .advanced import advanced_block, rmt_block
+                    others, series = {}, {}
+                    for s2 in SYMBOL_ORDER:
+                        cl = list(feed.state(s2).closes or [])
+                        series[s2] = cl[:start_i + 1]
+                        if s2 != symbol:
+                            others[s2] = cl[:start_i + 1]
+                    blk = advanced_block(
+                        symbol, tf, ctx, others=others,
+                        full_closes=closes[:start_i + 1],
+                        rmt=rmt_block(series))
+                    return blk.get("signs") or {}
+                except Exception:
+                    return {}
+
             def _settle_prev(p, settle_i):
                 """Settle window p at closes[settle_i] (its own end bar):
                 strict sign via the ledger, TP/SL first-touch over the
                 window's own bars, formula grading + calibration rings."""
                 nonlocal settled, graded
                 (p_sig, p_cci, p_conf, p_dir, p_entry, p_tp,
-                 p_sl, p_start) = p
+                 p_sl, p_start, p_adv) = p
                 settle_px = closes[settle_i]
                 lvl = None
                 if p_tp and p_sl and p_dir:
@@ -116,6 +137,15 @@ def seed_history(engine, hours: int = 24) -> dict:
                         {f: _sign(v) for f, v in p_sig.items()},
                         {}, [], None, None)
                     graded += 1
+                    for _mod, _s in (p_adv or {}).items():
+                        if _s:
+                            engine.hist.ring(engine.hist.tf_key(
+                                symbol, tf, f"adv_{_mod}"), 600).append(
+                                1.0 if _s == ms else 0.0)
+                    if (p_adv or {}).get("signature"):
+                        engine.hist.ring(engine.hist.tf_key(
+                            symbol, tf, "adv_sig"), 600).append(
+                            1.0 if p_adv["signature"] == ms else 0.0)
                     # calibration rings (stated conf vs realised)
                     try:
                         engine.hist.ring(engine.hist.tf_key(
@@ -182,7 +212,8 @@ def seed_history(engine, hours: int = 24) -> dict:
                 stats["windows"] += 1
                 prev = ({f: float(v) for f, v in vals.items()},
                         float(pack.get("cci_adjusted") or 0.0), conf,
-                        direction, entry, tp, sl, start_i)
+                        direction, entry, tp, sl, start_i,
+                        _adv_signs(start_i, ctx))
             # the last window ends at its own end bar (<= last tape bar)
             if prev is not None and ends:
                 _settle_prev(prev, ends[-1])

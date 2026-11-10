@@ -1431,6 +1431,13 @@ class PredictionEngine:
                     } for fid, v in comp.items()),
                     key=lambda c: -abs(c["contribution"]),
                 )
+                _comps.append({
+                    "id": "102", "name": "Advanced math layer",
+                    "value": round(float(_adv.get("vote") or 0.0), 5),
+                    "weight": 0.18,
+                    "contribution": round(
+                        0.18 * float(_adv.get("vote") or 0.0), 5)})
+                _comps.sort(key=lambda c: -abs(c["contribution"]))
                 _top3 = _comps[:3]
                 _agree = sum(1 for c in _top3
                              if _sign(c["value"]) == _sign(pack["cci_adjusted"]))
@@ -1443,6 +1450,9 @@ class PredictionEngine:
                     + (f". Top signals {'reinforce' if _agree >= 2 else 'conflict'} "
                        "the net direction. "
                        if _top3 else ". ")
+                    + (f"Advanced layer {_adv.get('vote', 0):+.3f} "
+                       f"(gate ×{_adv.get('soft_gate', 1):.2f}, "
+                       f"size ×{_adv.get('size_mult', 1):.2f}). ")
                     + (f"Trend decoherence P6 ×{fin['drpt']:.2f} — choppy market. "
                        if fin.get("drpt", 0) > 0.1 else
                        "Physics multipliers near neutral. ")
@@ -1479,6 +1489,12 @@ class PredictionEngine:
                 # adaptive conformal band (ACI state per asset/TF,
                 # updated at settlement — see _settle hook)
                 _cf = getattr(self, "_conformal", {}).get((symbol, tf))
+                if not _cf:
+                    _ring = list(self.hist.ring(self.hist.tf_key(
+                        symbol, tf, "conf_q"), 400))
+                    if _ring:
+                        _cf = {"q": float(_ring[-1]),
+                               "n": len(_ring), "hits": 0}
                 if _cf and _cf.get("q"):
                     _px = float(ctxs[tf].P[-1]) if ctxs[tf].P else 0.0
                     results[tf]["conformal"] = {
@@ -2493,31 +2509,101 @@ class PredictionEngine:
             pass
         return 0.15
 
+    def _adv_weight_scales(self, symbol: str, tf: str) -> dict:
+        """Per-module scale from its walk-forward accuracy ring:
+        acc 50% -> 1.0x, 60% -> 1.2x, 40% -> 0.8x (bounded
+        [0.5, 1.5], needs n>=40 graded samples to move at all)."""
+        scales: dict[str, float] = {}
+        try:
+            for mod in ("kalman", "fracdiff", "bocpd", "entropy",
+                        "ou_hurst", "jumps", "pairs_ou", "wavelet",
+                        "rmt_residual"):
+                ring = list(self.hist.ring(
+                    self.hist.tf_key(symbol, tf, f"adv_{mod}"), 600))
+                if len(ring) >= 40:
+                    acc = sum(ring) / len(ring)
+                    scales[mod] = max(0.5, min(1.5, 0.6 + acc * 0.8))
+        except Exception:
+            pass
+        return scales
+
     def _advanced_for(self, symbol: str, tf: str, ctx) -> dict:
         """Advanced mathematics layer (app/advanced.py) — computed
-        once per (asset, TF) pass; failures degrade to a neutral
+        once per (asset, TF, bar); failures degrade to a neutral
         block, never to a crashed prediction."""
         try:
+            cache = getattr(self, "_adv_cache", None)
+            if cache is None:
+                cache = self._adv_cache = {}
+            st = self.feed.state(symbol)
+            key = (symbol, tf, len(st.closes or []),
+                   (st.times or [0])[-1] if st.times else 0)
+            if key in cache:
+                return cache[key]
             from .advanced import advanced_block, rmt_block
             others = {}
             series = {}
-            for s in SYMBOL_ORDER:
-                st = self.feed.state(s)
-                closes = list(st.closes or [])
-                series[s] = closes
-                if s != symbol:
-                    others[s] = closes
-            rmt = rmt_block(series)
-            return advanced_block(
+            for s2 in SYMBOL_ORDER:
+                st2 = self.feed.state(s2)
+                closes = list(st2.closes or [])
+                series[s2] = closes
+                if s2 != symbol:
+                    others[s2] = closes
+            rmt_cache = getattr(self, "_rmt_cache", None)
+            if rmt_cache is None:
+                rmt_cache = self._rmt_cache = {}
+            rkey = int(time.time() // 60)
+            if rkey not in rmt_cache:
+                rmt_cache.clear()
+                rmt_cache[rkey] = rmt_block(series)
+            blk = advanced_block(
                 symbol, tf, ctx, others=others,
                 full_closes=series.get(symbol) or list(ctx.P or []),
-                sig_weight=self._sig_weight(), rmt=rmt)
+                sig_weight=self._sig_weight(), rmt=rmt_cache[rkey],
+                weight_scales=self._adv_weight_scales(symbol, tf))
+            cache.clear()
+            cache[key] = blk
+            return blk
         except Exception:
             log.exception("advanced block failed %s/%s", symbol, tf)
             return {"vote": 0.0, "signs": {}, "modules": {},
                     "soft_gate": 1.0, "rqa_mult": 1.0, "har_rv": {},
                     "evt": {}, "rmt": None, "size_mult": 1.0,
                     "weights": {}}
+
+    def advanced_history(self, symbol: str, tf: str) -> dict:
+        """Per-module walk-forward accuracy (adv_* rings) — the
+        honest scoreboard for the advanced layer: every module
+        report its settled sample count and hit rate, and the
+        adaptive weight scale the engine currently applies."""
+        mods = {}
+        try:
+            scales = self._adv_weight_scales(symbol, tf)
+            for mod in ("kalman", "fracdiff", "bocpd", "entropy",
+                        "ou_hurst", "jumps", "pairs_ou", "wavelet",
+                        "rmt_residual", "signature"):
+                ring = list(self.hist.ring(self.hist.tf_key(
+                    symbol, tf, f"adv_{mod}"), 600))
+                n = len(ring)
+                mods[mod] = {
+                    "n": n,
+                    "acc": (round(sum(ring) / n, 4) if n else None),
+                    "scale": round(scales.get(mod, 1.0), 3)}
+            sig_n = len(list(self.hist.ring(self.hist.tf_key(
+                symbol, tf, "adv_sig"), 600)))
+            cq = list(self.hist.ring(self.hist.tf_key(
+                symbol, tf, "conf_q"), 400))
+            return {"symbol": symbol, "tf": tf, "modules": mods,
+                    "signature_samples": sig_n,
+                    "signature_floor": sig_n < 500,
+                    "conformal": {"q_bps": (round(cq[-1] * 1e4, 1)
+                                            if cq else None),
+                                  "n": len(cq)}}
+        except Exception:
+            log.exception("advanced_history failed")
+            return {"symbol": symbol, "tf": tf, "modules": {},
+                    "signature_samples": 0, "signature_floor": True,
+                    "conformal": {"q_bps": None, "n": 0}}
 
     def _learners(self, symbol: str, tf: str, ctx) -> dict:
         """§8.6: edge guard (flat windows), temporal twin (segmented vs
@@ -3194,6 +3280,8 @@ class PredictionEngine:
                 "news": 1 if res.get("news_value", 0) > 0 else -1,
                 "hf": 1 if res.get("hedge", {}).get("combined", 0) > 0 else -1,
                 "brain": int(res.get("brain", {}).get("polarity", 0)),
+                "adv": _sign(float((res.get("advanced") or {})
+                                   .get("vote") or 0.0)),
                 "core": int(res.get("direction", 0)),
                 "final": int(res.get("direction", 0)),
             }
@@ -3901,6 +3989,9 @@ class PredictionEngine:
                     _cf_all[(symbol, tf)] = conformal_update(
                         _cf_all.get((symbol, tf), {}),
                         abs(price / _entry - 1.0))
+                    self.hist.ring(self.hist.tf_key(
+                        symbol, tf, "conf_q"), 400).append(
+                        float(_cf_all[(symbol, tf)]["q"]))
             except Exception:
                 pass
             # close the trading book for this asset if a position was

@@ -134,49 +134,65 @@ def kalman_vote(P: list[float]) -> dict:
 
 # ---------------------------------------------------------------- bocpd
 def bocpd_vote(P: list[float], hazard: float = 1.0 / 60.0) -> dict:
-    """Gaussian BOCPD (known-variance approx on returns): exact
-    run-length posterior recursion, then vote = mean return of the
-    most likely current segment. A fresh break => the segment is
-    young => the vote is shrunk and the soft gate tightens."""
-    r = _rets(P[-160:])
+    """Bayesian online changepoint detection (Adams & MacKay 2007)
+    with the conjugate Normal-Inverse-Gamma posterior — unknown
+    mean AND variance per segment, Student-t predictive. The vote
+    is the posterior-weighted segment drift; the soft gate tightens
+    when the changepoint probability (run length ~ 0) is high."""
+    r = _rets(P[-170:])
     if len(r) < 25:
         return {"vote": 0.0, "gate": 1.0, "why": "thin"}
-    sd = _std(r) or EPS
-    mu0 = 0.0
-    # posterior over run lengths, truncated at len(r)
+    MAXRL = 120
+    # NIG prior: mu0=0, kappa0=1, alpha0=2, beta0 from global var
+    var0 = (_std(r) ** 2) or 1e-8
+    # per-run-length posterior params (lists, index = run length)
+    mu = [0.0]; kap = [1.0]; alp = [2.0]; bet = [var0]
     post = [1.0]
-    seg_mean = [0.0]     # mean of segment ending at t for each run len
-    seg_n = [0]
-    p_break_recent = 0.0
-    for i, x in enumerate(r):
-        new_post = [0.0] * (len(post) + 1)
-        new_mean = [0.0] * (len(post) + 1)
-        new_n = [0] * (len(post) + 1)
-        # changepoint mass
-        cp = sum(post) * hazard
-        new_post[0] = cp
-        new_mean[0] = x
-        new_n[0] = 1
+    p_cp = 0.0
+    exp_drift = 0.0
+    for x in r:
+        # Student-t predictive for each run length
+        new_post = [0.0] * (min(len(post) + 1, MAXRL))
+        nmu = [0.0] * len(new_post); nkap = [1.0] * len(new_post)
+        nalp = [2.0] * len(new_post); nbet = [var0] * len(new_post)
+        # changepoint: all mass -> run length 0 under the prior
+        cp_mass = sum(post) * hazard
+        new_post[0] = cp_mass
+        nmu[0], nkap[0], nalp[0], nbet[0] = x, 2.0, 2.5, var0 + 0.0
+        growth_total = 0.0
         for rl in range(len(post)):
-            # predictive density under segment mean so far
-            m = seg_mean[rl]
-            pred = math.exp(-0.5 * ((x - m) / sd) ** 2)
-            w = post[rl] * (1 - hazard) * pred
-            new_post[rl + 1] = w
-            new_n[rl + 1] = seg_n[rl] + 1
-            new_mean[rl + 1] = m + (x - m) / new_n[rl + 1]
+            if post[rl] <= 0:
+                continue
+            nu = 2 * alp[rl]
+            scale2 = bet[rl] * (kap[rl] + 1) / (alp[rl] * kap[rl])
+            # Student-t log pdf
+            z = (x - mu[rl]) ** 2 / (nu * scale2)
+            logp = (math.lgamma((nu + 1) / 2) - math.lgamma(nu / 2)
+                    - 0.5 * math.log(nu * math.pi * scale2)
+                    - (nu + 1) / 2 * math.log1p(z))
+            w = post[rl] * (1 - hazard) * math.exp(max(-30.0, logp))
+            nrl = rl + 1
+            if nrl >= MAXRL:
+                nrl = MAXRL - 1
+            new_post[nrl] += w
+            growth_total += w
+            # NIG update with this observation
+            k_old = kap[rl]
+            nkap[nrl] = k_old + 1
+            nmu[nrl] = (k_old * mu[rl] + x) / (k_old + 1)
+            nalp[nrl] = alp[rl] + 0.5
+            nbet[nrl] = bet[rl] + (k_old * (x - mu[rl]) ** 2) / (2 * (k_old + 1))
         tot = sum(new_post) or EPS
-        post = [p / tot for p in new_post]
-        seg_mean, seg_n = new_mean, new_n
-        if i >= len(r) - 3:
-            p_break_recent = max(p_break_recent, post[0])
-    best = max(range(len(post)), key=lambda k: post[k])
-    seg_ret = seg_mean[best] * min(seg_n[best], 40)
-    vote = _tanh(seg_ret / (sd * (min(seg_n[best], 40) ** 0.5) + EPS))
-    gate = 1.0 - 0.45 * min(1.0, p_break_recent * 3.0)
+        post = [v / tot for v in new_post]
+        mu, kap, alp, bet = nmu, nkap, nalp, nbet
+        p_cp = post[0] if post else 0.0
+        exp_drift = sum(post[rl] * mu[rl] for rl in range(len(post)))
+    sd = _std(r) or EPS
+    vote = _tanh(exp_drift / (sd + EPS) * 8.0)
+    gate = 1.0 - 0.5 * min(1.0, p_cp * 4.0)
+    best_rl = max(range(len(post)), key=lambda k: post[k])
     return {"vote": round(vote, 4), "gate": round(gate, 3),
-            "run_len": int(seg_n[best]),
-            "p_break": round(float(post[0]), 4)}
+            "run_len": int(best_rl), "p_break": round(float(p_cp), 4)}
 
 
 # ---------------------------------------------------------------- entropy
@@ -332,8 +348,12 @@ def jumps_vote(P: list[float]) -> dict:
         i = len(r) - 1 - back
         if i < 5:
             break
-        local = (sum(absr[max(0, i - 20):i]) / max(1, min(20, i))) or EPS
-        stat = abs(r[i]) / (local * 1.25 + EPS)
+        seg = absr[max(1, i - 20):i]
+        # local bipower variation: jump-robust local sigma
+        local = ((math.pi / 2) * sum(seg[k] * seg[k - 1]
+                 for k in range(1, len(seg))) / max(1, len(seg))) ** 0.5 \
+            if len(seg) > 3 else (absr[i - 1] if i else EPS)
+        stat = abs(r[i]) / (local + EPS)
         if stat > 3.0:
             # jumps partially retrace, scaled by recency decay
             vote = -_sign(r[i]) * min(1.0, (stat - 3.0) / 3.0 + 0.4) \
@@ -440,19 +460,28 @@ def evt_tail(Pfull: list[float]) -> dict:
     exc = [x - thr for x in r if x > thr]
     if len(exc) < 25:
         return {"q99_bps": None, "why": "thin tail"}
-    mean_exc = sum(exc) / len(exc)
-    # method-of-moments GPD shape (bounded for sanity)
-    var_exc = sum((x - mean_exc) ** 2 for x in exc) / len(exc)
-    xi = 0.5 * (1 - mean_exc ** 2 / (var_exc + EPS))
-    xi = max(-0.2, min(0.6, xi))
-    beta = mean_exc * (1 - xi) if xi < 1 else mean_exc
-    n, Nexc = len(r), len(exc)
-    p = 0.01
+    # GPD fit by probability-weighted moments (Hosking & Wallis):
+    # b0 = E[X], b1 = E[X * F(X)] over exceedances (ascending order)
+    exc_s = sorted(exc)
+    m = len(exc_s)
+    if m < 2:
+        return {"q99_bps": None, "why": "thin tail"}
+    b0 = sum(exc_s) / m
+    b1 = sum((i / (m - 1)) * exc_s[i] for i in range(m)) / m
+    if b1 <= EPS or b0 <= EPS:
+        return {"q99_bps": None, "why": "degenerate tail"}
+    ratio = b0 / b1
+    if abs(2.0 - ratio) < 1e-6:
+        return {"q99_bps": None, "why": "degenerate tail"}
+    k_hw = (4.0 - ratio) / (2.0 - ratio)     # Hosking shape (=-xi)
+    xi = max(-0.2, min(0.6, -k_hw))          # EVT shape (fat tail > 0)
+    beta = max(EPS, b0 * (1.0 + xi))
+    # POT return level: P(X > thr + y) = (Nexc/n)(1 + xi y/beta)^(-1/xi)
+    n_all, p_target = len(r), 0.01
     if abs(xi) > 1e-6:
-        q = thr + (beta / xi) * (((n / Nexc) * (1 - (1 - p))) ** (-xi) - 1) \
-            if False else thr + (beta / xi) * (((Nexc / n) / p) ** xi - 1)
+        q = thr + (beta / xi) * (((len(exc) / n_all) / p_target) ** xi - 1)
     else:
-        q = thr + beta * math.log((Nexc / n) / p)
+        q = thr + beta * math.log((len(exc) / n_all) / p_target)
     median_r = srt[len(srt) // 2] or EPS
     size = max(0.4, min(1.0, (3.0 * median_r) / (q + EPS)))
     return {"q99_bps": round(q * 1e4, 1), "xi": round(xi, 3),
@@ -596,7 +625,8 @@ MODULE_WEIGHTS = {
 def advanced_block(symbol: str, tf: str, ctx, others: dict | None = None,
                    full_closes: list[float] | None = None,
                    sig_weight: float = 0.15,
-                   rmt: dict | None = None) -> dict:
+                   rmt: dict | None = None,
+                   weight_scales: dict | None = None) -> dict:
     """Single engine entry point. Returns votes, soft gates and
     sizing layers; every field safe to print in the UI/API."""
     P = list(ctx.P or [])
@@ -626,6 +656,12 @@ def advanced_block(symbol: str, tf: str, ctx, others: dict | None = None,
     weights = dict(MODULE_WEIGHTS)
     weights["signature"] = min(float(sig_weight), 0.15) \
         if sig_weight <= 0.15 else min(float(sig_weight), 0.6)
+    # walk-forward grade-driven scaling (engine supplies, from the
+    # adv_* accuracy rings): proven modules earn up to 1.5x, weak
+    # ones fall to 0.5x — the floor keeps every voter voting
+    for _k, _sc in (weight_scales or {}).items():
+        if _k in weights and _k != "signature":
+            weights[_k] = weights[_k] * max(0.5, min(1.5, float(_sc)))
     num = den = 0.0
     signs: dict[str, int] = {}
     for name, blk in mods.items():

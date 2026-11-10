@@ -1,8 +1,11 @@
 """Advanced mathematics layer (app/advanced.py) — each approved
 module pinned on synthetic tape where the right answer is known."""
 import math
+import random
+from types import SimpleNamespace
 
 from app.advanced import (
+    advanced_block,
     bocpd_vote, conformal_update, entropy_block, evt_tail,
     fracdiff_vote, har_rv, jumps_vote, kalman_vote, ou_hurst_block,
     pairs_vote, rqa_multiplier, signature_vote, wavelet_vote,
@@ -107,3 +110,47 @@ def test_conformal_band_adapts_to_misses():
         st = conformal_update(st, 0.004)     # always exceeding
     assert st["q"] > 0.001, "band must widen when it keeps missing"
     assert st["n"] == 60
+
+
+def test_weight_scales_clamped_and_applied():
+    P = _trend(300, 0.0008, 0.0006, seed=23)
+    ctx = SimpleNamespace(x=1, p=P[-1], P=P, Pfull=P, O=P, H=P, L=P, V=P)
+    base = advanced_block("BTCUSDT", "tf3", ctx)
+    scaled = advanced_block("BTCUSDT", "tf3", ctx,
+                            weight_scales={"kalman": 99.0,
+                                           "wavelet": 0.01})
+    # scales clamp to [0.5, 1.5]: kalman share grows but stays finite
+    wk = scaled["weights"]["kalman"] / max(1e-9, base["weights"]["kalman"])
+    assert 1.0 < wk <= 1.5001
+    ww = scaled["weights"]["wavelet"] / max(1e-9, base["weights"]["wavelet"])
+    assert 0.4999 <= ww < 1.0
+    # signature is exempt from adaptive scaling (floor-governed)
+    assert scaled["weights"]["signature"] == base["weights"]["signature"]
+
+
+def test_bocpd_conjugate_detects_regime_break():
+    rnd = random.Random(31)
+    calm = [100.0 * (1 + rnd.gauss(0, 0.0005)) ** i for i in range(120)]
+    last = calm[-1]
+    jump = [last * (1.03 ** (i + 1)) * (1 + rnd.gauss(0, 0.0005))
+            for i in range(30)]
+    blk = bocpd_vote(calm + jump)
+    assert 0.0 <= blk["p_break"] <= 1.0
+    # after a persistent 3%/bar break the run-length posterior must
+    # notice (most likely run length resets well below calm length)
+    assert blk["run_len"] < 120
+
+
+def test_evt_pwm_fat_tail_positive_shape():
+    rnd = random.Random(41)
+    P, price = [100.0], 100.0
+    for i in range(1600):
+        step = rnd.gauss(0, 0.001)
+        if i % 97 == 0:
+            step += rnd.choice([-1, 1]) * 0.012   # fat-tail shocks
+        price *= 1 + step
+        P.append(price)
+    out = evt_tail(P)
+    assert out["q99_bps"] is not None and out["q99_bps"] > 0
+    assert 0.25 <= out["size_mult"] <= 1.0
+    assert out["cat_stop_bps"] >= out["q99_bps"]

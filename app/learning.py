@@ -291,7 +291,7 @@ class LearningSystem:
                     1 if s == move_sign else 0)
         # subsystem agreement contribution (feeds deep steps 8-11)
         final_ok = move_sign != 0 and subsystems.get("final", 0) == move_sign
-        for name in ("emotion", "physics", "news", "hf", "brain", "core"):
+        for name in ("emotion", "physics", "news", "hf", "brain", "core", "adv"):
             s = subsystems.get(name, 0)
             if not s:
                 continue

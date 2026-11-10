@@ -2830,6 +2830,25 @@ async function loadHistory() {
         }
       }
     } catch { /* banner optional */ }
+    // advanced module scoreboard (per-module walk-forward accuracy)
+    try {
+      const adv = await api(`/api/history/advanced?symbol=${state.symbol}&tf=${state.tf}`);
+      const mods = adv.modules || {};
+      const names = Object.keys(mods);
+      const elA = $("#hs-advanced");
+      if (elA) {
+        if (!names.length) {
+          elA.innerHTML = `<div class="dim pad">No module history for ${state.symbol} ${state.tf.toUpperCase()} yet — settles one bar behind each locked call.</div>`;
+        } else {
+          elA.innerHTML = names.map(m => { const d = mods[m];
+            const enough = (d.n || 0) >= 8;
+            return `<div class="kv"><span>${m}</span>` + (enough
+              ? `<b class="${d.acc >= 0.55 ? "acc-up" : d.acc <= 0.45 ? "acc-dn" : ""}">${(d.acc * 100).toFixed(1)}% <span class="dim" style="font-weight:400">n=${d.n} · weight ×${d.scale}</span></b>`
+              : `<b class="dim">— n=${d.n} (needs ≥8)</b>`) + `</div>`; }).join("")
+            + `<div class="hint">Walk-forward graded: module sign locked one pass, settled against the realised bar. Weight scale follows accuracy (50% → ×1.0, bounded 0.5–1.5, arms at n≥40). Path-signature: ${adv.signature_samples || 0}/500 graded → ${adv.signature_floor ? "<b>floor weight</b> (unproven)" : "<b>earned weight</b>"}${adv.conformal && adv.conformal.q_bps != null ? ` · conformal q ${adv.conformal.q_bps} bps (n=${adv.conformal.n})` : ""}</div>`;
+        }
+      }
+    } catch { /* scoreboard optional */ }
     const [days, lb] = await Promise.all([api("/api/history/days"), api("/api/history/leaderboard")]);
     const dd = days.days || [];
     const box = $("#hs-days");

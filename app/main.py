@@ -893,6 +893,16 @@ async def history_days() -> JSONResponse:
     return JSONResponse({"ok": True, "days": engine.historydb.days()})
 
 
+@app.get("/api/history/advanced")
+async def history_advanced(symbol: str = "BTCUSDT",
+                           tf: str = "tf3") -> JSONResponse:
+    """Per-module walk-forward accuracy for the advanced layer."""
+    from .config import SYMBOLS, TIMEFRAMES
+    return JSONResponse({"ok": True, **engine.advanced_history(
+        symbol if symbol in SYMBOLS else "BTCUSDT",
+        tf if tf in TIMEFRAMES else "tf3")})
+
+
 @app.get("/api/history/day")
 async def history_day(date: str) -> JSONResponse:
     rows = engine.historydb.day(date)

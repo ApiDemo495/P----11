@@ -90,6 +90,6 @@ def test_dashboard_rewrite_contracts():
     assert 'grid.style.display = "";' in js
     assert "setFocusTf(tf)" in js
     css = (ROOT / "static" / "style.css").read_text()
-    assert ".dash-hero" in css and ".main-chart { height: 340px" in css
+    assert ".dash-hero" in css and ".main-chart { height: 480px" in css
     # emotion UI consumes the server dominant
     assert "em.dominant" in js

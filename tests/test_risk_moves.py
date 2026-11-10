@@ -38,7 +38,9 @@ def test_levels_from_measured_moves_both_sides():
             assert b["tp"] > 100.0 > b["sl"]
         else:
             assert b["tp"] < 100.0 < b["sl"]
-        assert b["rr"] >= 1.0 and b["tp_bps"] > 5   # not the old ~2bp toy
+        # band rule: (0, 4:1]; sub-1:1 is allowed but must be flagged
+        assert 0.0 < b["rr"] <= 4.0 and b["below_floor"] == (b["rr"] < 1.0)
+        assert b["tp_bps"] > 5   # not the old ~2bp toy
 
 
 def test_sigma_cap_against_one_bad_print():
