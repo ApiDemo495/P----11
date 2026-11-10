@@ -191,3 +191,85 @@ def test_rings_persistence_roundtrip():
     _rings_restore(e2, snap)
     assert list(e2.hist.ring("BTCUSDT:tf3:adv_kalman", 600)) == [1.0]
     assert list(e2.hist.ring("BTCUSDT:tf3:conf_q", 400)) == [0.0042]
+
+
+def test_pairs_intercept_recovers_spread():
+    # cointegrated pair with a LEVEL intercept: y = 1.5 + 0.8 x +
+    # OU spread. Without the intercept the spread z is garbage and
+    # the fade vote points the wrong way.
+    rnd = random.Random(3)
+    x, y = [11.0], [1.5 + 0.8 * 11.0]
+    spread = 0.0
+    for _ in range(239):
+        x.append(x[-1] + rnd.gauss(0, 0.002))
+        spread = 0.92 * spread + rnd.gauss(0, 0.004)
+        y.append(1.5 + 0.8 * x[-1] + spread)
+    # push the spread far up at the end: vote must fade it (short y)
+    y[-1] += 0.05
+    out = pairs_vote("ETH", [math.exp(v) for v in y],
+                     {"BTC": [math.exp(v) for v in x]})
+    assert out["vote"] < 0 and out["z"] > 1.0
+
+
+def test_signature_translation_invariant():
+    rnd = random.Random(9)
+    P = [100.0]
+    for _ in range(80):
+        P.append(P[-1] * (1 + rnd.gauss(0.0004, 0.001)))
+    V = [1000 + 300 * math.sin(i / 5.0) for i in range(len(P))]
+    a = signature_vote(P, V)["vote"]
+    b = signature_vote([v * math.exp(5.0) for v in P], V)["vote"]
+    assert abs(a - b) < 0.05          # level shift must not move it
+
+
+def test_rqa_periodic_beats_noise():
+    per = [100.0]
+    pat = [0.002, -0.001, 0.0015, -0.002] * 40
+    for r in pat:
+        per.append(per[-1] * (1 + r))
+    rnd = random.Random(4)
+    noi = [100.0]
+    for _ in range(160):
+        noi.append(noi[-1] * (1 + rnd.gauss(0, 0.0016)))
+    assert (rqa_multiplier(per)["determinism"]
+            > rqa_multiplier(noi)["determinism"])
+
+
+def test_evt_q99_tracks_empirical():
+    rnd = random.Random(17)
+    P, px = [100.0], 100.0
+    rets = []
+    for i in range(3000):
+        step = rnd.gauss(0, 0.0008)
+        if i % 89 == 0:
+            step += rnd.choice([-1, 1]) * 0.01
+        rets.append(abs(step))
+        px *= 1 + step
+        P.append(px)
+    out = evt_tail(P)
+    emp = sorted(rets)[int(0.99 * len(rets))] * 1e4
+    assert out["q99_bps"] is not None
+    assert 0.5 * emp < out["q99_bps"] < 2.2 * emp
+
+
+def test_bocpd_quiet_on_pure_noise():
+    rnd = random.Random(21)
+    P = [100.0]
+    for _ in range(170):
+        P.append(P[-1] * (1 + rnd.gauss(0, 0.001)))
+    out = bocpd_vote(P)
+    # with the prior-predictive factor in the CP mass, featureless
+    # noise must NOT read as a permanent regime break
+    assert out["gate"] >= 0.9 and out["p_break"] < 0.1
+
+
+def test_ou_deviation_half_life_finite():
+    rnd = random.Random(27)
+    lp = [11.0]
+    dev = 0.0
+    for _ in range(259):
+        dev = 0.90 * dev + rnd.gauss(0, 0.002)
+        lp.append(11.0 + dev + 0.00002 * len(lp))
+    out = ou_hurst_block([math.exp(v) for v in lp], 22)
+    assert out["half_life_bars"] < 60      # ~ln2/ln(1/0.9) = 6.6
+    assert abs(out["z"]) > 0.1             # z actually moves now

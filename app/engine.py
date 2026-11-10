@@ -1169,7 +1169,9 @@ class PredictionEngine:
                 float(fin["confidence"]) * _adv["soft_gate"]
                 * _adv["rqa_mult"]))
             _beh = dict(_beh)
-            _beh["score"] = float(_beh["score"]) + 0.18 * _adv["vote"]
+            _adv_k = self._adv_blend_k(symbol, tf)
+            fin["adv_blend_k"] = round(_adv_k, 4)
+            _beh["score"] = float(_beh["score"]) + _adv_k * _adv["vote"]
             _tier = self._tier_for(symbol, tf, float(_beh["score"]))
             fin.update(_tier)
             fin["raw_score"] = round(float(_beh["score"]), 5)
@@ -1441,9 +1443,11 @@ class PredictionEngine:
                 _comps.append({
                     "id": "102", "name": "Advanced math layer",
                     "value": round(float(_adv.get("vote") or 0.0), 5),
-                    "weight": 0.18,
+                    "weight": round(
+                        float(fin.get("adv_blend_k", 0.08)), 4),
                     "contribution": round(
-                        0.18 * float(_adv.get("vote") or 0.0), 5)})
+                        float(fin.get("adv_blend_k", 0.08))
+                        * float(_adv.get("vote") or 0.0), 5)})
                 _comps.sort(key=lambda c: -abs(c["contribution"]))
                 _top3 = _comps[:3]
                 _agree = sum(1 for c in _top3
@@ -2553,6 +2557,25 @@ class PredictionEngine:
         except Exception:
             pass
         return scales
+
+    def _adv_blend_k(self, symbol: str, tf: str) -> float:
+        """Scale-matched blend coefficient for the advanced vote.
+
+        The old flat 0.18 was a weightage error: cci scores live in
+        +/-0.1..0.3 while the advanced vote spans +/-1, so 0.18 let
+        one ~50% layer outweigh the whole 36-formula score. The
+        coefficient now tracks the score's own measured scale
+        (median |score| of the last 60 windows): the advanced layer
+        earns roughly a one-third say at its typical |vote| ~0.3,
+        bounded [0.04, 0.15], 0.08 before any history exists."""
+        hist = [abs(v) for v in
+                (self.score_hist.get((symbol, tf), []) or [])
+                if v is not None]
+        if len(hist) >= 10:
+            ordered = sorted(hist)
+            med = ordered[len(ordered) // 2]
+            return max(0.04, min(0.15, 0.6 * med))
+        return 0.08
 
     def _advanced_for(self, symbol: str, tf: str, ctx) -> dict:
         """Advanced mathematics layer (app/advanced.py) — computed

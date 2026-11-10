@@ -164,10 +164,21 @@ def bocpd_vote(P: list[float], hazard: float = 1.0 / 60.0) -> dict:
         new_post = [0.0] * (min(len(post) + 1, MAXRL))
         nmu = [0.0] * len(new_post); nkap = [1.0] * len(new_post)
         nalp = [2.0] * len(new_post); nbet = [var0] * len(new_post)
-        # changepoint: all mass -> run length 0 under the prior
-        cp_mass = sum(post) * hazard
-        new_post[0] = cp_mass
-        nmu[0], nkap[0], nalp[0], nbet[0] = x, 2.0, 2.5, var0 + 0.0
+        # changepoint: all mass -> run length 0, weighted by the
+        # PRIOR predictive density of x (NIG prior: mu0=0, kap0=1,
+        # alp0=2, bet0=var0) — omitting this factor (bare hazard
+        # mass) massively overstates the break probability
+        _nu0 = 4.0
+        _sc0 = var0 * 2.0 / 2.0          # bet0(kap0+1)/(alp0 kap0)
+        _z0 = (x - 0.0) ** 2 / (_nu0 * _sc0)
+        _lp0 = (math.lgamma((_nu0 + 1) / 2) - math.lgamma(_nu0 / 2)
+                - 0.5 * math.log(_nu0 * math.pi * _sc0)
+                - (_nu0 + 1) / 2 * math.log1p(_z0))
+        new_post[0] = sum(post) * hazard * math.exp(max(-30.0, _lp0))
+        # run-length-0 segment has SEEN x: kap 1->2, alp 2->2.5,
+        # bet += kap0 (x-mu0)^2 / (2 (kap0+1)) = x^2 / 4
+        nmu[0], nkap[0], nalp[0] = x, 2.0, 2.5
+        nbet[0] = var0 + (x * x) / 4.0
         growth_total = 0.0
         for rl in range(len(post)):
             if post[rl] <= 0:
@@ -311,19 +322,22 @@ def ou_hurst_block(P: list[float], W: int) -> dict:
     if len(r) < 70:
         return {"vote": 0.0, "gate": 1.0, "why": "thin"}
     lp = [math.log(p) if p > 0 else 0.0 for p in P[-(min(len(P), 260)):]]
-    # OU fit via AR(1) on log price: x_t = a + b x_{t-1}
-    xs, ys = lp[:-1], lp[1:]
+    # OU fit on the DEVIATION of log price from its window mean —
+    # the stationary object. (AR(1) on raw log price pins b ~ 1,
+    # the half-life explodes and z collapses to ~0: no signal.)
+    _mlp = sum(lp) / len(lp)
+    dev = [v - _mlp for v in lp]
+    xs, ys = dev[:-1], dev[1:]
     mx = sum(xs) / len(xs)
     my = sum(ys) / len(ys)
     den = sum((x - mx) ** 2 for x in xs) or EPS
     b = sum((xs[i] - mx) * (ys[i] - my) for i in range(len(xs))) / den
-    b = min(0.999, max(0.90, b))
-    kappa = -math.log(b)
+    b = min(0.999, max(-0.5, b))
+    kappa = -math.log(b) if b > 0 else 5.0
     half_life = math.log(2) / kappa if kappa > EPS else 9999.0
-    theta = my - b * mx
-    mu = theta / (1 - b) if (1 - b) > EPS else lp[-1]
+    sd_dev = _std(dev) or EPS
     sd_lp = _std([lp[i] - lp[i - 1] for i in range(1, len(lp))]) or EPS
-    z = (lp[-1] - mu) / (sd_lp * (max(1.0, half_life) ** 0.5) + EPS)
+    z = dev[-1] / sd_dev
     H = _dfa_hurst(r[-160:])
     if H < 0.45:
         regime = "reverting"
@@ -394,7 +408,8 @@ def pairs_vote(symbol: str, P: list[float],
     my = sum(y) / n
     den = sum((v - mx) ** 2 for v in x) or EPS
     beta = sum((x[i] - mx) * (y[i] - my) for i in range(n)) / den
-    spread = [y[i] - beta * x[i] for i in range(n)]
+    alpha = my - beta * mx            # intercept — without it the
+    spread = [y[i] - (alpha + beta * x[i]) for i in range(n)]
     # OU half-life of the spread
     sx, sy = spread[:-1], spread[1:]
     msx = sum(sx) / len(sx)
@@ -421,7 +436,7 @@ def wavelet_vote(P: list[float], horizon: int = 22) -> dict:
     if len(P) < 40:
         return {"vote": 0.0, "why": "thin"}
     cur = [math.log(v) if v > 0 else 0.0 for v in P[-140:]]
-    sd = _std(_rets(P[-140:])) or EPS
+    sd = _std([cur[i] - cur[i - 1] for i in range(1, len(cur))]) or EPS
     votes = []
     step = 1
     for level in range(4):
@@ -492,7 +507,7 @@ def evt_tail(Pfull: list[float]) -> dict:
         return {"q99_bps": None, "why": "degenerate tail"}
     k_hw = (4.0 - ratio) / (2.0 - ratio)     # Hosking shape (=-xi)
     xi = max(-0.2, min(0.6, -k_hw))          # EVT shape (fat tail > 0)
-    beta = max(EPS, b0 * (1.0 + xi))
+    beta = max(EPS, b0 * (1.0 - xi))   # GPD mean b0 = beta/(1-xi)
     # POT return level: P(X > thr + y) = (Nexc/n)(1 + xi y/beta)^(-1/xi)
     n_all, p_target = len(r), 0.01
     if abs(xi) > 1e-6:
@@ -537,9 +552,10 @@ def rmt_block(series: dict[str, list[float]]) -> dict:
            "lambda_max": round(float(lam_max), 3),
            "mp_edge": round(float(mp_edge), 3),
            "residual_vote": {}}
+    _mode_var = float(mode_ret @ mode_ret) or EPS
     for i, s in enumerate(syms):
-        resid = M[i] - mode_ret * (float(_np.corrcoef(M[i], mode_ret)[0, 1])
-                                   if T > 3 else 0.0)
+        _beta = float(M[i] @ mode_ret) / _mode_var if T > 3 else 0.0
+        resid = M[i] - _beta * mode_ret
         tail = resid[-22:]
         out["residual_vote"][s] = round(
             _tanh(float(tail.mean()) * 6.0), 4)
@@ -570,14 +586,19 @@ def rqa_multiplier(P: list[float]) -> dict:
             if i != j and max(abs(pts[i][k] - pts[j][k])
                               for k in range(m)) <= eps_r:
                 rec[i][j] = 1
-    # determinism: share of recurrent points in diagonals >= 3
+    # determinism (Webber & Zbilut): share of recurrent points that
+    # lie on DIAGONAL lines of length >= 3 (offsets d != 0), i.e.
+    # trajectory segments that repeat in time
+    tot = sum(sum(row) for row in rec)
     det_pts = 0
-    tot = 0
-    for i in range(n):
+    for d in range(-(n - 1), n):
+        if d == 0:
+            continue
         run = 0
-        for j in range(n):
-            tot += rec[i][j]
-            if rec[i][j]:
+        i0 = max(0, -d)
+        i1 = min(n, n - d)
+        for i in range(i0, i1):
+            if rec[i][i + d]:
                 run += 1
             else:
                 if run >= 3:
@@ -605,12 +626,18 @@ def signature_vote(P: list[float], V: list[float]) -> dict:
     dp = [p[i] - p[i - 1] for i in range(1, n)]
     dv = [v[i] - v[i - 1] for i in range(1, n)]
     disp = p[-1] - p[0]
-    # Levy area of the (price, volume) path: 0.5 * sum(p dv - v dp)
+    # Levy area in CENTRED coordinates (relative to path start):
+    # with raw log price (~11.5) the p*dv term adds a spurious
+    # level x volume-change that is not a path property
+    pc = [x - p[0] for x in p]
+    vc = [x - v[0] for x in v]
     area = 0.0
     for i in range(len(dp)):
-        area += 0.5 * (p[i] * dv[i] - v[i] * dp[i])
+        area += 0.5 * (pc[i] * dv[i] - vc[i] * dp[i])
     sd = _std(dp) or EPS
-    vote = _tanh(disp / (sd * (n ** 0.5)) + area * 0.002)
+    sdv = _std(dv) or EPS
+    area_z = area / (sd * sdv * max(1, len(dp))) if sdv > 0 else 0.0
+    vote = _tanh(disp / (sd * (n ** 0.5)) + 0.5 * area_z)
     return {"vote": round(vote, 4), "disp": round(disp, 5),
             "area": round(area, 3), "weight_cap": 0.15}
 
@@ -624,17 +651,34 @@ def conformal_update(state: dict, abs_ret: float, alpha: float = 0.2,
     if q <= 0:
         q = max(abs_ret, 1e-4)
     exceeded = 1.0 if abs_ret > q else 0.0
-    q = q * (1.0 + gamma * (exceeded - alpha) * 4.0)
+    q = q * (1.0 + gamma * (exceeded - alpha))
     q = max(1e-5, min(0.25, q))
     return {"q": q, "n": int(state.get("n", 0)) + 1,
             "hits": int(state.get("hits", 0)) + (0 if exceeded else 1)}
 
 
 # ---------------------------------------------------------------- composite
+# Base weights from MEASURED walk-forward accuracy on real BTC 1m,
+# formula w = clamp(1 + 20*(acc - 0.5), 0.5, 1.5). Two experiments
+# (REAL_RESULTS S7): (a) weights fit on Aug alone did NOT hold on
+# Sep (Aug +0.4/+0.7pp, Sep -0.3/-0.5pp — month rankings shuffle),
+# so these use the POOLED Aug+Sep accuracy (n-weighted, ~5,900
+# decisions/horizon): the evidence is mild, so the tilts are mild.
+#   kalman .506 -> 1.13    ou_hurst .504 -> 1.08
+#   fracdiff .503 -> 1.06  jumps .503 -> 1.06 (sparse voter)
+#   wavelet .500 -> 0.99   entropy .499 -> 0.98
+#   bocpd .494 -> 0.87     pairs_ou unmeasured (needs a ref asset;
+#                          BTC-only tape) -> neutral 0.80, graded
+#                          live on the alt assets
+# The live grade-driven scales multiply these base weights, so any
+# module can still earn up to 1.5x or fall to the 0.5x floor from
+# its own settled history. Signature measured .519 pooled — the
+# most consistent module after its area fix — but stays at the
+# user-mandated floor until the ENGINE's own rings reach n>=500.
 MODULE_WEIGHTS = {
-    "kalman": 1.00, "fracdiff": 1.00, "ou_hurst": 1.00,
-    "wavelet": 0.90, "jumps": 0.80, "pairs_ou": 0.80,
-    "bocpd": 0.70, "entropy": 0.70, "rmt_residual": 0.35,
+    "kalman": 1.13, "fracdiff": 1.06, "jumps": 1.06,
+    "wavelet": 0.99, "ou_hurst": 1.08, "pairs_ou": 0.80,
+    "entropy": 0.98, "bocpd": 0.87, "rmt_residual": 0.35,
     "signature": 0.15,          # floor until validated (engine raises)
 }
 
@@ -706,7 +750,8 @@ def advanced_block(symbol: str, tf: str, ctx, others: dict | None = None,
         v = float(blk.get("vote", 0.0) or 0.0)
         w = weights.get(name, 0.5)
         num += w * v
-        den += w
+        if v != 0.0:
+            den += w          # abstentions do not dilute the mean
         signs[name] = _sign(v)
     vote = num / den if den else 0.0
 

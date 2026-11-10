@@ -363,3 +363,53 @@ every prior audit — short-horizon reversion is real on this tape
 but not stable across months. No accuracy claim beyond the cells
 above. The live `adv_*` rings + grade-driven scales keep auditing
 every module; anything that stops earning falls to the 0.5 floor.
+
+## 7. Error + weightage fix pass on the later-added layer (2026-11-10)
+
+Miscalculations found by line-audit and fixed (each now has a
+ground-truth test that fails on the old math):
+1. **Pairs-OU spread had no regression intercept** — the "spread"
+   of two log-price levels (~11 vs ~6) was dominated by the level
+   gap; z was meaningless. Intercept added.
+2. **OU fit on raw log price** — AR(1) pins b≈1, half-life
+   explodes, z≈0 (module measured nothing). Now fit on the
+   deviation from the window mean (the stationary object).
+3. **BOCPD changepoint mass omitted the prior-predictive
+   likelihood** — p_break grossly overstated, gate over-tight.
+   Adams–MacKay CP term now carries the NIG prior predictive.
+4. **EVT PWM scale sign**: beta was b0(1+xi), correct is b0(1-xi)
+   (GPD mean) — the 1-in-100 quantile/cat-stop was inflated ~2x
+   at xi=0.3.
+5. **RQA determinism counted horizontal row runs**, not diagonal
+   lines — wrong geometry (Webber–Zbilut diagonals now).
+6. **Signature Lévy area in uncentred coordinates** — raw log
+   price (~11.5) injected a spurious level×Δvolume term; the vote
+   was not translation-invariant. Centred; test pins invariance.
+7. **RMT residual beta used bare correlation** instead of
+   cov/var of the mode.
+8. **Wavelet slope normalised by simple-return sd** while the
+   slope is on log price — now log-return sd.
+9. **Composite dilution**: abstaining (zero-vote) modules counted
+   in the weighted-mean denominator, shrinking the vote ~35%.
+   Denominator now counts only modules actually voting.
+10. **Conformal ACI** carried an arbitrary ×4 gain; removed.
+11. **Blend weightage**: advanced vote entered the fused score at
+    flat 0.18 while CCI scores live in ±0.1–0.3 and the vote spans
+    ±1 — one ~50% layer could outweigh all 36 formulas. The
+    coefficient is now scale-matched to the score's own median
+    (0.6 × median|score|, bounded [0.04, 0.15]) in both the blend
+    and the component-102 contribution record.
+
+Weightage experiment (discipline: fit/select, then hold out):
+Aug-fit module weights improved Aug (+0.4/+0.7pp) but cost Sep
+(−0.3/−0.5pp) — month rankings shuffle, so shipped weights derive
+from POOLED Aug+Sep measured accuracy (mild tilts, 0.87–1.13).
+Post-fix signature is the most consistent module (51.3/52.3/51.3/
+51.5 across the four cells) — it stays at the mandated floor
+until the engine's own rings reach n≥500 regardless.
+
+Net measured effect of the whole fix pass on the composite:
+Aug 22m 52.4% / Sep 22m 49.6% / Aug 130m 50.4% / Sep 130m 48.7%
+(flat-weight equivalent). Still no claim of a stable edge —
+September remains at/below coin-flip; what improved is that the
+numbers are now computed correctly and weighted by measurement.
