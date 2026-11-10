@@ -32,5 +32,6 @@ def test_header_reconnect_button():
 def test_confidence_calibration_wired():
     src = open("app/engine.py").read()
     assert "_conf_hist" in src and "conf_percentile" in src
-    assert "len(_pool) >= 20" in src          # measured rank once 20 scores exist
+    assert "len(_pool) >= 8" in src           # measured rank once 8 scores exist
+    assert "score_abs" in src                 # pool persisted in a ring (survives restart)
     assert 'fin["confidence_raw"]' in src     # raw never hidden

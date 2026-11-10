@@ -1018,11 +1018,18 @@ class PredictionEngine:
             _pool = [abs(v) for v in
                      self.score_hist.get((symbol, tf), [])
                      if v is not None]
+            try:
+                _ring_pool = [abs(v) for v in self.hist.ring(
+                    self.hist.tf_key(symbol, tf, "score_abs"), 200)]
+                if len(_ring_pool) > len(_pool):
+                    _pool = _ring_pool
+            except Exception:
+                pass
             _rank_val = abs(float(pack["cci_adjusted"]))
-            if len(_pool) < 20:
+            if len(_pool) < 8:
                 _pool = list(_hist)
                 _rank_val = _base_conf
-            if len(_pool) >= 20:
+            if len(_pool) >= 8:
                 _pct = sum(1 for v in _pool if v <= _rank_val) / len(_pool)
                 fin["confidence"] = round(_pct, 4)
                 fin["conf_percentile"] = round(_pct, 4)
@@ -1495,6 +1502,12 @@ class PredictionEngine:
                     if _ring:
                         _cf = {"q": float(_ring[-1]),
                                "n": len(_ring), "hits": 0}
+                if not (_cf and _cf.get("q")):
+                    _cq = list(self.hist.ring(self.hist.tf_key(
+                        symbol, tf, "conf_q"), 400))
+                    results[tf]["conformal"] = {
+                        "q_bps": None, "n": len(_cq),
+                        "state": "calibrating — needs settled windows"}
                 if _cf and _cf.get("q"):
                     _px = float(ctxs[tf].P[-1]) if ctxs[tf].P else 0.0
                     results[tf]["conformal"] = {
@@ -1535,7 +1548,16 @@ class PredictionEngine:
                             k: {"vote": (v or {}).get("vote"),
                                 "gate": (v or {}).get("gate"),
                                 "regime": (v or {}).get("regime"),
-                                "hurst": (v or {}).get("hurst")}
+                                "hurst": (v or {}).get("hurst"),
+                                # a zero vote must say WHY (thin /
+                                # non-stationary / no ref) — silent
+                                # zeros are how distrust starts
+                                "why": ((v or {}).get("why")
+                                        if not (v or {}).get("vote")
+                                        else None),
+                                "z": (v or {}).get("z"),
+                                "half_life_bars": (v or {})
+                                .get("half_life_bars")}
                             for k, v in (_adv.get("modules")
                                          or {}).items()},
                         "har_rv": _adv.get("har_rv"),
@@ -1848,6 +1870,11 @@ class PredictionEngine:
         5) BUY.   HOLD does not exist — the contest forces a side."""
         hist = self.score_hist.setdefault((symbol, tf), __import__("collections").deque(maxlen=60))
         hist.append(abs(score))
+        try:
+            self.hist.ring(self.hist.tf_key(symbol, tf, "score_abs"),
+                           200).append(abs(float(score)))
+        except Exception:
+            pass
         if len(hist) >= 10:
             ordered = sorted(hist)
             med = ordered[len(ordered) // 2]
@@ -2560,9 +2587,14 @@ class PredictionEngine:
                 symbol, tf, ctx, others=others,
                 full_closes=series.get(symbol) or list(ctx.P or []),
                 sig_weight=self._sig_weight(), rmt=rmt_cache[rkey],
-                weight_scales=self._adv_weight_scales(symbol, tf))
+                weight_scales=self._adv_weight_scales(symbol, tf),
+                minutes=int(TIMEFRAMES[tf]["minutes"]))
             cache.clear()
             cache[key] = blk
+            last = getattr(self, "_adv_last", None)
+            if last is None:
+                last = self._adv_last = {}
+            last[(symbol, tf)] = blk
             return blk
         except Exception:
             log.exception("advanced block failed %s/%s", symbol, tf)
@@ -5001,8 +5033,17 @@ class PredictionEngine:
                                 "method": bs.get("method")}
                 if d:
                     _lr = self.last_result.get((symbol, tf)) or {}
-                    _adv2 = _lr.get("advanced")
+                    _adv2 = _lr.get("advanced") or \
+                        getattr(self, "_adv_last", {}).get((symbol, tf))
                     if _adv2:
+                        _conf = _lr.get("conformal")
+                        if not _conf:
+                            _cqn = len(list(self.hist.ring(
+                                self.hist.tf_key(symbol, tf, "conf_q"),
+                                400)))
+                            _conf = {"q_bps": None, "n": _cqn,
+                                     "state": ("calibrating — needs "
+                                               "settled windows")}
                         d["advanced"] = {
                             "vote": _adv2.get("vote"),
                             "soft_gate": _adv2.get("soft_gate"),
@@ -5010,14 +5051,20 @@ class PredictionEngine:
                             "size_mult": _adv2.get("size_mult"),
                             "modules": {
                                 k: {"vote": (v or {}).get("vote"),
-                                    "gate": (v or {}).get("gate")}
+                                    "gate": (v or {}).get("gate"),
+                                    "why": ((v or {}).get("why")
+                                            if not (v or {}).get("vote")
+                                            else None),
+                                    "z": (v or {}).get("z"),
+                                    "half_life_bars": (v or {})
+                                    .get("half_life_bars")}
                                 for k, v in (_adv2.get("modules")
                                              or {}).items()},
                             "har_rv": _adv2.get("har_rv"),
                             "evt": _adv2.get("evt"),
                             "rmt_mode_share": (_adv2.get("rmt") or {})
                             .get("mode_share"),
-                            "conformal": _lr.get("conformal"),
+                            "conformal": _conf,
                         }
                 tfs[tf] = d
             assets[symbol] = {

@@ -342,3 +342,24 @@ same machinery as every other component:
 Effect on accuracy: still an open empirical question — answerable
 now from the `adv_*` rings once ≥40 settlements per module exist.
 No accuracy claim is made until then.
+
+## 6. Advanced layer measured on real BTC 1m (2026-11-10)
+
+Walk-forward, every 30 bars, block from past 300 bars only, strict
+sign, Binance BTCUSDT 1m Aug–Sep 2026 (87,840 bars; ~2,900
+decisions per horizon). BEFORE any sign change: composite 48.6%
+(22m) / 49.9% (130m); every trend module (kalman/fracdiff/wavelet)
+<50% at both horizons; reversion modules (ou_hurst, jumps) >50%.
+
+Change applied (change-never-remove): kalman/fracdiff/wavelet
+enter REVERSED at horizons ≤44m only (at 130m the flip measured a
+wash); signature reversed at all horizons (47.7–48.7% in all four
+month×horizon cells). Result by cell — 22m: Aug 52.8%, Sep 49.5%;
+130m: Aug 51.4%, Sep 48.3%; pooled ≈50.5% vs 49.2% before.
+
+Honest verdict: the gain is August-concentrated; September is
+neutral-to-negative. This is the same regime-mirage pattern as
+every prior audit — short-horizon reversion is real on this tape
+but not stable across months. No accuracy claim beyond the cells
+above. The live `adv_*` rings + grade-driven scales keep auditing
+every module; anything that stops earning falls to the 0.5 floor.

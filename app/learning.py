@@ -606,6 +606,7 @@ class LearningSystem:
             "hmm": {f"{s}|{tf}": h.to_dict() for (s, tf), h in self.hmm.items()},
             "core_weights": core_w,
             "brains": (engine.brains.state_dict() if engine is not None else {}),
+            "rings": _rings_snapshot(engine),
         }
 
     def load_state(self, engine=None, emotion=None, physics=None,
@@ -658,6 +659,7 @@ class LearningSystem:
                 brains = engine.brains
             if brains is not None:
                 brains.load_state(d.get("brains", {}))
+            _rings_restore(engine, d.get("rings") or {})
 
     def save(self, engine=None) -> None:
         try:
@@ -681,6 +683,36 @@ class LearningSystem:
         except OSError:
             pass
         self.save(engine)
+
+
+def _rings_snapshot(engine) -> dict:
+    """Persist the grading/calibration rings (adv_* module accuracy,
+    conf_q conformal state, score_abs confidence pool) so a restart
+    does not reset module scoreboards or calibration to zero."""
+    out: dict[str, list[float]] = {}
+    try:
+        if engine is None or not hasattr(engine, "hist"):
+            return out
+        for key, ring in list(engine.hist._rings.items()):
+            name = key.rsplit(":", 1)[-1]
+            if name.startswith("adv_") or name in ("conf_q", "score_abs"):
+                out[key] = [round(float(v), 6) for v in ring.values()][-600:]
+    except Exception:
+        pass
+    return out
+
+
+def _rings_restore(engine, rings: dict) -> None:
+    try:
+        if engine is None or not hasattr(engine, "hist") or not rings:
+            return
+        for key, vals in rings.items():
+            ring = engine.hist.ring(key, 600)
+            if len(ring) == 0:
+                for v in vals:
+                    ring.append(float(v))
+    except Exception:
+        pass
 
 
 def now_until() -> float:

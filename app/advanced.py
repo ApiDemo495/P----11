@@ -92,21 +92,28 @@ def fracdiff_series(P: list[float], d: float = 0.4) -> list[float]:
     return out
 
 
-def fracdiff_vote(P: list[float]) -> dict:
+def fracdiff_vote(P: list[float], horizon: int = 22) -> dict:
     fd = fracdiff_series(P)
     if len(fd) < 20:
         return {"vote": 0.0, "why": "thin"}
-    seg = fd[-22:]
+    # slope window matched to the forecast horizon (22 bars is the
+    # neutral point; longer horizons read the slower drift)
+    L = max(8, min(60, int(horizon)))
+    seg = fd[-L:]
     slope = (seg[-1] - seg[0]) / (len(seg) - 1)
     sd = _std([seg[i] - seg[i - 1] for i in range(1, len(seg))]) or EPS
-    return {"vote": round(_tanh(slope / sd * 2.0), 4),
-            "d": 0.4, "n": len(fd)}
+    return {"vote": round(_tanh(slope / sd * 2.0 * (L / 22.0) ** 0.5), 4),
+            "d": 0.4, "n": len(fd), "win": L}
 
 
 # ---------------------------------------------------------------- kalman
-def kalman_vote(P: list[float]) -> dict:
+def kalman_vote(P: list[float], horizon: int = 1) -> dict:
     """Level+velocity Kalman filter; gain adapts via innovation
-    variance ratio (q/r estimated online from the tape itself)."""
+    variance ratio (q/r estimated online from the tape itself).
+    The vote is the HORIZON-scaled drift SNR: expected drift over
+    the forecast horizon (vel*h) vs its noise (sd*sqrt(h)) — so a
+    22-minute and a 247-minute question get different answers from
+    the same filter state."""
     if len(P) < 12:
         return {"vote": 0.0, "why": "thin"}
     lp = [math.log(p) if p > 0 else 0.0 for p in P[-(min(len(P), 300)):]]
@@ -128,8 +135,10 @@ def kalman_vote(P: list[float]) -> dict:
         p11, p12, p22 = (1 - k1) * p11p, (1 - k1) * p12p, p22p - k2 * p12p
         innov_sd = 0.95 * innov_sd + 0.05 * abs(innov)
     sd = (innov_sd or EPS)
-    return {"vote": round(_tanh(vel / (sd + EPS) * 1.5), 4),
-            "vel_bps_bar": round(vel * 1e4, 3)}
+    h = max(1, int(horizon))
+    snr = vel * (h ** 0.5) / (sd + EPS)
+    return {"vote": round(_tanh(snr * 1.5), 4),
+            "vel_bps_bar": round(vel * 1e4, 3), "horizon": h}
 
 
 # ---------------------------------------------------------------- bocpd
@@ -228,12 +237,16 @@ def _lz_complexity(signs: list[int]) -> float:
     return c * math.log2(n) / n if n else 1.0    # ~1 = incompressible
 
 
-def entropy_block(P: list[float]) -> dict:
+def entropy_block(P: list[float], horizon: int = 22) -> dict:
     """Predictability meter + sign-Markov voter. The voter: order-2
     Markov chain over return signs estimated inside the window —
     P(next = majority continuation) mapped to a vote. Entropy/LZ
     scale the SOFT GATE, never the side."""
-    r = _rets(P[-140:])
+    # horizon-step returns: tf1 reads 1-bar signs, tf4 reads ~11-bar
+    # signs — the Markov question is asked at the TF's own clock
+    step = max(1, int(round(horizon / 22.0))) if horizon else 1
+    lp = [math.log(v) if v > 0 else 0.0 for v in P[-140 * step:]]
+    r = [lp[i] - lp[i - step] for i in range(step, len(lp))]
     if len(r) < 40:
         return {"vote": 0.0, "gate": 1.0, "why": "thin"}
     signs = [_sign(x) for x in r]
@@ -400,7 +413,7 @@ def pairs_vote(symbol: str, P: list[float],
 
 
 # ---------------------------------------------------------------- wavelet
-def wavelet_vote(P: list[float]) -> dict:
+def wavelet_vote(P: list[float], horizon: int = 22) -> dict:
     """A-trous Haar MODWT on log price: at each scale (2/4/8/16 bars)
     the approximation (smoothed price) slope over the last scale
     bars votes; coarse scales = slower trend, fine = fast trend.
@@ -422,8 +435,12 @@ def wavelet_vote(P: list[float]) -> dict:
         votes.append(slope / (sd + EPS))
         cur = nxt
         step *= 2
-    num = sum(v / (i + 1) for i, v in enumerate(votes))
-    den = sum(1.0 / (i + 1) for i in range(len(votes)))
+    # scale weights tilt toward the forecast horizon: short TFs
+    # weight fine scales, long TFs weight coarse scales
+    tilt = max(0.0, min(2.0, (int(horizon) / 22.0) ** 0.5 - 1.0))
+    wts = [(1.0 / (i + 1)) * (1.0 + tilt * i / 3.0) for i in range(4)]
+    num = sum(v * w for v, w in zip(votes, wts))
+    den = sum(wts)
     return {"vote": round(_tanh((num / den) * 1.6), 4),
             "scales": [round(float(v), 2) for v in votes]}
 
@@ -626,7 +643,8 @@ def advanced_block(symbol: str, tf: str, ctx, others: dict | None = None,
                    full_closes: list[float] | None = None,
                    sig_weight: float = 0.15,
                    rmt: dict | None = None,
-                   weight_scales: dict | None = None) -> dict:
+                   weight_scales: dict | None = None,
+                   minutes: int = 22) -> dict:
     """Single engine entry point. Returns votes, soft gates and
     sizing layers; every field safe to print in the UI/API."""
     P = list(ctx.P or [])
@@ -639,19 +657,39 @@ def advanced_block(symbol: str, tf: str, ctx, others: dict | None = None,
     # the tape itself is short
     tape = list(full_closes or P)[-280:]
     mods: dict[str, dict] = {}
-    mods["kalman"] = kalman_vote(tape)
-    mods["fracdiff"] = fracdiff_vote(tape)
+    mods["kalman"] = kalman_vote(tape, horizon=minutes)
+    mods["fracdiff"] = fracdiff_vote(tape, horizon=minutes)
     mods["bocpd"] = bocpd_vote(tape)
-    mods["entropy"] = entropy_block(tape)
+    mods["entropy"] = entropy_block(tape, horizon=minutes)
     mods["ou_hurst"] = ou_hurst_block(tape, W)
     mods["jumps"] = jumps_vote(tape)
     mods["pairs_ou"] = pairs_vote(symbol, tape, others)
-    mods["wavelet"] = wavelet_vote(tape)
+    mods["wavelet"] = wavelet_vote(tape, horizon=minutes)
     mods["signature"] = signature_vote(P, V)
     rmt_res = 0.0
     if rmt and rmt.get("residual_vote"):
         rmt_res = float(rmt["residual_vote"].get(symbol, 0.0) or 0.0)
     mods["rmt_residual"] = {"vote": round(rmt_res, 4)}
+
+    # MEASURED SIGN REVERSALS (real BTC 1m walk-forward, Aug–Sep
+    # 2026, both horizons, consistent with the full-engine audit's
+    # all-folds momentum anti-prediction): the trend-following
+    # modules' raw signs are anti-predictive on this tape, so their
+    # votes enter reversed — changed, never removed; each still
+    # carries its (grade-scaled) floor weight, and the adv_* rings
+    # grade the REVERSED sign so the scales keep auditing it.
+    # the trend trio reverses only at SHORT horizons (<=44m: the
+    # reversion regime); at 130m+ the flip measured a wash, so the
+    # original signs stand there. signature is anti-predictive at
+    # every measured horizon/month, so it reverses at all horizons
+    # (still floor-weighted until its 500 graded samples judge it).
+    _rev = ("kalman", "fracdiff", "wavelet") if minutes <= 44 else ()
+    for _name in _rev + ("signature",):
+        if _name in mods and mods[_name].get("vote"):
+            mods[_name] = dict(mods[_name])
+            mods[_name]["vote"] = round(
+                -float(mods[_name]["vote"]), 4)
+            mods[_name]["reversed"] = True
 
     weights = dict(MODULE_WEIGHTS)
     weights["signature"] = min(float(sig_weight), 0.15) \

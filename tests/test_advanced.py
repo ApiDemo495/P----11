@@ -154,3 +154,40 @@ def test_evt_pwm_fat_tail_positive_shape():
     assert out["q99_bps"] is not None and out["q99_bps"] > 0
     assert 0.25 <= out["size_mult"] <= 1.0
     assert out["cat_stop_bps"] >= out["q99_bps"]
+
+
+def test_horizon_changes_the_answer():
+    # same tape, different forecast horizons must NOT collapse to
+    # the same vote (tf-invariance was the "un-synced" smell)
+    P = _trend(300, 0.0009, 0.0005, seed=5)
+    ctx = SimpleNamespace(P=P, V=P, W=22, p=P[-1])
+    b22 = advanced_block("BTCUSDT", "tf1", ctx, full_closes=P,
+                         minutes=22)
+    b247 = advanced_block("BTCUSDT", "tf4", ctx, full_closes=P,
+                          minutes=247)
+    assert b22["modules"]["kalman"]["horizon"] == 22
+    assert b247["modules"]["kalman"]["horizon"] == 247
+    assert b22["vote"] != b247["vote"]
+    assert (b22["modules"]["entropy"].get("vote")
+            != b247["modules"]["entropy"].get("vote")
+            or b22["modules"]["wavelet"]["vote"]
+            != b247["modules"]["wavelet"]["vote"])
+
+
+def test_rings_persistence_roundtrip():
+    from app.history import HistoryStore
+    from app.learning import _rings_restore, _rings_snapshot
+
+    class _E:
+        pass
+    e1, e2 = _E(), _E()
+    e1.hist, e2.hist = HistoryStore(), HistoryStore()
+    e1.hist.ring("BTCUSDT:tf3:adv_kalman", 600).append(1.0)
+    e1.hist.ring("BTCUSDT:tf3:conf_q", 400).append(0.0042)
+    e1.hist.ring("BTCUSDT:tf3:unrelated", 50).append(9.0)
+    snap = _rings_snapshot(e1)
+    assert "BTCUSDT:tf3:adv_kalman" in snap
+    assert "BTCUSDT:tf3:unrelated" not in snap
+    _rings_restore(e2, snap)
+    assert list(e2.hist.ring("BTCUSDT:tf3:adv_kalman", 600)) == [1.0]
+    assert list(e2.hist.ring("BTCUSDT:tf3:conf_q", 400)) == [0.0042]
