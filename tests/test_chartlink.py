@@ -5,10 +5,16 @@ from app.chartlink import LinkWatchdog, all_reports, link_report
 
 
 class _St:
-    def __init__(self, live, closes, times):
+    def __init__(self, live, closes, times, sources=None):
         self.live_price, self.opens = live, list(closes)
         self.closes, self.times = list(closes), list(times)
         self.highs, self.lows = list(closes), list(closes)
+        self.sources = list(sources or ["sim"] * len(times))
+
+    def indices_for_family(self, family):
+        from app.feed import _family
+        return [i for i, source in enumerate(self.sources[:len(self.times)])
+                if _family(source) == family]
 
 
 class _Feed:
@@ -29,6 +35,18 @@ def test_link_report_flags_desync():
     f._s["BTC"] = _St(103.0, [100.0], [now - 60])     # 3 % below live
     r = link_report(f, "BTC", now=float(now))
     assert r["delta_bps"] > 200 and r["ok"] is False
+
+
+def test_link_report_flags_foreign_history_even_when_last_bar_matches():
+    f = _Feed(); f.mode, f.source = "binance", "binance-ws"
+    now = int(time.time())
+    f._s["BTC"] = _St(68_769.0, [75_920.0, 68_769.0],
+                      [now - 120, now - 60], ["sim", "binance-ws"])
+    r = link_report(f, "BTC", now=float(now))
+    assert r["delta_bps"] == 0.0
+    assert r["last_bar_close"] == 68_769.0
+    assert r["foreign_bars"] == 1
+    assert r["source_mix_ok"] is False and r["ok"] is False
 
 
 def test_watchdog_logs_persistent_desync_only():

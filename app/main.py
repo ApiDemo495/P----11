@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from .clock import MasterClock, seconds_to_next_grc
 from .config import SYMBOLS, SYMBOL_ORDER, TF_ORDER, TIMEFRAMES
 from .engine import PredictionEngine
-from .feed import MarketFeed
+from .feed import MarketFeed, _family
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -740,7 +740,10 @@ async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONRes
                             status_code=400)
     n = max(10, min(500, n))
     st = engine.feed.state(symbol)
-    count = len(st.times)
+    active_family = _family(getattr(engine.feed, "mode", "unknown"))
+    indices = st.indices_for_family(active_family)
+    foreign_bars = len(st.times) - len(indices)
+    count = len(indices)
     W = int(TIMEFRAMES.get(tf, {}).get("minutes", 1) or 1)
     if tf == "tf1":
         W = 1        # tf1 keeps raw 1-minute candles (the 22m window is the
@@ -750,9 +753,9 @@ async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONRes
         bars = [
             {"t": st.times[i], "o": st.opens[i], "h": st.highs[i],
              "l": st.lows[i], "c": st.closes[i], "v": st.volumes[i]}
-            for i in range(start, count)
+            for i in indices[start:]
         ]
-        if st.live_price > 0:
+        if st.live_price > 0 and active_family in ("sim", "binance"):
             # the live partial bar belongs to the CURRENT bucket: merge
             # into it when the tape already has it, else open it at the
             # previous close. (Was: appended at last_bar+60 — a future
@@ -773,7 +776,7 @@ async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONRes
     else:
         # epoch-aligned buckets of W minutes
         bucket: dict[int, dict] = {}
-        for i in range(count):
+        for i in indices:
             bkt = st.times[i] // (W * 60) * (W * 60)
             b = bucket.get(bkt)
             if b is None:
@@ -785,9 +788,9 @@ async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONRes
                 b["c"] = st.closes[i]
                 b["v"] += st.volumes[i]
         bars = list(bucket.values())[-n:]
-        if st.live_price > 0 and bars:
+        if st.live_price > 0 and active_family in ("sim", "binance"):
             bkt = int(time.time() // (W * 60)) * (W * 60)
-            if bkt == bars[-1]["t"]:
+            if bars and bkt == bars[-1]["t"]:
                 bars[-1]["h"] = max(bars[-1]["h"], st.live_price, st.live_high or 0)
                 bars[-1]["l"] = min(bars[-1]["l"], st.live_price, st.live_low or 1e18)
                 bars[-1]["c"] = st.live_price
@@ -805,6 +808,7 @@ async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONRes
     return JSONResponse(
         {"ok": True, "symbol": symbol, "tf": tf,
          "bucket_minutes": W, "revision": revision,
+         "bar_family": active_family, "excluded_foreign_bars": foreign_bars,
          "feed": {"mode": fstats.get("mode"), "source": fstats.get("source"),
                   "switches": fstats.get("switches")},
          "bars": bars},

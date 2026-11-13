@@ -48,8 +48,13 @@ SIM_PER_MIN_VOL = {"BTC": 120.0, "PAXG": 18.0, "ETH": 1500.0, "BNB": 4200.0}
 
 
 def _family(source: str) -> str:
-    """Writer family: every binance path is one family, the simulator another."""
-    return "binance" if str(source).startswith("binance") else "sim"
+    """Return known writer family; never silently classify unknown as sim."""
+    name = str(source or "").lower()
+    if name.startswith("binance"):
+        return "binance"
+    if name == "sim":
+        return "sim"
+    return "unknown"
 
 
 class SymbolState:
@@ -121,18 +126,50 @@ class SymbolState:
     def flush_foreign(self, family: str) -> int:
         """Drop every bar whose writer is not in `family` (D-1: any source
         change flushes the tape so two feeds can never alternate in one)."""
-        keep = [i for i, src in enumerate(self.sources)
+        keep = [i for i, src in enumerate(self.sources[:len(self.times)])
                 if _family(src) == family]
         dropped = len(self.times) - len(keep)
-        if dropped > 0:
-            self.times = [self.times[i] for i in keep]
-            self.closes = [self.closes[i] for i in keep]
-            self.volumes = [self.volumes[i] for i in keep]
-            self.opens = [self.opens[i] for i in keep]
-            self.highs = [self.highs[i] for i in keep]
-            self.lows = [self.lows[i] for i in keep]
-            self.sources = [self.sources[i] for i in keep]
+        self.times = [self.times[i] for i in keep]
+        self.closes = [self.closes[i] for i in keep]
+        self.volumes = [self.volumes[i] for i in keep]
+        self.opens = [self.opens[i] for i in keep]
+        self.highs = [self.highs[i] for i in keep]
+        self.lows = [self.lows[i] for i in keep]
+        self.sources = [self.sources[i] for i in keep]
         return dropped
+
+    def indices_for_family(self, family: str) -> list[int]:
+        """Indices with explicit provenance; missing/unknown tags fail closed."""
+        if family not in ("binance", "sim"):
+            return []
+        return [i for i, source in enumerate(self.sources[:len(self.times)])
+                if _family(source) == family]
+
+    def replace_history(
+        self, bars: list[tuple[int, float, float, float, float, float, str]],
+    ) -> None:
+        """Atomically replace the tape with a sorted, deduplicated OHLC set.
+
+        Used when REST backfill arrives after a simulator has already built a
+        newer tape. `push_bar` is intentionally append/last-bucket oriented and
+        must not be used to insert an old backfill behind that tape.
+        """
+        by_time: dict[int, tuple[float, float, float, float, float, str]] = {}
+        for ts, open_, high, low, close, volume, source in bars:
+            values = tuple(float(x) for x in
+                           (open_, high, low, close, volume))
+            if (int(ts) <= 0 or not all(math.isfinite(x) for x in values)
+                    or min(values[:4]) <= 0 or values[4] < 0):
+                continue
+            by_time[int(ts)] = (*values, str(source))
+        ordered = sorted(by_time.items())
+        self.times = [ts for ts, _ in ordered]
+        self.opens = [bar[0] for _, bar in ordered]
+        self.highs = [bar[1] for _, bar in ordered]
+        self.lows = [bar[2] for _, bar in ordered]
+        self.closes = [bar[3] for _, bar in ordered]
+        self.volumes = [bar[4] for _, bar in ordered]
+        self.sources = [bar[5] for _, bar in ordered]
 
     def aligned(self) -> dict[int, tuple[float, float]]:
         return dict(zip(self.times, zip(self.closes, self.volumes)))
@@ -237,24 +274,33 @@ class MarketFeed:
         return False
 
     def _switch_tape(self, new_mode: str, source: str) -> None:
-        """Mode change. On ADOPT (sim -> real) every synthetic bar is flushed
-        (D-1). On DEMOTE the real history is KEPT — bars are time-ordered and
-        never alternate between writers, so dropping them would only starve
-        the formula windows; the chip turns SIMULATED TAPE instead."""
+        """Switch writer families without ever mixing their candle history.
+
+        Thin live history is an empty/short live tape, not permission to label
+        simulator candles as Binance. Likewise, on demotion only simulator
+        candles remain visible. Missing live prices are cleared until the new
+        writer supplies a print.
+        """
         if new_mode == self.mode:
             return
-        if new_mode == "binance":
-            # count REAL-family bars only (sim placeholders are still in
-            # the tape at this moment and would mask a thin real history)
-            real = [sum(1 for src in st.sources
-                        if _family(src) == "binance")
-                    for st in self.states.values()]
-            if min(real) < 25:
-                log.info("feed: real history thin (%s) — keeping sim "
-                         "placeholders until klines arrive", real)
-            else:
-                for st in self.states.values():
-                    st.flush_foreign("binance")
+        if new_mode not in ("binance", "sim"):
+            raise ValueError(f"unknown feed mode: {new_mode}")
+        for st in self.states.values():
+            st.flush_foreign(new_mode)
+            if new_mode == "binance":
+                st.last_tick = 0.0
+                if st.times:
+                    st.live_price = st.closes[-1]
+                    st.live_volume = st.volumes[-1]
+                    st.live_open = st.opens[-1]
+                    st.live_high = st.highs[-1]
+                    st.live_low = st.lows[-1]
+                else:
+                    st.live_price = st.live_volume = 0.0
+                    st.live_open = st.live_high = st.live_low = 0.0
+                    st.day_open = 0.0
+            elif st.times and not st.live_price:
+                st.live_price = st.closes[-1]
         self.mode = new_mode
         self.note(source)               # counts switches in stats()
 
@@ -405,19 +451,39 @@ class MarketFeed:
                 raise last_exc
             for sym, rows in rows_by_sym.items():
                 st = self.states[sym]
+                rest_bars: list[tuple[int, float, float, float, float, float, str]] = []
                 for row in rows:
                     ts = int(row[0]) // 1000
                     o, h, l, c, v = (
                         float(row[1]), float(row[2]), float(row[3]),
                         float(row[4]), float(row[5]),
                     )
-                    st.push_bar(ts, c, v, o, h, l, source="binance-rest")
+                    rest_bars.append((ts, o, h, l, c, v, "binance-rest"))
                     pushed += 1
+                rest_latest = max((bar[0] for bar in rest_bars), default=None)
+                by_time = {bar[0]: bar for bar in rest_bars}
+                # A retry can overlap an active WS. Preserve only its latest
+                # Binance bars beyond REST, plus the WS update to REST's last
+                # bucket. Never let older simulator timestamps block backfill.
+                for i, ts in enumerate(st.times):
+                    src = st.sources[i] if i < len(st.sources) else "unknown"
+                    if _family(src) != "binance":
+                        continue
+                    if (rest_latest is None or ts > rest_latest or
+                            (ts == rest_latest and src == "binance-ws")):
+                        by_time[ts] = (ts, st.opens[i], st.highs[i],
+                                       st.lows[i], st.closes[i],
+                                       st.volumes[i], src)
+                st.replace_history(list(by_time.values()))
                 if st.closes:
                     st.live_price = st.closes[-1]
+                    st.live_volume = st.volumes[-1]
                     st.live_open = st.opens[-1]
                     st.live_high = st.highs[-1]
                     st.live_low = st.lows[-1]
+                else:
+                    st.live_price = st.live_volume = 0.0
+                    st.live_open = st.live_high = st.live_low = 0.0
                 # D-6: session reference = the exchange's own 24h open
                 # (never bars[0] of whatever history the chart holds —
                 # that produced absurd +12% / +53% / -36% tickers)
@@ -630,8 +696,11 @@ class MarketFeed:
     # ---------------------------------------------------------- Simulator
     async def _start_sim(self) -> None:
         rng = self._sim_rng
-        now = int(time.time())
-        start_ts = now - (BACKFILL_BARS + 5) * 60
+        # Align synthetic bars to the same epoch-minute buckets as Binance.
+        # Without this, the final sim bar could be :47, so Binance's :00 bar
+        # was rejected as out-of-order during handover.
+        now_minute = int(time.time() // 60) * 60
+        start_ts = now_minute - (BACKFILL_BARS + 5) * 60
 
         # regime-switching pre-history so baselines/regimes start populated
         for sym in SYMBOL_ORDER:

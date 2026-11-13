@@ -533,6 +533,7 @@ def test_simulator_live_regimes_persist(monkeypatch):
     from conftest import run_sync
     run_sync(f._start_sim())
     assert set(f._sim_regime) == set(F.SYMBOL_ORDER)
+    assert all(ts % 60 == 0 for ts in f.state("BTC").times)
     r = f._sim_regime["BTC"]
     assert 1 <= r["left"] <= 2400 and isinstance(r["drift"], float)
     run_sync(f.stop())

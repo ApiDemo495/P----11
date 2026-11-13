@@ -24,12 +24,18 @@ CHECK_S = 5.0
 def link_report(feed, symbol: str, now: float | None = None) -> dict[str, Any]:
     now = time.time() if now is None else now
     st = feed.state(symbol)
+    mode = str(getattr(feed, "mode", "unknown"))
+    active_family = mode if mode in ("binance", "sim") else "unknown"
+    indices = st.indices_for_family(active_family)
+    foreign_bars = len(st.times) - len(indices)
+    last_i = indices[-1] if indices else None
     live = float(st.live_price or 0.0)
-    last_t = int(st.times[-1]) if st.times else 0
-    last_c = float(st.closes[-1]) if st.closes else 0.0
+    last_t = int(st.times[last_i]) if last_i is not None else 0
+    last_c = float(st.closes[last_i]) if last_i is not None else 0.0
     delta_bps = (abs(last_c - live) / live * 1e4) if live > 0 and last_c > 0 else None
     bar_age = (now - last_t) if last_t else None
-    ok = bool(delta_bps is not None and delta_bps <= OK_BPS
+    source_mix_ok = active_family in ("binance", "sim") and foreign_bars == 0
+    ok = bool(source_mix_ok and delta_bps is not None and delta_bps <= OK_BPS
               and bar_age is not None and bar_age <= 180)
     return {
         "symbol": symbol,
@@ -39,9 +45,13 @@ def link_report(feed, symbol: str, now: float | None = None) -> dict[str, Any]:
         "bar_age_s": round(bar_age, 1) if bar_age is not None else None,
         "delta_bps": round(delta_bps, 2) if delta_bps is not None else None,
         "ok": ok,
-        "bars": len(st.times),
+        "bars": len(indices),
+        "raw_bars": len(st.times),
+        "foreign_bars": foreign_bars,
+        "active_family": active_family,
+        "source_mix_ok": source_mix_ok,
         "source": getattr(feed, "source", "?"),
-        "mode": getattr(feed, "mode", "?"),
+        "mode": mode,
     }
 
 
@@ -89,6 +99,7 @@ class LinkWatchdog:
                             "bar_age_s": r["bar_age_s"],
                             "live_price": r["live_price"],
                             "last_bar_close": r["last_bar_close"],
+                            "foreign_bars": r["foreign_bars"],
                             "mode": r["mode"], "source": r["source"],
                         })
             except Exception:

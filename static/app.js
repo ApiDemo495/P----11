@@ -196,6 +196,7 @@ function setSymbol(sym) {
     // response populate the newly selected asset's candle buffers.
     S._candleLoadSeq = (S._candleLoadSeq || 0) + 1;
     S.tfBars = {}; S.tfBarsRevision = {}; S.tfBarsSymbol = sym;
+    S.tfBarsForeign = 0;
     S.candleSeries = null; S.priceHist = [];
     resetOwnChartForSymbol(sym);
   }
@@ -454,6 +455,8 @@ function drawOwnChart() {
   }
   const notes = [];
   if (S.snap?.feed?.simulated) notes.push("SIM TAPE — simulated feed, not exchange bars");
+  if (S.tfBarsSymbol === S.symbol && S.tfBarsForeign > 0)
+    notes.push(`${S.tfBarsForeign} foreign/unknown candles excluded — feed handover; waiting for clean tape`);
   if (desync > 0.002) notes.push(`CHART DESYNC ${(desync * 100).toFixed(1)}% — rebuilding`);
   else if (stalled) notes.push("live bar stalled — refetching");
   else if (age != null && age > 15) notes.push(`stale — last print ${Math.round(age)}s ago`);
@@ -1823,6 +1826,7 @@ async function loadCandles() {
       S.tfBars = {}; S.tfBarsRevision = {}; S.tfBarsSymbol = symbol;
     }
     S.tfBars ||= {}; S.tfBarsRevision ||= {};
+    S.tfBarsForeign = Math.max(0, Number(md.excluded_foreign_bars) || 0);
     const historyRevision = String(md.revision ||
       `client-${candleRevisionFallback(md.bars)}`);
     const _cut = (bars, tf) => {
@@ -3330,10 +3334,11 @@ async function pollChartLink() {
       <td class="mono">${fmt(r.last_bar_close, 2)}</td>
       <td class="mono" style="color:${r.ok ? "var(--green)" : "var(--red)"}">${r.delta_bps == null ? "—" : r.delta_bps.toFixed(1) + " bps"}</td>
       <td class="mono">${r.bar_age_s == null ? "—" : Math.round(r.bar_age_s) + "s"}</td>
+      <td class="mono" style="color:${r.foreign_bars ? "var(--red)" : "var(--green)"}">${r.foreign_bars ?? "?"}</td>
       <td>${r.ok ? "✓ linked" : "✗ DESYNC"}</td></tr>`).join("");
     const inc = (d.watchdog?.incidents || []).slice(-3).reverse().map(i =>
-      `<div class="hint">⚠ ${new Date(i.ts * 1000).toLocaleTimeString()} ${i.symbol} desync ${i.delta_bps?.toFixed?.(1)} bps (bar ${Math.round(i.bar_age_s || 0)}s old, ${esc(i.mode)}/${esc(i.source)})</div>`).join("");
-    box.innerHTML = `<table class="tbl"><thead><tr><th>ASSET</th><th>LIVE</th><th>LAST CANDLE</th><th>Δ</th><th>BAR AGE</th><th>LINK</th></tr></thead><tbody>${rows}</tbody></table>${inc}`;
+      `<div class="hint">⚠ ${new Date(i.ts * 1000).toLocaleTimeString()} ${i.symbol} desync ${i.delta_bps?.toFixed?.(1) ?? "—"} bps, ${i.foreign_bars ?? 0} foreign bars (bar ${Math.round(i.bar_age_s || 0)}s old, ${esc(i.mode)}/${esc(i.source)})</div>`).join("");
+    box.innerHTML = `<table class="tbl"><thead><tr><th>ASSET</th><th>LIVE</th><th>LAST CANDLE</th><th>Δ</th><th>BAR AGE</th><th>FOREIGN</th><th>LINK</th></tr></thead><tbody>${rows}</tbody></table>${inc}`;
     const meta = $("#link-meta");
     if (meta) meta.textContent = `server-measured · ${d.watchdog?.checks ?? 0} checks · ${d.watchdog?.desync_checks ?? 0} desync checks`;
     const f = (d.assets || {})[S.symbol];
