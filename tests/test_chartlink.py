@@ -49,6 +49,24 @@ def test_link_report_flags_foreign_history_even_when_last_bar_matches():
     assert r["source_mix_ok"] is False and r["ok"] is False
 
 
+def test_link_report_rejects_same_family_handover_jump_with_matching_last_close():
+    f = _Feed(); f.mode, f.source = "binance", "binance-ws"
+    now = int(time.time())
+    st = _St(68_769.0, [75_920.0, 68_769.0],
+             [now - 60, now], ["binance-rest", "binance-ws"])
+    st.opens = [75_920.0, 68_769.0]
+    st.highs = [75_920.0, 68_769.0]
+    st.lows = [75_920.0, 68_769.0]
+    f._s["BTC"] = st
+
+    r = link_report(f, "BTC", now=float(now))
+
+    assert r["delta_bps"] == 0.0  # last-bar-only agreement is insufficient
+    assert r["history_jump_bps"] > r["jump_limit_bps"]
+    assert "extreme-candle-jump" in r["reasons"]
+    assert r["ok"] is False
+
+
 def test_watchdog_logs_persistent_desync_only():
     import asyncio
     f = _Feed(); now = int(time.time())
@@ -80,5 +98,7 @@ def test_endpoint_and_panel_exist():
     assert "/api/chart-link" in (root / "app" / "main.py").read_text()
     js = (root / "static" / "app.js").read_text()
     assert "pollChartLink" in js and "repairChartLink" in js
+    assert "UNTRUSTED TAPE" in js and "candles hidden" in js
+    assert "tfBarsIntegrity" in js
     assert 'id="link-panel"' in (root / "static" / "index.html").read_text()
     assert 'id="btn-repair-link"' in (root / "static" / "index.html").read_text()

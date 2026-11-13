@@ -151,3 +151,34 @@ def test_candles_endpoint_excludes_non_active_source_history(monkeypatch):
     assert payload["excluded_foreign_bars"] == 1
     assert payload["bars"]
     assert all(bar["c"] < 70_000 for bar in payload["bars"])
+    assert payload["integrity"]["ok"] is False
+    assert "foreign-or-unknown-bars" in payload["integrity"]["reasons"]
+
+
+def test_candles_endpoint_refuses_single_source_tape_with_screenshot_sized_gap(monkeypatch):
+    """A matching live partial candle cannot bless a stale 75.9k history."""
+    from fastapi.testclient import TestClient
+    import app.main as main
+
+    feed = MarketFeed()
+    feed.mode, feed.source = "binance", "binance-ws"
+    st = feed.state("BTC")
+    now = int(time.time() // 60) * 60
+    st.push_bar(now - 60, 75_920.0, 1.0, 75_920.0, 75_940.0,
+                75_900.0, source="binance-rest")
+    st.live_price = 68_769.0
+    st.live_open = st.live_high = st.live_low = 68_769.0
+    st.live_volume = 1.0
+    monkeypatch.setattr(main.engine, "feed", feed)
+
+    response = TestClient(main.app).get(
+        "/api/candles?symbol=BTC&tf=tf1&n=260")
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["bar_family"] == "binance"
+    assert payload["excluded_foreign_bars"] == 0
+    assert payload["integrity"]["delta_bps"] == 0.0
+    assert payload["integrity"]["history_jump_bps"] > 900
+    assert "extreme-candle-jump" in payload["integrity"]["reasons"]
+    assert payload["integrity"]["ok"] is False

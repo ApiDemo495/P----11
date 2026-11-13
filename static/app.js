@@ -196,7 +196,8 @@ function setSymbol(sym) {
     // response populate the newly selected asset's candle buffers.
     S._candleLoadSeq = (S._candleLoadSeq || 0) + 1;
     S.tfBars = {}; S.tfBarsRevision = {}; S.tfBarsSymbol = sym;
-    S.tfBarsForeign = 0;
+    S.tfBarsForeign = 0; S.tfBarsIntegrity = null; S.tfBarsFetchedAt = 0;
+    S.tfBarsFamily = "unknown"; S.tfBarsMode = "unknown";
     S.candleSeries = null; S.priceHist = [];
     resetOwnChartForSymbol(sym);
   }
@@ -401,7 +402,7 @@ function ownMake(el) {
   legend.style.cssText = "position:absolute;top:6px;left:8px;z-index:5;font:10px ui-monospace,monospace;color:#c9c9dc;pointer-events:none";
   el.appendChild(legend);
   const stale = document.createElement("div");
-  stale.style.cssText = "position:absolute;top:22px;left:8px;z-index:5;font:10px ui-monospace,monospace;color:#ef9a9a;pointer-events:none";
+  stale.style.cssText = "display:none;position:absolute;top:22px;left:8px;z-index:5;max-width:calc(100% - 16px);padding:4px 6px;border:1px solid rgba(239,83,80,.55);border-radius:4px;background:rgba(35,12,18,.86);font:10px ui-monospace,monospace;color:#ff9a9a;white-space:normal;pointer-events:none";
   el.appendChild(stale);
   chart.subscribeCrosshairMove(param => {
     const bar = param?.seriesData?.get(candles);
@@ -440,13 +441,37 @@ function drawOwnChart() {
   const a = S.snap?.assets?.[S.symbol]; if (!a) return;
   const d = a.tfs?.[S.focusTf]; if (!d) return;
   const now = serverNow();
-  // honesty on the chart itself (docs A-4 / D-3 / D-4): SIM label,
-  // stale tape, live-bar stall and price/tape DESYNC with auto-rebuild
+  // Fail closed on the exact rendered tape, not only a server-side link
+  // sample. A stale chart must never sit below a current quote with no label.
   const age = a.feed_age_s;
+  const bucket0 = (S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60;
+  const bt0 = Math.floor(now / bucket0) * bucket0;
   const tapeArr = S.tfBars?.[S.focusTf] || [];
   const tapeLast = tapeArr[tapeArr.length - 1];
-  const desync = (tapeLast && liveP0() > 0) ? Math.abs(tapeLast.close - liveP0()) / liveP0() : 0;
-  const stalled = tapeLast && (now - tapeLast.time) > 2 * ((S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60);
+  // the 1 Hz tick stream is the live price truth; snapshot is fallback only.
+  const liveP = (S.prices?.[S.symbol] > 0) ? S.prices[S.symbol] : a.price;
+  const desync = (tapeLast && liveP > 0)
+    ? Math.abs(tapeLast.close - liveP) / liveP : Infinity;
+  const stalled = tapeLast && (now - tapeLast.time) > 2 * bucket0;
+  const reasons = [];
+  const family = S.tfBarsFamily || "unknown";
+  const mode = S.tfBarsMode || "unknown";
+  const integrity = S.tfBarsIntegrity;
+  if (!(family === "binance" || family === "sim") || family !== mode)
+    reasons.push("unknown/mismatched feed provenance");
+  if (!integrity || integrity.ok !== true)
+    reasons.push(integrity?.reasons?.length
+      ? integrity.reasons.join(", ") : "server integrity unavailable");
+  if (!S.tfBarsFetchedAt || Date.now() - S.tfBarsFetchedAt > 60000)
+    reasons.push("candle response stale or unavailable");
+  if (S.tfBarsForeign > 0)
+    reasons.push(`${S.tfBarsForeign} foreign/unknown server candles`);
+  if (!tapeLast) reasons.push("no active-source candles");
+  if (!(liveP > 0)) reasons.push("live quote unavailable");
+  if (tapeLast && liveP > 0 && desync * 10000 > 20)
+    reasons.push(`quote/candle mismatch ${Math.round(desync * 10000)} bps`);
+  if (tapeLast && (now - tapeLast.time) > Math.max(180, 2 * bucket0))
+    reasons.push(`last candle ${Math.round(now - tapeLast.time)}s old`);
   if (desync > 0.002 || stalled) {
     if (Date.now() - (S._desyncAt || 0) > 5000) {   // rebuild at most 1/5s
       S._desyncAt = Date.now(); Own.key = "";
@@ -455,19 +480,28 @@ function drawOwnChart() {
   }
   const notes = [];
   if (S.snap?.feed?.simulated) notes.push("SIM TAPE — simulated feed, not exchange bars");
-  if (S.tfBarsSymbol === S.symbol && S.tfBarsForeign > 0)
-    notes.push(`${S.tfBarsForeign} foreign/unknown candles excluded — feed handover; waiting for clean tape`);
-  if (desync > 0.002) notes.push(`CHART DESYNC ${(desync * 100).toFixed(1)}% — rebuilding`);
-  else if (stalled) notes.push("live bar stalled — refetching");
-  else if (age != null && age > 15) notes.push(`stale — last print ${Math.round(age)}s ago`);
+  if (reasons.length)
+    notes.push(`UNTRUSTED TAPE — ${reasons.join("; ")}; candles hidden`);
+  if (desync > 0.002)
+    notes.push(`CHART DESYNC ${(desync * 100).toFixed(1)}% — candles hidden, refetching`);
+  if (stalled) notes.push("live bar stalled — refetching");
+  if (!reasons.length && !stalled && age != null && age > 15)
+    notes.push(`stale — last print ${Math.round(age)}s ago`);
   inst.stale.textContent = notes.join(" · ");
-  function liveP0() { return (S.prices?.[S.symbol] > 0) ? S.prices[S.symbol] : a.price; }
-  const bucket0 = (S.focusTf === "tf3" || S.focusTf === "tf4") ? 300 : 60;
-  const bt0 = Math.floor(now / bucket0) * bucket0;
-  // the 1 Hz tick stream is the live price truth; a.price (snapshot,
-  // GRC-cadence) is only the fallback before the first tick arrives
-  const liveP = (S.prices?.[S.symbol] > 0) ? S.prices[S.symbol] : a.price;
-  let bars = (S.tfBars?.[S.focusTf] || []).filter(b2 => b2.close > 0 && b2.time <= bt0);
+  inst.stale.style.display = notes.length ? "block" : "none";
+  if (reasons.length) {
+    // Clear stale OHLC/volume/fan instead of continuing to show a known
+    // mismatched chart. Locked entry/TP/SL lines remain visible.
+    try {
+      inst.candles.setData([]); inst.vol.setData([]);
+      inst.fan50.setData([]); inst.fan25.setData([]); inst.fan75.setData([]);
+      inst.candles.setMarkers([]);
+    } catch {}
+    inst.last = null; Own.key = ""; Own.rangeKey = "";
+    ownSetLines(inst, d);
+    return;
+  }
+  let bars = tapeArr.filter(b2 => b2.close > 0 && b2.time <= bt0);
   if (bars.length && liveP > 0) {
     // merge the browser's own price prints into the tape: prints in
     // the last bar's bucket UPDATE that bar, later prints open new
@@ -1827,6 +1861,11 @@ async function loadCandles() {
     }
     S.tfBars ||= {}; S.tfBarsRevision ||= {};
     S.tfBarsForeign = Math.max(0, Number(md.excluded_foreign_bars) || 0);
+    S.tfBarsIntegrity = (md.integrity && typeof md.integrity === "object")
+      ? md.integrity : null;
+    S.tfBarsFetchedAt = Date.now();
+    S.tfBarsFamily = String(md.bar_family || "unknown");
+    S.tfBarsMode = String(md.feed?.mode || "unknown");
     const historyRevision = String(md.revision ||
       `client-${candleRevisionFallback(md.bars)}`);
     const _cut = (bars, tf) => {
@@ -3335,10 +3374,11 @@ async function pollChartLink() {
       <td class="mono" style="color:${r.ok ? "var(--green)" : "var(--red)"}">${r.delta_bps == null ? "—" : r.delta_bps.toFixed(1) + " bps"}</td>
       <td class="mono">${r.bar_age_s == null ? "—" : Math.round(r.bar_age_s) + "s"}</td>
       <td class="mono" style="color:${r.foreign_bars ? "var(--red)" : "var(--green)"}">${r.foreign_bars ?? "?"}</td>
-      <td>${r.ok ? "✓ linked" : "✗ DESYNC"}</td></tr>`).join("");
+      <td class="mono" style="color:${(r.history_jump_bps || 0) > (r.jump_limit_bps || 300) ? "var(--red)" : "var(--green)"}">${r.history_jump_bps == null ? "—" : r.history_jump_bps.toFixed(1) + " bps"}</td>
+      <td>${r.ok ? "✓ linked" : "✗ UNTRUSTED"}</td></tr>`).join("");
     const inc = (d.watchdog?.incidents || []).slice(-3).reverse().map(i =>
-      `<div class="hint">⚠ ${new Date(i.ts * 1000).toLocaleTimeString()} ${i.symbol} desync ${i.delta_bps?.toFixed?.(1) ?? "—"} bps, ${i.foreign_bars ?? 0} foreign bars (bar ${Math.round(i.bar_age_s || 0)}s old, ${esc(i.mode)}/${esc(i.source)})</div>`).join("");
-    box.innerHTML = `<table class="tbl"><thead><tr><th>ASSET</th><th>LIVE</th><th>LAST CANDLE</th><th>Δ</th><th>BAR AGE</th><th>FOREIGN</th><th>LINK</th></tr></thead><tbody>${rows}</tbody></table>${inc}`;
+      `<div class="hint">⚠ ${new Date(i.ts * 1000).toLocaleTimeString()} ${i.symbol} untrusted: ${esc((i.integrity_reasons || []).join(", "))}; quote delta ${i.delta_bps?.toFixed?.(1) ?? "—"} bps, candle jump ${i.history_jump_bps?.toFixed?.(1) ?? "—"} bps (${esc(i.mode)}/${esc(i.source)})</div>`).join("");
+    box.innerHTML = `<table class="tbl"><thead><tr><th>ASSET</th><th>LIVE</th><th>LAST CANDLE</th><th>Δ</th><th>BAR AGE</th><th>FOREIGN</th><th>MAX JUMP</th><th>LINK</th></tr></thead><tbody>${rows}</tbody></table>${inc}`;
     const meta = $("#link-meta");
     if (meta) meta.textContent = `server-measured · ${d.watchdog?.checks ?? 0} checks · ${d.watchdog?.desync_checks ?? 0} desync checks`;
     const f = (d.assets || {})[S.symbol];

@@ -805,10 +805,15 @@ async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONRes
         bars, mode=str(fstats.get("mode") or ""),
         source=str(fstats.get("source") or ""),
         switches=int(fstats.get("switches") or 0))
+    from .chartlink import candle_tape_integrity
+    integrity = candle_tape_integrity(
+        bars, live_price=st.live_price, family=active_family,
+        foreign_bars=foreign_bars, now=time.time(), bucket_minutes=W)
     return JSONResponse(
         {"ok": True, "symbol": symbol, "tf": tf,
          "bucket_minutes": W, "revision": revision,
          "bar_family": active_family, "excluded_foreign_bars": foreign_bars,
+         "integrity": integrity,
          "feed": {"mode": fstats.get("mode"), "source": fstats.get("source"),
                   "switches": fstats.get("switches")},
          "bars": bars},

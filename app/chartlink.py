@@ -13,12 +13,108 @@ the tape the chart draws and the price the ticker shows.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections import deque
 from typing import Any
 
 OK_BPS = 20.0          # ≤ 0.20 %: link healthy (doc D-4 threshold)
+MAX_BAR_JUMP_BPS = 300.0  # fail closed on a ≥3% 1m gap/body (handover guard)
 CHECK_S = 5.0
+
+
+def candle_tape_integrity(
+    bars: list[dict[str, Any]], *, live_price: float, family: str,
+    foreign_bars: int = 0, now: float | None = None,
+    bucket_minutes: int = 1,
+) -> dict[str, Any]:
+    """Fail closed on unknown provenance, stale/desynced quotes, or tape jumps.
+
+    ``bars`` must be the actual OHLC rows intended for the chart. The
+    per-candle continuity check catches a single-source-looking history that
+    still jumps across a feed handover; matching only its final close is not
+    sufficient. The threshold expands with bucket duration for aggregated
+    candles, using the same rule for every symbol.
+    """
+    now = time.time() if now is None else float(now)
+    bucket_minutes = max(1, int(bucket_minutes or 1))
+    live = float(live_price or 0.0)
+    reasons: list[str] = []
+    if family not in ("binance", "sim"):
+        reasons.append("unknown-active-source")
+    if int(foreign_bars or 0) > 0:
+        reasons.append("foreign-or-unknown-bars")
+    if live <= 0 or not math.isfinite(live):
+        reasons.append("live-quote-unavailable")
+    if not bars:
+        reasons.append("no-active-candles")
+
+    last_close = 0.0
+    last_t = 0
+    delta_bps = None
+    age_s = None
+    max_jump_bps = 0.0
+    ordered = True
+    valid = True
+    normalized: list[tuple[int, float, float, float, float]] = []
+    for bar in bars:
+        try:
+            ts = int(bar["t"])
+            o, h, low, close = (float(bar[k]) for k in ("o", "h", "l", "c"))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            valid = False
+            continue
+        if (ts <= 0 or not all(math.isfinite(x) and x > 0
+                               for x in (o, h, low, close))
+                or h < max(o, low, close) or low > min(o, h, close)):
+            valid = False
+            continue
+        if normalized and ts <= normalized[-1][0]:
+            ordered = False
+        normalized.append((ts, o, h, low, close))
+    if not valid:
+        reasons.append("invalid-ohlc")
+    if not ordered:
+        reasons.append("unordered-timestamps")
+
+    if normalized:
+        last_t, _, _, _, last_close = normalized[-1]
+        age_s = max(0.0, now - last_t)
+        max_age_s = max(180.0, bucket_minutes * 120.0)
+        if last_t > now + 5.0:
+            reasons.append("future-candles")
+        if age_s > max_age_s:
+            reasons.append("stale-candles")
+        if live > 0 and last_close > 0:
+            delta_bps = abs(last_close - live) / live * 10_000.0
+            if delta_bps > OK_BPS:
+                reasons.append("quote-candle-desync")
+        for prev, curr in zip(normalized, normalized[1:]):
+            prev_t, _, _, _, prev_close = prev
+            curr_t, o, h, low, close = curr
+            body_bps = abs(close - o) / o * 10_000.0
+            gap_bps = (abs(o - prev_close) / prev_close * 10_000.0
+                       if curr_t > prev_t else 0.0)
+            range_bps = (h - low) / o * 10_000.0
+            max_jump_bps = max(max_jump_bps, body_bps, gap_bps, range_bps)
+        jump_limit = MAX_BAR_JUMP_BPS * math.sqrt(bucket_minutes)
+        if max_jump_bps > jump_limit:
+            reasons.append("extreme-candle-jump")
+
+    return {
+        "ok": not reasons,
+        "reasons": reasons,
+        "family": family if family in ("binance", "sim") else "unknown",
+        "foreign_bars": int(foreign_bars or 0),
+        "bars": len(normalized),
+        "live_price": live,
+        "last_bar_close": last_close,
+        "last_bar_t": last_t,
+        "bar_age_s": round(age_s, 1) if age_s is not None else None,
+        "delta_bps": round(delta_bps, 2) if delta_bps is not None else None,
+        "history_jump_bps": round(max_jump_bps, 2),
+        "jump_limit_bps": round(MAX_BAR_JUMP_BPS * math.sqrt(bucket_minutes), 2),
+    }
 
 
 def link_report(feed, symbol: str, now: float | None = None) -> dict[str, Any]:
@@ -28,23 +124,23 @@ def link_report(feed, symbol: str, now: float | None = None) -> dict[str, Any]:
     active_family = mode if mode in ("binance", "sim") else "unknown"
     indices = st.indices_for_family(active_family)
     foreign_bars = len(st.times) - len(indices)
-    last_i = indices[-1] if indices else None
     live = float(st.live_price or 0.0)
-    last_t = int(st.times[last_i]) if last_i is not None else 0
-    last_c = float(st.closes[last_i]) if last_i is not None else 0.0
-    delta_bps = (abs(last_c - live) / live * 1e4) if live > 0 and last_c > 0 else None
-    bar_age = (now - last_t) if last_t else None
+    chart_indices = indices[-260:]  # same maximum raw window as the dashboard
+    chart_bars = [
+        {"t": st.times[i], "o": st.opens[i], "h": st.highs[i],
+         "l": st.lows[i], "c": st.closes[i]}
+        for i in chart_indices
+        if i < len(st.opens) and i < len(st.highs)
+        and i < len(st.lows) and i < len(st.closes)
+    ]
     source_mix_ok = active_family in ("binance", "sim") and foreign_bars == 0
-    ok = bool(source_mix_ok and delta_bps is not None and delta_bps <= OK_BPS
-              and bar_age is not None and bar_age <= 180)
+    integrity = candle_tape_integrity(
+        chart_bars, live_price=live, family=active_family,
+        foreign_bars=foreign_bars, now=now, bucket_minutes=1)
     return {
         "symbol": symbol,
-        "live_price": live,
-        "last_bar_t": last_t,
-        "last_bar_close": last_c,
-        "bar_age_s": round(bar_age, 1) if bar_age is not None else None,
-        "delta_bps": round(delta_bps, 2) if delta_bps is not None else None,
-        "ok": ok,
+        **integrity,
+        "ok": bool(source_mix_ok and integrity["ok"]),
         "bars": len(indices),
         "raw_bars": len(st.times),
         "foreign_bars": foreign_bars,
@@ -100,6 +196,8 @@ class LinkWatchdog:
                             "live_price": r["live_price"],
                             "last_bar_close": r["last_bar_close"],
                             "foreign_bars": r["foreign_bars"],
+                            "history_jump_bps": r["history_jump_bps"],
+                            "integrity_reasons": r["reasons"],
                             "mode": r["mode"], "source": r["source"],
                         })
             except Exception:
