@@ -18,11 +18,13 @@ jobs:
           d = json.load(open('.devcontainer/devcontainer.json'))
           assert d['waitFor'] == 'onCreateCommand'
           for h in ('onCreateCommand','postCreateCommand','postStartCommand','postAttachCommand'):
-              assert 'start.py --detach' in d[h], h
+              assert d[h] == 'python3 start.py --detach', h
           assert 'visibility' not in d['portsAttributes']['8000']  # spec has no such key; gh CLI in start.py enforces public
           print('devcontainer OK')"
       - name: boot via start.py (the exact Codespace path)
         run: |
+          python3 start.py --detach
+          # Concurrent/repeated Codespaces hooks must not launch a second server.
           python3 start.py --detach
           python3 - <<'PY'
           import json, time, urllib.request

@@ -53,7 +53,11 @@ python3 start.py               # placeholder instantly, app when ready
 <p>from the <b>Ports tab → globe icon (Open in Browser)</b>: the</p>
 <p>in-editor Simple Browser cannot display forwarded ports (GitHub</p>
 <p>refuses to iframe them), which looks like a dead page even when</p>
-<p>the app is perfectly healthy.</p>
+<p>the app is perfectly healthy. The lifecycle hooks are idempotent across</p>
+<p>create/start/attach; after changing <code>.devcontainer/devcontainer.json</code></p>
+<p>in an existing Codespace, <b>Rebuild Container</b> once so the hooks are</p>
+<p>installed. Diagnose with <code>python3 start.py --status</code> and inspect</p>
+<p><code>data/boot.log</code> / <code>data/server.log</code> if it reports nothing listening.</p>
 <p>Run the test suite:</p>
 <pre><code>
 .venv/bin/python -m pytest -q    # 357 tests (honesty, parts 1-4, news, brain, order-book, UX sync, deep RL)

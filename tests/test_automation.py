@@ -31,12 +31,34 @@ def test_start_py_is_stdlib_only_and_self_contained():
     assert "ThreadingHTTPServer" in src            # placeholder
     assert "urllib.request" in src                 # health, no curl
     assert '"curl"' not in src and "curl -" not in src  # never invoked
-    assert "flock(" not in src and "fcntl" not in src  # no lock files
+    assert "flock(" not in src and "fcntl" not in src  # no kernel flock dependency
     assert "import app.main" in src                # import pre-check
     assert "--detach" in src and "--stop" in src and "--status" in src
+    assert "def _claim_start_lock" in src and "os.link(tmp, START_LOCK)" in src
+    assert "def _atomic_pidfile" in src
     # provisioning bounded, pip bounded
     assert '"--retries", "2", "--timeout", "30"' in src
     assert 'timeout=timeout_s' in src or "subprocess.run" in src
+
+
+def test_detach_launch_guard_is_atomic_and_reclaims_dead_owner(tmp_path, monkeypatch):
+    import importlib.util
+    import os
+
+    spec = importlib.util.spec_from_file_location("start_lock_test", ROOT / "start.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "DATA", str(tmp_path))
+    monkeypatch.setattr(mod, "START_LOCK", str(tmp_path / "start.lock"))
+
+    assert mod._claim_start_lock() is True
+    assert (tmp_path / "start.lock").read_text().strip() == str(os.getpid())
+    assert mod._claim_start_lock() is False  # overlapping lifecycle hook
+    mod._release_start_lock()
+
+    (tmp_path / "start.lock").write_text("2147483647")
+    assert mod._claim_start_lock() is True  # stale lock is recoverable
+    mod._release_start_lock()
 
 
 def test_placeholder_answers_before_engine():
@@ -80,7 +102,7 @@ def test_devcontainer_hooks_are_start_py_only():
     assert d["waitFor"] == "onCreateCommand"   # editor never blocked
     for hook in ("onCreateCommand", "postCreateCommand",
                  "postStartCommand", "postAttachCommand"):
-        assert d[hook] == "python3 start.py --detach || true"
+        assert d[hook] == "python3 start.py --detach"
     # containers.dev spec: portsAttributes has NO visibility key —
     # Codespaces ignores it. Public is enforced by start.py's gh CLI
     # retries; the devcontainer must not pretend otherwise, and must

@@ -41,7 +41,11 @@ engine after one pip install, watchdog after that). Open the app
 from the **Ports tab → globe icon (Open in Browser)**: the
 in-editor Simple Browser cannot display forwarded ports (GitHub
 refuses to iframe them), which looks like a dead page even when
-the app is perfectly healthy.
+the app is perfectly healthy. The lifecycle hooks are idempotent across
+create/start/attach; after changing `.devcontainer/devcontainer.json`
+in an existing Codespace, **Rebuild Container** once so the hooks are
+installed. Diagnose with `python3 start.py --status` and inspect
+`data/boot.log` / `data/server.log` if it reports nothing listening.
 
 Run the test suite:
 

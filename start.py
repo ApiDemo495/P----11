@@ -45,6 +45,7 @@ os.chdir(ROOT)
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.path.join(ROOT, "data")
 PIDFILE = os.path.join(DATA, "start.pid")
+START_LOCK = os.path.join(DATA, "start.lock")
 STAMP = os.path.join(ROOT, ".setup_stamp")
 BOOTLOG = os.path.join(DATA, "boot.log")
 SERVERLOG = os.path.join(DATA, "server.log")
@@ -352,6 +353,80 @@ def stop_engine(proc: subprocess.Popen | None) -> None:
             pass
 
 
+def _atomic_pidfile(pid: int) -> None:
+    """Replace the starter PID atomically so lifecycle hooks see it."""
+    os.makedirs(DATA, exist_ok=True)
+    tmp = f"{PIDFILE}.{os.getpid()}.{time.time_ns()}.tmp"
+    try:
+        with open(tmp, "x") as fh:
+            fh.write(f"{int(pid)}\n")
+        os.replace(tmp, PIDFILE)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _claim_start_lock() -> bool:
+    """Atomic, stdlib-only duplicate-launch guard for overlapping hooks.
+
+    Write a complete temporary token and hard-link it into place; unlike
+    an empty O_EXCL sentinel, another hook can never observe the lock before
+    its owner PID has been written. Dead-owner locks are removed and retried.
+    """
+    os.makedirs(DATA, exist_ok=True)
+    tmp = f"{START_LOCK}.{os.getpid()}.{time.time_ns()}.tmp"
+    try:
+        with open(tmp, "x") as fh:
+            fh.write(f"{os.getpid()}\n")
+        try:
+            os.link(tmp, START_LOCK)
+            return True
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            log(f"WARN: cannot create starter lock ({exc.__class__.__name__})")
+            return False
+
+        try:
+            old_stat = os.stat(START_LOCK)
+            with open(START_LOCK) as lock_fh:
+                old_pid = int(lock_fh.read().strip())
+        except (OSError, ValueError):
+            old_stat = None
+            old_pid = 0
+        if old_pid and _pid_alive(old_pid):
+            return False
+        if old_stat is not None:
+            try:
+                current = os.stat(START_LOCK)
+                if current.st_ino == old_stat.st_ino:
+                    os.unlink(START_LOCK)
+            except OSError:
+                pass
+        try:
+            os.link(tmp, START_LOCK)
+            return True
+        except (FileExistsError, OSError):
+            return False
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _release_start_lock() -> None:
+    try:
+        with open(START_LOCK) as lock_fh:
+            owner = int(lock_fh.read().strip())
+        if owner == os.getpid():
+            os.unlink(START_LOCK)
+    except (OSError, ValueError):
+        pass
+
+
 def serve() -> int:
     def _term(signum, frame):
         stop_engine(_child)
@@ -363,8 +438,7 @@ def serve() -> int:
     signal.signal(signal.SIGTERM, _term)
     signal.signal(signal.SIGINT, _term)
     os.makedirs(DATA, exist_ok=True)
-    with open(PIDFILE, "w") as fh:
-        fh.write(str(os.getpid()))
+    _atomic_pidfile(os.getpid())
     placeholder = _PlaceholderServer()
     placeholder.start()
     make_port_public()
@@ -456,14 +530,35 @@ def detach() -> int:
     if pid:
         print(f"starter already running (pid {pid})", flush=True)
         return 0
-    os.makedirs(DATA, exist_ok=True)
-    out = open(BOOTLOG, "ab")
-    proc = subprocess.Popen([sys.executable, os.path.abspath(__file__),
-                             "--serve"], stdout=out, stderr=out,
-                            start_new_session=True)
-    print(f"starter launched (pid {proc.pid}) — port {PORT} is "
-          f"covered by the placeholder within seconds", flush=True)
-    return 0
+    if not _claim_start_lock():
+        pid = running_pid()
+        if pid:
+            print(f"starter already running (pid {pid})", flush=True)
+        else:
+            print("starter launch already in progress", flush=True)
+        return 0
+    try:
+        # Recheck after claiming: another hook may have finished booting
+        # between our first health check and the atomic launch lock.
+        if healthy():
+            print("app already healthy — nothing to do", flush=True)
+            return 0
+        pid = running_pid()
+        if pid:
+            print(f"starter already running (pid {pid})", flush=True)
+            return 0
+        with open(BOOTLOG, "ab") as out:
+            proc = subprocess.Popen(
+                [sys.executable, os.path.abspath(__file__), "--serve"],
+                stdout=out, stderr=out, start_new_session=True)
+        # Publish the child PID before releasing the lock. A later
+        # postStart/postAttach hook now sees the starter immediately.
+        _atomic_pidfile(proc.pid)
+        print(f"starter launched (pid {proc.pid}) — port {PORT} is "
+              f"covered by the placeholder within seconds", flush=True)
+        return 0
+    finally:
+        _release_start_lock()
 
 
 def stop() -> int:

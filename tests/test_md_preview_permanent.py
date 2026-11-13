@@ -72,7 +72,7 @@ def test_devcontainer_hooks_cover_attach_and_start():
     # re-attach (the gap that made auto-start look dead)
     for hook in ("onCreateCommand", "postCreateCommand",
                  "postStartCommand", "postAttachCommand"):
-        assert cfg[hook] == "python3 start.py --detach || true"
+        assert cfg[hook] == "python3 start.py --detach"
     # agent deps + model are NOT auto-downloaded at boot (user order);
     # they download from the Agents tab button only
     assert "INSTALL_AGENTS" not in json.dumps(cfg)
