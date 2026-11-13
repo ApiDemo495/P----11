@@ -145,6 +145,29 @@ def test_initial_analysis_locks_early_with_all_cycles(live_engine):
             assert cyc.cycle_end - cyc.cycle_start == TIMEFRAMES[tf]["minutes"] * 60
 
 
+def test_every_asset_timeframe_uses_the_same_valid_frozen_contract(live_engine):
+    from app.levels import validate_cycle_contract
+    engine, feed = live_engine.engine, live_engine.feed
+    snapshot = engine.build_snapshot()
+    ids = set()
+    for symbol in SYMBOL_ORDER:
+        for tf in TF_ORDER:
+            cycle = engine.cycles[(symbol, tf)]
+            contract = validate_cycle_contract(cycle)
+            view = snapshot["assets"][symbol]["tfs"][tf]
+            assert contract is not None, (symbol, tf, cycle.level_contract)
+            assert view["levels_ok"] is True
+            assert view["contract_id"] == contract["id"]
+            assert view["entry"] == contract["entry"]
+            assert view["tp"] == contract["tp"]
+            assert view["sl"] == contract["sl"]
+            assert contract["ratio"] <= 4.0
+            assert view["execution_eligible"] is False  # harness uses simulated tape
+            ids.add(contract["id"])
+    assert len(ids) == len(SYMBOL_ORDER) * len(TF_ORDER)
+    assert feed.mode == "sim"
+
+
 def test_tp4_locked_and_tp23_pending_at_lock(live_engine):
     engine = live_engine.engine
     cyc = engine.cycles[("BTC", "tf1")]

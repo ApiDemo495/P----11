@@ -102,6 +102,14 @@ class TFCycle:
     safe_events: int = 0
     sl_observed: bool = False        # unissued cycle: SL crossed (one-shot event)
     risk: dict = field(default_factory=dict)   # measured-moves TP/SL block (frozen)
+    # One lock-bound TP/SL contract is shared by display, grading and execution.
+    cycle_id: str | None = None
+    lock_id: str | None = None
+    level_revision: int = 0
+    contract_lock: dict = field(default_factory=dict)
+    level_contract: dict = field(default_factory=dict)
+    execution_eligible: bool = False
+    contract_tp_hit: bool = False
     forecast: dict = field(default_factory=dict)  # NEW system: price at horizon end
     strength: float = 0.0            # voter-agreement purity [0,1]
     winrate: float | None = None     # measured hit-rate in this conf bucket
@@ -147,8 +155,16 @@ class TFCycle:
             "tp": self.tp,
             "sl": self.sl,
             "risk": self.risk,
+            "cycle_id": self.cycle_id,
+            "lock_id": self.lock_id,
+            "level_revision": self.level_revision,
+            "level_contract": self.level_contract,
+            "contract_id": (self.level_contract or {}).get("id"),
+            "execution_eligible": self.execution_eligible,
+            "contract_tp_hit": self.contract_tp_hit,
+            "sl_observed": self.sl_observed,
             # the LOCKED entry every level is anchored to (app/levels.py)
-            "entry": (self.risk or {}).get("entry"),
+            "entry": (self.level_contract or {}).get("entry") or (self.risk or {}).get("entry"),
             "levels_ok": None,   # filled by the snapshot levels gate
             # PROV now means only: the frozen block itself is the
             # small-sample ATR fallback — never "seeded from spot"

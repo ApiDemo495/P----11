@@ -138,7 +138,8 @@ class PriceChart {
   }
   setLines(lines) { // [{price, color, title, dash}] — quad-card levels
     this._lines = (lines || []).filter(L => Number.isFinite(L.price))
-      .map(L => ({ p: L.price, label: L.title || "", color: L.color || PC_GOLD, dash: !!L.dash }));
+      .map(L => ({ p: L.price, label: L.title || "", color: L.color || PC_GOLD,
+        dash: !!L.dash, contract: !!L.contract }));
     this._emit();
   }
   _emit() {
@@ -197,12 +198,15 @@ class PriceChart {
     let lo = Infinity, hi = -Infinity;
     for (const s of series) for (const p of s.pts) { lo = Math.min(lo, p.p); hi = Math.max(hi, p.p); }
     const levels = (m.levels || []).filter(L => Number.isFinite(L.p));
-    /* DOMAIN RULE (TradingView "scale price chart only"; research
-       addendum): the axis comes from the DATA plotted — price series
-       plus the fan's inner band/median. Levels and the fan's outer
-       band are annotations drawn ONTO that domain, never folded into
-       it, or a TP 1.3% away compresses all price action flat.
-       Off-scale levels render as edge tags with their real distance. */
+    /* The locked ENTRY/TP/SL are first-class scale anchors so none can
+       disappear beyond an edge; non-contract rungs and LIQ marks remain
+       annotations and cannot flatten the price trace. */
+    for (const L of levels) if (L.contract) {
+      lo = Math.min(lo, L.p);
+      hi = Math.max(hi, L.p);
+    }
+    /* Non-contract levels and the fan's outer band stay outside the
+       domain so distant annotations cannot flatten candles. */
     if (m.fan?.pts?.length) {
       const mode = m.domainFan || "none";   // default: price data alone scales the chart (Binance-style)
       const dataLo = lo, dataHi = hi, dRange = Math.max(1e-12, hi - lo);

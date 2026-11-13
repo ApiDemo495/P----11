@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app import trading
 from app.ledger import SettlementLedger
+from tests.contract_fixtures import locked_contract_signal
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -24,9 +25,9 @@ def test_stale_tape_refused_by_trading_gate():
     cfg = {"enabled": True, "testnet": True, "api_key": "k",
            "api_secret": "s", "max_order_usdt": 25, "max_orders_day": 4,
            "armed_until": time.time() + 600}
-    sig = {"symbol": "BTC", "tf": "tf1", "issued": True, "direction": 1,
-           "entry": 100.0, "tp": 101.0, "sl": 99.0,
-           "feed_age_s": 45.0}
+    sig = locked_contract_signal(entry=100.0, tp_bps=200.0,
+                                 sl_bps=100.0, cycle_id="deep-audit",
+                                 feed_age_s=45.0)
     ok, why = trading.gate(cfg, sig, set(), 0)
     assert not ok and "stale tape" in why
     sig["feed_age_s"] = 1.0

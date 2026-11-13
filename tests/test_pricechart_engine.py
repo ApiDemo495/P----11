@@ -27,9 +27,10 @@ def test_research_rules_implemented():
     assert "VOL " in LC                                # volume sub-pane labelled
 
 
-def test_domain_from_data_not_levels():
-    assert "DOMAIN RULE" in LC and "Scale price chart only" in LC.replace("scale price chart only", "Scale price chart only") or "DOMAIN RULE" in LC
-    assert "offScale" in LC and "edge tag" in LC       # far levels pinned, not folded in
+def test_contract_levels_scale_chart_but_rungs_stay_annotations():
+    assert "if (L.contract)" in LC
+    assert "non-contract rungs and LIQ marks remain" in LC
+    assert "offScale" in LC and "edge tag" in LC       # non-contract far levels stay pinned
     assert "function quadChart" in JS and "handleScroll: false" in JS  # doc C-5 mini candle cards
     assert "q-spark" not in JS                         # red noise line deleted (doc C-5)
     assert "Math.min(12" in LC                         # sparse volume bars capped

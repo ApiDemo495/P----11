@@ -336,6 +336,18 @@ function _drawOwn() { drawOwnChart(); }
 const Own = { inst: null, key: "", lineKey: "", markerKey: "" };
 const TZ_OFF = 19800;                    // IST = UTC+5:30 (doc D-2)
 const lt = t => t + TZ_OFF;              // render-only shift for LWC
+function levelAutoscaleProvider(values) {
+  return original => {
+    const base = original?.();
+    if (!base?.priceRange) return base;
+    const finite = (values || []).filter(Number.isFinite);
+    if (!finite.length) return base;
+    return { ...base, priceRange: {
+      minValue: Math.min(base.priceRange.minValue, ...finite),
+      maxValue: Math.max(base.priceRange.maxValue, ...finite),
+    }};
+  };
+}
 function ownMake(el) {
   const LW = window.LightweightCharts; if (!LW || !el) return null;
   const chart = LW.createChart(el, {
@@ -346,8 +358,10 @@ function ownMake(el) {
     crosshair: { mode: LW.CrosshairMode.Normal },
     width: el.clientWidth || 300, height: el.clientHeight || 340,
   });
+  const levelValues = [];
   const candles = chart.addCandlestickSeries({ upColor: "#26a69a", downColor: "#ef5350",
     borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350",
+    autoscaleInfoProvider: levelAutoscaleProvider(levelValues),
     priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
   const vol = chart.addHistogramSeries({ priceScaleId: "", priceFormat: { type: "volume" } });
   chart.priceScale("").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
@@ -368,22 +382,27 @@ function ownMake(el) {
       : "";
   });
   new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); } catch {} }).observe(el);
-  return { chart, candles, vol, fan50, fan25, fan75, legend, stale, lines: {}, last: null };
+  return { chart, candles, vol, fan50, fan25, fan75, legend, stale,
+    lines: {}, levelValues, last: null };
 }
 function ownSetLines(inst, d) {
   const want = {};
-  if (d.entry) want.entry = { price: d.entry, color: "#c9d1d9", title: "ENTRY", style: 1 };
-  if (d.tp) want.tp = { price: d.tp, color: "#26a69a", title: "TP", style: 2 };
-  if (d.sl) want.sl = { price: d.sl, color: "#ef5350", title: "SL", style: 2 };
+  if (S.showLines !== false && d.levels_ok !== false) {
+    if (Number.isFinite(d.entry)) want.entry = { price: d.entry, color: "#c9d1d9", title: "ENTRY", style: 1, contract: true };
+    if (Number.isFinite(d.tp)) want.tp = { price: d.tp, color: "#26a69a", title: "TP", style: 2, contract: true };
+    if (Number.isFinite(d.sl)) want.sl = { price: d.sl, color: "#ef5350", title: "SL", style: 2, contract: true };
+  }
   const key = JSON.stringify(want);
+  inst.levelValues.splice(0, inst.levelValues.length,
+    ...Object.values(want).filter(v => v.contract).map(v => v.price));
   if (key === Own.lineKey) return;
   Own.lineKey = key;
   for (const k of Object.keys(inst.lines)) { try { inst.candles.removePriceLine(inst.lines[k]); } catch {} }
   inst.lines = {};
-  const LW = window.LightweightCharts;
   for (const [k, v] of Object.entries(want))
     inst.lines[k] = inst.candles.createPriceLine({ price: v.price, color: v.color,
       lineWidth: 1, lineStyle: v.style, axisLabelVisible: true, title: v.title });
+  try { inst.chart.priceScale("right").applyOptions({ autoScale: true }); } catch {}
 }
 function drawOwnChart() {
   const host = $("#chart-own"); if (!host) return;
@@ -533,12 +552,14 @@ function bnMake(el, mini) {
     width: el.clientWidth || 300, height: el.clientHeight || (mini ? 142 : 340),
   });
   // user: Binance LINE chart, not candles — closes as a line
+  const levelValues = [];
   const candles = chart.addLineSeries({ color: "#f0b90b", lineWidth: 2,
+    autoscaleInfoProvider: levelAutoscaleProvider(levelValues),
     priceLineVisible: true, lastValueVisible: true });
   const vol = chart.addHistogramSeries({ priceScaleId: "", priceFormat: { type: "volume" } });
   chart.priceScale("").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
   const ma = (color) => chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-  const out = { chart, candles, vol, ma7: ma("rgba(240,185,11,.85)"), ma25: ma("rgba(200,120,255,.7)"), last: null };
+  const out = { chart, candles, vol, ma7: ma("rgba(240,185,11,.85)"), ma25: ma("rgba(200,120,255,.7)"), levelValues, _lines: [], last: null };
   new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); } catch {} }).observe(el);
   return out;
 }
@@ -906,10 +927,10 @@ function renderHero() {
       ${cyc?.forecast?.price ? `<div class="kv"><span>${cyc.forecast.mode === "new" ? "🎯 FORECAST (target)" : "forecast if NEW"} ${cyc.forecast.minutes}m</span><b>${px(cyc.forecast.price)} (${cyc.forecast.move_bps} bp)</b></div>` : ""}
       <div class="kv"><span>cci adj</span><b>${fx(res.cci_adjusted ?? 0, 4)}</b></div>
       <div class="kv"><span>countdown</span><b>${cyc?.countdown_s != null ? `${Math.floor(cyc.countdown_s / 60)}m ${cyc.countdown_s % 60}s` : "—"}</b></div>
-      <div class="kv"><span>entry (locked)</span><b>${cyc?.entry ? px(cyc.entry) : (res.lock?.price ? px(res.lock.price) : "—")}</b></div>
+      <div class="kv"><span>entry (locked contract)</span><b>${cyc?.entry ? px(cyc.entry) : (res.lock?.price ? px(res.lock.price) : "—")}</b></div>
       <div class="kv"><span>price now</span><b>${a.price ? px(a.price) : "—"}</b></div>
       <div class="kv"><span>stop loss</span><b class="acc-dn">${cyc?.sl ? px(cyc.sl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:9px">prov</span>' : ""}</b></div>
-      <div class="kv"><span>ratio</span><b>${cyc?.ratio ? "1:" + cyc.ratio : "—"}</b></div>`;
+      <div class="kv"><span>TP:SL ratio</span><b>${cyc?.ratio ? Number(cyc.ratio).toFixed(2) + ":1" : "—"}</b></div>`;
   }
   // TP ladder — the TF's own horizon ALWAYS first (user rule)
   const tg = cyc?.targets || [];
@@ -937,9 +958,11 @@ function renderHero() {
       + (res.asset_nature ? ` · ${S.symbol} profile: ${res.asset_nature} · issue floor ${fmt(res.asset_floor, 3)}` : "")
       + (res.behavior?.action ? ` · behaviour: ${res.behavior.action}` : "");
   }
-  // chart overlays: SL, TP ladder (horizon first), liquidation clusters
+  // Frozen contract pair is explicit; measured TP rungs remain separate.
   const lines = [];
-  if (cyc?.sl) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL" });
+  if (Number.isFinite(cyc?.entry)) lines.push({ price: cyc.entry, color: "#c9d1d9", title: "ENTRY", contract: true });
+  if (Number.isFinite(cyc?.tp)) lines.push({ price: cyc.tp, color: "#26a69a", title: "TP", contract: true });
+  if (Number.isFinite(cyc?.sl)) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL", contract: true });
   const mgi = res.micro;
   if (mgi?.available) {
     // only clusters within ±2% of price: a far cluster used to widen
@@ -975,19 +998,22 @@ function bnDrawLines(lines) {
   if (!lines) {   // rebuild from the focus cycle
     const cyc = S.snap?.assets?.[S.symbol]?.tfs?.[S.focusTf];
     lines = [];
-    if (cyc?.entry) lines.push({ price: cyc.entry, color: "#e8e8f0", title: "ENTRY" });
-    if (cyc?.tp) lines.push({ price: cyc.tp, color: "#22c98a", title: "TP" });
-    if (cyc?.sl) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL" });
+    if (Number.isFinite(cyc?.entry)) lines.push({ price: cyc.entry, color: "#e8e8f0", title: "ENTRY", contract: true });
+    if (Number.isFinite(cyc?.tp)) lines.push({ price: cyc.tp, color: "#22c98a", title: "TP", contract: true });
+    if (Number.isFinite(cyc?.sl)) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL", contract: true });
     for (const t of (cyc?.targets || [])) if (t.level)
       lines.push({ price: t.level, color: "#c9a227", title: `TP${t.k}` });
   }
+  const visible = S.showLines === false ? [] : (lines || []).filter(L => Number.isFinite(L.price));
+  inst.levelValues.splice(0, inst.levelValues.length,
+    ...visible.filter(L => L.contract).map(L => L.price));
   for (const l of inst._lines || []) { try { inst.candles.removePriceLine(l); } catch {} }
   inst._lines = [];
-  if (S.showLines === false) return;
-  for (const L of lines || []) if (Number.isFinite(L.price))
+  for (const L of visible)
     inst._lines.push(inst.candles.createPriceLine({ price: L.price,
       color: L.color || "#c9a227", lineWidth: 1, lineStyle: 2,
       axisLabelVisible: true, title: L.title || "" }));
+  try { inst.chart.priceScale("right").applyOptions({ autoScale: true }); } catch {}
 }
 
 function bindAllTf() {
@@ -1046,10 +1072,12 @@ function quadChart(el, bucketSec = 60) {
     handleScroll: false, handleScale: false,
     width: el.clientWidth || 170, height: el.clientHeight || 92,
   });
+  const levelValues = [];
   const candles = chart.addLineSeries({ color: "#38bdf8", lineWidth: 1,
+    autoscaleInfoProvider: levelAutoscaleProvider(levelValues),
     priceLineVisible: false, lastValueVisible: true });
   new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); } catch {} }).observe(el);
-  const inst = { chart, candles, last: null, _lines: [],
+  const inst = { chart, candles, last: null, _lines: [], levelValues,
     setData(bars) {
       if (!bars?.length) return;
       candles.setData(bars.map(b => ({ time: lt(b.time), value: b.close })));
@@ -1058,11 +1086,15 @@ function quadChart(el, bucketSec = 60) {
       try { chart.timeScale().scrollToRealTime(); } catch {}
     },
     setLines(lines) {
+      const visible = (lines || []).filter(L => Number.isFinite(L.price));
+      levelValues.splice(0, levelValues.length,
+        ...visible.filter(L => L.contract).map(L => L.price));
       for (const l of inst._lines) { try { candles.removePriceLine(l); } catch {} }
       inst._lines = [];
-      for (const L of (lines || [])) if (Number.isFinite(L.price))
+      for (const L of visible)
         inst._lines.push(candles.createPriceLine({ price: L.price, color: L.color || "#c9a227",
           lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: L.title || "" }));
+      try { chart.priceScale("right").applyOptions({ autoScale: true }); } catch {}
     },
     tick(p) {
       if (!inst.last || !(p > 0)) return;
@@ -1145,9 +1177,11 @@ function renderQuads(opts = {}) {
     const chg = a.window_change_pct ?? 0;
     $("#qp-" + tf).innerHTML = pr != null
       ? `${px(pr)} <span class="chg ${chg >= 0 ? "up" : "down"}">${chg >= 0 ? "+" : ""}${fmt(chg, 2)}%</span>` : "—";
-    // TP/SL overlay lines on the chart
+    // Frozen contract pair scales with the price series; measured rungs stay distinct.
     const lines = [];
-    if (cyc?.sl) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL" });
+    if (Number.isFinite(cyc?.entry)) lines.push({ price: cyc.entry, color: "#c9d1d9", title: "ENTRY", contract: true });
+    if (Number.isFinite(cyc?.tp)) lines.push({ price: cyc.tp, color: "#26a69a", title: "TP", contract: true });
+    if (Number.isFinite(cyc?.sl)) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL", contract: true });
     // liquidation clusters (measured @forceOrder buckets) as purple overlays
     // (liquidation-cluster overlays live on the hero chart only — on
     // the small quad cards they were two more colliding labels)
@@ -1157,7 +1191,7 @@ function renderQuads(opts = {}) {
     const _hz = (cyc?.targets || [])[(cyc?.targets || []).length - 1];
     if (_hz?.level) lines.push({
       price: _hz.level, color: "#c9a227",
-      title: `TP${_hz.minutes}m`, dash: false,
+      title: `TF${_hz.minutes}m rung`, dash: false,
     });
     if (heavy) S.charts[tf]?.setLines(lines);
   });
@@ -1329,18 +1363,20 @@ function onAnalyseDone(msg) {
     <div class="an-signal ${dirCls}">
       <div class="big">${r.signal}</div>
       <div class="conf">confidence ${fx(r.confidence, 3)}${r.issued ? " · ISSUED" : " · below floor"}</div>
-      <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? "1:" + Number(r.ratio).toFixed(2) : "—"} · levels: ${esc(r.levels_source || "locked cycle")}</div>
+      <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? Number(r.ratio).toFixed(2) + ":1" : "—"} · ${esc(r.levels_source || "preview only")}</div>
+      <div class="conf">${r.contract_state === "locked" ? `LOCKED CONTRACT ${esc((r.contract_id || "").slice(0, 16))}` : "PREVIEW ONLY — NO LOCKED CONTRACT"} · ${r.execution_eligible ? "EXECUTION ELIGIBLE" : "NOT EXECUTION-ELIGIBLE"}</div>
     </div>
     <div class="an-grid">
-      ${r.tps.map(t => `<div class="an-cell"><div class="k">TP${t.k} · ${t.minutes}m</div><div class="v">${px(t.level)}</div></div>`).join("")}
-      <div class="an-cell"><div class="k">STOP LOSS</div><div class="v" style="color:#f0385a">${r.sl ? px(r.sl) : "—"}</div></div>
+      ${r.contract_tp ? `<div class="an-cell"><div class="k">LOCKED CONTRACT TP</div><div class="v" style="color:#26a69a">${px(r.contract_tp)}</div></div>` : ""}
+      ${r.tps.map(t => `<div class="an-cell"><div class="k">MEASURED RUNG ${t.k} · ${t.minutes}m</div><div class="v">${px(t.level)}</div></div>`).join("")}
+      <div class="an-cell"><div class="k">LOCKED CONTRACT SL</div><div class="v" style="color:#f0385a">${r.contract_sl ? px(r.contract_sl) : r.sl ? px(r.sl) : "—"}</div></div>
       <div class="an-cell"><div class="k">LADDER</div><div class="v" style="font-size:10.5px;font-weight:400">${esc(r.ladder?.source || "—")}</div></div>
       <div class="an-w">weightage for ${msg.symbol} (per-asset mix): ${(r.weightage || []).map(w => `F${w.id} <b>${w.w}</b>`).join(" · ")}<br/><span class="dim">${esc(r.weightage_note || "")}</span></div>
       <div class="an-ai">AI review — ${esc(aiLine)}</div>
       ${r.recheck ? `<div class="an-recheck" style="margin-top:6px;font-size:10.5px">
         <b class="${r.recheck.passed ? "acc-up" : "acc-dn"}">${esc(r.recheck.verdict)}</b>
         ${(r.recheck.checks || []).map(c => `<div class="kv"><span>${c.ok ? "✓" : "✗"} ${esc(c.name)}</span><b class="${c.ok ? "" : "acc-dn"}">${esc(c.detail)}</b></div>`).join("")}
-        ${r.prediction ? `<div class="hint">prediction produced: ${r.prediction.direction > 0 ? "BUY" : "SELL"} · entry ${px(r.prediction.entry)} · TP ${px(r.prediction.tp)} · SL ${px(r.prediction.sl)} · 1:${Number(r.prediction.ratio).toFixed(2)}</div>` : `<div class="hint">raw analysis read was ${esc(r.raw_signal || "—")} — not produced as a prediction (see failed checks above).</div>`}
+        ${r.prediction ? `<div class="hint">${r.prediction.kind === "locked-contract" ? "locked contract" : "preview only"}: ${r.prediction.direction > 0 ? "BUY" : r.prediction.direction < 0 ? "SELL" : "FLAT"} · entry ${px(r.prediction.entry)} · TP ${px(r.prediction.tp)} · SL ${px(r.prediction.sl)} · TP:SL ${r.prediction.ratio != null ? Number(r.prediction.ratio).toFixed(2) + ":1" : "—"} · ${r.prediction.execution_eligible ? "execution eligible" : "never executes"}</div>` : `<div class="hint">raw analysis read was ${esc(r.raw_signal || "—")} — not produced as a prediction (see failed checks above).</div>`}
       </div>` : ""}
       <div class="an-period">calculation period: ${esc(period)} · total ${r.elapsed_ms} ms</div>
     </div></div>`;
@@ -1706,7 +1742,7 @@ function renderCalls() {
       <td class="mono">${fmt(res?.confidence, 3)}</td>
       ${tps}
       <td class="mono sl-cell">${sl}</td>
-      <td class="mono">${cyc?.ratio ? "1:" + cyc.ratio : "—"}</td>
+      <td class="mono">${cyc?.ratio ? Number(cyc.ratio).toFixed(2) + ":1" : "—"}</td>
     </tr>`;
   }).join("");
   el.innerHTML = `<table class="tbl calls-tbl">

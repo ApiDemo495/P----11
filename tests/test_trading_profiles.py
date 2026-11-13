@@ -6,9 +6,10 @@ import time
 from app import trading
 from app.config import asset_profile
 from app.emotion import _crowd
+from tests.contract_fixtures import locked_contract_signal
 
-SIG = {"symbol": "BTC", "tf": "tf1", "issued": True, "direction": 1,
-       "entry": 100.0, "tp": 101.0, "sl": 99.0, "tp_bps": 100, "sl_bps": 100}
+SIG = locked_contract_signal(entry=100.0, tp_bps=100.0, sl_bps=100.0,
+                             cycle_id="trading-profile")
 
 
 def _cfg(**kw):
@@ -29,6 +30,20 @@ def test_gate_refuses_everything_unsafe():
     assert not trading.gate(_cfg(), SIG, set(), 4)[0]                   # day cap
     ok, why = trading.gate(_cfg(), SIG, set(), 0)
     assert ok and why == "all gates passed"
+    sim = {**SIG, "feed_mode": "sim", "feed_simulated": True}
+    ok, why = trading.gate(_cfg(), sim, set(), 0)
+    assert not ok and "live Binance feed required" in why
+    missing_feed = {k: v for k, v in SIG.items()
+                    if k not in ("feed_mode", "feed_simulated")}
+    ok, why = trading.gate(_cfg(), missing_feed, set(), 0)
+    assert not ok and "live Binance feed required" in why
+
+
+def test_below_one_to_one_contract_is_watch_only():
+    sig = locked_contract_signal(entry=100.0, tp_bps=50.0, sl_bps=100.0,
+                                cycle_id="below-floor")
+    ok, why = trading.gate(_cfg(), sig, set(), 0)
+    assert not ok and "watch-only" in why
 
 
 def test_trader_executes_only_through_gates_with_brackets():

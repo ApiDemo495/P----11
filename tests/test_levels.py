@@ -57,7 +57,10 @@ def test_no_trade_grc_keeps_frozen_levels():
     assert 'reason="retake_direction"' in src        # flip -> re-predict
 
 
-def test_apply_risk_never_overwrites_unissued():
+def test_apply_risk_never_overwrites_a_locked_contract():
     src = (ROOT / "app" / "engine.py").read_text()
     i = src.index("def _apply_risk")
-    assert "if not cyc.issued:" in src[i:i + 400]
+    seg = src[i:src.index("# ---------------- Signal Lock", i)]
+    assert "frozen = cyc.risk or {}" in seg
+    assert "if cyc.level_contract:" in seg
+    assert "_risk_pack(symbol, tf, cyc, res)" in seg  # legacy only

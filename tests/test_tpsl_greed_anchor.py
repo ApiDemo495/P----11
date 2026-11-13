@@ -77,4 +77,4 @@ def test_chart_labels_and_liq_filter():
     lc = (ROOT / "static" / "LineChart.js").read_text()
     assert "padL + plotW + 5" in lc                          # price labels on the right axis (PriceChart)
     assert "Math.abs(p - _ref) / _ref <= 0.02" in js      # far LIQ dropped
-    assert "entry (locked)" in js and "from entry" in js  # anchor shown
+    assert "entry (locked contract)" in js and "from entry" in js  # frozen contract anchor shown

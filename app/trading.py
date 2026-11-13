@@ -100,6 +100,33 @@ def read_log(n: int = 20) -> list:
         return []
 
 
+def _valid_contract_signal(sig: dict) -> tuple[bool, str]:
+    contract, lock = sig.get("contract"), sig.get("contract_lock")
+    if not _levels.lock_id_valid(lock):
+        return False, "contract lock fingerprint missing or invalid"
+    if not _levels.contract_valid(
+            contract, symbol=sig.get("symbol"), timeframe=sig.get("tf"),
+            cycle=sig.get("cycle_id"), side=sig.get("direction"),
+            revision=sig.get("level_revision"), lock_id=lock.get("lock_id"),
+            entry=sig.get("entry")):
+        return False, "frozen TP/SL contract identity or fingerprint invalid"
+    for field in ("entry", "tp", "sl"):
+        try:
+            if abs(float(sig.get(field)) - float(contract[field])) > max(
+                    1e-7, abs(float(contract[field])) * 1e-10):
+                return False, f"{field} differs from the frozen contract"
+        except (TypeError, ValueError, KeyError, OverflowError):
+            return False, f"{field} missing from the frozen contract"
+    if contract.get("below_floor") or not (1.0 <= float(contract["ratio"]) <= 4.0):
+        return False, "TP:SL below 1:1 or above 4:1 — watch-only"
+    return True, ""
+
+
+def _live_feed_signal(sig: dict) -> bool:
+    """Only an explicitly confirmed live Binance tape may authorize orders."""
+    return sig.get("feed_mode") == "binance" and sig.get("feed_simulated") is False
+
+
 def gate(cfg: dict, sig: dict, open_symbols: set,
          orders_today: int) -> tuple[bool, str]:
     """Every refusal is a reason, never silence. Order matters."""
@@ -112,16 +139,17 @@ def gate(cfg: dict, sig: dict, open_symbols: set,
     if float(sig.get("feed_age_s") or 0) > 20.0:
         return False, (f"stale tape ({sig.get('feed_age_s'):.0f}s since last "
                        "tick) — never trade a dead feed")
+    if not _live_feed_signal(sig):
+        return False, "live Binance feed required — simulated or unknown tape cannot execute"
     if not sig.get("issued"):
         return False, "signal not ISSUED (below confidence floor — no trade)"
     if not sig.get("direction"):
         return False, "no direction"
-    # execution is STRICTER than display: levels must be valid as
-    # given — never repaired, never recomputed at order time
-    if not _levels.valid(
-            {"tp": sig.get("tp"), "sl": sig.get("sl"),
-             "entry": sig.get("entry"), "direction": sig.get("direction")}):
-        return False, "TP/SL missing or wrong side of entry — refused"
+    if not sig.get("execution_eligible"):
+        return False, "cycle is not execution-eligible (watch-only or barrier already hit)"
+    valid_contract, why = _valid_contract_signal(sig)
+    if not valid_contract:
+        return False, why
     if sig["symbol"] in open_symbols:
         return False, f"position already open on {sig['symbol']}"
     if orders_today >= int(cfg.get("max_orders_day") or 4):
@@ -177,6 +205,12 @@ class Trader:
         row = {"ts": time.time(), "symbol": sig.get("symbol"),
                "tf": sig.get("tf"), "side": sig.get("direction"),
                "entry": sig.get("entry"), "ok": ok, "why": why,
+               "contract_id": sig.get("contract_id"),
+               "cycle_id": sig.get("cycle_id"),
+               "lock_id": sig.get("lock_id"),
+               "level_revision": sig.get("level_revision"),
+               "feed_mode": sig.get("feed_mode"),
+               "feed_simulated": sig.get("feed_simulated"),
                "testnet": bool(self.cfg.get("testnet", True))}
         _log(row)
         if not ok:
@@ -195,6 +229,11 @@ class Trader:
         return row
 
     def execute(self, sig: dict) -> dict:
+        # Defense in depth: even internal callers may not bypass the same
+        # account, live-feed, barrier and frozen-contract gates as consider().
+        ok, why = gate(self.cfg, sig, set(self.open_positions), self.orders_today)
+        if not ok:
+            raise ValueError(why)
         cfg = self.cfg
         sym = SYMBOLS[sig["symbol"]]
         entry = float(sig["entry"])

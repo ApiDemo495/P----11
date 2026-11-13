@@ -2,6 +2,7 @@
 Binance connect, functional equity sizing."""
 from app.flywire import short_error
 from app import trading
+from tests.contract_fixtures import locked_contract_signal
 
 
 def test_brain_error_never_raw():
@@ -27,13 +28,16 @@ def test_chart_engine_replaced():
 def test_risk_sizing_functional(monkeypatch):
     calls = []
     tr = trading.Trader()
-    tr.cfg = {**trading.DEFAULTS, "sizing_mode": "risk",
-              "equity_usdt": 1000.0, "risk_pct": 1.0,
-              "max_order_usdt": 100000.0, "testnet": True,
-              "api_key": "k", "api_secret": "s"}
+    tr.cfg = {**trading.DEFAULTS, "enabled": True,
+              "armed_until": 9999999999, "max_orders_day": 4,
+              "sizing_mode": "risk", "equity_usdt": 1000.0,
+              "risk_pct": 1.0, "max_order_usdt": 100000.0,
+              "testnet": True, "api_key": "k", "api_secret": "s"}
     monkeypatch.setattr(tr, "_signed",
                         lambda m, p, params: calls.append(params) or {"orderId": 1})
-    out = tr.execute({"symbol": "BTC", "direction": 1, "entry": 100.0, "sl": 99.0, "tp": 101.0})
+    out = tr.execute(locked_contract_signal(entry=100.0, tp_bps=100.0,
+                                            sl_bps=100.0,
+                                            cycle_id="risk-sizing"))
     # risk 10 USDT / 1% stop distance = 1000 notional -> qty 10 (capped by equity)
     assert out["qty"] == 10.0
     assert calls[0]["quantity"] == 10.0

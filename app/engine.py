@@ -2227,7 +2227,7 @@ class PredictionEngine:
                             "level": round(float(_lv["tp"]), 6)}]
                 sl = float(_lv["sl"])
                 ratio_used = _lv.get("ratio")
-                levels_source = "locked cycle — same levels as chart/calls"
+                levels_source = "locked contract — frozen entry/TP/SL"
             else:
                 entry_used = price
                 tps, sl, ratio_used = [], None, None
@@ -2242,7 +2242,7 @@ class PredictionEngine:
                                 "level": round(float(_fin["tp"]), 6)}]
                         sl = float(_fin["sl"])
                         ratio_used = _fin.get("ratio")
-                levels_source = "fresh 2:1 block (no lock yet this window)"
+                levels_source = "preview only — measured levels, no lock, not executable"
             _t_re = time.time()
             # 6.5 ── RECHECK: every data source, every subsystem, then
             # and only then a prediction (user order). The analysis may
@@ -2268,7 +2268,8 @@ class PredictionEngine:
             _age = (round(time.time() - float(_st.last_tick), 1)
                     if getattr(_st, "last_tick", 0) else None)
             _dir_lv = int(_lv["direction"]) if _lv else direction
-            _tp_lv = (tps[-1]["level"] if tps else None)
+            _tp_lv = (float(_lv["tp"]) if _lv else
+                      (tps[-1]["level"] if tps else None))
             from .levels import valid as _lv_valid
             _levels_ok = bool(_lv_valid({
                 "entry": entry_used, "tp": _tp_lv, "sl": sl,
@@ -2307,6 +2308,19 @@ class PredictionEngine:
                 "sl": round(sl, 6) if sl else None,
                 "ratio": ratio_used,
                 "levels_source": levels_source,
+                "contract_state": ("locked" if _lv and cyc and cyc.level_contract
+                                   else "legacy-locked" if _lv else "preview-only"),
+                "contract_id": ((cyc.level_contract or {}).get("id")
+                                if _lv and cyc else None),
+                "level_contract": (dict(cyc.level_contract)
+                                   if _lv and cyc and cyc.level_contract else None),
+                "contract_tp": float(_lv["tp"]) if _lv else None,
+                "contract_sl": float(_lv["sl"]) if _lv else None,
+                "execution_eligible": bool(
+                    _lv and cyc and cyc.execution_eligible and cyc.issued
+                    and cyc.tier != "watch-only" and not cyc.contract_tp_hit
+                    and not cyc.sl_observed and not cyc.pending_reset
+                    and getattr(self.feed, "mode", None) == "binance"),
                 "raw_signal": ("BUY" if direction > 0 else
                                "SELL" if direction < 0 else "FLAT"),
                 "recheck": recheck,
@@ -2314,8 +2328,16 @@ class PredictionEngine:
                                 "confidence": round(conf, 4),
                                 "entry": round(entry_used, 6),
                                 "tp": _tp_lv, "sl": round(sl, 6) if sl else None,
-                                "ratio": ratio_used}
-                               ),   # the call stands regardless of recheck
+                                "ratio": ratio_used,
+                                "kind": "locked-contract" if _lv and cyc and cyc.level_contract else "analysis-preview",
+                                "contract_id": ((cyc.level_contract or {}).get("id")
+                                                if _lv and cyc else None),
+                                "execution_eligible": bool(
+                                    _lv and cyc and cyc.execution_eligible and cyc.issued
+                                    and cyc.tier != "watch-only" and not cyc.contract_tp_hit
+                                    and not cyc.sl_observed and not cyc.pending_reset
+                                    and getattr(self.feed, "mode", None) == "binance")}
+                               ),   # preview is never executable
                 "weightage": [{"id": str(k), "w": round(v, 5)}
                               for k, v in top_w],
                 "weightage_note": ("per-asset, per-timeframe weights — "
@@ -3053,9 +3075,9 @@ class PredictionEngine:
         lock["original_price"] = old_entry
         lock["original_id"] = lock.get("lock_id") or (
             f"{symbol}-{tf}-{int(lock.get('locked_at') or 0)}")
-        lock["lock_id"] = f"emg-{int(now)}"
         lock["price"] = price
         lock["locked_at"] = now
+        lock["lock_id"] = _levels.make_lock_id(lock) or f"emg-{int(now)}"
         lock["reason"] = (f"NEWS_EMERGENCY re-lock: {(reason or 'news event')[:140]}"
                           f" | original entry {old_entry:.6f}")
         lock["emergency"] = True
@@ -3081,6 +3103,8 @@ class PredictionEngine:
             _cyc.sl = _cyc.risk["sl"]
             _cyc.events.append({"ts": now, "type": "relock_reanchor",
                                 "new_entry": price})
+            self._install_cycle_contract(_cyc, now, reason="emergency_relock")
+            self._save_cycle_lock_state(_cyc)
         row = self.news.record_emergency(symbol, lock["lock_id"],
                                          reason or "news emergency",
                                          old_entry, price, ok=True)
@@ -3507,16 +3531,242 @@ class PredictionEngine:
         return tp, sl, tp_dist, sl_dist, ratio
 
     def _apply_risk(self, symbol: str, tf: str, cyc: TFCycle, res: dict) -> None:
+        # The measured block is frozen at lock time. GRC refreshes may update
+        # diagnostics and measured rungs, but never replace the contract pair.
+        frozen = cyc.risk or {}
+        if _levels.valid({"entry": frozen.get("entry"), "tp": frozen.get("tp"),
+                          "sl": frozen.get("sl"), "direction": frozen.get("direction") or cyc.direction}):
+            # Keep F28/F29's current-risk read alive as a separate projection;
+            # it is diagnostic/sizing input only and cannot mutate the contract.
+            try:
+                projection = self._risk_pack(symbol, tf, cyc, res)
+                if projection and projection[4] is not None:
+                    frozen["live_projection"] = {
+                        "tp": projection[0], "sl": projection[1],
+                        "tp_dist": projection[2], "sl_dist": projection[3],
+                        "ratio": projection[4], "as_of": time.time(),
+                        "executable": False,
+                    }
+            except Exception:
+                log.exception("live risk projection failed for %s/%s", symbol, tf)
+            cyc.tp, cyc.sl = frozen["tp"], frozen["sl"]
+            cyc.tp_dist = float(frozen.get("tp_dist") or abs(cyc.tp - frozen["entry"]))
+            cyc.sl_dist = float(frozen.get("sl_dist") or abs(frozen["entry"] - cyc.sl))
+            cyc.ratio = round(cyc.tp_dist / cyc.sl_dist, 6) if cyc.sl_dist else None
+            return
+        if cyc.level_contract:
+            contract = _levels.validate_cycle_contract(cyc)
+            if contract:
+                cyc.tp, cyc.sl = contract["tp"], contract["sl"]
+                cyc.tp_dist, cyc.sl_dist = contract["tp_dist"], contract["sl_dist"]
+                cyc.ratio = contract["ratio"]
+            else:
+                cyc.execution_eligible = False
+            return
         if not cyc.issued:
-            return          # unissued: the frozen measured-moves block
-                            # set at the lock IS the level set — never
-                            # overwritten (with None or anything else)
+            return
         tp, sl, tp_dist, sl_dist, ratio = self._risk_pack(symbol, tf, cyc, res)
         if ratio is None and cyc.issued and cyc.active_k is None:
-            return          # all sub-targets completed — keep last placement
+            return
         cyc.tp, cyc.sl = tp, sl
         cyc.tp_dist, cyc.sl_dist = tp_dist, sl_dist
         cyc.ratio = ratio
+
+    def _install_cycle_contract(self, cyc: TFCycle, now: float,
+                                reason: str = "") -> dict | None:
+        """Freeze, persist and validate this cycle's exact entry/TP/SL pair."""
+        lock_row = self.locks.get((cyc.symbol, cyc.tf))
+        if not isinstance(lock_row, dict):
+            cyc.execution_eligible = False
+            return None
+        risk = cyc.risk or {}
+        entry = _levels._number(risk.get("entry")) or _levels._number(lock_row.get("price"))
+        side = int(cyc.direction or 0)
+        if entry is None or entry <= 0 or side not in (-1, 1):
+            cyc.level_contract = _levels.unavailable_contract(
+                symbol=cyc.symbol, timeframe=cyc.tf, cycle=cyc.cycle_id,
+                reason="locked entry or direction unavailable")
+            cyc.execution_eligible = False
+            return None
+
+        # A restart inside an unexpired prediction window must restore the
+        # exact serialized contract, not refit it from the newly warmed tape.
+        saved = lock_row.get("level_contract")
+        saved_lock = lock_row.get("contract_lock")
+        saved_cycle = lock_row.get("contract_cycle_id")
+        saved_revision = int(lock_row.get("level_revision") or 0)
+        saved_end = float(lock_row.get("contract_cycle_end") or 0.0)
+        if (reason == "initial_lock" and isinstance(saved_lock, dict)
+                and _levels.lock_id_valid(saved_lock)
+                and _levels.contract_valid(
+                    saved, symbol=cyc.symbol, timeframe=cyc.tf,
+                    cycle=saved_cycle, side=side, revision=saved_revision,
+                    lock_id=saved_lock.get("lock_id"), entry=entry)
+                and saved_end > now):
+            cyc.cycle_id = saved_cycle
+            cyc.lock_id = saved_lock["lock_id"]
+            cyc.level_revision = saved_revision
+            cyc.contract_lock = dict(saved_lock)
+            cyc.level_contract = dict(saved)
+            cyc.cycle_start = float(lock_row.get("contract_cycle_start") or cyc.cycle_start)
+            cyc.cycle_end = saved_end
+            cyc.contract_tp_hit = bool(lock_row.get("contract_tp_hit"))
+            cyc.sl_observed = bool(lock_row.get("sl_observed"))
+            cyc.pending_reset = bool(lock_row.get("contract_pending_reset"))
+            if "contract_active_k" in lock_row:
+                cyc.active_k = lock_row.get("contract_active_k")
+            cyc.safe_events = int(lock_row.get("contract_safe_events") or cyc.safe_events)
+            cyc.sl_tighten = float(lock_row.get("contract_sl_tighten") or cyc.sl_tighten)
+            cyc.issued = bool(lock_row.get("contract_issued", cyc.issued))
+            if lock_row.get("contract_tier"):
+                cyc.tier = str(lock_row["contract_tier"])
+            if lock_row.get("contract_confidence") is not None:
+                cyc.confidence = float(lock_row["contract_confidence"])
+            saved_targets = lock_row.get("contract_targets")
+            if isinstance(saved_targets, list) and len(saved_targets) == len(cyc.targets):
+                for target, saved_target in zip(cyc.targets, saved_targets):
+                    if not isinstance(saved_target, dict):
+                        continue
+                    if saved_target.get("status") in {"pending", "locked", "hit", "invalidated"}:
+                        target.status = saved_target["status"]
+                    level = _levels._number(saved_target.get("level"))
+                    target.level = level if level and level > 0 else None
+                    target.direction = int(saved_target.get("direction") or 0)
+                    target.locked_at = saved_target.get("locked_at")
+                    target.hit_ts = saved_target.get("hit_ts")
+                    target.locked_cci = saved_target.get("locked_cci")
+            if isinstance(lock_row.get("contract_risk"), dict):
+                cyc.risk = dict(lock_row["contract_risk"])
+            cyc.tp, cyc.sl = saved["tp"], saved["sl"]
+            cyc.tp_dist, cyc.sl_dist, cyc.ratio = saved["tp_dist"], saved["sl_dist"], saved["ratio"]
+            if cyc.targets:
+                cyc.target(len(cyc.targets)).level = cyc.tp
+            cyc.execution_eligible = bool(
+                cyc.issued and cyc.tier != "watch-only"
+                and not saved.get("below_floor") and not cyc.contract_tp_hit
+                and not cyc.sl_observed and not cyc.pending_reset
+                and getattr(self.feed, "mode", None) == "binance")
+            return cyc.level_contract
+
+        # Cap only the TP distance at the user's 4:1 maximum, keeping the
+        # measured stop and recording the uncapped evidence in the risk block.
+        tp, sl = _levels._number(cyc.tp), _levels._number(cyc.sl)
+        lv = {"entry": entry, "tp": tp, "sl": sl, "direction": side}
+        if not _levels.valid(lv):
+            cyc.level_contract = _levels.unavailable_contract(
+                symbol=cyc.symbol, timeframe=cyc.tf, cycle=cyc.cycle_id,
+                reason="measured TP/SL failed locked-entry side validation",
+                side=side)
+            cyc.execution_eligible = False
+            return None
+        tp_dist, sl_dist = abs(tp - entry), abs(entry - sl)
+        rr = tp_dist / sl_dist if sl_dist else 0.0
+        if rr > _levels.MAX_RR:
+            risk.setdefault("raw_tp_bps", risk.get("tp_bps"))
+            risk.setdefault("raw_ratio", rr)
+            tp_dist = _levels.MAX_RR * sl_dist
+            tp = entry + side * tp_dist
+            cyc.tp = round(tp, 8)
+            if cyc.targets:
+                cyc.target(len(cyc.targets)).level = cyc.tp
+            risk["tp"] = cyc.tp
+            risk["tp_dist"] = tp_dist
+            risk["tp_bps"] = tp_dist / entry * 1e4
+            risk["rr"] = risk["ratio"] = _levels.MAX_RR
+            rr = _levels.MAX_RR
+        cyc.tp_dist, cyc.sl_dist = tp_dist, sl_dist
+        cyc.ratio = round(rr, 6) if sl_dist else None
+        if rr < 1.0 - 1e-6:
+            cyc.tier = "watch-only"
+            cyc.execution_eligible = False
+            if not any(e.get("type") == "below_ratio_floor" for e in cyc.events):
+                cyc.events.append({"ts": now, "type": "below_ratio_floor", "ratio": rr})
+
+        # Give each issuance/relock a fresh lock fingerprint, distinct from
+        # the settlement-window row's mutable metadata.
+        contract_lock = {
+            "symbol": cyc.symbol, "tf": cyc.tf, "side": side,
+            "price": entry, "locked_at": float(now),
+            "window_start": float(cyc.cycle_start or now),
+            "window_end": float(cyc.cycle_end or now),
+            "relocks": int(lock_row.get("relocks") or 0),
+        }
+        contract_lock["lock_id"] = _levels.make_lock_id(contract_lock)
+        revision = max(1, int(lock_row.get("level_revision") or 0) + 1)
+        cycle_id = f"{cyc.symbol}:{cyc.tf}:{int(float(cyc.cycle_start or now) * 1000)}"
+        frozen = {"entry": entry, "tp": tp, "sl": sl, "direction": side}
+        source = "horizon-forecast" if (cyc.forecast or {}).get("mode") == "new" else "measured-moves"
+        contract = _levels.make_contract(
+            frozen, symbol=cyc.symbol, timeframe=cyc.tf, cycle=cycle_id,
+            side=side, revision=revision, lock_id=contract_lock["lock_id"],
+            source=source)
+        cyc.cycle_id, cyc.lock_id = cycle_id, contract_lock["lock_id"]
+        cyc.level_revision, cyc.contract_lock = revision, contract_lock
+        cyc.level_contract = contract or _levels.unavailable_contract(
+            symbol=cyc.symbol, timeframe=cyc.tf, cycle=cycle_id,
+            reason="contract construction failed", lock_id=contract_lock["lock_id"],
+            side=side, revision=revision)
+        if contract:
+            cyc.tp, cyc.sl = contract["tp"], contract["sl"]
+            cyc.tp_dist, cyc.sl_dist, cyc.ratio = (
+                contract["tp_dist"], contract["sl_dist"], contract["ratio"])
+            if cyc.targets:
+                cyc.target(len(cyc.targets)).level = cyc.tp
+        cyc.execution_eligible = bool(
+            contract and cyc.issued and cyc.tier != "watch-only"
+            and not contract.get("below_floor") and not cyc.contract_tp_hit
+            and not cyc.sl_observed and not cyc.pending_reset
+            and getattr(self.feed, "mode", None) == "binance")
+        lock_row.update({
+            "level_contract": dict(cyc.level_contract),
+            "contract_lock": dict(contract_lock),
+            "contract_cycle_id": cycle_id,
+            "contract_cycle_start": cyc.cycle_start,
+            "contract_cycle_end": cyc.cycle_end,
+            "contract_risk": dict(cyc.risk or {}),
+            "contract_targets": [target.to_dict() for target in cyc.targets],
+            "contract_tier": cyc.tier,
+            "contract_confidence": cyc.confidence,
+            "contract_active_k": cyc.active_k,
+            "contract_safe_events": cyc.safe_events,
+            "contract_sl_tighten": cyc.sl_tighten,
+            "contract_tp_hit": bool(cyc.contract_tp_hit),
+            "sl_observed": bool(cyc.sl_observed),
+            "contract_pending_reset": bool(cyc.pending_reset),
+            "contract_issued": bool(cyc.issued),
+            "level_revision": revision,
+        })
+        self._save_locks()
+        return contract
+
+    def _save_cycle_lock_state(self, cyc: TFCycle) -> bool:
+        """Persist only a self-consistent locked contract and barrier state."""
+        contract = _levels.validate_cycle_contract(cyc)
+        if not contract:
+            cyc.execution_eligible = False
+            return False
+        row = self.locks.get((cyc.symbol, cyc.tf))
+        if not isinstance(row, dict):
+            return False
+        row.update({"level_contract": dict(contract),
+                    "contract_lock": dict(cyc.contract_lock),
+                    "contract_cycle_id": cyc.cycle_id,
+                    "contract_cycle_start": cyc.cycle_start,
+                    "contract_cycle_end": cyc.cycle_end,
+                    "contract_risk": dict(cyc.risk or {}),
+                    "contract_targets": [target.to_dict() for target in cyc.targets],
+                    "contract_tier": cyc.tier,
+                    "contract_confidence": cyc.confidence,
+                    "contract_active_k": cyc.active_k,
+                    "contract_safe_events": cyc.safe_events,
+                    "contract_sl_tighten": cyc.sl_tighten,
+                    "level_revision": cyc.level_revision,
+                    "sl_observed": bool(cyc.sl_observed),
+                    "contract_tp_hit": bool(cyc.contract_tp_hit),
+                    "contract_pending_reset": bool(cyc.pending_reset),
+                    "contract_issued": bool(cyc.issued)})
+        self._save_locks()
+        return True
 
     # ---------------- Signal Lock Protocol + settlement (advice 0.3/0.4)
     def _load_locks(self) -> None:
@@ -3699,6 +3949,23 @@ class PredictionEngine:
             tp1 = float(d.get("tp") or 0.0) or (
                 float((targets[0] or {}).get("level") or 0.0)
                 if targets else 0.0)
+            if dirn in (-1, 1) and price > 0 and tp1 > 0 and sl > 0:
+                tp_touched = (price >= tp1 if dirn > 0 else price <= tp1)
+                sl_touched = (price <= sl if dirn > 0 else price >= sl)
+                hit_name = ("TP" if tp_touched else "SL" if sl_touched else None)
+                if (d.get("contract_tp_hit") or d.get("sl_observed")
+                        or tp_touched or sl_touched):
+                    return {
+                        "approx": True, "method": "barrier observed — probability withheld",
+                        "n": 0, "ambig": 0, "ci_target": None,
+                        "ci_stop": None, "p_target": None, "p_stop": None,
+                        "p_between": None, "p_close_down": None,
+                        "ev_bps": None, "entry": (d.get("level_contract") or {}).get("entry"),
+                        "tp": tp1, "sl": sl, "direction": dirn,
+                        "barrier": ("TP already observed" if d.get("contract_tp_hit")
+                                    else "SL already observed" if d.get("sl_observed")
+                                    else f"price at/past {hit_name}"),
+                    }
             if not dirn or price <= 0 or sl <= 0 or tp1 <= 0:
                 return None
             rem_s = float(d.get("countdown_s") or 0)
@@ -4397,11 +4664,11 @@ class PredictionEngine:
         }
         if _mode == "new" and _fc_price and _price0 > 0:
             cyc.tp = _fc_price
+            cyc.sl = _horizon_block["sl"]
             cyc.tp_dist = abs(_fc_price - _price0)
-            if cyc.sl:
-                cyc.sl_dist = abs(_price0 - cyc.sl)
-                cyc.ratio = (round(cyc.tp_dist / cyc.sl_dist, 3)
-                             if cyc.sl_dist else None)
+            cyc.sl_dist = abs(_price0 - cyc.sl)
+            cyc.ratio = (round(cyc.tp_dist / cyc.sl_dist, 6)
+                         if cyc.sl_dist else None)
             cyc.direction = cyc.forecast["direction"]
         # user rule: below 1:1 is not worth trading -> watch-only
         if (cyc.ratio is not None and cyc.ratio < 1.0):
@@ -4410,6 +4677,14 @@ class PredictionEngine:
                                "ratio": cyc.ratio})
         cyc.events.append({"ts": now, "type": "cycle_fresh", "reason": reason})
         cyc.risk = dict(_horizon_block)
+        if _mode == "new" and _fc_price and _price0 > 0:
+            # NEW system: end-price forecast is TP; the measured catastrophic
+            # stop remains unchanged. Preserve both raw and effective evidence.
+            cyc.risk["raw_tp_bps"] = cyc.risk.get("tp_bps")
+            cyc.risk["tp"] = cyc.tp
+            cyc.risk["tp_dist"] = cyc.tp_dist
+            cyc.risk["tp_bps"] = cyc.tp_dist / _price0 * 1e4
+            cyc.risk["rr"] = cyc.risk["ratio"] = cyc.ratio
         self.cycles[(symbol, tf)] = cyc
         self._apply_risk(symbol, tf, cyc, res)
         if cyc.sl is None and _price0 > 0:
@@ -4423,6 +4698,7 @@ class PredictionEngine:
             cyc.ratio = _horizon_block["rr"]
         if cyc.ratio is None:
             cyc.ratio = _horizon_block.get("rr")
+        self._install_cycle_contract(cyc, now, reason=reason)
         # OPTIONAL execution: the trader re-checks every safety gate
         # itself (disabled / unarmed / sub-floor / wrong-side levels
         # are refused + logged) — this hook can never fire a random
@@ -4430,12 +4706,22 @@ class PredictionEngine:
         try:
             self.trader.consider({
                 "symbol": symbol, "tf": tf,
-                "issued": bool(cyc.issued and cyc.tier != "watch-only"),
+                "issued": bool(cyc.execution_eligible),
+                "execution_eligible": bool(cyc.execution_eligible),
+                "feed_mode": getattr(self.feed, "mode", None),
+                "feed_simulated": getattr(self.feed, "mode", None) != "binance",
                 "feed_age_s": round(now - float(
                     self.feed.state(symbol).last_tick or 0), 1)
                 if self.feed.state(symbol).last_tick else 999.0,
                 "direction": int(cyc.direction or 0),
-                "entry": float(_price0 or 0), "tp": cyc.tp, "sl": cyc.sl,
+                "entry": (cyc.level_contract or {}).get("entry"),
+                "tp": (cyc.level_contract or {}).get("tp"),
+                "sl": (cyc.level_contract or {}).get("sl"),
+                "contract": dict(cyc.level_contract or {}),
+                "contract_lock": dict(cyc.contract_lock or {}),
+                "contract_id": (cyc.level_contract or {}).get("id"),
+                "cycle_id": cyc.cycle_id, "lock_id": cyc.lock_id,
+                "level_revision": cyc.level_revision,
                 "tp_bps": _horizon_block.get("tp_bps"),
                 "sl_bps": _horizon_block.get("sl_bps"),
                 # advanced sizing layers: HAR-RV + EVT + RMT mode
@@ -4643,8 +4929,9 @@ class PredictionEngine:
                 )
                 t4.locked_at = now
                 t4.locked_cci = res["cci_adjusted"]
-                cyc.direction = t4.direction
-                cyc.events.append({"ts": now, "type": "extreme_override"})
+                cyc.events.append({"ts": now, "type": "extreme_override",
+                                   "contract_changed": False,
+                                   "candidate_direction": t4.direction})
 
         if not res["issued"]:
             # NO TRADE — insufficient confidence. Levels are NEVER nulled
@@ -4663,6 +4950,7 @@ class PredictionEngine:
             cyc.drhe = res["drhe"]
             cyc.active_k = None
             cyc.refreshed_at = now
+            self._save_cycle_lock_state(cyc)
             return
 
         if not cyc.issued or cyc.direction == 0:
@@ -4684,7 +4972,8 @@ class PredictionEngine:
             t1.direction = res["direction"] or t1.direction
             t1.locked_at = now
             t1.locked_cci = new_cci
-            cyc.direction = t1.direction      # live direction follows Tp1
+            # The measured rung may be refreshed; the cycle side and its
+            # frozen contract remain the original locked prediction.
 
         # --- Tp2: medium lock strength — only if CCI shift > 0.3
         t2 = cyc.target(2)
@@ -4714,6 +5003,7 @@ class PredictionEngine:
         cyc.issued = True
         cyc.refreshed_at = now
         self._apply_risk(symbol, tf, cyc, res)
+        self._save_cycle_lock_state(cyc)
 
     # ==================================================================
     # event-driven recomputes (between GRCs — explicitly allowed by the spec)
@@ -4733,15 +5023,19 @@ class PredictionEngine:
         t.status = "hit"
         t.hit_ts = now
         cyc.events.append({"ts": now, "type": "target_hit", "k": k, "level": t.level})
+        if (cyc.tp is not None and t.level is not None
+                and abs(float(t.level) - float(cyc.tp))
+                <= max(1e-7, abs(float(cyc.tp)) * 1e-10)):
+            cyc.contract_tp_hit = True
+            cyc.execution_eligible = False
 
         if k in (1, 2):
             # "The moment Tp1 is reached, immediately calculate and lock Tp2
             #  using all current data" (same for Tp2 -> Tp3)
             res = self._event_result(symbol, tf)
             self.last_result[(symbol, tf)] = res
-            shift = abs(res["cci_adjusted"] - (cyc.cci or 0.0))
-            if res["direction"] and shift > (0.3 if k == 1 else 0.5):
-                cyc.direction = res["direction"]
+            # Sub-target recalculation must not mutate the cycle side or its
+            # entry-bound TP/SL contract after the barrier has been locked.
             nxt = cyc.target(k + 1)
             from .moves_risk import risk_block as _rb2
             _st2 = self.feed.state(symbol)
@@ -4772,13 +5066,19 @@ class PredictionEngine:
         elif k == 3:
             cyc.active_k = None       # all sequential sub-targets completed
         # k == 4: macro thesis hit — informational only
+        self._save_cycle_lock_state(cyc)
 
     # -- SL Hit Protocol ----------------------------------------------------
     async def _on_sl_hit(self, symbol: str, tf: str, now: float) -> None:
         cyc = self.cycles.get((symbol, tf))
-        if cyc is None or not cyc.issued or cyc.active_k is None:
+        if cyc is None or not cyc.issued:
             return
         original_direction = cyc.direction
+        cyc.sl_observed = True
+        cyc.execution_eligible = False
+        if not any(e.get("type") == "sl_crossed" for e in cyc.events):
+            cyc.events.append({"ts": now, "type": "sl_crossed",
+                               "sl": cyc.sl, "observed": True})
         # E2/E9 history: this cycle experienced an SL hit (both branches)
         self.hist.record_sl_hit(symbol)
         # FULL RECALCULATION EVENT: every formula across all subsystems,
@@ -4843,8 +5143,9 @@ class PredictionEngine:
             cyc.tier = "watch-only"   # side stays issued + graded (doc §3)
             cyc.pending_reset = True
             cyc.close_alert = True
-            cyc.tp = cyc.sl = None
-            cyc.ratio = None
+            # Keep the frozen entry/TP/SL visible for audit; only execution
+            # eligibility and the next-cycle state change after a barrier.
+            cyc.execution_eligible = False
             cyc.refreshed_at = now
             await self.emit({
                 "type": "sl_event",
@@ -4854,6 +5155,7 @@ class PredictionEngine:
                 "message": "CLOSE POSITION IMMEDIATELY",
                 "ts": now,
             })
+        self._save_cycle_lock_state(cyc)
 
     # ==================================================================
     # 1 Hz tick loop: hit detection, countdown rollovers, phase beat
@@ -4911,18 +5213,20 @@ class PredictionEngine:
                             against = (price <= cyc.sl and cyc.direction > 0) or (
                                 price >= cyc.sl and cyc.direction < 0
                             )
-                            if against:
+                            if against and not cyc.sl_observed:
                                 await self._on_sl_hit(symbol, tf, now)
                                 continue
-                        if cyc.tp is not None:
+                        if cyc.tp is not None and not cyc.contract_tp_hit:
                             hit_tp = (price >= cyc.tp and cyc.direction > 0) or (
                                 price <= cyc.tp and cyc.direction < 0
                             )
-                            if hit_tp and cyc.tp_dist:
+                            if hit_tp:
+                                cyc.contract_tp_hit = True
+                                cyc.execution_eligible = False
                                 cyc.events.append(
                                     {"ts": now, "type": "tp_hit", "tp": cyc.tp}
                                 )
-                                cyc.tp = None      # one-shot marker
+                                self._save_cycle_lock_state(cyc)
                     elif not cyc.issued:
                         # NOT issued (below the confidence floor): the
                         # locked TP/SL levels are still displayed, so
@@ -4940,6 +5244,9 @@ class PredictionEngine:
                                         {"ts": now, "type": "target_hit",
                                          "k": t.k, "level": t.level,
                                          "observed": True})
+                                    if cyc.tp is not None and abs(float(t.level) - float(cyc.tp)) <= max(1e-7, abs(float(cyc.tp)) * 1e-10):
+                                        cyc.contract_tp_hit = True
+                                        cyc.execution_eligible = False
                         if cyc.sl is not None and cyc.direction:
                             against = (price <= cyc.sl
                                        and cyc.direction > 0) or (
@@ -4950,6 +5257,9 @@ class PredictionEngine:
                                 cyc.events.append(
                                     {"ts": now, "type": "sl_crossed",
                                      "sl": cyc.sl, "observed": True})
+                        if cyc.contract_tp_hit or cyc.sl_observed:
+                            cyc.execution_eligible = False
+                            self._save_cycle_lock_state(cyc)
                     # countdown reached zero -> immediate fresh cycle
                     if cyc.cycle_end and now >= cyc.cycle_end and not cyc.pending_reset:
                         self.last_window_ts = time.time()
@@ -5046,17 +5356,35 @@ class PredictionEngine:
                 # never reach the screen again.
                 if d and cyc is not None:
                     lv = _levels.from_cycle(cyc)
+                    d["level_contract"] = (dict(cyc.level_contract)
+                                            if cyc.level_contract else None)
+                    d["contract_id"] = ((cyc.level_contract or {}).get("id"))
+                    d["contract_state"] = ("locked" if lv and cyc.level_contract
+                                            else "legacy" if lv else "unavailable")
                     if lv:
                         d["tp"], d["sl"] = lv["tp"], lv["sl"]
                         d["tp_dist"], d["sl_dist"] = lv["tp_dist"], lv["sl_dist"]
                         d["ratio"] = lv["ratio"]
                         d["entry"] = lv["entry"]
                         d["levels_ok"] = True
+                        d["execution_eligible"] = bool(
+                            cyc.execution_eligible and cyc.issued
+                            and cyc.tier != "watch-only"
+                            and not cyc.contract_tp_hit and not cyc.sl_observed
+                            and not cyc.pending_reset
+                            and getattr(self.feed, "mode", None) == "binance")
                         d["sl_provisional"] = bool(
                             (cyc.risk or {}).get("provisional"))
                     else:
-                        d["tp"] = d["sl"] = None
+                        d["tp"] = d["sl"] = d["entry"] = None
                         d["levels_ok"] = False
+                        d["execution_eligible"] = False
+                        if cyc.level_contract:
+                            d["level_contract"] = _levels.unavailable_contract(
+                                symbol=symbol, timeframe=tf, cycle=cyc.cycle_id,
+                                reason="cycle lock/level contract failed validation",
+                                lock_id=cyc.lock_id, side=cyc.direction,
+                                revision=cyc.level_revision)
                 if d and price > 0:
                     bs = self.branch_stats(d, price, now, tf)
                     if bs:

@@ -39,10 +39,16 @@ def test_spread_does_not_break_ratio():
     assert abs(b["rr"] - b0["rr"]) < 0.35
 
 
+def test_ui_ratio_is_reported_as_take_profit_to_stop_loss():
+    js = open("static/app.js").read()
+    assert 'Number(cyc.ratio).toFixed(2) + ":1"' in js
+    assert 'TP:SL ${r.ratio ? Number(r.ratio).toFixed(2) + ":1"' in js
+
+
 def test_analysis_uses_locked_levels_not_projection():
     js = open("app/engine.py").read()
     seg = js[js.index("# 7 ── final"):js.index("job[\"result\"] = final")]
     assert "_lv_from_cycle(cyc)" in seg
     assert "_project_level" not in seg          # TP = entry bug factory gone
-    assert "locked cycle" in seg
-    assert "2:1 block" in seg                   # no-lock fallback is 2:1 too
+    assert "locked contract" in seg
+    assert "preview only" in seg               # no-lock analysis is not executable
