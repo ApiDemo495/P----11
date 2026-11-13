@@ -234,7 +234,10 @@ volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
 - **Candle resolution per timeframe:** TF 22 m → 1-minute candles,
   44 m → 1-minute, 130 m → 5-minute, 247 m → 5-minute (switchable 1/5/15).
   Show **the last 3 windows of history plus the current window** so the
-  current window has context (22-minute TF → the last ~90 minutes).
+  current window has context (at least 30 real candles in every TF; the
+  22-minute view keeps at least 90 one-minute candles). The browser may
+  request up to 1000 one-minute source bars; if the feed has fewer, show
+  only available source candles and a warm-up note—never synthesize bars.
 - **Candles come from the server**, built from the same trade stream the
   settlement uses, bootstrapped from the exchange's REST klines at start
   (Binance `/api/v3/klines`, Kraken OHLC, your equity feed's bars) so the
@@ -273,10 +276,14 @@ state.lines = {
   countdown.
 
 ### C-4 The fan and the first-touch replay are secondary, not the chart
-- The quantile fan belongs **inside the current window only**, drawn as a
-  thin `q50` dashed line plus a faint q25–q75 band — never a q5–q95 cone
-  painted over the whole canvas. Make it a toggle (`expected path: on/off`),
-  default off on the main chart, on in the probability panel.
+- The quantile fan belongs **inside the current window only**. On the
+  OWN chart, keep the model `q50` median path visible as a dashed
+  estimate; the faint q25–q75 context bands are optional under the FAN
+  toggle. Label q50 as an estimate (not a promise) and retain the
+  model/basis label; a driftless thin-tape fallback may be flat and must
+  not be turned into a directional path. Never paint a q5–q95 cone over
+  the whole canvas. The probability panel may show the full fan with its
+  model/fallback basis.
 - The "NEITHER 96 % / STOP" first-touch bar and the replay belong in the
   probability panel, not over the chart.
 

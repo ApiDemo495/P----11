@@ -465,6 +465,7 @@ span.tp-min.tp-horizon { color: var(--gold); font-weight: 700; letter-spacing: .
 .main-chart { height: 560px; position: relative; margin-top: 10px;
   border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
   background: rgba(0,0,0,.22); }
+#chart-own { height: 420px; }
 #hero-title { font: 700 17px/1.3 var(--mono); letter-spacing: 1.5px; }
 #tf-hero .kv { background: rgba(255,255,255,.02); }
 .quad-grid { grid-template-columns: repeat(4, 1fr); gap: 10px; }
@@ -474,6 +475,7 @@ span.tp-min.tp-horizon { color: var(--gold); font-weight: 700; letter-spacing: .
 .q-chart { height: 86px; }
 @media (max-width: 900px) {
   .main-chart { height: 420px; }
+  #chart-own { height: 320px; }
   .hero-badge { font-size: 20px; min-width: 160px; width: 100%; }
   .dash-hero-side { align-items: stretch; width: 100%; }
   .quad-grid { grid-template-columns: repeat(2, 1fr); }

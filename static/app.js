@@ -340,16 +340,18 @@ function _drawOwn() { drawOwnChart(); }
    the vendored Lightweight Charts. Autoscale comes from the candles
    only; entry/TP/SL are price lines with axis tags (off-screen levels
    keep their tag at the axis edge, per the library); lock/hit markers;
-   fan (q50 dashed + q25/q75) inside the current window only, toggle,
-   default OFF; volume histogram; OHLC crosshair legend; stale-tape
+   model q50 median estimate inside the current window (always on),
+   optional q25/q75 range bands behind the FAN toggle; volume histogram;
+   OHLC crosshair legend; stale-tape
    note on the chart itself (doc A-4). ═══════ */
-const Own = { inst: null, key: "", lineKey: "", markerKey: "", symbol: "" };
+const Own = { inst: null, key: "", lineKey: "", markerKey: "", fanKey: "__unset", symbol: "" };
 const TZ_OFF = 19800;                    // IST = UTC+5:30 (doc D-2)
 const lt = t => t + TZ_OFF;              // render-only shift for LWC
 function resetOwnChartForSymbol(symbol) {
   if (Own.symbol === symbol) return;
   Own.symbol = symbol;
-  Own.key = Own.rangeKey = Own.lineKey = Own.markerKey = Own.fanKey = "";
+  Own.key = Own.rangeKey = Own.lineKey = Own.markerKey = "";
+  Own.fanKey = "__unset";
   Own.rangeTo = 0;
   const inst = Own.inst;
   if (!inst) return;
@@ -363,6 +365,8 @@ function resetOwnChartForSymbol(symbol) {
     inst.candles.setData([]); inst.vol.setData([]);
     inst.fan50.setData([]); inst.fan25.setData([]); inst.fan75.setData([]);
   } catch {}
+  inst.forecastLabel.textContent = "forecast warming up";
+  inst.forecastLabel.title = inst.forecastLabel.textContent;
   inst.stale.textContent = `loading ${symbol} candles…`;
 }
 function levelAutoscaleProvider(values) {
@@ -395,9 +399,14 @@ function ownMake(el) {
   const vol = chart.addHistogramSeries({ priceScaleId: "", priceFormat: { type: "volume" } });
   chart.priceScale("").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
   const fanOpts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
-  const fan50 = chart.addLineSeries({ ...fanOpts, color: "rgba(127,216,207,.9)", lineStyle: LW.LineStyle.Dashed });
+  const fan50 = chart.addLineSeries({ ...fanOpts, lineWidth: 2, color: "#7fd8cf", lineStyle: LW.LineStyle.Dashed });
   const fan25 = chart.addLineSeries({ ...fanOpts, color: "rgba(38,166,154,.35)" });
   const fan75 = chart.addLineSeries({ ...fanOpts, color: "rgba(38,166,154,.35)" });
+  const forecastLabel = document.createElement("div");
+  forecastLabel.style.cssText = "position:absolute;top:6px;right:8px;z-index:5;max-width:calc(100% - 16px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:9px ui-monospace,monospace;color:#7fd8cf;background:rgba(10,14,20,.72);padding:2px 4px;border-radius:3px;pointer-events:auto;cursor:help";
+  forecastLabel.textContent = "forecast warming up";
+  forecastLabel.title = forecastLabel.textContent;
+  el.appendChild(forecastLabel);
   const legend = document.createElement("div");
   legend.style.cssText = "position:absolute;top:6px;left:8px;z-index:5;font:10px ui-monospace,monospace;color:#c9c9dc;pointer-events:none";
   el.appendChild(legend);
@@ -411,7 +420,7 @@ function ownMake(el) {
       : "";
   });
   new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); } catch {} }).observe(el);
-  return { chart, candles, vol, fan50, fan25, fan75, legend, stale,
+  return { chart, candles, vol, fan50, fan25, fan75, forecastLabel, legend, stale,
     lines: {}, levelValues, last: null };
 }
 function ownSetLines(inst, d) {
@@ -495,6 +504,8 @@ function drawOwnChart() {
     try {
       inst.candles.setData([]); inst.vol.setData([]);
       inst.fan50.setData([]); inst.fan25.setData([]); inst.fan75.setData([]);
+      inst.forecastLabel.textContent = "forecast unavailable · untrusted tape";
+      inst.forecastLabel.title = inst.forecastLabel.textContent;
       inst.candles.setMarkers([]);
     } catch {}
     inst.last = null; Own.key = ""; Own.rangeKey = "";
@@ -526,6 +537,12 @@ function drawOwnChart() {
     else if (bt0 > lb.time) bars.push({ time: bt0, open: lb.close, high: Math.max(lb.close, liveP),
                      low: Math.min(lb.close, liveP), close: liveP, v: 0 });
   }
+  const minVisibleBars = S.focusTf === "tf1" ? 90 : 30;
+  if (tapeArr.length < minVisibleBars) {
+    notes.push(`history warming: ${tapeArr.length}/${minVisibleBars} source candles; showing available data`);
+    inst.stale.textContent = notes.join(" · ");
+    inst.stale.style.display = "block";
+  }
   const key = `${S.symbol}|${S.focusTf}|${d.cycle_start}`;
   // A feed handover can replace OHLC history without changing the bar
   // count or last timestamp. Include the server's content/source revision;
@@ -544,16 +561,17 @@ function drawOwnChart() {
       inst.last = { ...lb };
     } catch { /* rejected series: leave Own.key stale, retry next paint */ }
   }
-  // viewport follows the live bucket: left = window context (cycle
-  // start - 2 windows, capped at 3 windows back), right = now + a
-  // couple of buckets. Reframes on cycle change OR when "now" nears
-  // the right edge, so candles always end at the live price at the
-  // chart's right edge — never stranded mid-chart (user screenshot).
+  // Keep three prior horizon windows plus the current one in view,
+  // but never request more history than the server supplied. The 22m
+  // chart keeps the documented 90 one-minute-bar first-paint context.
+  // Leave room through the forecast horizon so its median path is visible.
   if (bars.length) {
     const Wsec = Math.max(bucket0, (d.cycle_end || 0) - (d.cycle_start || 0)) || bucket0;
-    let vFrom = Math.max(bars[0].time, (d.cycle_start || bars[0].time) - 2 * Wsec);
-    vFrom = Math.max(vFrom, bt0 - 3 * Wsec);
-    const vTo = bt0 + 2 * bucket0;
+    const minContext = (S.focusTf === "tf1" ? 90 : 30) * bucket0;
+    const contextSec = Math.max(4 * Wsec, minContext);
+    const vFrom = Math.max(bars[0].time, bt0 - contextSec);
+    const vTo = Math.max(bt0 + 2 * bucket0,
+      (d.cycle_end || bt0) + 2 * bucket0);
     if (key !== Own.rangeKey || !Own.rangeTo || bt0 > Own.rangeTo - 2 * bucket0) {
       Own.rangeKey = key; Own.rangeTo = vTo;
       try { inst.chart.timeScale().setVisibleRange({ from: lt(vFrom), to: lt(vTo) }); } catch {}
@@ -590,17 +608,50 @@ function drawOwnChart() {
   const mk = JSON.stringify(markers);
   if (mk !== Own.markerKey) { Own.markerKey = mk;
     try { inst.candles.setMarkers(markers.sort((x, y) => x.time - y.time)); } catch {} }
-  // fan: in-window only, toggle, default off (doc C-4)
+  // The model's q50 median estimate is always visible. The FAN toggle
+  // only adds/removes the q25–q75 context bands; no path is synthesized.
   const b = d.branches, fanOn = !!S.fanOn;
-  const fanKey = fanOn && b?.fan?.length > 2 ? `${d.cycle_start}|${Math.round(now)}` : "";
+  const fanPts = Array.isArray(b?.fan) ? b.fan : [];
+  const fanKey = fanPts.length > 2
+    ? `${d.cycle_start}|${Math.round(now)}|${fanOn ? 1 : 0}|${fanPts.length}` : "";
   if (fanKey !== (Own.fanKey || "")) {
     Own.fanKey = fanKey;
-    if (!fanKey) { inst.fan50.setData([]); inst.fan25.setData([]); inst.fan75.setData([]); }
-    else {
-      const fT = f => Math.floor(now + f * Math.max(1, (d.cycle_end || now) - now));
-      const series = k => b.fan.map(p2 => ({ time: lt(fT(p2.f)), value: p2[k] }))
-        .filter((v, i, arr) => i === 0 || v.time > arr[i - 1].time);
-      try { inst.fan50.setData(series("q50")); inst.fan25.setData(series("q25")); inst.fan75.setData(series("q75")); } catch {}
+    if (!fanKey) {
+      inst.fan50.setData([]); inst.fan25.setData([]); inst.fan75.setData([]);
+      inst.forecastLabel.textContent = "forecast unavailable · insufficient data";
+      inst.forecastLabel.title = inst.forecastLabel.textContent;
+    } else {
+      const fT = f => Math.floor(now + Number(f) * Math.max(1, (d.cycle_end || now) - now));
+      const series = k => {
+        const out = [];
+        for (const p2 of fanPts) {
+          const frac = Number(p2.f), value = Number(p2[k]);
+          if (!Number.isFinite(frac) || !Number.isFinite(value) || value <= 0) continue;
+          const time = lt(fT(frac));
+          if (out.length && time <= out[out.length - 1].time) continue;
+          out.push({ time, value });
+        }
+        return out;
+      };
+      const median = series("q50");
+      let rendered = true;
+      try {
+        inst.fan50.setData(median.length > 1 ? median : []);
+        inst.fan25.setData(fanOn ? series("q25") : []);
+        inst.fan75.setData(fanOn ? series("q75") : []);
+      } catch {
+        rendered = false;
+        inst.fan50.setData([]); inst.fan25.setData([]); inst.fan75.setData([]);
+      }
+      const method = String(b.method || "approximate model");
+      const basis = String(b.fan_basis || "");
+      const source = [method, basis].filter(Boolean).join(" · ");
+      const label = !rendered
+        ? "forecast unavailable · chart rejected path"
+        : median.length > 1 ? `MODEL ESTIMATE · q50 · ${source}`
+          : "forecast unavailable · invalid median path";
+      inst.forecastLabel.textContent = label;
+      inst.forecastLabel.title = `${label} · not a promise`;
     }
   }
 }
@@ -1840,11 +1891,11 @@ async function loadCandles() {
   const seq = (S._candleLoadSeq || 0) + 1;
   S._candleLoadSeq = seq;
   try {
-    // ONE dense minute-series fetch drives every TF card chart (the
-    // aggregated 44/130/247-minute bars were only 4-5 points → smooth
-    // fake curves; traders want the real zigzag). TP/lock overlays stay
+    // ONE dense minute-series fetch drives every TF chart. Four horizon
+    // windows need up to 988 raw minutes at TF4; 1000 real source bars
+    // covers that without synthesising history. TP/lock overlays stay
     // per-TF below.
-    const md = await api(`/api/candles?symbol=${symbol}&tf=tf1&n=260`);
+    const md = await api(`/api/candles?symbol=${symbol}&tf=tf1&n=1000`);
     // Ignore an older response after a symbol switch or a newer refetch;
     // otherwise BTC bars can be written into another asset's chart state.
     if (seq !== S._candleLoadSeq || symbol !== S.symbol ||
@@ -1869,8 +1920,15 @@ async function loadCandles() {
     const historyRevision = String(md.revision ||
       `client-${candleRevisionFallback(md.bars)}`);
     const _cut = (bars, tf) => {
-      const w = (QWIN[tf] || 60) * 60, tmax = bars.length ? bars[bars.length - 1].t : 0;
-      return bars.filter(b => b.t >= tmax - w);
+      const intervalMin = QINT[tf] || 1;
+      const windowMin = QWIN[tf] || 60;
+      // Three completed horizon windows plus the current one, with a
+      // hard floor of 30 real candles. Preserve the chart spec's 90-bar
+      // first-paint context for the 22-minute / 1m view.
+      const lookbackMin = Math.max(4 * windowMin, 30 * intervalMin,
+        tf === "tf1" ? 90 * intervalMin : 0);
+      const tmax = bars.length ? bars[bars.length - 1].t : 0;
+      return bars.filter(b => b.t >= tmax - lookbackMin * 60);
     };
     const agg = (bars, mins) => {
       if (mins <= 1) return bars;

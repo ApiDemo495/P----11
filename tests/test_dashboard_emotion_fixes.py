@@ -92,5 +92,7 @@ def test_dashboard_rewrite_contracts():
     css = (ROOT / "static" / "style.css").read_text()
     assert ".dash-hero" in css and ".main-chart { height: 560px" in css
     assert ".main-chart { height: 420px" in css
+    assert "#chart-own { height: 420px; }" in css
+    assert "#chart-own { height: 320px; }" in css
     # emotion UI consumes the server dominant
     assert "em.dominant" in js

@@ -733,12 +733,13 @@ def _candle_history_revision(bars: list[dict], *, mode: str = "",
 
 @app.get("/api/candles")
 async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONResponse:
-    """OHLC bars (incl. the live partial minute). tf=tf1 → raw 1-minute
-    bars; tf2/tf3/tf4 aggregate into 44/130/247-minute windows per config."""
+    """OHLC bars (incl. the live partial minute), capped at 1000 source
+    minutes for chart context. tf=tf1 → raw 1-minute bars; wider TFs
+    aggregate using the configured horizon buckets."""
     if symbol not in SYMBOLS:
         return JSONResponse({"ok": False, "error": "unknown symbol"},
                             status_code=400)
-    n = max(10, min(500, n))
+    n = max(10, min(1000, n))
     st = engine.feed.state(symbol)
     active_family = _family(getattr(engine.feed, "mode", "unknown"))
     indices = st.indices_for_family(active_family)
