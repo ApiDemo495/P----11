@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import logging
 import time
 from typing import Any
@@ -709,6 +711,26 @@ async def news_feed(symbol: str) -> JSONResponse:
     return JSONResponse({"ok": True, **engine.news.aggregate(symbol)})
 
 
+def _candle_history_revision(bars: list[dict], *, mode: str = "",
+                             source: str = "", switches: int = 0) -> str:
+    """Revision for completed OHLC history, independent of list length/end time.
+
+    A feed handover can replace every candle while keeping the same bucket
+    timestamps and count. The browser must still replace its rendered series.
+    The current partial candle is intentionally excluded; live ticks update it.
+    """
+    completed = bars[:-1]
+    normalized = [[int(b["t"]), round(float(b["o"]), 8),
+                   round(float(b["h"]), 8), round(float(b["l"]), 8),
+                   round(float(b["c"]), 8), round(float(b.get("v") or 0), 8)]
+                  for b in completed]
+    payload = json.dumps({"mode": mode, "source": source,
+                          "switches": int(switches), "bars": normalized},
+                         sort_keys=True, separators=(",", ":"),
+                         allow_nan=False).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:20]
+
+
 @app.get("/api/candles")
 async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONResponse:
     """OHLC bars (incl. the live partial minute). tf=tf1 → raw 1-minute
@@ -775,8 +797,18 @@ async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONRes
                              "h": st.live_high or st.live_price,
                              "l": st.live_low or st.live_price,
                              "c": st.live_price, "v": st.live_volume, "live": True})
-    return JSONResponse({"ok": True, "symbol": symbol, "tf": tf,
-                         "bucket_minutes": W, "bars": bars})
+    fstats = engine.feed.stats()
+    revision = _candle_history_revision(
+        bars, mode=str(fstats.get("mode") or ""),
+        source=str(fstats.get("source") or ""),
+        switches=int(fstats.get("switches") or 0))
+    return JSONResponse(
+        {"ok": True, "symbol": symbol, "tf": tf,
+         "bucket_minutes": W, "revision": revision,
+         "feed": {"mode": fstats.get("mode"), "source": fstats.get("source"),
+                  "switches": fstats.get("switches")},
+         "bars": bars},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 
 @app.get("/api/backtest")

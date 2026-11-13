@@ -69,7 +69,7 @@ def test_per_tf_candle_endpoints():
     The user asked for real-market zigzag precision, so the raw 1-minute
     tape with high/low wicks drives all four cards; TP/lock overlays
     remain per-TF. The endpoint itself still accepts tf= aggregation.)"""
-    assert "/api/candles?symbol=${S.symbol}&tf=tf1&n=260" in APP_JS
+    assert "/api/candles?symbol=${symbol}&tf=tf1&n=260" in APP_JS
     assert "main.pts[main.pts.length - 1]" in (STATIC / "LineChart.js").read_text()  # PriceChart engine
     # every TF chart still receives data in the loop
     assert "S.charts[tf].setData" in APP_JS or "c.setData(" in APP_JS

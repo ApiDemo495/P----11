@@ -44,6 +44,17 @@ def test_own_chart_live_candle_never_freezes():
     assert "Own.rangeKey" in JS          # reframe only on window change
 
 
+def test_candle_fetches_reject_stale_symbol_and_key_history_revision():
+    # A slower request for the previously selected asset must never populate
+    # the current asset; same-time/same-length feed replacements still redraw.
+    assert "const symbol = S.symbol;" in JS
+    assert "S._candleLoadSeq = seq;" in JS
+    assert "seq !== S._candleLoadSeq || symbol !== S.symbol" in JS
+    assert "S.tfBarsRevision[tf] = historyRevision;" in JS
+    assert "const sourceRevision =" in JS and "S.tfBarsRevision?.[S.focusTf]" in JS
+    assert "String(md.revision ||" in JS and "candleRevisionFallback(md.bars)" in JS
+
+
 def test_probability_chart_uses_shared_engine():
     assert "cvHost._pc.setModel" in JS
     assert "lo: p2.q05, lo2: p2.q25, mid: p2.q50, hi2: p2.q75, hi: p2.q95" in JS  # nested fan bands

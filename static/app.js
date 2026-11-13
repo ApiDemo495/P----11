@@ -191,6 +191,14 @@ function buildRail() {
 function setSymbol(sym) {
   S.lastViewFetch = 0;
   const ab = $("#analyse-sym"); if (ab) ab.textContent = sym;
+  if (sym !== S.symbol) {
+    // Invalidate any request for the previous asset and never let its late
+    // response populate the newly selected asset's candle buffers.
+    S._candleLoadSeq = (S._candleLoadSeq || 0) + 1;
+    S.tfBars = {}; S.tfBarsRevision = {}; S.tfBarsSymbol = sym;
+    S.candleSeries = null; S.priceHist = [];
+    resetOwnChartForSymbol(sym);
+  }
   S.symbol = sym;
   $$(".asset-btn").forEach(b => b.classList.toggle("active", b.dataset.sym === sym));
   syncToolbar();
@@ -333,9 +341,28 @@ function _drawOwn() { drawOwnChart(); }
    fan (q50 dashed + q25/q75) inside the current window only, toggle,
    default OFF; volume histogram; OHLC crosshair legend; stale-tape
    note on the chart itself (doc A-4). ═══════ */
-const Own = { inst: null, key: "", lineKey: "", markerKey: "" };
+const Own = { inst: null, key: "", lineKey: "", markerKey: "", symbol: "" };
 const TZ_OFF = 19800;                    // IST = UTC+5:30 (doc D-2)
 const lt = t => t + TZ_OFF;              // render-only shift for LWC
+function resetOwnChartForSymbol(symbol) {
+  if (Own.symbol === symbol) return;
+  Own.symbol = symbol;
+  Own.key = Own.rangeKey = Own.lineKey = Own.markerKey = Own.fanKey = "";
+  Own.rangeTo = 0;
+  const inst = Own.inst;
+  if (!inst) return;
+  for (const line of Object.values(inst.lines || {})) {
+    try { inst.candles.removePriceLine(line); } catch {}
+  }
+  inst.lines = {};
+  inst.levelValues.splice(0, inst.levelValues.length);
+  inst.last = null;
+  try {
+    inst.candles.setData([]); inst.vol.setData([]);
+    inst.fan50.setData([]); inst.fan25.setData([]); inst.fan75.setData([]);
+  } catch {}
+  inst.stale.textContent = `loading ${symbol} candles…`;
+}
 function levelAutoscaleProvider(values) {
   return original => {
     const base = original?.();
@@ -406,10 +433,11 @@ function ownSetLines(inst, d) {
 }
 function drawOwnChart() {
   const host = $("#chart-own"); if (!host) return;
-  const a = S.snap?.assets?.[S.symbol]; if (!a) return;
-  const d = a.tfs?.[S.focusTf]; if (!d) return;
   if (!Own.inst) { host.innerHTML = ""; Own.inst = ownMake(host); }
   const inst = Own.inst; if (!inst) return;
+  resetOwnChartForSymbol(S.symbol); // clear the prior asset before reading its new tape
+  const a = S.snap?.assets?.[S.symbol]; if (!a) return;
+  const d = a.tfs?.[S.focusTf]; if (!d) return;
   const now = serverNow();
   // honesty on the chart itself (docs A-4 / D-3 / D-4): SIM label,
   // stale tape, live-bar stall and price/tape DESYNC with auto-rebuild
@@ -462,10 +490,12 @@ function drawOwnChart() {
                      low: Math.min(lb.close, liveP), close: liveP, v: 0 });
   }
   const key = `${S.symbol}|${S.focusTf}|${d.cycle_start}`;
-  // data refreshes whenever loadCandles brings a newer last bar (the
-  // cycle-only key froze the chart at first paint — candles fell
-  // behind the live price within a minute and never caught up)
-  const dataKey = bars.length ? `${key}|${bars[bars.length - 1].time}|${bars.length}` : "";
+  // A feed handover can replace OHLC history without changing the bar
+  // count or last timestamp. Include the server's content/source revision;
+  // the old length+time key kept drawing yesterday's price range.
+  const sourceRevision = `${S.tfBarsSymbol || S.symbol}|${S.tfBarsRevision?.[S.focusTf] || "unversioned"}`;
+  const dataKey = bars.length
+    ? `${key}|${sourceRevision}|${bars[bars.length - 1].time}|${bars.length}` : "";
   if (bars.length && dataKey !== Own.key) {
     const cs = bars.map(b2 => ({ time: lt(b2.time), open: b2.open, high: b2.high, low: b2.low, close: b2.close }));
     try {
@@ -1079,7 +1109,11 @@ function quadChart(el, bucketSec = 60) {
   new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); } catch {} }).observe(el);
   const inst = { chart, candles, last: null, _lines: [], levelValues,
     setData(bars) {
-      if (!bars?.length) return;
+      if (!bars?.length) {
+        candles.setData([]); inst.last = null;
+        try { chart.timeScale().fitContent(); } catch {}
+        return;
+      }
       candles.setData(bars.map(b => ({ time: lt(b.time), value: b.close })));
       const lb = bars[bars.length - 1];
       inst.last = { time: lb.time, open: lb.open, high: lb.high, low: lb.low, close: lb.close };
@@ -1753,13 +1787,31 @@ function renderCalls() {
 }
 
 /* ═══════════ candles (per symbol, per TF) ═══════════ */
+function candleRevisionFallback(bars) {
+  // Older servers may not send a revision. Hash completed OHLC content so
+  // equal counts/timestamps cannot make the chart retain a stale tape.
+  let h = 2166136261;
+  for (const b of (bars || []).slice(0, -1)) {
+    const row = `${b.t}|${b.o}|${b.h}|${b.l}|${b.c}|${b.v || 0};`;
+    for (let i = 0; i < row.length; i++)
+      h = Math.imul(h ^ row.charCodeAt(i), 16777619);
+  }
+  return (h >>> 0).toString(16);
+}
 async function loadCandles() {
+  const symbol = S.symbol;
+  const seq = (S._candleLoadSeq || 0) + 1;
+  S._candleLoadSeq = seq;
   try {
     // ONE dense minute-series fetch drives every TF card chart (the
     // aggregated 44/130/247-minute bars were only 4-5 points → smooth
     // fake curves; traders want the real zigzag). TP/lock overlays stay
     // per-TF below.
-    const md = await api(`/api/candles?symbol=${S.symbol}&tf=tf1&n=260`);
+    const md = await api(`/api/candles?symbol=${symbol}&tf=tf1&n=260`);
+    // Ignore an older response after a symbol switch or a newer refetch;
+    // otherwise BTC bars can be written into another asset's chart state.
+    if (seq !== S._candleLoadSeq || symbol !== S.symbol ||
+        (md.symbol && md.symbol !== symbol) || !Array.isArray(md.bars)) return;
     const mbars = (md.bars || []).map(x =>
       ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
     // EACH timeframe card aggregates the tape at its OWN interval
@@ -1767,7 +1819,12 @@ async function loadCandles() {
     // 1-minute series photocopied four times). Wider TF = wider bars.
     const QINT = { tf1: 1, tf2: 1, tf3: 5, tf4: 5 };   // doc C-2 resolutions
     const QWIN = { tf1: 22, tf2: 44, tf3: 130, tf4: 247 };  // own horizon each
-    S.tfBars = S.tfBars || {};
+    if (S.tfBarsSymbol !== symbol) {
+      S.tfBars = {}; S.tfBarsRevision = {}; S.tfBarsSymbol = symbol;
+    }
+    S.tfBars ||= {}; S.tfBarsRevision ||= {};
+    const historyRevision = String(md.revision ||
+      `client-${candleRevisionFallback(md.bars)}`);
     const _cut = (bars, tf) => {
       const w = (QWIN[tf] || 60) * 60, tmax = bars.length ? bars[bars.length - 1].t : 0;
       return bars.filter(b => b.t >= tmax - w);
@@ -1784,9 +1841,19 @@ async function loadCandles() {
       return [...out.values()];
     };
     await Promise.all(TF.map(async tf => {
-      const d = { bars: md.bars };
-      const bars = agg(d.bars || [], QINT[tf] || 1);
-      const c = S.charts[tf]; if (!c || !bars.length) return;
+      const bars = agg(md.bars || [], QINT[tf] || 1);
+      const mapped = _cut(bars, tf).map(x =>
+        ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
+      S.tfBars[tf] = mapped;
+      S.tfBarsRevision[tf] = historyRevision;
+      const c = S.charts[tf]; if (!c) return;
+      if (!mapped.length) {
+        c.setData([]);
+        if (tf === S.focusTf) {
+          S.priceHist = []; S.candleSeries = { symbol, bars: [] };
+        }
+        return;
+      }
       const markers = [];
       for (let i = 2; i < bars.length - 2; i++) {
         const b = bars[i];
@@ -1795,13 +1862,11 @@ async function loadCandles() {
         if (b.l < bars[i-1].l && b.l < bars[i-2].l && b.l < bars[i+1].l && b.l < bars[i+2].l)
           markers.push({ time: b.t, above: false, color: "#00d4f0", glyph: "◆" });
       }
-      const cyc = S.snap?.assets?.[S.symbol]?.tfs?.[tf];
+      const cyc = S.snap?.assets?.[symbol]?.tfs?.[tf];
       (cyc?.targets || []).forEach(t => {
         if (t.status === "hit" && t.hit_ts)
           markers.push({ time: Math.floor(t.hit_ts / 60) * 60, above: true, color: "#22c98a", glyph: "▲" });
       });
-      const mapped = _cut(bars, tf).map(x => ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
-      S.tfBars[tf] = mapped;
       c.setData(mapped);
       // seed the realised-path history (hero line chart + branches):
       // without this the white path only existed from page load and
@@ -1816,11 +1881,14 @@ async function loadCandles() {
         // full-window candle series for the charts' realised line:
         // covers the window from its start (REST backfill), so the
         // line begins at the window's left edge on a true time axis
-        S.candleSeries = { symbol: S.symbol, bars: seeded };
+        S.candleSeries = { symbol, bars: seeded };
       }
       // Binance-mode cards refresh on the same cadence (chart <-> price link)
       if (S.chartSrc === "binance") { try { bnEnsure(); } catch (e) {} }
     }));
+    if (seq === S._candleLoadSeq && symbol === S.symbol) {
+      try { drawMainChart(); } catch { /* chart may still be mounting */ }
+    }
   } catch { /* first GRC may not be ready */ }
 }
 

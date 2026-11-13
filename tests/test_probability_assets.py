@@ -75,5 +75,5 @@ def test_charts_true_window_axis_and_series():
     js = (ROOT / "static" / "app.js").read_text()
     assert "function realisedSeries(" in js
     assert "d.cycle_start" in js and "nowT: tN" in js  # probability chart: true window axis + NOW divider
-    assert "S.candleSeries = { symbol: S.symbol, bars: seeded }" in js
+    assert "S.candleSeries = { symbol, bars: seeded }" in js  # request-bound asset
     assert "loadCandles().catch(() => {})" in js     # 30 s refresh wired

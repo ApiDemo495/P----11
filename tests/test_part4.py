@@ -538,13 +538,46 @@ def test_simulator_live_regimes_persist(monkeypatch):
     run_sync(f.stop())
 
 
+def test_candle_history_revision_detects_same_shape_feed_replacement():
+    """A source handover may replace OHLC while count and times are stable."""
+    from app.main import _candle_history_revision
+
+    bars = [
+        {"t": 60, "o": 100.0, "h": 102.0, "l": 99.0, "c": 101.0, "v": 5.0},
+        {"t": 120, "o": 101.0, "h": 103.0, "l": 100.0, "c": 102.0, "v": 6.0},
+        {"t": 180, "o": 102.0, "h": 104.0, "l": 101.0, "c": 103.0, "v": 7.0},
+    ]
+    replaced = [dict(b) for b in bars]
+    replaced[0]["c"] = 96.0
+    replaced[0]["l"] = 95.0
+    assert [b["t"] for b in replaced] == [b["t"] for b in bars]
+    assert len(replaced) == len(bars)
+    original_revision = _candle_history_revision(
+        bars, mode="binance", source="binance-ws", switches=1)
+    assert original_revision == _candle_history_revision(
+        bars, mode="binance", source="binance-ws", switches=1)
+    assert original_revision != _candle_history_revision(
+        replaced, mode="binance", source="binance-ws", switches=1)
+    # The live partial candle changes on ticks; it is handled by updates,
+    # while a completed-history or feed-source change forces setData.
+    partial_tick = [dict(b) for b in bars]
+    partial_tick[-1]["c"] = 99.0
+    assert original_revision == _candle_history_revision(
+        partial_tick, mode="binance", source="binance-ws", switches=1)
+    assert original_revision != _candle_history_revision(
+        bars, mode="sim", source="sim", switches=2)
+
+
 def test_candles_endpoint_aggregates_timeframes():
     """tf=tf2/3/4 return W-minute buckets, not raw minutes."""
     from fastapi.testclient import TestClient
     from app.main import app
     c = TestClient(app)
-    r1 = c.get("/api/candles?symbol=BTC&tf=tf1").json()
+    response = c.get("/api/candles?symbol=BTC&tf=tf1")
+    assert response.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+    r1 = response.json()
     r2 = c.get("/api/candles?symbol=BTC&tf=tf2").json()
+    assert r1["revision"] and set(r1["feed"]) == {"mode", "source", "switches"}
     assert r1["bucket_minutes"] == 1 and r2["bucket_minutes"] == 44
     if len(r2["bars"]) > 1:
         gaps = {r2["bars"][i + 1]["t"] - r2["bars"][i]["t"] for i in
