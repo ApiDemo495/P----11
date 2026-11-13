@@ -3,6 +3,7 @@ calculator, issued alerts, trade close-out bookkeeping."""
 from pathlib import Path
 
 from app import trading
+from tests.contract_fixtures import locked_contract_signal
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -41,9 +42,9 @@ def test_close_position_books_pnl_and_frees_symbol():
     orig = tr.load_cfg
     tr.load_cfg = lambda: t.cfg
     try:
-        sig = {"symbol": "ETH", "tf": "tf1", "issued": True,
-               "direction": -1, "entry": 100.0, "tp": 98.0, "sl": 101.0,
-               "tp_bps": 200, "sl_bps": 100}
+        sig = locked_contract_signal(symbol="ETH", side=-1, entry=100.0,
+                                     tp_bps=200.0, sl_bps=100.0,
+                                     cycle_id="close-position")
         assert t.consider(sig)["ok"]
         assert "ETH" in t.open_positions
         row = t.close_position("ETH", 97.0, "win")

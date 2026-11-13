@@ -251,6 +251,7 @@ def test_brain_instances_and_hormone_directions():
         await feed.start()
         market = eng._build_market("BTC")
         bs = eng.brains
+        bs._real_failed = True  # explicitly exercise the labelled synthetic fallback
         affinity = {}
         thing2 = bs.performance_inputs() | {
             "norm_returns20": [0.0] * 20, "tp_dist": 3.0, "sl_dist": 1.0,
@@ -285,6 +286,7 @@ def test_brain_instances_and_hormone_directions():
 def test_brain_affinity_input_applied_when_strong():
     bs = BrainSystem()
     bs.initialize()
+    bs._real_failed = True  # the test is about the synthetic fallback graph
     conn = bs.connectome
     market = {
         "closes": [100.0 + i for i in range(120)],

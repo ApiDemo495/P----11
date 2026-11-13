@@ -13,7 +13,8 @@ def test_no_no_trade_ui():
 def test_issued_means_side_issued():
     assert 'fin["issued"] = True' in ENG
     assert 'fin["exec_ok"]' in ENG               # execution keeps its gate
-    assert '"issued": bool(cyc.issued and cyc.tier != "watch-only")' in ENG
+    assert '"issued": bool(cyc.execution_eligible)' in ENG
+    assert '"feed_simulated": getattr(self.feed, "mode", None) != "binance"' in ENG
 
 
 def test_recheck_and_vetoes_are_advisory():

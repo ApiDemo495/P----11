@@ -243,7 +243,9 @@ def from_cycle(cyc) -> dict | None:
     """Return the validated frozen contract, or legacy frozen levels."""
     contract = getattr(cyc, "level_contract", None)
     if contract is not None:
-        return validate_cycle_contract(cyc)
+        checked = validate_cycle_contract(cyc)
+        return ({**checked, "direction": checked["side"]}
+                if checked is not None else None)
     risk = getattr(cyc, "risk", None) or {}
     entry = risk.get("entry") or getattr(cyc, "_levels_entry", None)
     if not entry:
