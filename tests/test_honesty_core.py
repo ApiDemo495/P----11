@@ -186,7 +186,15 @@ def test_history_seed_replays_real_windows():
     from a partial window."""
     from tests.test_engine import make_engine, _boot, run
     from app.history_seed import seed_history
-    eng, _f, _e = make_engine(); run(_boot(eng))
+    eng, feed, _e = make_engine(); run(_boot(eng))
+    # A simulator tape is explicitly refused; the replay path accepts only
+    # closed Binance-family candles with minute-aligned timestamps.
+    skipped = seed_history(eng, hours=6)
+    assert skipped["state"] == "skipped-sim"
+    feed.mode = "binance"
+    for state in feed.states.values():
+        state.times = [int(ts) // 60 * 60 for ts in state.times]
+        state.sources = ["binance-rest"] * len(state.times)
     stats = seed_history(eng, hours=6)
     assert stats["settled"] > 0 and stats["graded"] > 0
     # the ledger file is shared across tests — judge only seeded rows
@@ -201,3 +209,5 @@ def test_history_seed_replays_real_windows():
     assert tfs_seeded == {"tf1", "tf2", "tf3", "tf4"}, tfs_seeded
     src = (ROOT / "app" / "history_seed.py").read_text()
     assert "formulas-only" in src and "sim" in src.lower()
+    js = (ROOT / "static" / "app.js").read_text()
+    assert '"partial-history"' in js and "verified minute coverage" in js

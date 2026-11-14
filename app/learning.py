@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
 import time
 from collections import deque
 
@@ -661,13 +662,26 @@ class LearningSystem:
                 brains.load_state(d.get("brains", {}))
             _rings_restore(engine, d.get("rings") or {})
 
-    def save(self, engine=None) -> None:
+    def save(self, engine=None) -> bool:
+        """Atomically persist learning state; callers can report failures."""
+        tmp = None
         try:
-            os.makedirs(os.path.dirname(LEARN_STATE_FILE) or ".", exist_ok=True)
-            with open(LEARN_STATE_FILE, "w") as fh:
-                json.dump(self.state_dict(engine), fh)
-        except OSError:
-            pass
+            directory = os.path.dirname(LEARN_STATE_FILE) or "."
+            os.makedirs(directory, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(self.state_dict(engine), fh, allow_nan=False)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, LEARN_STATE_FILE)
+            return True
+        except (OSError, TypeError, ValueError):
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            return False
 
     def reset(self, engine) -> None:
         self.__init__()

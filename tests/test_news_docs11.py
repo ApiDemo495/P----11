@@ -170,6 +170,57 @@ def test_halt_never_loses_settlement():
     assert out2 is None                           # still returns None (docstring)
 
 
+def test_settlement_write_failure_retries_the_frozen_boundary_price(monkeypatch,
+                                                                    tmp_path):
+    """A failed ledger fsync must keep the lock and retry the same outcome."""
+    import app.ledger as ledger_module
+    from app.engine import PredictionEngine
+    from app.feed import MarketFeed
+
+    eng = PredictionEngine(MarketFeed(), emit=lambda _message: None)
+    eng.locks.clear()
+    eng.ledger.path = str(tmp_path / "ledger.json")
+    eng.ledger.rows.clear()
+    eng.ledger.settle_calls = 0
+    eng.ledger.last_settle_ts = 0.0
+    eng.ledger.last_settle = {}
+    eng.ledger.totals = {"win": 0, "loss": 0, "skip": 0}
+    eng.rl.on_settle = lambda **_kwargs: None
+    eng.rl.q_on_settle = lambda *_args: None
+    eng.rl.audit = lambda *_args: None
+    now = time.time()
+    start, end = eng._grid_window("tf1", now)
+    eng.locks[("BTC", "tf1")] = {
+        "symbol": "BTC", "tf": "tf1", "side": 1, "confidence": 0.9,
+        "price": 100.0, "locked_at": now - 100,
+        "window_start": start - 1320, "window_end": end - 1,
+        "relocks": 0,
+    }
+    eng.feed.state("BTC").live_price = 101.0
+    eng._halt_until = {"BTC": time.time() + 600}
+    original_replace = ledger_module.os.replace
+    fail_once = {"armed": True}
+
+    def replace_once(src, dst):
+        if fail_once["armed"] and str(dst) == eng.ledger.path:
+            fail_once["armed"] = False
+            raise OSError("simulated disk failure")
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(ledger_module.os, "replace", replace_once)
+    eng._settle_and_lock("BTC", "tf1", now, {"direction": 1})
+    assert eng.ledger.stats("BTC", "tf1")["n"] == 0
+    assert eng.locks[("BTC", "tf1")]["pending_settlement"]["settle_price"] == 101.0
+
+    eng.feed.state("BTC").live_price = 105.0
+    eng._settle_and_lock("BTC", "tf1", now + 1, {"direction": 1})
+    rows = eng.ledger.rows["BTC|tf1"]
+    assert len(rows) == 1
+    assert rows[0]["settle"] == 101.0
+    assert rows[0]["record_id"].startswith("live-v1:BTC:tf1:")
+    assert ("BTC", "tf1") not in eng.locks
+
+
 # 7. Relevance gate: dropped item is counted and shown with an example.
 def test_acc7_relevance_gate_counted():
     ns = NewsSystem(); ns.initialize(); ns.items = []

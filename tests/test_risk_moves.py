@@ -90,5 +90,7 @@ def test_engine_relock_reanchors_and_ledger_level_outcome():
     eng = open(os.path.join(os.path.dirname(__file__), "..",
                             "app", "engine.py")).read()
     assert "_reanchor(_cyc.risk, price)" in eng
-    assert "level_outcome=_lvl" in eng
+    assert "first_touch=_touch" in eng
+    assert "barriers_available=_barriers" in eng
+    assert "_touch in (\"target\", \"stop\")" in eng
     assert "risk_block as _risk_block" in eng

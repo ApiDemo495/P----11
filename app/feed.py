@@ -48,13 +48,31 @@ SIM_PER_MIN_VOL = {"BTC": 120.0, "PAXG": 18.0, "ETH": 1500.0, "BNB": 4200.0}
 
 
 def _family(source: str) -> str:
-    """Return known writer family; never silently classify unknown as sim."""
+    """Return a verified writer family; unknown lookalikes fail closed."""
     name = str(source or "").lower()
-    if name.startswith("binance"):
+    if name in {"binance", "binance-rest", "binance-ws"}:
         return "binance"
     if name == "sim":
         return "sim"
     return "unknown"
+
+
+def _valid_ohlcv(ts, open_, high, low, close, volume, *,
+                 require_minute_boundary: bool = True) -> bool:
+    """Validate one OHLCV row; exchange-family bars are epoch-minute aligned."""
+    try:
+        raw_ts = float(ts)
+        stamp = int(raw_ts)
+        values = tuple(float(value) for value in
+                       (open_, high, low, close, volume))
+    except (TypeError, ValueError, OverflowError):
+        return False
+    o, h, lo, c, v = values
+    return (math.isfinite(raw_ts) and raw_ts == stamp and stamp > 0
+            and (not require_minute_boundary or stamp % 60 == 0)
+            and all(math.isfinite(value) for value in values)
+            and min(o, h, lo, c) > 0 and v >= 0
+            and h >= max(o, lo, c) and lo <= min(o, h, c))
 
 
 class SymbolState:
@@ -103,6 +121,13 @@ class SymbolState:
             high = max(open_, close)
         if low is None:
             low = min(open_, close)
+        if not _valid_ohlcv(
+                ts, open_, high, low, close, volume,
+                require_minute_boundary=_family(source) != "unknown"):
+            return
+        ts = int(float(ts))
+        open_, high, low, close, volume = map(
+            float, (open_, high, low, close, volume))
         # replace a partially-recorded bar with the same timestamp, else append
         if self.times and self.times[-1] == ts:
             self.closes[-1] = close
@@ -155,14 +180,18 @@ class SymbolState:
         must not be used to insert an old backfill behind that tape.
         """
         by_time: dict[int, tuple[float, float, float, float, float, str]] = {}
+        duplicate_times: set[int] = set()
         for ts, open_, high, low, close, volume, source in bars:
-            values = tuple(float(x) for x in
-                           (open_, high, low, close, volume))
-            if (int(ts) <= 0 or not all(math.isfinite(x) for x in values)
-                    or min(values[:4]) <= 0 or values[4] < 0):
+            if not _valid_ohlcv(ts, open_, high, low, close, volume):
                 continue
-            by_time[int(ts)] = (*values, str(source))
-        ordered = sorted(by_time.items())
+            stamp = int(float(ts))
+            if stamp in by_time:
+                duplicate_times.add(stamp)
+                continue
+            by_time[stamp] = (float(open_), float(high), float(low),
+                              float(close), float(volume), str(source))
+        ordered = sorted((ts, bar) for ts, bar in by_time.items()
+                         if ts not in duplicate_times)
         self.times = [ts for ts, _ in ordered]
         self.opens = [bar[0] for _, bar in ordered]
         self.highs = [bar[1] for _, bar in ordered]
@@ -223,13 +252,50 @@ class MarketFeed:
         self._tick_times.append(now)
         del self._tick_times[:-2000]     # depth@100ms alone is ~40 msg/s
 
+    def history_coverage(self, now: float | None = None) -> dict[str, dict]:
+        """Measure active-family closed 1m candles; never infer missing bars."""
+        now = time.time() if now is None else float(now)
+        current = int(now // 60) * 60
+        cutoff = current - 1440 * 60
+        family = _family(self.mode)
+        out = {}
+        for symbol, state in self.states.items():
+            stamps = set()
+            for ts, source in zip(state.times, state.sources):
+                try:
+                    raw = float(ts)
+                    stamp = int(raw)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if (_family(source) == family and math.isfinite(raw)
+                        and raw == stamp and stamp > 0 and stamp % 60 == 0
+                        and stamp < current):
+                    stamps.add(stamp)
+            ordered = sorted(stamps)
+            recent = [ts for ts in ordered if cutoff <= ts < current]
+            gaps = [b - a for a, b in zip(recent, recent[1:]) if b - a != 60]
+            complete = (len(recent) == 1440 and recent[0] == cutoff
+                        and recent[-1] == current - 60 and not gaps)
+            out[symbol] = {
+                "family": family, "bars": len(ordered),
+                "last_24h_bars": len(recent), "expected_24h_bars": 1440,
+                "continuous_24h": complete,
+                "from": ordered[0] if ordered else None,
+                "to": ordered[-1] if ordered else None,
+                "gaps_24h": len(gaps),
+                "largest_gap_minutes": max(gaps, default=0) // 60,
+                **({} if ordered else {"why": "no active-family source candles"}),
+            }
+        return out
+
     def stats(self) -> dict:
-        """Feed chip payload — source, age, ticks/s, switches (advice D)."""
+        """Feed state with provenance and measured historical coverage."""
         now = time.time()
         recent = [t for t in self._tick_times if now - t <= 10.0]
         tps = len(recent) / 10.0
         age = round(now - self.last_delivery, 1) if self.last_delivery else None
         stale = (age is None) or age > 30.0
+        history = self.history_coverage(now)
         return {
             "source": self.source,
             "mode": self.mode,
@@ -249,6 +315,9 @@ class MarketFeed:
                 st.times for st in self.states.values()) else 0.0,
             "bars_sim": sum(1 for st in self.states.values()
                             for src in st.sources if _family(src) == "sim"),
+            "history_24h": history,
+            "history_complete_24h": bool(history) and all(
+                row.get("continuous_24h") for row in history.values()),
             "stale": stale,
             "label": (f"SIMULATED TAPE" if self.mode != "binance"
                       else f"live · {self.source} · {tps:.1f} ticks/s"),
@@ -335,8 +404,10 @@ class MarketFeed:
             # first fetch was geo-refused) — keep pulling until every
             # window is full, so formulas never sit on a 4-bar tape
             if (self.mode == "binance"
-                    and any(len(st.closes) < 60
-                            for st in self.states.values())
+                    and (any(len(st.indices_for_family("binance")) < BACKFILL_BARS
+                             for st in self.states.values())
+                         or not all(row.get("continuous_24h")
+                                    for row in self.history_coverage(now).values()))
                     and now >= getattr(self, "_next_backfill", 0.0)):
                 self._next_backfill = now + 30.0
                 try:
@@ -424,83 +495,127 @@ class MarketFeed:
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
     # ------------------------------------------------------------- Binance
+    async def _fetch_symbol_klines(self, client, base: str, exchange_symbol: str,
+                                   *, end_ms: int | None = None,
+                                   count: int | None = None) -> list[tuple]:
+        """Paginate verified 1m klines; absent provider minutes stay absent."""
+        wanted = max(0, int(BACKFILL_BARS if count is None else count))
+        if not wanted:
+            return []
+        if end_ms is None:
+            current_ms = int(time.time() // 60) * 60_000
+            end_ms = current_ms - 1            # closed candles only
+        end_ms = int(end_ms)
+        end_bucket = end_ms // 60_000 * 60_000
+        cursor = max(0, end_bucket - (wanted - 1) * 60_000)
+        accepted: dict[int, tuple] = {}
+        while cursor <= end_ms and len(accepted) < wanted:
+            limit = min(1000, wanted - len(accepted))
+            response = await client.get(
+                f"{base}/api/v3/klines",
+                params={"symbol": exchange_symbol, "interval": "1m",
+                        "startTime": cursor, "endTime": end_ms,
+                        "limit": limit})
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list) or not rows:
+                break
+            max_stamp = None
+            added = 0
+            for row in rows:
+                try:
+                    raw_ms = float(row[0])
+                    stamp_ms = int(raw_ms)
+                    stamp = stamp_ms // 1000
+                    o, high, low, close, volume = (float(row[i])
+                                                   for i in (1, 2, 3, 4, 5))
+                except (IndexError, TypeError, ValueError, OverflowError):
+                    continue
+                max_stamp = max(max_stamp or stamp_ms, stamp_ms)
+                if (not math.isfinite(raw_ms) or raw_ms != stamp_ms
+                        or stamp_ms % 60_000 or stamp_ms < cursor
+                        or stamp_ms > end_ms or stamp in accepted
+                        or not _valid_ohlcv(stamp, o, high, low, close, volume)):
+                    continue
+                accepted[stamp] = (stamp, o, high, low, close, volume,
+                                   "binance-rest")
+                added += 1
+            if max_stamp is None or max_stamp < cursor:
+                break
+            next_cursor = max_stamp + 60_000
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+            if added == 0 and max_stamp < end_ms - 60_000:
+                break
+        return [accepted[ts] for ts in sorted(accepted)][-wanted:]
+
     async def _fetch_backfill(self) -> int:
-        """1m kline pull (main host, then the vision mirror). Reused by
-        startup AND the reconcile retry loop so a short first fetch can
-        never leave the formula windows starved. Returns bars pushed."""
+        """Paginated real 1m history from Binance, then its official mirror."""
         bases = [BINANCE_REST, BINANCE_REST_VISION]
+        rows_by_sym: dict[str, list[tuple]] | None = None
+        used_base = bases[0]
         last_exc: Exception | None = None
-        pushed = 0
+        end_ms = int(time.time() // 60) * 60_000 - 1
         async with httpx.AsyncClient(timeout=15.0) as client:
             for base in bases:
                 try:
-                    rows_by_sym: dict[str, list] = {}
+                    candidate = {}
                     for sym, ex_symbol in SYMBOLS.items():
-                        resp = await client.get(
-                            f"{base}/api/v3/klines",
-                            params={"symbol": ex_symbol, "interval": "1m",
-                                    "limit": BACKFILL_BARS},
-                        )
-                        resp.raise_for_status()
-                        rows_by_sym[sym] = resp.json()
+                        candidate[sym] = await self._fetch_symbol_klines(
+                            client, base, ex_symbol, end_ms=end_ms,
+                            count=BACKFILL_BARS)
+                    rows_by_sym = candidate
+                    used_base = base
                     last_exc = None
                     break
-                except Exception as exc:        # try the mirror host
+                except Exception as exc:
                     last_exc = exc
-            if last_exc is not None:
-                raise last_exc
-            for sym, rows in rows_by_sym.items():
+            if rows_by_sym is None:
+                if last_exc is not None:
+                    raise last_exc
+                return 0
+            pushed = 0
+            for sym, rest_bars in rows_by_sym.items():
                 st = self.states[sym]
-                rest_bars: list[tuple[int, float, float, float, float, float, str]] = []
-                for row in rows:
-                    ts = int(row[0]) // 1000
-                    o, h, l, c, v = (
-                        float(row[1]), float(row[2]), float(row[3]),
-                        float(row[4]), float(row[5]),
-                    )
-                    rest_bars.append((ts, o, h, l, c, v, "binance-rest"))
-                    pushed += 1
+                pushed += len(rest_bars)
                 rest_latest = max((bar[0] for bar in rest_bars), default=None)
                 by_time = {bar[0]: bar for bar in rest_bars}
-                # A retry can overlap an active WS. Preserve only its latest
-                # Binance bars beyond REST, plus the WS update to REST's last
-                # bucket. Never let older simulator timestamps block backfill.
-                for i, ts in enumerate(st.times):
-                    src = st.sources[i] if i < len(st.sources) else "unknown"
-                    if _family(src) != "binance":
-                        continue
-                    if (rest_latest is None or ts > rest_latest or
-                            (ts == rest_latest and src == "binance-ws")):
-                        by_time[ts] = (ts, st.opens[i], st.highs[i],
-                                       st.lows[i], st.closes[i],
-                                       st.volumes[i], src)
+                # Retain verified WS candles newer than the REST snapshot,
+                # and let a WS update own the overlapping final minute.
+                for i, ts in enumerate(st.times[:len(st.sources)]):
+                    src = st.sources[i]
+                    if (_family(src) == "binance" and
+                            (rest_latest is None or ts > rest_latest or
+                             (ts == rest_latest and src == "binance-ws"))):
+                        row = (ts, st.opens[i], st.highs[i], st.lows[i],
+                               st.closes[i], st.volumes[i], src)
+                        if _valid_ohlcv(ts, *row[1:6]):
+                            by_time[ts] = row
                 st.replace_history(list(by_time.values()))
                 if st.closes:
                     st.live_price = st.closes[-1]
                     st.live_volume = st.volumes[-1]
-                    st.live_open = st.opens[-1]
-                    st.live_high = st.highs[-1]
-                    st.live_low = st.lows[-1]
+                    st.live_open, st.live_high, st.live_low = (
+                        st.opens[-1], st.highs[-1], st.lows[-1])
+                    st.day_open = (st.closes[-1440] if len(st.closes) >= 1440
+                                   else st.closes[0])
                 else:
-                    st.live_price = st.live_volume = 0.0
+                    st.live_price = st.live_volume = st.day_open = 0.0
                     st.live_open = st.live_high = st.live_low = 0.0
-                # D-6: session reference = the exchange's own 24h open
-                # (never bars[0] of whatever history the chart holds —
-                # that produced absurd +12% / +53% / -36% tickers)
-                st.day_open = (st.closes[-1440] if len(st.closes) >= 1440
-                               else (st.closes[0] if st.closes else 0.0))
-                try:
-                    async with httpx.AsyncClient(timeout=10.0) as tc:
-                        for sym, ex_symbol in SYMBOLS.items():
-                            tr = await tc.get(
-                                f"{base}/api/v3/ticker/24hr",
-                                params={"symbol": ex_symbol})
-                            tr.raise_for_status()
-                            self.states[sym].day_open = float(
-                                tr.json().get("openPrice") or 0.0) \
-                                or self.states[sym].day_open
-                except Exception:
-                    pass          # fallback above stays; never fake it
+            # Binance's ticker is the authoritative daily anchor when available.
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as ticker_client:
+                    for sym, ex_symbol in SYMBOLS.items():
+                        response = await ticker_client.get(
+                            f"{used_base}/api/v3/ticker/24hr",
+                            params={"symbol": ex_symbol})
+                        response.raise_for_status()
+                        open_price = float(response.json().get("openPrice") or 0)
+                        if math.isfinite(open_price) and open_price > 0:
+                            self.states[sym].day_open = open_price
+            except Exception:
+                pass                         # measured bar fallback remains
         return pushed
 
     async def _start_binance(self) -> None:

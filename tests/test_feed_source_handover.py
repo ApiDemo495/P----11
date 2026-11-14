@@ -12,6 +12,7 @@ def test_unknown_writer_is_not_classified_as_sim():
 
     assert _family("binance-ws") == "binance"
     assert _family("sim") == "sim"
+    assert _family("binance-ws-pretend") == "unknown"
     assert _family("test") == "unknown"
     state = SymbolState("BTC")
     state.push_bar(60, 100.0, 1.0, 100.0, 101.0, 99.0, source="test")
@@ -182,3 +183,64 @@ def test_candles_endpoint_refuses_single_source_tape_with_screenshot_sized_gap(m
     assert payload["integrity"]["history_jump_bps"] > 900
     assert "extreme-candle-jump" in payload["integrity"]["reasons"]
     assert payload["integrity"]["ok"] is False
+
+
+def test_backfill_paginates_beyond_binance_klines_limit():
+    """A 1,500-bar request must be split into <=1,000-bar pages."""
+    from app.feed import MarketFeed
+    from conftest import run_sync
+
+    feed = MarketFeed()
+    start_ms = 1_700_000_000_000 // 60_000 * 60_000
+    end_ms = start_ms + 1_499 * 60_000 + 59_999
+    calls = []
+
+    class Response:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.rows
+
+    class Client:
+        async def get(self, url, params):
+            calls.append(dict(params))
+            first = params["startTime"]
+            last = min(params["endTime"] // 60_000 * 60_000,
+                       first + (params["limit"] - 1) * 60_000)
+            rows = []
+            for ts in range(first, last + 1, 60_000):
+                rows.append([ts, "100", "101", "99", "100.5", "2"])
+            return Response(rows)
+
+    rows = run_sync(feed._fetch_symbol_klines(
+        Client(), "https://example.invalid", "BTCUSDT",
+        end_ms=end_ms, count=1500))
+    assert len(rows) == 1500
+    assert [call["limit"] for call in calls] == [1000, 500]
+    assert [row[0] for row in rows] == list(
+        range(start_ms // 1000, (start_ms + 1_500 * 60_000) // 1000, 60))
+    assert all(row[-1] == "binance-rest" for row in rows)
+
+
+def test_history_coverage_counts_only_continuous_closed_active_family_bars():
+    feed = MarketFeed()
+    feed.mode = "binance"
+    now = 1_800_000_017.0
+    current = int(now // 60) * 60
+    state = feed.state("BTC")
+    bars = [(ts, 100.0, 101.0, 99.0, 100.5, 1.0, "binance-rest")
+            for ts in range(current - 1440 * 60, current, 60)]
+    state.replace_history(bars)
+    coverage = feed.history_coverage(now)["BTC"]
+    assert coverage["continuous_24h"] is True
+    assert coverage["last_24h_bars"] == 1440
+
+    state.replace_history(bars[:700] + bars[701:])
+    coverage = feed.history_coverage(now)["BTC"]
+    assert coverage["continuous_24h"] is False
+    assert coverage["last_24h_bars"] == 1439
+    assert coverage["gaps_24h"] == 1

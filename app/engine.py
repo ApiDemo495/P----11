@@ -20,6 +20,7 @@ import json
 import logging
 import math
 import os
+import tempfile
 import time
 
 import numpy as np
@@ -3777,14 +3778,27 @@ class PredictionEngine:
         except (OSError, ValueError, KeyError):
             self.locks = {}
 
-    def _save_locks(self) -> None:
+    def _save_locks(self) -> bool:
+        path = "data/locks.json"
+        tmp = None
         try:
-            import os as _os
-            _os.makedirs("data", exist_ok=True)
-            with open("data/locks.json", "w", encoding="utf-8") as fh:
-                json.dump({"locks": list(self.locks.values())}, fh)
-        except OSError:
-            pass
+            directory = os.path.dirname(path) or "."
+            os.makedirs(directory, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump({"locks": list(self.locks.values())}, fh,
+                          allow_nan=False)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+            return True
+        except (OSError, TypeError, ValueError):
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            return False
 
     # -- probability-forecast audit persistence -------------------------
     def _load_prob_audit(self) -> None:
@@ -4304,27 +4318,97 @@ class PredictionEngine:
             same_window = abs(float(prev.get("window_end", 0)) - end) < 1e-6
             if same_window:
                 return                      # lock holds for the whole window
-            price = self.feed.prices().get(symbol, 0.0)
-            # level outcome of the PREVIOUS cycle (B-3: separate column
-            # from the window win/loss): first touch wins, from the
-            # cycle's own event log on the same price stream
-            _lvl = None
-            _pc = self.cycles.get((symbol, tf))
-            if _pc is not None and int(prev.get("side") or 0):
-                _first = next((e.get("type") for e in _pc.events
-                               if e.get("type") in ("target_hit",
-                                                    "sl_crossed")), None)
-                _lvl = ("TP first" if _first == "target_hit" else
-                        "SL first" if _first == "sl_crossed" else
-                        "TP first" if any(t.status == "hit"
-                                          for t in _pc.targets) else
-                        "SL first" if _pc.sl_observed else "neither")
+            _pending = prev.get("pending_settlement")
+            if isinstance(_pending, dict):
+                # Freeze the first boundary's result across disk errors/restarts;
+                # retries must not settle the same window at a later quote.
+                try:
+                    _side = int(_pending.get("side") or 0)
+                except (TypeError, ValueError, OverflowError):
+                    _side = 0
+                _entry = float(_pending.get("entry") or 0.0)
+                price = float(_pending.get("settle_price") or 0.0)
+                _window_end = _pending.get("window_end")
+                _touch = _pending.get("first_touch", "unavailable")
+                _barriers = bool(_pending.get("barriers_available"))
+                _ambiguous = bool(_pending.get("ambiguous"))
+                _record_id = str(_pending.get("record_id") or "")
+            else:
+                price = self.feed.prices().get(symbol, 0.0)
+                # First-touch grading is distinct from directional window
+                # grading. Only a validated frozen level contract may establish
+                # barriers; absent/invalid barriers are never called "neither".
+                _touch, _barriers, _ambiguous = "unavailable", False, False
+                _pc = self.cycles.get((symbol, tf))
+                try:
+                    _side = int(prev.get("side") or 0)
+                except (TypeError, ValueError, OverflowError):
+                    _side = 0
+                if _pc is not None and _side in (-1, 1):
+                    _contract = _pc.level_contract or {}
+                    _barriers = _levels.contract_valid(
+                        _contract, symbol=symbol, timeframe=tf,
+                        cycle=_pc.cycle_id, side=_side,
+                        revision=_pc.level_revision, lock_id=_pc.lock_id)
+                    if _barriers:
+                        _locked_at = float(prev.get("locked_at") or
+                                           prev.get("computed_at") or 0.0)
+                        _events = sorted(
+                            (event for event in _pc.events
+                             if event.get("type") in
+                             ("target_hit", "tp_hit", "sl_crossed")
+                             and float(event.get("ts") or 0.0) >= _locked_at),
+                            key=lambda event: float(event.get("ts") or 0.0))
+                        _first = _events[0] if _events else None
+                        _touch = ("target" if _first and _first.get("type") in
+                                  ("target_hit", "tp_hit") else
+                                  "stop" if _first else "neither")
+                        if _first:
+                            _first_ts = float(_first.get("ts") or 0.0)
+                            _same_time_types = {
+                                event.get("type") for event in _events
+                                if float(event.get("ts") or 0.0) == _first_ts
+                            }
+                            if ("sl_crossed" in _same_time_types and
+                                    _same_time_types & {"target_hit", "tp_hit"}):
+                                _touch, _ambiguous = "ambiguous", True
+                _entry = float(prev.get("price") or 0.0)
+                _window_end = prev.get("window_end")
+                try:
+                    _window_start = float(prev.get("window_start") or 0.0)
+                    if not math.isfinite(_window_start) or _window_start <= 0:
+                        _window_start = float(prev.get("locked_at") or now)
+                except (TypeError, ValueError, OverflowError):
+                    _window_start = float(prev.get("locked_at") or now)
+                _record_id = str(prev.get("settlement_id") or
+                                 f"live-v1:{symbol}:{tf}:"
+                                 f"{int(_window_start * 1000)}")
+                _pending = {
+                    "record_id": _record_id, "entry": _entry,
+                    "settle_price": price, "side": _side,
+                    "window_end": _window_end, "first_touch": _touch,
+                    "barriers_available": _barriers,
+                    "ambiguous": _ambiguous,
+                }
             _row = self.ledger.settle(
-                symbol, tf,
-                float(prev.get("price") or 0.0),
-                price, int(prev.get("side") or 0),
-                window_end=float(prev.get("window_end") or 0),
-                level_outcome=_lvl)
+                symbol, tf, _entry, price, _side, window_end=_window_end,
+                record_id=_record_id, first_touch=_touch,
+                barriers_available=_barriers, ambiguous=_ambiguous)
+            if not _row.get("_persisted", True):
+                prev["pending_settlement"] = _pending
+                self.locks[(symbol, tf)] = prev
+                self._save_locks()
+                return
+            if _row.get("_duplicate"):
+                # A crash may happen after the ledger fsync but before the
+                # lock file is cleared. Continue from the committed row.
+                _entry = float(_row.get("entry") or _entry)
+                price = float(_row.get("settle") or price)
+                _side = int(_row.get("side") or _side)
+                _touch = _row.get("first_touch") or _touch
+                _barriers = bool(_row.get("barriers_available", _barriers))
+                _ambiguous = bool(_row.get("ambiguous", _ambiguous))
+            prev.pop("pending_settlement", None)
             # adaptive conformal state: learn this window's realised
             # |return| so the next band is honest (Gibbs-Candes ACI)
             try:
@@ -4356,8 +4440,8 @@ class PredictionEngine:
                 if (_pred and _pred.get("p_target") is not None
                         and abs(float(_pred.get("cycle_start") or 0)
                                 - float(prev.get("window_start") or 0)) < 1.0
-                        and _lvl in ("TP first", "SL first")):
-                    _y = 1.0 if _lvl == "TP first" else 0.0
+                        and _touch in ("target", "stop")):
+                    _y = 1.0 if _touch == "target" else 0.0
                     _pa = self._prob_audit
                     _pa["n"] += 1
                     _pa["sum_pred"] += float(_pred["p_target"])

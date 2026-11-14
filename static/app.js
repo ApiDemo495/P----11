@@ -3028,6 +3028,13 @@ async function loadHistory() {
           el.innerHTML = `<div class="pad"><b>🌱 24H WARM-HISTORY SEED</b> — <span class="dim">replaying the last 24h of tape in the background… reload in a moment</span></div>`;
         } else if (s.state === "skipped-sim") {
           el.innerHTML = `<div class="pad"><b>🌱 24H WARM-HISTORY SEED</b> — <span class="acc-warn">skipped: feed is simulated — sim history dressed as a backtest would be a lie. Connect Binance for the real seed.</span></div>`;
+        } else if (["partial-history", "insufficient-history", "persistence-failed", "unavailable"].includes(s.state)) {
+          const coverage = Object.values(s.coverage || {});
+          const bars = coverage.reduce((n, item) => n + (item.requested_bars || 0), 0);
+          const expected = coverage.reduce((n, item) => n + (item.expected_requested_bars || 0), 0);
+          const reason = s.why || "verified history is not sufficient for a complete replay";
+          el.innerHTML = `<div class="pad"><b>🌱 24H WARM-HISTORY SEED</b> — <span class="acc-warn">${esc(reason)}</span>` +
+            `${expected ? ` <span class="dim">verified minute coverage: ${bars}/${expected} requested across assets; missing bars were not filled.</span>` : ""}</div>`;
         } else if (s.state === "fresh") {
           el.innerHTML = `<div class="pad"><b>🌱 24H WARM-HISTORY SEED</b> — <span class="dim">already seeded in the last 24h (${s.rows ?? sd.ledger_rows ?? 0} ledger rows) — history below includes the replayed tape, flagged per row.</span></div>`;
         } else if (s.state === "failed") {
