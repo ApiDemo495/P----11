@@ -74,6 +74,8 @@ from . import genesis as genesis_mod
 # regime routing only). 97-101 are the brain/emotion/physics/news/hedge
 # subsystem inputs to the CCI; 20 is DRHE the regime gauge.
 NON_VOTING_IDS = frozenset({20, 97, 98, 99, 100, 101})
+EMERGENCY_RELOCK_COOLDOWN_S = 60.0
+EMERGENCY_RELOCK_MIN_MOVE_ATR = 0.5
 
 
 def _mean(xs):
@@ -266,7 +268,7 @@ class PredictionEngine:
         # --- Part-2 cross-GRC state (rewards/learning inputs) --------------
         self.prev_comp: dict[tuple[str, str], dict[int, float]] = {}
         self.prev_brain_signals: dict[tuple[str, str], list[float]] = {}
-        self.prev_emotions: dict[tuple[str, str], tuple[dict, dict]] = {}
+        self.prev_emotions: dict[tuple[str, str], tuple[dict, dict, float]] = {}
         self.prev_cci_dir: dict[tuple[str, str], int] = {}
         self.prev_physics: dict[tuple[str, str], dict[int, float]] = {}
         self.brain_weight_adj: dict[tuple[str, str], dict[int, float]] = {}
@@ -677,18 +679,44 @@ class PredictionEngine:
             # §7 genesis: evaluate admitted candidates on this window
             # (features from the same tape — one shared feature build)
             _gfeat = genesis_mod.build_features(ctx.P, ctx.V)
-            _gact = [e["id"] for e in self.genesis.formulas.values()
-                     if e["state"] == "active"]
+            # Candidate/probation formulas must be frozen at lock time too;
+            # otherwise they never receive walk-forward samples and can
+            # never reach the active lifecycle state.
+            _gids = self.genesis.walk_forward_ids()
             self._genesis_values[(symbol, tf)] = \
-                genesis_mod.evaluate_active(_gfeat, _gact)
+                genesis_mod.evaluate_active(_gfeat, _gids)
 
         # 2) Bgn synchronization of every registered formula across timeframes
         adj: dict[str, dict[int, float]] = {tf: {} for tf in TF_ORDER}
+        forward_probs: dict[str, dict[str, dict[str, Any]]] = {
+            tf: {} for tf in TF_ORDER}
         for fid in FORMULA_FUNCTIONS:
             raw_by_tf = {tf: raws[tf].get(fid, 0.0) for tf in TF_ORDER}
             synced = BgnSynchronizer.adjust(matrix, raw_by_tf)
             for tf in TF_ORDER:
                 adj[tf][fid] = synced[tf]
+                # §2.7: once a same-asset / same-horizon bucket has 30
+                # settled readings, use its empirical P(up) − 0.5 in the
+                # fused signal. The table is keyed by the frozen raw formula
+                # reading, so lookup uses the same value recorded at lock.
+                # Until then, the original Bgn-synced formula is unchanged.
+                if fid not in WEIGHT_IDS:
+                    continue
+                try:
+                    _raw_fv = float(raws[tf].get(fid, 0.0))
+                    if not math.isfinite(_raw_fv):
+                        raise ValueError("non-finite formula reading")
+                    _p_up, _fw_n = self.forward.p_up(
+                        fid, symbol, tf, _raw_fv)
+                except (TypeError, ValueError, OverflowError):
+                    _p_up, _fw_n = None, 0
+                forward_probs[tf][str(fid)] = {
+                    "p_up": round(float(_p_up), 4)
+                    if _p_up is not None else None,
+                    "n": int(_fw_n), "used": _p_up is not None,
+                }
+                if _p_up is not None:
+                    adj[tf][fid] = float(_p_up) - 0.5
 
         # 3) long market context (30/60-minute stats, peers, order-flow seams)
         market = self._build_market(symbol)
@@ -723,7 +751,7 @@ class PredictionEngine:
                     rewards = {
                         fid: (1.0 if _sign(prev_c[fid]) == _sign(move) else -1.0)
                         for fid in WEIGHT_IDS
-                        if fid in prev_c
+                        if fid in prev_c and _sign(prev_c[fid]) != 0
                     }
                     prev_bs = self.prev_brain_signals.get((symbol, tf)) or []
                     brain_rewards = {
@@ -754,14 +782,51 @@ class PredictionEngine:
                 _scale = max(price * 0.0005, 1e-9)
                 prev_ph = self.prev_physics.get((symbol, tf))
                 if prev_ph and move != 0:
+                    from .physics import _NON_DIRECTIONAL as _p_nondirectional
+                    for pid in range(1, 22):
+                        try:
+                            _pv = float(prev_ph.get(pid, 0.0))
+                        except (TypeError, ValueError, OverflowError):
+                            continue
+                        _ps = 2.0 * _pv - 1.0 if pid in _p_nondirectional else _pv
+                        if _sign(_ps):
+                            self.hist.ring(self.hist.tf_key(
+                                symbol, tf, f"pacc{pid}"), 50).append(
+                                1.0 if _sign(_ps) == _sign(move) else -1.0)
+                    _ufp_s = _sign(float(prev_ph.get(22, 0.0) or 0.0))
+                    if _ufp_s:
+                        self.hist.ring(self.hist.tf_key(
+                            symbol, tf, "pacc22"), 50).append(
+                            1.0 if _ufp_s == _sign(move) else -1.0)
                     self.physics.reward_update(symbol, tf, prev_ph, move,
                                                eta=self.learning.rates["physics"],
                                                scale=_scale)
-                # CERC emotion-weight rewards (21 channels, eta rule)
+                # CERC emotion-weight rewards (21 channels, eta rule).
+                # Score the PREVIOUS pass, not the values just computed below.
                 prev_em = self.prev_emotions.get((symbol, tf))
                 if prev_em and move != 0:
+                    _pev, _pdirs = prev_em[0], prev_em[1]
+                    for eid in range(1, 22):
+                        _term = float(_pev.get(eid, 0.0) or 0.0) * int(
+                            _pdirs.get(eid, 0) or 0)
+                        if eid == 21:
+                            _term *= 1.0 - 0.5 * float(_pev.get(eid, 0.0) or 0.0)
+                        if _sign(_term):
+                            self.hist.ring(self.hist.tf_key(
+                                symbol, tf, f"eacc{eid}"), 50).append(
+                                1.0 if _sign(_term) == _sign(move) else -1.0)
+                    _prev_cerc = (float(prev_em[2]) if len(prev_em) > 2 else
+                                  sum(float(_pev.get(eid, 0.0) or 0.0)
+                                      * int(_pdirs.get(eid, 0) or 0)
+                                      * (1.0 - 0.5 * float(_pev.get(eid, 0.0) or 0.0)
+                                         if eid == 21 else 1.0)
+                                      for eid in range(1, 22)))
+                    if _sign(_prev_cerc):
+                        self.hist.ring(self.hist.tf_key(
+                            symbol, tf, "eacc22"), 50).append(
+                            1.0 if _sign(_prev_cerc) == _sign(move) else -1.0)
                     self.emotions.reward_update(
-                        symbol, tf, prev_em[0], prev_em[1], 0.0, move,
+                        symbol, tf, prev_em[0], prev_em[1], _prev_cerc, move,
                         eta=self.learning.rates["emotion"],
                         scale=_scale,
                     )
@@ -1264,7 +1329,11 @@ class PredictionEngine:
                 "sigma_base": sigma_base,
                 "arc": {"value": round(arc, 4), "ratio": ratio_band},
                 "cci": pack["cci"],
+                "cci_raw": pack["cci"],
+                "cci_adjusted_raw": pack.get(
+                    "cci_adjusted_raw", pack["cci_adjusted"]),
                 "cci_adjusted": pack["cci_adjusted"],
+                "forward_probabilities": forward_probs[tf],
                 "confidence": fin["confidence"],
                 "strength": fin.get("strength", 0.0),
                 "winrate": fin.get("winrate"),
@@ -1325,9 +1394,11 @@ class PredictionEngine:
                 self.prev_brain_signals[(symbol, tf)] = [
                     inst["h_signal"] for inst in br["instances"]
                 ]
-                self.prev_emotions[(symbol, tf)] = (em["emotions"], em["directions"])
-                self.prev_cci_dir[(symbol, tf)] = pack["direction"]
-                self.prev_physics[(symbol, tf)] = dict(phys["values"])
+                self.prev_emotions[(symbol, tf)] = (
+                    em["emotions"], em["directions"], float(em.get("cerc", 0.0)))
+                _prev_p = dict(phys["values"])
+                _prev_p[22] = float(phys["ufp"]["value"])
+                self.prev_physics[(symbol, tf)] = _prev_p
                 # F21 sparkline: the aggregator's own adjusted output
                 self.hist.ring(
                     self.hist.tf_key(symbol, tf, "fspark21"), 100
@@ -1362,40 +1433,17 @@ class PredictionEngine:
                 self.hist.ring(
                     self.hist.tf_key(symbol, tf, "pspark22"), 100
                 ).append(phys["ufp"]["value"])
-                if move != 0:
-                    for pid in range(1, 22):
-                        self.hist.ring(
-                            self.hist.tf_key(symbol, tf, f"pacc{pid}"), 50
-                        ).append(1.0 if _sign(pvals[pid]) == _sign(move)
-                                 else -1.0)
-                    self.hist.ring(
-                        self.hist.tf_key(symbol, tf, "pacc22"), 50
-                    ).append(1.0 if _sign(phys["ufp"]["value"]) == _sign(move)
-                             else -1.0)
-                # emotion sparklines + accuracy (same term as reward_update)
-                ew = self.emotions._weights(symbol, tf)
-                for i, (eid, ev) in enumerate(em["emotions"].items()):
+                # Per-channel accuracy is graded in the reward phase above,
+                # against the PREVIOUS pass that preceded this realized move.
+                # This pass only updates the sparkline, not its own accuracy.
+                for eid, ev in em["emotions"].items():
                     self.hist.ring(
                         self.hist.tf_key(symbol, tf, f"emospark{eid}"), 100
                     ).append(ev)
-                    if move != 0 and eid in em["directions"]:
-                        if eid <= 21 and i < len(ew):
-                            term = ew[i] * ev * em["directions"][eid]
-                            if eid == 21:
-                                term *= (1.0 - 0.5 * ev)
-                        else:
-                            term = em["cerc"]
-                        self.hist.ring(
-                            self.hist.tf_key(symbol, tf, f"eacc{eid}"), 50
-                        ).append(1.0 if _sign(term) == _sign(move) else -1.0)
                 # E22 (CERC) sparkline — not part of the emotions dict
                 self.hist.ring(
                     self.hist.tf_key(symbol, tf, "emospark22"), 100
                 ).append(em["cerc"])
-                if move != 0:
-                    self.hist.ring(
-                        self.hist.tf_key(symbol, tf, "eacc22"), 50
-                    ).append(1.0 if _sign(em["cerc"]) == _sign(move) else -1.0)
                 # --- System Co-relation series (last 50 GRCs) --------------
                 for i, inst in enumerate(br["instances"]):
                     self.hist.ring(
@@ -1777,8 +1825,15 @@ class PredictionEngine:
                         },
                     },
                     "reason": _reason,
-                    # Part-4 sync: the values the dashboard quadrants read
+                    # Part-4 sync: expose the unmodified CCI and its
+                    # double-check-adjusted value separately from the later
+                    # behavior/advanced score sent to the direction ladder.
+                    "cci": pack["cci"],
+                    "cci_raw": pack["cci"],
+                    "cci_adjusted_raw": pack.get(
+                        "cci_adjusted_raw", pack["cci_adjusted"]),
                     "cci_adjusted": pack["cci_adjusted"],
+                    "forward_probabilities": forward_probs[tf],
                     "direction": pack["direction"],
                     "issued": bool(fin["issued"]),
                     "weight_profile": self._weight_profile(symbol, tf, {
@@ -3006,6 +3061,9 @@ class PredictionEngine:
             res["confidence"] = dc["confidence"]
             if dc["label"] == "overridden":
                 res["direction"] = dc["direction"]
+            # The previous-signal cache must match the final post-agent /
+            # double-check direction used by the next learning pass.
+            self.prev_cci_dir[(symbol, tf)] = int(res.get("direction") or 0)
             self.last_result[(symbol, tf)] = res
             # keep the snapshot display in sync with the post-agent values
             disp = self.display_systems.get((symbol, tf))
@@ -3026,19 +3084,19 @@ class PredictionEngine:
             log.exception("groq synthesis failed")
         # ---- tape veto + lock sync (advice 8.1) ----
         self._apply_tape_veto(symbol, res_pack)
-        lock = self.locks.get((symbol, "tf1"))
-        if lock is not None:
-            lock["side"] = int((res_pack.get("tf1") or {}).get("direction") or 0)
-            lock["confidence"] = round(float((res_pack.get("tf1") or {}).get("confidence") or 0), 4)
-            lock["reason"] = str((res_pack.get("tf1") or {}).get("reason") or "")[:500]
-            self._save_locks()
+        # Do not rewrite the settlement lock from a later live recompute.
+        # Its side/confidence/reason are the frozen prediction for this W;
+        # only a new cycle or an explicit emergency re-lock may replace it.
 
     def emergency_relock(self, symbol: str, tf: str = "tf1",
-                         reason: str = "") -> dict:
-        """docs11 §4.9 — THE ONLY path that mutates an already-locked
-        entry: re-opens it at the current price, records the original
-        entry in the reason, then halts all new locks for 30 s.
-        Rate guard: >6/hour is a BUG (error N-8) and is rejected."""
+                         reason: str = "", *, automatic: bool = False) -> dict:
+        """Re-anchor an existing lock after an emergency.
+
+        Automatic news triggers additionally require an active lock and a
+        ≥0.5 ATR move from its entry; manual drills retain their explicit
+        behavior. All paths share a 60 s cooldown, six-per-hour N-8 cap,
+        and 30 s new-lock halt.
+        """
         now = time.time()
         hour = [r for r in self.news.emergency_history
                 if r.get("asset") == symbol and now - r.get("ts", 0.0) < 3600.0]
@@ -3048,6 +3106,16 @@ class PredictionEngine:
                 "detail": f">6 emergency re-locks in 1 h for {symbol} — BUG"})
             return {"ok": False,
                     "error": "N-8: >6 emergency re-locks in one hour — bug, not a signal"}
+        try:
+            _last_emergency = float(self.news.last_emergency.get(symbol) or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            _last_emergency = 0.0
+        _cooldown_left = (EMERGENCY_RELOCK_COOLDOWN_S
+                          - (now - _last_emergency))
+        if _cooldown_left > 0.0:
+            return {"ok": False, "cooldown": True,
+                    "cooldown_s": round(_cooldown_left, 1),
+                    "error": "emergency re-lock cooldown active"}
         price = float(self.feed.prices().get(symbol) or 0.0)
         if price <= 0:
             st0 = self.feed.state(symbol)
@@ -3058,6 +3126,26 @@ class PredictionEngine:
             # never overwrite a REAL entry with0 (it would force a skip)
             return {"ok": False,
                     "error": "no price yet — emergency re-lock refused"}
+        if automatic:
+            if lock is None:
+                return {"ok": False, "skipped": True,
+                        "error": "automatic emergency requires an active lock"}
+            if price <= 0 or _old_entry <= 0:
+                return {"ok": False, "skipped": True,
+                        "error": "automatic emergency needs a valid entry and price"}
+            try:
+                _atr_gate = float(self._atr(self.build_ctx(symbol, tf)))
+            except Exception:
+                _atr_gate = 0.0
+            if not math.isfinite(_atr_gate) or _atr_gate <= 0.0:
+                return {"ok": False, "skipped": True,
+                        "error": "automatic emergency gated: ATR unavailable"}
+            _move_atr = abs(price - _old_entry) / _atr_gate
+            if _move_atr < EMERGENCY_RELOCK_MIN_MOVE_ATR:
+                return {"ok": False, "skipped": True,
+                        "move_atr": round(_move_atr, 3),
+                        "required_move_atr": EMERGENCY_RELOCK_MIN_MOVE_ATR,
+                        "error": "automatic emergency gated: move below ATR threshold"}
         halt = getattr(self, "_halt_until", None)
         if halt is None:
             halt = self._halt_until = {}
@@ -3210,15 +3298,14 @@ class PredictionEngine:
                     label = (f"F{fid}"
                              if fid not in ("agent", "brain", "micro")
                              else fid)
-                    if len(ring) < self.HINDSIGHT_MIN_DECIDED:
-                        entry = {"label": label, "n": len(ring),
+                    g = self._grade_ring(ring)
+                    decided_n = int(g.get("n") or 0) if g else 0
+                    if decided_n < self.HINDSIGHT_MIN_DECIDED:
+                        entry = {"label": label, "n": decided_n,
                                  "enough": False,
-                                 "note": "not enough windows to say "
+                                 "note": "not enough windows with decided outcomes to say "
                                          f"(need {self.HINDSIGHT_MIN_DECIDED})"}
                     else:
-                        g = self._grade_ring(ring)
-                        if not g:
-                            continue
                         entry = {"label": label, "enough": True, **g}
                         entry["changes_note"] = (
                             f"damped {label} ×{g['multiplier']}: "
@@ -3358,7 +3445,7 @@ class PredictionEngine:
                         w[fid] = max(1e-3, min(0.5, w[fid] * float(mult)))
 
     def _record_learning(self, symbol: str, res_pack: dict[str, dict],
-                         now: float) -> None:
+                         now: float, *, record_id: str | None = None) -> None:
         """Section 10/13 bookkeeping after the lock rules ran."""
         prices = self.feed.prices()
         price = prices.get(symbol, 0.0)
@@ -3381,11 +3468,11 @@ class PredictionEngine:
             target_hit = any(e["type"] == "target_hit" for e in evs)
             sl_hit = any(e["type"] == "sl_hit" for e in evs)
             sub = {
-                "emotion": 1 if res.get("emotion", {}).get("aggregate", 0) > 0 else -1,
-                "physics": 1 if res.get("physics", {}).get("ufp", 0) > 0 else -1,
-                "news": 1 if res.get("news_value", 0) > 0 else -1,
-                "hf": 1 if res.get("hedge", {}).get("combined", 0) > 0 else -1,
-                "brain": int(res.get("brain", {}).get("polarity", 0)),
+                "emotion": _sign(res.get("emotion", {}).get("aggregate", 0)),
+                "physics": _sign(res.get("physics", {}).get("ufp", 0)),
+                "news": _sign(res.get("news_value", 0)),
+                "hf": _sign(res.get("hedge", {}).get("combined", 0)),
+                "brain": _sign(res.get("brain", {}).get("polarity", 0)),
                 "adv": _sign(float((res.get("advanced") or {})
                                    .get("vote") or 0.0)),
                 "core": int(res.get("direction", 0)),
@@ -4313,12 +4400,29 @@ class PredictionEngine:
         inside the halt used to return before the ledger was written and
         that window was lost forever (the all-zero settlement history)."""
         prev = self.locks.get((symbol, tf))
-        start, end = self._grid_window(tf, now)
+        # Prediction, contract, probability audit and settlement all share
+        # the same lock-anchored [start, end) interval (W from issuance).
+        start = float(now)
+        end = start + TIMEFRAMES[tf]["minutes"] * 60.0
         if prev is not None:
-            same_window = abs(float(prev.get("window_end", 0)) - end) < 1e-6
-            if same_window:
-                return                      # lock holds for the whole window
             _pending = prev.get("pending_settlement")
+            if not isinstance(_pending, dict):
+                try:
+                    _prev_end = float(prev.get("window_end") or 0.0)
+                except (TypeError, ValueError, OverflowError):
+                    _prev_end = 0.0
+                if _prev_end <= 0.0:
+                    try:
+                        _prev_start = float(prev.get("window_start") or 0.0)
+                    except (TypeError, ValueError, OverflowError):
+                        _prev_start = 0.0
+                    if _prev_start > 0.0:
+                        _prev_end = _prev_start + TIMEFRAMES[tf]["minutes"] * 60.0
+                    else:
+                        _locked = float(prev.get("locked_at") or now)
+                        _prev_end = self._grid_window(tf, _locked)[1]
+                if now < _prev_end:
+                    return                  # lock holds for its full W horizon
             if isinstance(_pending, dict):
                 # Freeze the first boundary's result across disk errors/restarts;
                 # retries must not settle the same window at a later quote.
@@ -4489,7 +4593,7 @@ class PredictionEngine:
                                         {int(k): float(v)
                                          for k, v in prev["fv"].items()},
                                         float(prev.get("price") or 0.0),
-                                        price)
+                                        price, record_id=_record_id)
                 except Exception:
                     pass
             # §7 genesis: score the admitted set walk-forward on the

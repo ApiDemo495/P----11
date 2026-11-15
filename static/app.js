@@ -2347,7 +2347,7 @@ async function loadPhysics() {
       const blocks = ["kramers_moyal", "ising", "fdt", "maxent"].filter(k => est[k]).map(k => {
         const e = est[k];
         const nums = Object.entries(e).filter(([kk, vv]) => kk !== "derivation")
-          .map(([kk, vv]) => `${kk} ${Array.isArray(vv) ? vv.map(x => fmt(x, 5)).join(",") : fmt(vv, 5)}`)
+          .map(([kk, vv]) => `${kk} ${Array.isArray(vv) ? vv.map(x => x == null ? "—" : fmt(x, 5)).join(",") : (vv == null ? "—" : fmt(vv, 5))}`)
           .join(" · ");
         return `<div class="logic"><b>${k.replace("_", " ").toUpperCase()}</b> — ${nums}
           <div class="dim">${esc(e.derivation || "")}</div></div>`;

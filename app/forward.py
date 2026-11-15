@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 from typing import Any
 
 BUCKETS = (-1.0, -0.5, 0.0, 0.5, 1.0)
@@ -31,6 +32,9 @@ class ForwardTables:
     def __init__(self, path: str = "data/forward.json") -> None:
         self.path = path
         self.rows: dict[tuple[int, str, str, float], dict[str, int]] = {}
+        self._lock = threading.RLock()
+        self._record_ids: set[str] = set()
+        self._record_id_order: list[str] = []
         self._load()
 
     # ── persistence ────────────────────────────────────────────────────
@@ -42,42 +46,91 @@ class ForwardTables:
                 fid, sym, tf, bucket = key.rsplit("|", 3)
                 self.rows[(int(fid), sym, tf, float(bucket))] = {
                     "up": int(cell.get("up", 0)), "n": int(cell.get("n", 0))}
-        except (OSError, ValueError, KeyError):
+            ids = raw.get("record_ids") or []
+            self._record_id_order = [str(v) for v in ids if v][-10000:]
+            self._record_ids = set(self._record_id_order)
+        except (OSError, ValueError, KeyError, TypeError):
             self.rows = {}
+            self._record_ids, self._record_id_order = set(), []
 
     def save(self) -> None:
-        out: dict[str, Any] = {"rows": {}}
-        for (fid, sym, tf, b), cell in self.rows.items():
-            out["rows"][f"{fid}|{sym}|{tf}|{b}"] = cell
+        with self._lock:
+            out: dict[str, Any] = {"rows": {},
+                                   "record_ids": self._record_id_order[-10000:]}
+            for (fid, sym, tf, b), cell in self.rows.items():
+                out["rows"][f"{fid}|{sym}|{tf}|{b}"] = dict(cell)
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(self.path) or ".",
                                    suffix=".tmp")
-        with os.fdopen(fd, "w") as fh:
-            json.dump(out, fh)
-        os.replace(tmp, self.path)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(out, fh, allow_nan=False)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.path)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
     # ── recording (called at settlement) ───────────────────────────────
     def record(self, symbol: str, tf: str, fv: dict[int, float],
-               entry: float, settle: float) -> int:
-        """One settled window: bucket every frozen reading, credit P(up)."""
+               entry: float, settle: float,
+               record_id: str | None = None) -> int:
+        """One settled window: bucket frozen readings, credit P(up).
+
+        ``record_id`` makes live settlement retries and verified-history
+        seeding idempotent across both this process and restarts.
+        """
         if not fv or not entry or not settle:
             return 0
         up = 1 if settle > entry else 0        # strict: tie is NOT up
-        n = 0
-        for fid, value in fv.items():
-            if not isinstance(fid, (int, str)):
-                continue
-            fid_i = int(fid)
-            if fid_i == 20:                    # DRHE is a confidence gauge
-                continue
-            key = (fid_i, symbol, tf, _bucket(float(value)))
-            cell = self.rows.setdefault(key, {"up": 0, "n": 0})
-            cell["n"] += 1
-            cell["up"] += up
-            n += 1
-        if n:
-            self.save()
-        return n
+        rid = str(record_id)[:240] if record_id else None
+        with self._lock:
+            if rid and rid in self._record_ids:
+                return 0
+            old_cells: dict[tuple[int, str, str, float], dict | None] = {}
+            n = 0
+            for fid, value in fv.items():
+                if not isinstance(fid, (int, str)):
+                    continue
+                fid_i = int(fid)
+                if fid_i == 20:                  # DRHE is a confidence gauge
+                    continue
+                key = (fid_i, symbol, tf, _bucket(float(value)))
+                if key not in old_cells:
+                    old_cells[key] = (dict(self.rows[key]) if key in self.rows
+                                      else None)
+                cell = self.rows.setdefault(key, {"up": 0, "n": 0})
+                cell["n"] += 1
+                cell["up"] += up
+                n += 1
+            if not n:
+                return 0
+            if rid:
+                self._record_ids.add(rid)
+                self._record_id_order.append(rid)
+                while len(self._record_id_order) > 10000:
+                    expired = self._record_id_order.pop(0)
+                    self._record_ids.discard(expired)
+            try:
+                self.save()
+            except Exception:
+                for key, old in old_cells.items():
+                    if old is None:
+                        self.rows.pop(key, None)
+                    else:
+                        self.rows[key] = old
+                if rid:
+                    self._record_ids.discard(rid)
+                    try:
+                        self._record_id_order.remove(rid)
+                    except ValueError:
+                        pass
+                raise
+            return n
 
     # ── reading (fusion + UI) ──────────────────────────────────────────
     def p_up(self, fid: int, symbol: str, tf: str, value: float) -> tuple[float | None, int]:

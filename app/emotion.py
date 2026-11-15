@@ -56,9 +56,13 @@ def _crowd(emos, dirs, ids, labels):
     (positive, negative, flat) human readings of that crowd."""
     vals = []
     for i in ids:
-        v = float(emos.get(i, 0.5) or 0.5)
+        # RTP (E9) is a magnitude in [0, 1] with zero meaning no trauma;
+        # unlike the sigmoid channels its neutral point is 0, not 0.5.
+        neutral = 0.0 if i == 9 else 0.5
+        v = float(emos.get(i, neutral))
         d = int(dirs.get(i, 0) or 0)
-        vals.append((abs(v - 0.5) * 2.0) * d)
+        scale = 1.0 if i == 9 else 0.5
+        vals.append((abs(v - neutral) / scale) * d)
     score = sum(vals) / len(vals) if vals else 0.0
     label = labels[0] if score > 0.15 else labels[1] if score < -0.15 \
         else labels[2]
@@ -565,27 +569,40 @@ class EmotionSystem:
             reward = ±clip(|move|/scale, 0.3, 1.5).
           * per-channel EWMA ACCURACY exposed to the UI/API.
         """
+        move_dir = sign(move)
+        if move_dir == 0:
+            return
+        w = self._weights(symbol, tf)
+        acc = self._accuracy(symbol, tf)
+        active = []
+        for i, eid in enumerate(EMO_IDS):
+            try:
+                value = float(emos.get(eid, 0.0))
+                direction = int(dirs.get(eid, 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if (direction == 0 or not math.isfinite(value)
+                    or abs(value) <= 1e-12):
+                continue                    # abstention is not a miss
+            term = w[i] * value * direction
+            if eid == 21:
+                term *= (1.0 - 0.5 * value)
+            if abs(term) > 1e-12:
+                active.append((i, term))
+        if not active:
+            return
         base = ETA if eta is None else eta
         key = (symbol, tf)
         n = self.n_updates.get(key, 0)
         rate = max(base, ETA_COLD * 0.5 ** (n / COLD_HALFLIFE))
         self.n_updates[key] = n + 1
-        w = self._weights(symbol, tf)
-        acc = self._accuracy(symbol, tf)
-        move_dir = sign(move)
         mag = 1.0
         if scale and move != 0.0:
             mag = _clamp(abs(move) / scale, 0.3, 1.5)
-        for i, eid in enumerate(EMO_IDS):
-            term = w[i] * emos.get(eid, 0.0) * dirs.get(eid, 0)
-            if eid == 21:
-                term *= (1.0 - 0.5 * emos.get(21, 0.0))
-            if move_dir == 0:
-                reward = 0.0
-            else:
-                correct = sign(term) == move_dir
-                reward = mag if correct else -mag
-                acc[i] = ACC_SMOOTH * acc[i] + (1 - ACC_SMOOTH) * (1.0 if correct else 0.0)
+        for i, term in active:
+            correct = sign(term) == move_dir
+            reward = mag if correct else -mag
+            acc[i] = ACC_SMOOTH * acc[i] + (1 - ACC_SMOOTH) * (1.0 if correct else 0.0)
             # same multiplicative eta rule as the CCI weight learning:
             # omega(t) = omega(t-1) * (1 + eta * reward), then clamp
             w[i] = _clamp(w[i] * (1.0 + rate * reward), W_CLAMP_LO, W_CLAMP_HI)

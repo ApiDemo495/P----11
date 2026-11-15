@@ -115,9 +115,13 @@ class CCIEngine:
         if move == 0:
             return
         w = self.get_weights(symbol, tf)
+        move_sign = _sign(move)
         for fid in list(w.keys()):
             f_prev = prev.get(fid, 0.0)
-            reward = 1.0 if _sign(f_prev) == _sign(move) else -1.0
+            signal_sign = _sign(f_prev)
+            if not signal_sign:
+                continue                 # abstention is not a scored miss
+            reward = 1.0 if signal_sign == move_sign else -1.0
             w[fid] = w[fid] * (1.0 + rate * reward)
             w[fid] = max(WEIGHT_MIN, min(WEIGHT_MAX, w[fid]))
         total = sum(w.values())

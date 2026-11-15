@@ -140,6 +140,34 @@ def test_acc6_emergency_relock():
     assert dr["ok"] and dr["drill"] and dr["halt_s"] == 30
 
 
+def test_automatic_emergency_is_atr_gated_and_cooldown_applies(monkeypatch):
+    from app.engine import PredictionEngine
+    from app.feed import MarketFeed
+
+    feed = MarketFeed()
+    eng = PredictionEngine(feed, emit=lambda m: None)
+    now = time.time()
+    eng.locks[("BTC", "tf1")] = {
+        "symbol": "BTC", "tf": "tf1", "side": 1, "confidence": 0.9,
+        "price": 100.0, "locked_at": now - 60,
+        "window_end": now + 600, "relocks": 0}
+    monkeypatch.setattr(feed, "prices", lambda: {"BTC": 102.0})
+    monkeypatch.setattr(eng, "build_ctx", lambda symbol, tf: object())
+    monkeypatch.setattr(eng, "_atr", lambda ctx: 10.0)
+
+    gated = eng.emergency_relock(
+        "BTC", "tf1", "critical headline", automatic=True)
+    assert not gated["ok"] and gated["skipped"]
+    assert gated["move_atr"] == 0.2
+    assert eng.locks[("BTC", "tf1")]["price"] == 100.0
+    assert not eng.news.emergency_history
+    assert not getattr(eng, "_halt_until", {})
+
+    eng.news.last_emergency["BTC"] = time.time()
+    cooled = eng.emergency_relock("BTC", "tf1", "manual retry")
+    assert not cooled["ok"] and cooled["cooldown"]
+
+
 def test_halt_never_loses_settlement():
     """The settlement-history root cause: a boundary inside the30s
     emergency halt used to return BEFORE the ledger write — the window
@@ -193,7 +221,7 @@ def test_settlement_write_failure_retries_the_frozen_boundary_price(monkeypatch,
     eng.locks[("BTC", "tf1")] = {
         "symbol": "BTC", "tf": "tf1", "side": 1, "confidence": 0.9,
         "price": 100.0, "locked_at": now - 100,
-        "window_start": start - 1320, "window_end": end - 1,
+        "window_start": start - 1320, "window_end": start - 1,
         "relocks": 0,
     }
     eng.feed.state("BTC").live_price = 101.0

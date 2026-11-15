@@ -250,31 +250,74 @@ def estimators(sc: "Scene") -> dict:
     if len(P) < 8:
         return {"ready": False, "note": "needs ≥8 bars"}
 
-    # 1) Kramers-Moyal: D1/D2 as conditional moments of 1-minute log-price
-    #    increments in five state bins (state = deviation from the W-mean)
+    # 1) Kramers–Moyal: conditional moments of the NEXT log-price
+    #    increment given the current price-deviation state.  Empty/small
+    #    bins are unsupported (not zero observations), and pooled moments
+    #    are sample-count weighted.  Coefficients are per minute; the
+    #    second coefficient is E[(Δx)^2]/(2Δt), the Kramers–Moyal convention.
     r = np.diff(np.log(P))
-    dev = P - P.mean()
-    bins = np.quantile(dev, [0.2, 0.4, 0.6, 0.8]) if len(P) > 10 else None
-    state = np.digitize(dev[1:], bins) if bins is not None else np.zeros(len(r), dtype=int)
-    D1, D2 = [], []
+    state_prices = P[:-1]
+    dev = state_prices - float(state_prices.mean())
+    bins = np.quantile(dev, [0.2, 0.4, 0.6, 0.8])
+    state = np.digitize(dev, bins)
+    times = np.asarray(getattr(sc, "T", []) or [], dtype=float)
+    steps = np.diff(times)
+    steps = steps[np.isfinite(steps) & (steps > 0)]
+    dt_seconds = float(np.median(steps)) if len(steps) else 60.0
+    dt_minutes = max(dt_seconds / 60.0, 1e-9)
+    min_bin_n = 3
+    D1: list[float | None] = []
+    D2: list[float | None] = []
+    counts: list[int] = []
+    centers: list[float] = []
+    valid_values: list[tuple[float, float, int, float]] = []
     for b in range(5):
-        m = state == b
-        rr = r[m] if m.any() else np.array([0.0])
-        D1.append(float(rr.mean()))
-        D2.append(float(rr.var()))
-    T = float(sc.tau)
-    d2 = max(float(np.mean(D2)), 1e-18)
-    d1 = float(np.mean(D1))
-    peclet = d1 * T / (2.0 * d2 * T) ** 0.5
-    slope = float(np.polyfit(range(5), D1, 1)[0]) if len(set(D1)) > 1 else 0.0
+        mask = state == b
+        rr = r[mask]
+        count = int(len(rr))
+        counts.append(count)
+        centers.append(float(np.mean(state_prices[mask])) if count else 0.0)
+        if count < min_bin_n:
+            D1.append(None)
+            D2.append(None)
+            continue
+        drift = float(np.mean(rr)) / dt_minutes
+        diffusion = float(np.mean(rr * rr)) / (2.0 * dt_minutes)
+        D1.append(drift)
+        D2.append(diffusion)
+        valid_values.append((drift, diffusion, count, centers[-1]))
+    n_effective = sum(row[2] for row in valid_values)
+    if n_effective:
+        d1 = sum(row[0] * row[2] for row in valid_values) / n_effective
+        d2 = sum(row[1] * row[2] for row in valid_values) / n_effective
+    else:
+        d1 = d2 = 0.0
+    horizon_minutes = max(float(sc.tau), 1e-9)
+    peclet = (d1 * horizon_minutes / math.sqrt(2.0 * d2 * horizon_minutes)
+              if d2 > 0 else None)
+    if len(valid_values) >= 2:
+        slope = float(np.polyfit([row[3] for row in valid_values],
+                                 [row[0] for row in valid_values], 1)[0])
+    else:
+        slope = None
     out["kramers_moyal"] = {
-        "D1": [round(x, 8) for x in D1], "D2": [round(x, 10) for x in D2],
-        "peclet": round(peclet, 4), "d1_slope": round(slope, 8),
-        "derivation": ("D1(x)=E[Δp|x], D2(x)=Var[Δp|x] over 5 state bins "
-                       "(state = deviation from the W-min mean); "
-                       "Péclet = D1·T / √(2·D2·T); slope(D1) > 0 → "
-                       "self-reinforcing, < 0 → restoring"),
-        "regime": ("self-reinforcing" if slope > 0 else "restoring"),
+        "D1": [round(x, 8) if x is not None else None for x in D1],
+        "D2": [round(x, 10) if x is not None else None for x in D2],
+        "sample_counts": counts,
+        "supported": [n >= min_bin_n for n in counts],
+        "min_bin_n": min_bin_n,
+        "n_effective": n_effective,
+        "dt_seconds": round(dt_seconds, 3),
+        "dt_minutes": round(dt_minutes, 6),
+        "peclet": round(peclet, 4) if peclet is not None else None,
+        "d1_slope": round(slope, 8) if slope is not None else None,
+        "derivation": ("x_t = price deviation from the W-window mean; "
+                       "bin by x_t, then estimate D1=E[Δlog(P)|x]/Δt and "
+                       "D2=E[(Δlog(P))²|x]/(2Δt) from the next increment; "
+                       "bins need ≥3 observations and pooled moments are "
+                       "sample-count weighted. Péclet = D1·T/√(2·D2·T)."),
+        "regime": ("insufficient conditional samples" if len(valid_values) < 2
+                   else "self-reinforcing" if slope > 0 else "restoring"),
     }
 
     # 2) Ising chain on bar-level signs: K = atanh(ρ1),
@@ -1298,19 +1341,34 @@ class PhysicsSystem:
         actually converge toward the terms that predicted the move."""
         if move == 0.0 or not prev_values:
             return
+        w = self._weights(symbol, tf)
+        acc = self._accuracy(symbol, tf)
+        active: list[tuple[int, float]] = []
+        for p in w:
+            try:
+                value = float(prev_values.get(p, 0.0))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(value):
+                continue
+            # Confidence/probability physics terms are mapped [0,1]→[-1,1]
+            # in build_ufp; grade that same directional contribution here.
+            signal = 2.0 * value - 1.0 if p in _NON_DIRECTIONAL else value
+            if abs(signal) > 1e-12:
+                active.append((p, signal))
+        if not active:
+            return                         # no evidence is not a miss
         base = ETA_PHYSICS if eta is None else eta
         key = (symbol, tf)
         n = self.n_updates.get(key, 0)
         rate = max(base, ETA_COLD_PHYS * 0.5 ** (n / COLD_HALFLIFE))
         self.n_updates[key] = n + 1
-        w = self._weights(symbol, tf)
-        acc = self._accuracy(symbol, tf)
         mag = 1.0
         if scale:
             mag = max(0.3, min(1.5, abs(move) / scale))
-        for p in list(w.keys()):
-            v_prev = prev_values.get(p, 0.0)
-            correct = _sign(v_prev) == _sign(move)
+        move_sign = _sign(move)
+        for p, signal in active:
+            correct = _sign(signal) == move_sign
             reward = mag if correct else -mag
             acc[p] = ACC_SMOOTH * acc[p] + (1 - ACC_SMOOTH) * (1.0 if correct else 0.0)
             w[p] = w[p] * (1.0 + rate * reward)
@@ -1404,10 +1462,6 @@ class PhysicsSystem:
                 hist.ring(hist.tf_key(symbol, tf, f"phys{p}"),
                           PHYSICS_COUPLING_WINDOW).append(values[p])
                 hist.ring(hist.tf_key(symbol, tf, f"pspark{p}"), 100).append(values[p])
-                if move != 0.0:
-                    hist.ring(hist.tf_key(symbol, tf, f"pacc{p}"), 50).append(
-                        1.0 if _sign(values[p]) == _sign(move) else -1.0
-                    )
             hist.ring(hist.tf_key(symbol, tf, "physcci"),
                       PHYSICS_COUPLING_WINDOW).append(cci_ref)
             hist.ring(hist.tf_key(symbol, tf, "pspark22"), 100).append(ufp["value"])

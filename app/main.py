@@ -248,7 +248,7 @@ async def _news_ticker() -> None:
                 trig = ev.get("emergency_trigger")
                 if trig:
                     out = engine.emergency_relock(
-                        sym, "tf1", trig.get("reason") or "")
+                        sym, "tf1", trig.get("reason") or "", automatic=True)
                     tick["assets"][sym]["emergency"] = out
             await manager.broadcast(tick)
         except asyncio.CancelledError:

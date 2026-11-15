@@ -130,7 +130,7 @@ def test_engine_first_touch_requires_a_valid_contract_and_grades_probability(tmp
         eng.locks[("BTC", "tf1")] = {
             "symbol": "BTC", "tf": "tf1", "side": 1, "price": 100.0,
             "locked_at": locked_at, "window_start": window_start,
-            "window_end": end - 1, "relocks": 0,
+            "window_end": start - 1, "relocks": 0,
         }
         eng.feed.state("BTC").live_price = 101.0
         eng._halt_until = {"BTC": time.time() + 600}

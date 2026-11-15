@@ -372,18 +372,23 @@ class GenesisLayer:
     def start_worker(self, interval_s: float = 600.0) -> None:
         if self._thread and self._thread.is_alive():
             return
+        self._stop.clear()
 
         def loop() -> None:
             try:
                 os.nice(19)          # §9: heavy work at low priority
             except OSError:
                 pass
-            while not self._stop.wait(interval_s):
+            # Initialize the candidate pool immediately; the old first pass
+            # waited ten minutes, so a fresh install had no Genesis state.
+            while not self._stop.is_set():
                 try:
                     self.generation_pass()
                 except Exception:
                     import traceback
                     traceback.print_exc()
+                if self._stop.wait(interval_s):
+                    return
 
         self._thread = threading.Thread(target=loop, daemon=True,
                                         name="genesis-worker")
@@ -398,44 +403,58 @@ class GenesisLayer:
         out-of-sample, run the lifecycle, admit or retire."""
         if features is None:
             features = {}
-        generated = 0
+        candidates_to_add = []
         for did, dom in DOMAINS.items():
             try:
                 candidates = dom["gen"](features)
             except Exception:
                 continue
-            for name, fn in candidates:
+            for name, _fn in candidates:
                 fid = f"{did}:{name}"
-                if fid not in self.formulas:
-                    self.formulas[fid] = {
-                        "id": fid, "domain": did, "domain_name": dom["name"],
-                        "definition": dom["math"],
-                        "state": "candidate", "metrics": {},
-                        "history": [], "scored": [],
-                        "born": time.time(),
-                    }
-                    generated += 1
-        self.generation_count += 1
-        self.next_generation = time.time() + 600.0
+                candidates_to_add.append((fid, did, dom))
+        now = time.time()
+        with self._lock:
+            generated = 0
+            for fid, did, dom in candidates_to_add:
+                if fid in self.formulas:
+                    continue
+                self.formulas[fid] = {
+                    "id": fid, "domain": did, "domain_name": dom["name"],
+                    "definition": dom["math"],
+                    "state": "candidate", "metrics": {},
+                    "history": [], "scored": [], "born": now,
+                }
+                generated += 1
+            self.generation_count += 1
+            self.next_generation = now + 600.0
+            pool = len(self.formulas)
         self.save()
-        return {"generated": generated, "pool": len(self.formulas)}
+        return {"generated": generated, "pool": pool}
+
+    def walk_forward_ids(self) -> list[str]:
+        """Frozen candidates/probation/active IDs eligible for OOS scoring."""
+        with self._lock:
+            return [fid for fid, entry in self.formulas.items()
+                    if entry.get("state") in ("candidate", "probation", "active")]
 
     def score_walk_forward(self, values: dict[str, float],
                            move: float) -> None:
-        """One settled window: every live candidate scores its strict-sign
-        call against the realised move (walk-forward, never in-sample)."""
+        """Score frozen candidate/probation/active readings against the
+        settled move (walk-forward, never in-sample)."""
         outcome = 1 if move > 0 else (-1 if move < 0 else 0)
         if outcome == 0:
             return
-        for fid, val in values.items():
-            entry = self.formulas.get(fid)
-            if entry is None:
-                continue
-            entry["scored"].append([round(float(val), 5), outcome])
-            entry["scored"] = entry["scored"][-200:]
-        self.outcomes.append({"ts": time.time(), "move": move})
-        self.outcomes = self.outcomes[-5000:]
-        self._lifecycle()
+        with self._lock:
+            for fid, val in values.items():
+                entry = self.formulas.get(fid)
+                if (entry is None or entry.get("state") not in
+                        ("candidate", "probation", "active")):
+                    continue
+                entry["scored"].append([round(float(val), 5), outcome])
+                entry["scored"] = entry["scored"][-200:]
+            self.outcomes.append({"ts": time.time(), "move": move})
+            self.outcomes = self.outcomes[-5000:]
+            self._lifecycle()
         self.save()
 
     def _lifecycle(self) -> None:

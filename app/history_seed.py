@@ -151,7 +151,7 @@ def _classify_touch(side: int, entry: float, tp: float | None,
 
 def _record_learning(engine, symbol: str, tf: str, values: dict,
                      pack: dict, settle_price: float, entry: float,
-                     touch: str) -> bool:
+                     touch: str, record_id: str | None = None) -> bool:
     move_sign = _sign(settle_price - entry)
     if not move_sign:
         return False
@@ -164,11 +164,18 @@ def _record_learning(engine, symbol: str, tf: str, values: dict,
             1 if touch == "stop" else None)
         conf = float(pack.get("confidence") or 0.0)
         cci = float(pack.get("cci_adjusted") or 0.0)
-        engine.hist.ring(engine.hist.tf_key(symbol, tf, "calib_p"), 400).append(
-            round(min(1.0, max(0.0, conf)) * 20) / 20.0)
-        engine.hist.ring(engine.hist.tf_key(symbol, tf, "calib_h"), 400).append(
-            1.0 if _sign(cci) == move_sign else 0.0)
-        engine.score_hist.setdefault((symbol, tf), []).append(cci)
+        if _sign(cci):
+            engine.hist.ring(engine.hist.tf_key(symbol, tf, "calib_p"), 400).append(
+                round(min(1.0, max(0.0, conf)) * 20) / 20.0)
+            engine.hist.ring(engine.hist.tf_key(symbol, tf, "calib_h"), 400).append(
+                1.0 if _sign(cci) == move_sign else 0.0)
+            engine.score_hist.setdefault((symbol, tf), []).append(cci)
+        try:
+            engine.forward.record(
+                symbol, tf, {int(k): float(v) for k, v in values.items()},
+                entry, settle_price, record_id=record_id)
+        except Exception:
+            log.exception("seed forward-table update failed %s/%s", symbol, tf)
         return True
     except Exception:
         log.exception("seed learning update failed %s/%s", symbol, tf)
@@ -320,7 +327,7 @@ def seed_history(engine, hours: int = 24, *, now: float | None = None) -> dict:
                     stats["graded"] += 1
                     row["graded"] += 1
                     _record_learning(engine, symbol, tf, values, pack,
-                                     settle_price, entry, touch)
+                                     settle_price, entry, touch, record_id)
             per_tf[tf] = row
         stats["symbols"][symbol] = per_tf
 

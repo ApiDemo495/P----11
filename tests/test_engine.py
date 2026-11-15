@@ -145,6 +145,43 @@ def test_initial_analysis_locks_early_with_all_cycles(live_engine):
             assert cyc.cycle_end - cyc.cycle_start == TIMEFRAMES[tf]["minutes"] * 60
 
 
+def test_forward_bucket_probability_is_used_and_raw_cci_is_exposed(live_engine):
+    from app.forward import BUCKETS
+
+    engine = live_engine.engine
+    # A mature bucket must replace only the fused component value with the
+    # empirical P(up)-0.5 estimate; its raw CCI remains separately exposed.
+    for bucket in BUCKETS:
+        engine.forward.rows[(1, "BTC", "tf1", bucket)] = {"up": 27, "n": 30}
+    result = engine.compute_asset("BTC", record=False)["tf1"]
+    forward = result["forward_probabilities"]["1"]
+    assert forward == {"p_up": 0.9, "n": 30, "used": True}
+    assert result["cci_raw"] == result["cci"]
+    assert "cci_adjusted_raw" in result
+
+
+def test_post_grc_direction_does_not_rewrite_frozen_lock(live_engine):
+    engine = live_engine.engine
+    frozen = {"symbol": "ETH", "tf": "tf1", "side": 1,
+              "confidence": 0.8, "reason": "locked call"}
+    engine.locks[("ETH", "tf1")] = dict(frozen)
+
+    async def no_groq(symbol, res_pack):
+        return None
+
+    engine._apply_groq_synthesis = no_groq
+    engine._apply_tape_veto = lambda symbol, res_pack: None
+    result = {
+        "direction": -1, "confidence": 0.75, "base_confidence": 0.5,
+        "cci_adjusted": -0.03, "pcv": 0.0, "brain": {"polarity": 0},
+        "issued": True, "tier": "half", "reason": "new live score",
+        "breakdown": {"components": []},
+    }
+    asyncio.run(engine._apply_agents("ETH", {"tf1": result}))
+    assert engine.locks[("ETH", "tf1")] == frozen
+    assert engine.prev_cci_dir[("ETH", "tf1")] == -1
+
+
 def test_every_asset_timeframe_uses_the_same_valid_frozen_contract(live_engine):
     from app.levels import validate_cycle_contract
     engine, feed = live_engine.engine, live_engine.feed

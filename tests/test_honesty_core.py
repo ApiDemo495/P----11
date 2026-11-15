@@ -33,8 +33,15 @@ def test_ledger_strict_sign_and_streaks():
 def test_grid_windows_and_lock_hold():
     from tests.test_engine import make_engine, _boot, run
     eng, _f, _e = make_engine(); run(_boot(eng))
+    # _boot() creates real initial locks at wall-clock now. Clear this pair
+    # so the test's synthetic grid-aligned timestamps drive the full cycle.
+    eng.locks.pop(("BTC", "tf1"), None)
+    eng.cycles.pop(("BTC", "tf1"), None)
+    eng.ledger.rows.clear()
+    eng.ledger.totals = {"win": 0, "loss": 0, "skip": 0}
     _s, _e = eng._grid_window("tf1", time.time()); now = _s + int((_e - _s) // 2)
     res = eng._event_result("BTC", "tf1")
+    res["direction"] = int(res.get("direction") or 1)
     eng.fresh_cycle("BTC", "tf1", now, res, reason="initial_lock")
     cyc = eng.cycles[("BTC", "tf1")]
     ws = 22 * 60

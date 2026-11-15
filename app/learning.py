@@ -291,18 +291,22 @@ class LearningSystem:
                 self._acc_ring(self.acc_sym, (fid, symbol), ACCURACY_ROLLING).append(
                     1 if s == move_sign else 0)
         # subsystem agreement contribution (feeds deep steps 8-11)
-        final_ok = move_sign != 0 and subsystems.get("final", 0) == move_sign
-        for name in ("emotion", "physics", "news", "hf", "brain", "core", "adv"):
-            s = subsystems.get(name, 0)
-            if not s:
-                continue
-            row = self.contrib.setdefault(name, [0, 0, 0, 0])
-            if s == subsystems.get("final", 0):
-                row[0] += 1 if final_ok else 0
-                row[1] += 1
-            else:
-                row[2] += 1 if final_ok else 0
-                row[3] += 1
+        final_sign = int(subsystems.get("final", 0) or 0)
+        final_ok = move_sign != 0 and final_sign == move_sign
+        # A flat final call has no consensus outcome; do not classify every
+        # live subsystem as an opposing vote against a directionless pick.
+        if final_sign:
+            for name in ("emotion", "physics", "news", "hf", "brain", "core", "adv"):
+                s = int(subsystems.get(name, 0) or 0)
+                if not s:
+                    continue
+                row = self.contrib.setdefault(name, [0, 0, 0, 0])
+                if s == final_sign:
+                    row[0] += 1 if final_ok else 0
+                    row[1] += 1
+                else:
+                    row[2] += 1 if final_ok else 0
+                    row[3] += 1
         # per-brain micro rewards (h_signal is float -> compare signs)
         w = self.brain_w.setdefault((symbol, tf), [0.25] * 4)
         for b, sig in enumerate(brain_sigs):
@@ -337,7 +341,7 @@ class LearningSystem:
         """High-alert optimization mode (Section 10 accuracy target)."""
         hrs = list(self.tf_hr.values())
         worst = min(hrs) if hrs else 0.5
-        best = min(hrs) if hrs else 0.5
+        best = max(hrs) if hrs else 0.5
         if not self.high_alert and worst < HIGH_ALERT_LOW:
             self.high_alert = True
         elif self.high_alert and best > HIGH_ALERT_HIGH:
