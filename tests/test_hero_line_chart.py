@@ -14,7 +14,10 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_fan_sigma_floored_by_measured_block():
     src = (ROOT / "app" / "engine.py").read_text()
     i = src.index("def branch_stats")
-    seg = src[i:i + 14000]
+    # slice to the END of branch_stats (a fixed 14 kB window silently
+    # stopped covering the function once it grew)
+    j = src.find("\n    def ", i + 10)
+    seg = src[i:j] if j > i else src[i:]
     assert "sigma_bps" in seg and "price * _sig_bps / 1e4" in seg
 
 

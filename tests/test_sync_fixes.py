@@ -24,5 +24,5 @@ def test_quad_charts_aggregate_per_tf():
     js = open("static/app.js").read()
     assert "QINT = { tf1: 1, tf2: 1, tf3: 5, tf4: 5 }" in js
     assert "agg(md.bars || [], QINT[tf] || 1)" in js
-    assert "S.tfBarsRevision[tf] = historyRevision;" in js
+    assert "S.tfBarsRevision[tf] = useSrv ? String(srv.revision" in js
     assert 'if (S.chartSrc === "binance") { try { bnEnsure(); }' in js

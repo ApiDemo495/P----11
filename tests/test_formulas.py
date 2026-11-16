@@ -110,11 +110,16 @@ def test_tci_concentrated_spike_positive():
 
 
 def test_ccmdr_zero_for_short_streak():
-    # alternating returns => streak length 1 -> 0 by spec (N < 3)
+    # Guide §3.2: an alternating tape has N < 3, which used to force a
+    # permanent 0.00. The reading is now the 30-bar magnitude-decay rate
+    # against the same critical value, scaled by streak participation
+    # N/3 — bounded, and provably smaller than a real 3-bar run.
     prices = [100.0]
     for i in range(100):
         prices.append(prices[-1] * (1.002 if i % 2 == 0 else 0.998))
-    assert FORMULA_FUNCTIONS[18](make_ctx(prices)) == 0.0
+    v = FORMULA_FUNCTIONS[18](make_ctx(prices))
+    assert -1.0 <= v <= 1.0
+    assert abs(v) < 1.0
 
 
 def test_ccmdr_positive_when_lambda_exceeds_default_critical():

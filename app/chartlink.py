@@ -13,6 +13,8 @@ the tape the chart draws and the price the ticker shows.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import math
 import time
 from collections import deque
@@ -215,3 +217,94 @@ class LinkWatchdog:
             "incidents": list(self.incidents)[-10:],
             "last": self.last,
         }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# guide §1 — per-timeframe mini-chart resampling
+#
+# The browser used to re-aggregate one 1-minute tape per card with its own
+# QINT/QWIN windows, so every card drifted from the contract it drew (and
+# two cards of the same TF could disagree). Resampling is now a SERVER
+# function with one step and one lookback per timeframe; the four series
+# are published together and each card binds to its own.
+# ══════════════════════════════════════════════════════════════════════
+TF_CHART_SPEC: dict[str, dict[str, int]] = {
+    # step = 1-minute bars merged per candle, lookback = candles published
+    "tf1": {"step": 1, "lookback": 60},
+    "tf2": {"step": 3, "lookback": 50},
+    "tf3": {"step": 10, "lookback": 48},
+    "tf4": {"step": 30, "lookback": 48},
+}
+
+
+def build_tf_candles(bars_1m: list[dict], tf: str,
+                     lookback: int | None = None) -> dict[str, Any]:
+    """Aggregate 1-minute bars into `tf` candles.
+
+    OHLC of each bucket: FIRST open, MAX high, MIN low, LAST close, FIRST
+    time (guide §1). Buckets are epoch-aligned to step×60 s, so successive
+    calls are stable and a card never re-phases when the tape grows.
+
+    Returns {"tf", "step", "lookback", "candles": [...], "closes": [...],
+             "revision": sha1 of the completed candles}.
+    """
+    spec = TF_CHART_SPEC.get(tf, TF_CHART_SPEC["tf1"])
+    step = max(1, int(spec["step"]))
+    n_out = max(1, int(lookback or spec["lookback"]))
+    rows = [b for b in (bars_1m or [])
+            if isinstance(b, dict) and b.get("t") is not None]
+    rows.sort(key=lambda b: float(b.get("t") or 0))
+    out: list[dict] = []
+    if step == 1:
+        out = [{
+            "t": int(r["t"]),
+            "o": float(r.get("o") or r.get("c") or 0.0),
+            "h": float(r.get("h") or r.get("c") or 0.0),
+            "l": float(r.get("l") or r.get("c") or 0.0),
+            "c": float(r.get("c") or 0.0),
+            "v": float(r.get("v") or 0.0),
+            **({"live": True} if r.get("live") else {}),
+        } for r in rows][-n_out:]
+    else:
+        width = step * 60
+        buckets: dict[int, dict] = {}
+        order: list[int] = []
+        for r in rows:
+            t = int(r["t"])
+            bkt = t // width * width
+            b = buckets.get(bkt)
+            if b is None:
+                buckets[bkt] = {
+                    "t": t,                      # FIRST time in the bucket
+                    "o": float(r.get("o") or r.get("c") or 0.0),
+                    "h": float(r.get("h") or r.get("c") or 0.0),
+                    "l": float(r.get("l") or r.get("c") or 0.0),
+                    "c": float(r.get("c") or 0.0),
+                    "v": float(r.get("v") or 0.0),
+                }
+                order.append(bkt)
+                if r.get("live"):
+                    buckets[bkt]["live"] = True
+            else:
+                b["h"] = max(b["h"], float(r.get("h") or r.get("c") or b["h"]))
+                b["l"] = min(b["l"], float(r.get("l") or r.get("c") or b["l"]))
+                b["c"] = float(r.get("c") or b["c"])
+                b["v"] += float(r.get("v") or 0.0)
+                if r.get("live"):
+                    b["live"] = True
+        out = [buckets[k] for k in order][-n_out:]
+    closes = [round(c["c"], 8) for c in out]
+    completed = [c for c in out if not c.get("live")]
+    rev_src = json.dumps([[c["t"], round(c["o"], 6), round(c["h"], 6),
+                           round(c["l"], 6), round(c["c"], 6)]
+                          for c in completed], separators=(",", ":"))
+    return {
+        "tf": tf,
+        "step": step,
+        "lookback": n_out,
+        "bucket_s": step * 60,
+        "candles": out,
+        "closes": closes,
+        "revision": hashlib.sha1(rev_src.encode("utf-8")).hexdigest()[:16],
+        "count": len(out),
+    }

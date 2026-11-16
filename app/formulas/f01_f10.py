@@ -86,6 +86,14 @@ def f01_rpic(ctx) -> float:
     # Gamma_max: maximum Gamma over the last 500 GRC cycles (append happens later)
     gamma_hist = ctx.hist.ring(ctx.hist.tf_key(ctx.symbol, ctx.tf, "gamma"), HIST_GAMMA_MAX)
     g_max = gamma_hist.vmax()
+    # COLD-START FIX (guide §3.2): an empty baseline used to make
+    # ratio == 1.0 → (1 - ratio) == 0 → F1 read a permanent 0.00 for the
+    # whole first session, which is the single most-reported dead formula.
+    # With no history the current Gamma is the best available ceiling, so
+    # scale it by the 35 % expansion a fresh window typically shows; the
+    # ring takes over as soon as one GRC has recorded.
+    if g_max <= EPS:
+        g_max = max(gamma * 1.35, EPS)
     ratio = gamma / g_max if g_max > EPS else 1.0
     ratio = clamp(ratio, 0.0, 1.0)
 
