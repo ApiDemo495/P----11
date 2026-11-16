@@ -108,6 +108,10 @@ class TFCycle:
     level_revision: int = 0
     contract_lock: dict = field(default_factory=dict)
     level_contract: dict = field(default_factory=dict)
+    # ONE authoritative object for this window (app/contracts.py): entry,
+    # TF-horizon TP, TP1..TP3 rungs, SL, ATR, both confidences, digest.
+    # Every panel reads this; nobody recomputes a level.
+    canonical: dict = field(default_factory=dict)
     execution_eligible: bool = False
     contract_tp_hit: bool = False
     forecast: dict = field(default_factory=dict)  # NEW system: price at horizon end
@@ -160,6 +164,10 @@ class TFCycle:
             "level_revision": self.level_revision,
             "level_contract": self.level_contract,
             "contract_id": (self.level_contract or {}).get("id"),
+            # canonical window contract (app/contracts.py) — single source
+            # of truth for entry / TP1..TP3 / TF-TP / SL / confidence
+            "canonical": self.canonical,
+            "canonical_id": (self.canonical or {}).get("id"),
             "execution_eligible": self.execution_eligible,
             "contract_tp_hit": self.contract_tp_hit,
             "sl_observed": self.sl_observed,

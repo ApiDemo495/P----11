@@ -45,6 +45,23 @@ else
   ollama pull "${MODEL}"
 fi
 
+# 3b) llama-cpp-python — PREBUILT CPU WHEEL, never a source build
+# (audit §11.1). Pressing DOWNLOAD LOCAL AGENT used to run
+#   "Building wheel for llama-cpp-python (pyproject.toml): started"
+# for ~20 minutes. --only-binary makes pip refuse to compile, so the
+# abetlen CPU index is the only source and the install takes ~3 s.
+PY="${PYTHON:-python3}"
+if ! "$PY" -c "import llama_cpp" >/dev/null 2>&1; then
+  echo "[llm] installing prebuilt llama-cpp-python CPU wheel (no compile)…"
+  "$PY" -m pip install --quiet --disable-pip-version-check \
+    --prefer-binary --only-binary llama-cpp-python \
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+    "llama-cpp-python>=0.2.90" \
+    || echo "[llm] WARN: prebuilt wheel unavailable — the ollama path still works"
+else
+  echo "[llm] llama-cpp-python already installed"
+fi
+
 echo "[llm] verifying…"
 ollama list | grep -i qwen || true
 echo "[llm] done — the app auditor picks it up automatically (OLLAMA_URL/MODEL env to relocate)."
