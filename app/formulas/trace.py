@@ -243,3 +243,94 @@ def traced_compute(ctx, record: bool = False,
         }
     traces["_pass_us"] = round(first_pass_us, 1)   # type: ignore[assignment]
     return out, traces
+
+
+# ══════════════════════════════════════════════════════════════════════
+# guide §3.1 — trace-ring seeding
+#
+# Every baseline ring a formula reads (Gamma_max, sigma_CWP, tau, SSBD,
+# R, lambda_critical, …) used to start EMPTY, so the first session showed
+# a wall of 0.00 with the reason "baseline rings cold". Seeding replays
+# the trailing 100 bars per timeframe through the real compute_all with
+# record=True, which appends to exactly the rings those formulas read.
+# ══════════════════════════════════════════════════════════════════════
+TRACE_SEED_BARS = 100
+TRACE_SEED_W = 22
+
+
+def seed_trace_rings(history_buffers, *, bars: int = TRACE_SEED_BARS,
+                     W: int = TRACE_SEED_W) -> dict:
+    """Replay the trailing `bars` bars of every (symbol, tf) through
+    compute_all(record=True) so F1–F35 wake up warm.
+
+    `history_buffers` is either
+      * {symbol: {"times","opens","highs","lows","closes","volumes",
+                  ["hist"]}}            — one 1-minute tape per symbol, or
+      * {(symbol, tf): {...same keys...}} — an already-bucketed tape.
+
+    Returns a compact report; never raises (a seeding failure must not
+    take the boot down)."""
+    from ..config import TIMEFRAMES  # local import: avoid a cycle
+    from ..models import FormulaContext
+    from . import compute_all
+
+    report: dict[str, Any] = {"bars": int(bars), "seeded": 0, "errors": 0,
+                              "skipped": 0, "per": {}}
+    if not history_buffers:
+        return report
+    if bars <= 0 or bars > 1000:
+        return report
+
+    items = []
+    for key, tape in (history_buffers or {}).items():
+        if isinstance(key, tuple) and len(key) == 2:
+            items.append((key[0], key[1], tape))
+        else:
+            for tf in ("tf1", "tf2", "tf3", "tf4"):
+                items.append((str(key), tf, tape))
+
+    for symbol, tf, tape in items:
+        try:
+            width = max(1, int(TIMEFRAMES.get(tf, {}).get("minutes", 1) or 1))
+            times = list(tape.get("times") or [])
+            closes = list(tape.get("closes") or [])
+            vols = list(tape.get("volumes") or [])
+            highs = list(tape.get("highs") or closes)
+            lows = list(tape.get("lows") or closes)
+            opens = list(tape.get("opens") or closes)
+            if len(closes) < W + 2 or len(times) < W + 2:
+                report["skipped"] += 1
+                continue
+            # bucket the 1-minute tape to the timeframe grid (last print of
+            # each bucket, like build_tf_candles' close series)
+            idx = list(range(len(closes) - 1, W * width - 1, -width))[::-1]
+            if len(idx) < W + 2:
+                idx = list(range(W, len(closes), max(1, len(closes) // bars)))
+            idx = idx[-int(bars) - 1:] if len(idx) > bars + 1 else idx
+            hist = tape.get("hist")
+            if hist is None:
+                from ..history import HistoryStore
+                hist = HistoryStore()
+            n_ok = 0
+            for j in range(W, len(idx)):
+                end = idx[j]
+                sl = idx[j - W:j + 1]
+                try:
+                    ctx = FormulaContext(
+                        symbol=symbol, tf=tf, W=W,
+                        P=[closes[i] for i in sl],
+                        V=[vols[i] if i < len(vols) else 0.0 for i in sl],
+                        T=[times[i] for i in sl], hist=hist,
+                        O=[opens[i] if i < len(opens) else closes[i] for i in sl],
+                        H=[highs[i] if i < len(highs) else closes[i] for i in sl],
+                        L=[lows[i] if i < len(lows) else closes[i] for i in sl])
+                    compute_all(ctx, record=True)
+                    n_ok += 1
+                except Exception:
+                    report["errors"] += 1
+            report["seeded"] += n_ok
+            report["per"][f"{symbol}:{tf}"] = n_ok
+        except Exception:
+            report["errors"] += 1
+            report["skipped"] += 1
+    return report

@@ -451,6 +451,35 @@ def serve() -> int:
     threading.Thread(target=_deferred_backtest, daemon=True).start()
     py = ensure_env()
 
+    # guide §8: warm the local LLM daemon while uvicorn boots. Pure
+    # subprocess work (probe 127.0.0.1:11434/api/tags → Popen ollama serve)
+    # on a daemon thread, so the detach contract (<1 s return) is intact.
+    def _warm_local_llm() -> None:
+        import shutil
+        import urllib.request
+        try:
+            urllib.request.urlopen("http://127.0.0.1:11434/api/tags",
+                                   timeout=1.5).read()
+            log("local LLM daemon already listening on 11434")
+            return
+        except Exception:
+            pass
+        binp = shutil.which("ollama")
+        if not binp:
+            log("local LLM: no ollama binary — cloud agents only (optional)")
+            return
+        try:
+            subprocess.Popen([binp, "serve"],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL,
+                             stdin=subprocess.DEVNULL,
+                             start_new_session=True, close_fds=True)
+            log("local LLM: ollama serve spawned (detached)")
+        except Exception as exc:
+            log(f"local LLM: spawn failed ({exc})")
+    threading.Thread(target=_warm_local_llm, name="warm-llm",
+                     daemon=True).start()
+
     global _child
     fails = 0
     while True:

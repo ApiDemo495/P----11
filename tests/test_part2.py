@@ -352,15 +352,21 @@ def test_all_emotions_bounded_and_cerc_consistent():
         assert 0.0 <= val <= 1.0, f"E{eid}={val}"
     for eid, d in dirs.items():
         assert d in (-1, 0, 1), f"dir E{eid}={d}"
-    # E22 CERC = weighted sum with TEDR participation multiplier
+    # E22 CERC = precision-weighted mean of the SIGNED estimators with the
+    # TEDR participation multiplier (guide §2: cerc = sum(w·E)/sum(w)).
+    # It used to be a 0..1 dial average, which is why the banner could say
+    # "bears in control" while every dial printed a positive number.
     w = sys_._weights("BTC", "tf1")
+    sig_map = out["signed"]
     expect = 0.0
     for i, eid in enumerate(EMO_IDS):
-        term = w[i] * emos[eid] * dirs[eid]
+        term = w[i] * sig_map[eid]
         if eid == 21:
             term *= (1.0 - 0.5 * emos[21])
         expect += term
+    expect /= (sum(w) or 1.0)
     assert out["cerc"] == pytest.approx(expect, abs=1e-4)
+    assert out["cerc_dial"] == pytest.approx(0.5 + 0.5 * out["cerc"], abs=1e-4)
     assert -1.0 <= out["cerc"] <= 1.0
     assert 0.0 <= out["rtp"] <= 1.0
     assert set(out["lag_values"]) == {"dpi", "octo", "pidx", "nsp"}

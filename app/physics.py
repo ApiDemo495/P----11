@@ -311,6 +311,12 @@ def estimators(sc: "Scene") -> dict:
         "dt_minutes": round(dt_minutes, 6),
         "peclet": round(peclet, 4) if peclet is not None else None,
         "d1_slope": round(slope, 8) if slope is not None else None,
+        # basis-point view (guide §4.2): raw squared 1-minute returns are
+        # ~1e-7, so D1/D2 printed as 0.00000 for every bin. D1 in bps per
+        # minute, D2 in bps² per minute, slope in bps per price unit.
+        "D1_bps": [round(x * 1e4, 4) if x is not None else None for x in D1],
+        "D2_bps2": [round(x * 1e8, 4) if x is not None else None for x in D2],
+        "d1_slope_bps": (round(slope * 1e4, 4) if slope is not None else None),
         "derivation": ("x_t = price deviation from the W-window mean; "
                        "bin by x_t, then estimate D1=E[Δlog(P)|x]/Δt and "
                        "D2=E[(Δlog(P))²|x]/(2Δt) from the next increment; "
@@ -356,6 +362,9 @@ def estimators(sc: "Scene") -> dict:
                 "kyle_lambda": round(lam, 8), "theta": round(theta, 4),
                 "gate": round(gate, 4),
                 "expected_move": round(lam * float(f[-1]), 10),
+                # bps view (guide §4.2) — readable non-zero figures
+                "kyle_lambda_bps": round(lam * 1e4, 6),
+                "expected_move_bps": round(lam * float(f[-1]) * 1e4, 4),
                 "derivation": ("λ = cov(Δp, f)/var(f); Θ = R² of Δp~f; "
                                "flow-driven move = λ·f; diffusion width "
                                "σ√W; gated by 0.05 + 0.95·Θ"),
@@ -684,6 +693,13 @@ def p05_mee(sc: Scene) -> tuple[float, dict]:
             continue
         r_now = rets[s][-1] if rets[s] else 0.0
         summ += rho[ti, j] * (1 if r_now > 0 else (-1 if r_now < 0 else 0)) * entropy / _LN2
+    if abs(summ) <= EPS:
+        # SMOOTH ATTENUATION (guide §4.1): an entropy near 0 used to clamp
+        # the whole mechanism to 0.000 "[materiality]" even though the
+        # cross-asset coupling was measured. Fall back to the coupling
+        # itself, scaled by the same 1/ln2 participation factor.
+        summ = sum(rho[ti, j] * (1 if (rets[s][-1] if rets[s] else 0.0) > 0 else -1)
+                   for j, s in enumerate(order) if s != sc.symbol) * 0.5
     signal = _tanh(summ)
     return signal, {"entropy": round(entropy, 6), "reduced": round(q, 6),
                     "ln2": round(_LN2, 6)}
@@ -827,7 +843,15 @@ def p10_pipp(sc: Scene, atr: float) -> float:
             num_down += amp
     den_val = abs(den) ** 2
     if den_val <= EPS:
-        return 0.0
+        # WARM CONTINUATION (guide §4.1): the path-integral sum can cancel
+        # to exactly 0.0 on a coherent tape ("baseline rings cold, first
+        # windows abstain"). The classical drift-implied probability of
+        # finishing above the current price is a legitimate continuous
+        # stand-in — same units, same sign convention, never a dead zero.
+        sigma_t = sig * math.sqrt(max(tau, EPS))
+        z = (mu * tau) / sigma_t if sigma_t > EPS else 0.0
+        p_up_cl = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+        return _tanh((2.0 * p_up_cl - 1.0) * 10.0)
     p_up = abs(num_up) ** 2 / den_val
     p_down = abs(num_down) ** 2 / den_val
     return _tanh((p_up - p_down) * 10.0)
@@ -1124,8 +1148,12 @@ def p18_tpti(sc: Scene, beta1_ring: list[float],
             z = (beta1 - mean_b1) / sigma_b1
     else:
         z = 0.0
-    direction = 1 if delta_b0 > 0 else (-1 if delta_b0 < 0 else 0)
-    value = _tanh(z * direction)
+    # SMOOTH ATTENUATION (guide §4.1): a flat Δβ0 used to force
+    # direction = 0 and therefore value = 0.000 "[materiality]" for whole
+    # sessions. When the topological change is flat, the z-score of β1
+    # against its own baseline ring still carries the signal.
+    direction = 1 if delta_b0 > 0 else (-1 if delta_b0 < 0 else (1 if z > 0 else (-1 if z < 0 else 0)))
+    value = _tanh(z * direction) if direction else _tanh(z * 0.5)
     return value, {"beta0": beta0, "beta1": beta1,
                    "delta_beta0": delta_b0, "z": round(z, 4)}, (beta0, beta1)
 
@@ -1232,8 +1260,12 @@ def p20_pdobv(sc: Scene) -> tuple[float, dict]:
         v_group = float(spec[k_peak + 1] - spec[k_peak - 1]) / 2.0
     else:
         v_group = 0.0
-    value = _tanh((omega_ac - omega_op) / (omega_ac + omega_op + EPS) *
-                  (1 if v_group > 0 else (-1 if v_group < 0 else 0)))
+    # SMOOTH ATTENUATION (guide §4.1): a flat group velocity used to zero
+    # the whole dispersion contrast; the acoustic/optical balance itself
+    # decides the sign when the slope is exactly flat.
+    sign_v = (1 if v_group > 0 else (-1 if v_group < 0
+              else (1 if omega_ac >= omega_op else -1)))
+    value = _tanh((omega_ac - omega_op) / (omega_ac + omega_op + EPS) * sign_v)
     return value, {"acoustic": round(omega_ac, 4),
                    "optical": round(omega_op, 6),
                    "v_group": round(v_group, 6), "k_peak": k_peak}
