@@ -369,16 +369,24 @@ function resetOwnChartForSymbol(symbol) {
   inst.forecastLabel.title = inst.forecastLabel.textContent;
   inst.stale.textContent = `loading ${symbol} candles…`;
 }
-function levelAutoscaleProvider(values) {
+/* TP/SL price lines must never flatten the candles. The old provider
+   widened the axis to contain EVERY level, so a stop 1.9 % away squashed
+   a 0.05 % intrabar range into one flat horizontal squiggle (audit §3.3).
+   The candle range keeps at least 75 % of the visible height: a level may
+   expand the axis by at most `maxExpand` (25 %) of the candle span, and a
+   level beyond that is clipped off-scale (LWC keeps its axis tag). */
+function levelAutoscaleProvider(values, maxExpand = 0.25) {
   return original => {
     const base = original?.();
     if (!base?.priceRange) return base;
     const finite = (values || []).filter(Number.isFinite);
     if (!finite.length) return base;
-    return { ...base, priceRange: {
-      minValue: Math.min(base.priceRange.minValue, ...finite),
-      maxValue: Math.max(base.priceRange.maxValue, ...finite),
-    }};
+    const lo0 = base.priceRange.minValue, hi0 = base.priceRange.maxValue;
+    const span = Math.max(1e-9, hi0 - lo0);
+    const pad = span * Math.max(0, maxExpand);
+    const lo = Math.min(lo0, Math.max(Math.min(...finite), lo0 - pad));
+    const hi = Math.max(hi0, Math.min(Math.max(...finite), hi0 + pad));
+    return { ...base, priceRange: { minValue: lo, maxValue: hi } };
   };
 }
 function ownMake(el) {
@@ -801,7 +809,7 @@ function renderBranches() {
     <div class="kv"><span>calibration (graded forecasts)</span><b>${S.snap?.prob_audit?.n ? `Δ ${S.snap.prob_audit.calibration_delta > 0 ? "+" : ""}${Math.round((S.snap.prob_audit.calibration_delta || 0) * 100)} pts · Brier raw ${S.snap.prob_audit.brier ?? "—"}${S.snap.prob_audit.brier_cal != null ? ` vs cal ${S.snap.prob_audit.brier_cal}` : ""} · n=${S.snap.prob_audit.n}` : "collecting — active after 30 graded windows"}</b></div>
     <div class="kv"><span>P(stop first)</span><b class="acc-dn">${_pct(b.p_stop)}</b></div>
     <div class="kv"><span>P(target | similar setups)</span><b class="acc-up">${b.p_target_cond != null ? `${_pct(b.p_target_cond)} <span class="dim" style="font-size:9px">n=${b.n_cond} · EV ${b.ev_bps_cond > 0 ? "+" : ""}${fmt(b.ev_bps_cond, 1)} bp</span>` : `<span class="dim">collecting (n=${b.n_cond || 0}/30 matched)</span>`}</b></div>
-    <div class="kv"><span>fan basis</span><b>${esc(b.fan_basis || "all windows")}</b></div>
+    <div class="kv"><span>fan basis</span><b>${esc(b.fan_basis || "all windows")}${b.drift_bps != null ? ` · q50 ${b.drift_bps >= 0 ? "+" : ""}${fmt(b.drift_bps, 1)} bp <span class="${b.fan_drift === "against" ? "acc-dn" : b.fan_drift === "with" ? "acc-up" : "dim"}">(${esc(b.fan_drift || "—")})</span>` : ""}</b></div>
     <div class="kv"><span>P(close between)</span><b>${_pct(b.p_between)}</b></div>
     <div class="kv"><span>P(close down)</span><b>${Math.round(b.p_close_down * 100)}%</b></div>
     <div class="kv"><span>σ (remaining)</span><b>${px(b.sigma)}</b></div>
@@ -816,8 +824,17 @@ function renderBranches() {
   // ---- probability bar: the answer in one glance ----
   const bar = $("#branch-bar");
   if (bar) {
-    const pt = Math.round((b.p_target_cond ?? b.p_target) * 100),
-          ps = Math.round(b.p_stop * 100), pb = Math.max(0, 100 - pt - ps);
+    // ONE measured triple per bar (audit §4.1). The old bar mixed the
+    // CONDITIONAL P(target) with the UNCONDITIONAL P(stop) and filled the
+    // remainder as "neither", so the segments printed 11 + 76 + 19 = 106 %
+    // next to cards reading 11 / 19 / 69. p_target + p_stop + p_between is
+    // 1.000 by construction; the conditional number lives in its own card.
+    const _ptv = Number(b.p_target) || 0, _psv = Number(b.p_stop) || 0;
+    const _pbv = Number.isFinite(b.p_between) ? Number(b.p_between)
+                                              : Math.max(0, 1 - _ptv - _psv);
+    const _tot = _ptv + _psv + _pbv || 1;
+    const pt = Math.round(_ptv / _tot * 100),
+          ps = Math.round(_psv / _tot * 100), pb = Math.max(0, 100 - pt - ps);
     const seg = (v, color, label) => v > 0 ? `<div style="flex:${v};background:${color};color:#0b0b14;font:700 10px ui-monospace,monospace;text-align:center;padding:4px 0;white-space:nowrap;overflow:hidden">${label} ${v}%</div>` : "";
     bar.innerHTML = `<div style="display:flex;border-radius:6px;overflow:hidden;gap:1px">
       ${seg(pt, "#26a69a", "TARGET FIRST")}${seg(pb, "#3a3f55", "NEITHER")}${seg(ps, "#ef5350", "STOP FIRST")}</div>
@@ -1060,11 +1077,19 @@ function renderHero() {
       const t = tg[i];
       if (!t) return "";
       const isTf = i === tg.length - 1;
-      const st = t.status === "hit" ? "HIT ✓" : t.status === "locked" ? "LOCK 🔒" : "open";
-      const cls = t.status === "hit" ? "acc-up" : t.status === "locked" ? "acc-warn" : "dim";
+      // FROZEN RUNG FALLBACK (audit §1.2): the canonical contract carries
+      // the price of every rung from the moment the window locks, so a
+      // not-yet-tracked TP2/TP3 shows its frozen level instead of "— OPEN".
+      const _canon = cyc?.canonical || {};
+      const _lvl = (t.level != null) ? t.level : (_canon[`tp${i + 1}`] ?? null);
+      const _frozen = t.level == null && _lvl != null;
+      const st = t.status === "hit" ? "HIT ✓"
+        : t.status === "locked" ? "LOCK 🔒"
+        : _frozen ? "FROZEN ❄" : "open";
+      const cls = t.status === "hit" ? "acc-up" : (t.status === "locked" || _frozen) ? "acc-warn" : "dim";
       const _entry = cyc?.entry || res.lock?.price || a.price || 0;
-      const _rel = (t.level && _entry) ? ` <span class="dim">${((t.level / _entry - 1) * 100).toFixed(2)}% from entry</span>` : "";
-      return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${t.level ? px(t.level) : "—"} <span class="dim">${st}</span>${_rel}</b></div>`;
+      const _rel = (_lvl && _entry) ? ` <span class="dim">${((_lvl / _entry - 1) * 100).toFixed(2)}% from entry</span>` : "";
+      return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${_lvl ? px(_lvl) : "—"} <span class="dim">${st}</span>${_rel}</b></div>`;
     }).join("") || `<div class="dim pad">waiting for the first lock…</div>`;
   }
   const rn = $("#risk-note");
@@ -1094,15 +1119,21 @@ function renderHero() {
       lines.push({ price: mgi.nearest_dn.price, color: "#a855f7",
                    title: `LIQ↓ ${Math.round(mgi.nearest_dn.bps)}bp`, dash: true });
   }
+  const _canon = cyc?.canonical || {};
   order.forEach(i => {
     const t = tg[i];
-    if (!t || !t.level) return;
+    if (!t) return;
+    // frozen rung from the canonical contract when the target itself has
+    // no level yet (pending TP2/TP3) — one ladder, drawn everywhere
+    const lvl = (t.level != null) ? t.level : (_canon[`tp${i + 1}`] ?? null);
+    if (lvl == null) return;
     const isTf = i === tg.length - 1;
+    const frozen = t.level == null;
     lines.push({
-      price: t.level,
-      color: t.status === "hit" ? "#22c98a" : t.status === "locked" ? "#c9a227" : "#00d4f0",
-      title: isTf ? `TF${t.minutes}m` : `TP${i + 1}${t.status === "hit" ? " ✓" : t.status === "locked" ? " 🔒" : ""}`,
-      dash: t.status !== "locked",
+      price: lvl,
+      color: t.status === "hit" ? "#22c98a" : (t.status === "locked" || frozen) ? "#c9a227" : "#00d4f0",
+      title: isTf ? `TF${t.minutes}m` : `TP${i + 1}${t.status === "hit" ? " ✓" : (t.status === "locked" || frozen) ? " 🔒" : ""}`,
+      dash: t.status !== "locked" && !frozen,
     });
   });
   S.charts.hero?.setLines(S.showLines === false ? [] : lines);
@@ -1896,6 +1927,12 @@ async function loadCandles() {
     // covers that without synthesising history. TP/lock overlays stay
     // per-TF below.
     const md = await api(`/api/candles?symbol=${symbol}&tf=tf1&n=1000`);
+    // guide §1: the SERVER publishes tf_charts[asset][tf] with one step and
+    // one lookback per timeframe. Cards bind to that series when it is
+    // available and fall back to local aggregation only if it is not, so
+    // two cards of the same TF can no longer disagree.
+    const tfc = await api(`/api/tf-charts?symbol=${symbol}`)
+      .catch(() => null);
     // Ignore an older response after a symbol switch or a newer refetch;
     // otherwise BTC bars can be written into another asset's chart state.
     if (seq !== S._candleLoadSeq || symbol !== S.symbol ||
@@ -1942,11 +1979,22 @@ async function loadCandles() {
       return [...out.values()];
     };
     await Promise.all(TF.map(async tf => {
-      const bars = agg(md.bars || [], QINT[tf] || 1);
-      const mapped = _cut(bars, tf).map(x =>
-        ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
+      const srv = (tfc && tfc.ok && tfc.charts) ? tfc.charts[tf] : null;
+      const useSrv = !!(srv && Array.isArray(srv.candles) && srv.candles.length);
+      const bars = useSrv ? srv.candles : agg(md.bars || [], QINT[tf] || 1);
+      const mapped = useSrv
+        ? srv.candles.map(x => ({ time: x.t, open: x.o, high: x.h,
+                                  low: x.l, close: x.c, v: x.v || 0,
+                                  ...(x.live ? { live: true } : {}) }))
+        : _cut(bars, tf).map(x =>
+            ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
       S.tfBars[tf] = mapped;
-      S.tfBarsRevision[tf] = historyRevision;
+      // each TF keeps its OWN revision and epoch — a tf4 card must not
+      // re-render because tf1 got a new minute
+      S.tfBarsRevision[tf] = useSrv ? String(srv.revision || historyRevision)
+                                    : historyRevision;
+      S.tfEpoch ||= {};
+      if (useSrv) S.tfEpoch[tf] = srv.candles[0].t;
       const c = S.charts[tf]; if (!c) return;
       if (!mapped.length) {
         c.setData([]);
@@ -2089,12 +2137,21 @@ async function loadFormulas() {
       const fwEl = $("#fl-forward");
       if (fwEl) {
         const rows = Object.keys(core).sort((a, b) => a - b).map(fid => {
+          // Every cell shows a real number (audit §6.1): Laplace-smoothed
+          // bucket posterior when this reading's bucket has samples, else
+          // the pooled per-(formula, asset, tf) posterior. A "°" marks a
+          // thin sample (n < 30) — the number is shown, never implied to
+          // be settled.
           const tds = ["tf1", "tf2", "tf3", "tf4"].map(tf => {
-            const cell = (fwd.buckets?.[`F${fid} ${S.symbol} ${tf}`] || [])
-              .find(b => Math.abs(b.bucket - (Math.max(-1, Math.min(1, core[fid])) )) < 0.26);
-            return cell && cell.settled
-              ? `<td title="bucket ${cell.bucket}, n=${cell.n}">${(cell.p_up * 100).toFixed(0)}%<span class="dim"> n${cell.n}</span></td>`
-              : `<td class="dim">—</td>`;
+            const key = `F${fid} ${S.symbol} ${tf}`;
+            const cell = (fwd.buckets?.[key] || [])
+              .find(b => Math.abs(b.bucket - (Math.max(-1, Math.min(1, core[fid])))) < 0.26);
+            const marg = fwd.marginal?.[key];
+            const p = (cell && cell.n) ? cell.p_up : (marg && marg.n ? marg.p_up : null);
+            const n = (cell && cell.n) ? cell.n : (marg?.n || 0);
+            const thin = !(cell && cell.settled);
+            if (p == null) return `<td class="dim">—</td>`;
+            return `<td title="${cell && cell.n ? `bucket ${cell.bucket}` : "pooled across buckets"} · n=${n}${thin ? " · thin (<30)" : ""}" class="${thin ? "dim" : ""}">${(p * 100).toFixed(0)}%<span class="dim"> n${n}${thin ? "°" : ""}</span></td>`;
           }).join("");
           const cur = (fv.raw?.[fid] ?? core[fid]);
           const tOn = contribs[fid] ? Math.abs(contribs[fid].contribution) >= 1e-5 : null;
@@ -2104,7 +2161,7 @@ async function loadFormulas() {
         fwEl.innerHTML = `<table class="fwd-table"><thead><tr><th>formula ✓/✗</th><th>now</th>
           <th>tf1 P(up)</th><th>tf2 P(up)</th><th>tf3 P(up)</th><th>tf4 P(up)</th></tr></thead>
           <tbody>${rows}</tbody></table>
-          <div class="hint">Forward P(up) is settled strict-sign from this ledger — n≥30 per bucket before it speaks (advice §2.7). Current value beside it: superposition (§2.8).</div>`;
+          <div class="hint">Forward P(up) = strict-sign settled result from this ledger, Laplace-smoothed (up+2)/(n+4) so every cell carries a number. <b>°</b> = thin sample (n&lt;30, pooled across buckets); unmarked = settled in this reading's own bucket (advice §2.7). Current value beside it: superposition (§2.8).</div>`;
       }
     } catch (e) { console.warn("forward/flat:", e); }
     // §7 genesis: pool counts, next generation, top formula + 7 metrics
@@ -2400,8 +2457,15 @@ async function loadNews() {
         `${x.backoff_level ? " L" + x.backoff_level : ""}` +
         `${x.dropped_429 ? " · 429×" + x.dropped_429 : ""}</b></div>`).join("");
       const ex = st.filtered_examples || [];
+      // §5.1 drop accounting: last window / cumulative / the reasons behind
+      // them. "0 dropped" while the ingest gate binned half the wire was
+      // the deceptive version of this line.
+      const reasons = Object.entries(st.dropped_reasons || {})
+        .map(([k, v]) => `${v}× ${k}`).slice(0, 3).join(" · ");
       $("#nw-dropped").textContent =
-        `${st.filtered || 0} dropped for no crypto relevance` +
+        `dropped ${st.last_dropped_count || 0} since last poll · ` +
+        `${st.total_dropped_count || 0} total` +
+        (reasons ? " — " + reasons : "") +
         (ex.length ? " — e.g. " + ex.map(h => `"${h}"`).join("; ") : "");
       const em = st.emergency_history || [];
       $("#nw-emerg").innerHTML = em.length
@@ -2424,15 +2488,25 @@ async function loadNews() {
           `${fmt(h.impact, 3)} <span class="dim">niv ${fmt(h.niv, 3)} smd ${fmt(h.smd, 3)}</span></b></div>`;
       }).join("");
       const h1 = hz.tf1;
-      if (h1 && h1.niv !== undefined) pushNiv(h1.niv);
+      const liveNiv = (d.live || {}).niv_live;
+      if (liveNiv !== undefined) pushNiv(liveNiv);
+      else if (h1 && h1.niv !== undefined) pushNiv(h1.niv);
     } catch (e) { /* status optional */ }
     $("#nw-scope").textContent = `${S.symbol} · ${d.source || ""} · ${d.count ?? (d.items || []).length} items`;
     const cats = d.categories || {};
+    // §5.1 the AGGREGATE row is the horizon-weighted mean of the four TF
+    // impacts, so it can never contradict the rows directly above it.
+    const aggImp = d.aggregate_impact ?? d.aggregate ?? 0;
     $("#nw-agg").innerHTML = TF.map(tf => {
       const imp = (d.impacts || {})[tf];
       return `<div class="kv"><span>${tf.toUpperCase()} impact</span><b>${fmt(imp, 4)}</b></div>`;
-    }).join("") + `<div class="kv"><span>aggregate</span><b>${fmt(d.aggregate, 4)}</b></div>
-      <div class="kv"><span>polarity</span><b>${fmt(d.polarity, 3)}</b></div>`;
+    }).join("") +
+      `<div class="kv"><span>aggregate <span class="dim">h-weighted</span></span>` +
+      `<b style="color:${aggImp >= 0 ? "var(--green)" : "var(--red)"}">${fmt(aggImp, 4)}</b></div>
+      <div class="kv"><span>polarity</span><b>${fmt(d.polarity, 3)}</b></div>
+      <div class="kv"><span>NIV live <span class="dim">decayed</span></span>` +
+      `<b>${fmt((d.live || {}).niv_live ?? d.niv, 4)}` +
+      ` <span class="dim">base ${fmt((d.live || {}).niv_base ?? d.niv, 4)}</span></b></div>`;
     const tb = $("#nw-table tbody"); tb.innerHTML = "";
     (d.items || []).forEach(it => {
       const cat = cats[it.category] || {};
@@ -2479,7 +2553,8 @@ function onNewsTicker(msg) {
         `<b style="color:${(h.impact || 0) >= 0 ? "var(--green)" : "var(--red)"}">` +
         `${fmt(h.impact, 3)} <span class="dim">niv ${fmt(h.niv, 3)} smd ${fmt(h.smd, 3)}</span></b></div>`;
     }).join("");
-    if (hz.tf1 && hz.tf1.niv !== undefined) pushNiv(hz.tf1.niv);
+    if (a.niv_live !== undefined) pushNiv(a.niv_live);
+    else if (hz.tf1 && hz.tf1.niv !== undefined) pushNiv(hz.tf1.niv);
     if (a.emergency) toast("⚡ auto emergency re-lock fired", "err");
     $("#nw-coverage").textContent = a.coverage || $("#nw-coverage").textContent;
   }
@@ -2574,8 +2649,9 @@ async function loadBrains() {
         <div class="logic">specialty vote ${fmt(inst.signal ?? 0, 3)} · hormone ${fmt(inst.h_signal, 3)}</div>
         <div class="logic">${inst.backend === "flywire-v783-real" ? `🧠 ${Number(inst.neurons).toLocaleString()} real neurons · ${Number(inst.synapses).toLocaleString()} real synapses (FlyWire v783)` : "synthetic graph — real circuit not ready"}</div>
         <div class="kv-row">
-          <div class="kv"><span>${inst.id === "DB-3" ? "state" : inst.id === "DB-1" ? "pattern" : inst.id === "DB-2" ? "experience" : "learn thrust"}</span><b>${inst.dominant ?? (inst.id === "DB-1" ? fmt(inst.pattern, 3) : inst.id === "DB-2" ? fmt(inst.experience, 3) : fmt(inst.signal, 3))}</b></div>
-          <div class="kv"><span>experience</span><b>${fmt(inst.experience, 3)}</b></div>
+          <div class="kv"><span>${inst.id === "DB-3" ? "state" : "pattern"}</span><b>${inst.pattern != null ? fmt(inst.pattern, 3) : fmt(Math.abs(inst.signal || 0), 3)}</b></div>
+          <div class="kv"><span>${inst.id === "DB-2" ? "calibration" : inst.id === "DB-1" ? "reliability" : "experience"}</span><b>${fmt(inst.experience, 3)}</b></div>
+          <div class="kv"><span>p_dominant</span><b>${fmt(inst.p_dominant, 3)}</b></div>
         </div>
         <div class="kv-row" style="margin-top:8px">
           ${["dopamine", "serotonin", "octopamine", "tyramine"].map(k =>
@@ -2649,7 +2725,7 @@ async function loadBrains() {
             <div class="kv-row">
               <div class="kv"><span>neurons (cells)</span><b>${(an.neurons || 0).toLocaleString()}</b></div>
               <div class="kv"><span>connections (≥5 syn)</span><b>${(an.connections || 0).toLocaleString()}</b></div>
-              <div class="kv"><span>synapses (Σ)</span><b>${an.synapses != null ? an.synapses.toLocaleString() : "computing…"}</b></div>
+              <div class="kv"><span>synapses (Σ)</span><b>${an.synapses != null ? Number(an.synapses).toLocaleString() : "—"}</b></div>
               <div class="kv"><span>mean degree</span><b>${an.mean_degree ?? "—"}</b></div>
               <div class="kv"><span>density</span><b>${an.density ?? "—"}</b></div>
             </div>

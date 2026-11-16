@@ -113,12 +113,26 @@ def test_acc6_emergency_relock():
     # feed has no live price yet — a re-lock must NEVER clobber a real
     # entry with price0, that forced every settlement into 'skip')
     feed.state("BTC").closes.append(50000.0)
+    # audit §1.3 WINDOW FREEZE: a locked contract is immutable for its
+    # window unless ≥15 min have elapsed (>3 ATR is also required when the
+    # ATR is measurable). This lock is 17 minutes old — a legitimate
+    # structural re-anchor — while the fresh one below must be refused.
     eng.locks[("BTC", "tf1")] = {
         "symbol": "BTC", "tf": "tf1", "side": 1, "confidence": 0.9,
-        "price": 50000.0, "reason": "old", "locked_at": now - 600,
-        "window_start": now - 600, "window_end": now + 600, "relocks": 0}
+        "price": 50000.0, "reason": "old", "locked_at": now - 1020,
+        "window_start": now - 1020, "window_end": now + 600, "relocks": 0}
     out = eng.emergency_relock("BTC", "tf1", "war headline + NIV swing")
     assert out["ok"] and not out["drill"]
+    # …and a lock taken 30 s ago cannot be re-anchored by any headline:
+    # that is the >1/HOUR = BUG loop the user saw on screen.
+    feed.state("ETH").closes.append(3000.0)
+    eng.locks[("ETH", "tf1")] = {
+        "symbol": "ETH", "tf": "tf1", "side": 1, "confidence": 0.9,
+        "price": 3000.0, "locked_at": now - 30,
+        "window_start": now - 30, "window_end": now + 600, "relocks": 0}
+    frozen = eng.emergency_relock("ETH", "tf1", "war headline")
+    assert not frozen["ok"] and frozen["frozen"] and frozen["skipped"]
+    assert eng.locks[("ETH", "tf1")]["price"] == 3000.0
     # refusal: a REAL entry + no price anywhere → refuse, never price0
     eng.locks[("BNB", "tf1")] = {
         "symbol": "BNB", "tf": "tf1", "side": 1, "confidence": 0.9,

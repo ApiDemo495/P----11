@@ -7,6 +7,7 @@ being presented as a complete 24-hour backtest.
 from __future__ import annotations
 
 import logging
+import os as _os
 import math
 import time
 
@@ -305,7 +306,9 @@ def seed_history(engine, hours: int = 24, *, now: float | None = None) -> dict:
                     symbol, tf, entry, settle_price, side,
                     window_end=times[end_i], seeded=True, conf=confidence,
                     record_id=record_id, first_touch=touch,
-                    barriers_available=barriers, ambiguous=ambiguous)
+                    barriers_available=barriers, ambiguous=ambiguous,
+                    votes={f"F{fid}": float(v) for fid, v in values.items()
+                           if isinstance(v, (int, float))})
                 if not result.get("_persisted", True):
                     stats["persistence_failures"] += 1
                     continue
@@ -352,6 +355,25 @@ def seed_history(engine, hours: int = 24, *, now: float | None = None) -> dict:
         stats["why"] = "verified history is partial or contains gaps; missing minutes were not filled"
     else:
         stats["state"] = "done"
+    # guide §7.2: regrade every seeded row against its own arithmetic and
+    # tally all 41 subjects (F1–F35 + the six module lanes).
+    try:
+        stats["hindsight"] = engine.ledger.hindsight_regrade()
+        engine.hindsight = stats["hindsight"]
+    except Exception as exc:
+        stats["hindsight"] = {"error": repr(exc)}
+        log.exception("hindsight regrade failed")
+    # guide §3.1: warm every formula's baseline ring from the trailing
+    # 100 bars before the first live window (cold rings = wall of 0.00).
+    try:
+        from .formulas.trace import seed_trace_rings
+        buffers = {sym: dict(tape, hist=local_hist)
+                   for sym, tape in (tapes or {}).items()}
+        stats["trace_seed"] = seed_trace_rings(
+            buffers, bars=int(_os.environ.get("P11_TRACE_SEED_BARS", 100) or 100))
+    except Exception as exc:
+        stats["trace_seed"] = {"error": repr(exc)}
+        log.exception("trace ring seeding failed")
     stats["ts"] = time.time()
     log.info("history seed done: %s", stats)
     return stats

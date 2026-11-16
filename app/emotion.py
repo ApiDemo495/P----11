@@ -50,6 +50,114 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else (hi if v > hi else v)
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Estimator helpers (guide §2): every channel is squash()'d into
+# [-1, +1], so nothing can sit in a dead zone and nothing can saturate
+# at a hard 0.00 / 1.00 cliff.
+# ══════════════════════════════════════════════════════════════════════
+def squash(x: float, scale: float = 1.5) -> float:
+    """tanh(x/scale) — continuous, differentiable, bounded in (-1, 1)."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(x):
+        return 0.0
+    return math.tanh(x / (scale if scale else 1.0))
+
+
+def _ema(xs, span: int) -> float:
+    seq = list(xs)[-max(2 * span, span):] if xs else []
+    if not seq:
+        return 0.0
+    a = 2.0 / (span + 1.0)
+    out = float(seq[0])
+    for v in seq[1:]:
+        out = a * float(v) + (1.0 - a) * out
+    return out
+
+
+def _rsi(xs, period: int = 14) -> float:
+    seq = list(xs)[-(period + 1):] if xs else []
+    if len(seq) < 3:
+        return 50.0
+    gains = losses = 0.0
+    for i in range(1, len(seq)):
+        d = float(seq[i]) - float(seq[i - 1])
+        if d > 0:
+            gains += d
+        else:
+            losses -= d
+    if gains + losses <= 1e-12:
+        return 50.0
+    return 100.0 * gains / (gains + losses)
+
+
+def _ad_impulse(hi, lo, cls, vols, k: int = 8) -> float:
+    """Volume-weighted close-location value (accumulation/distribution)."""
+    n = min(len(hi), len(lo), len(cls), len(vols), max(1, k))
+    if n <= 0:
+        return 0.0
+    num = den = 0.0
+    for h_, l_, c_, v_ in zip(hi[-n:], lo[-n:], cls[-n:], vols[-n:]):
+        rng = float(h_) - float(l_)
+        if rng <= 1e-12:
+            continue
+        num += float(v_) * ((float(c_) - float(l_)) - (float(h_) - float(c_))) / rng
+        den += float(v_)
+    return (num / den) if den > 1e-12 else 0.0
+
+
+def _gk_vol(hi, lo, cls, k: int) -> float:
+    """Garman-Klass realised volatility (Parkinson term, log-space)."""
+    n = min(len(hi), len(lo), len(cls), max(2, k))
+    if n < 3:
+        return 0.0
+    vals = []
+    for h_, l_, c_ in zip(hi[-n:], lo[-n:], cls[-n:]):
+        if float(h_) <= 0 or float(l_) <= 0 or float(c_) <= 0 or h_ <= l_:
+            continue
+        vals.append(max(0.0, 0.5 * math.log(float(h_) / float(l_)) ** 2))
+    return math.sqrt(sum(vals) / len(vals)) if vals else 0.0
+
+
+def _wick_pressure(hi, lo, cls, k: int = 10) -> float:
+    """Upper-wick share of the bar range over k bars: 1 = heavy rejection."""
+    n = min(len(hi), len(lo), len(cls), max(1, k))
+    if n <= 0:
+        return 0.0
+    tot = 0.0
+    used = 0
+    for h_, l_, c_ in zip(hi[-n:], lo[-n:], cls[-n:]):
+        rng = float(h_) - float(l_)
+        if rng <= 1e-12:
+            continue
+        tot += (float(h_) - max(float(c_), float(l_))) / rng
+        used += 1
+    return max(0.0, min(1.0, tot / used)) if used else 0.0
+
+
+def _mean_range(hi, lo, cls, k: int) -> float:
+    """Mean relative bar range (high-low)/close over the last k bars."""
+    n = min(len(hi), len(lo), len(cls), max(1, k))
+    if n <= 0:
+        return 0.0
+    vals = [(float(hi[-i]) - float(lo[-i])) / float(cls[-i])
+            for i in range(1, n + 1) if float(cls[-i]) > 0]
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+def _vwap(cls, vols, k: int = 20) -> float:
+    n = min(len(cls), len(vols), max(1, k))
+    if n <= 0:
+        return float(cls[-1]) if cls else 0.0
+    c, v = list(cls)[-n:], list(vols)[-n:]
+    den = sum(float(x) for x in v)
+    if den <= 1e-12:
+        return float(c[-1])
+    return sum(float(a) * float(b) for a, b in zip(c, v)) / den
+
+
 def _crowd(emos, dirs, ids, labels):
     """Signed crowd read from a channel subset: mean of
     (intensity x direction), intensity = |v-0.5|x2. Labels are the
@@ -184,267 +292,223 @@ class EmotionSystem:
         emos: dict[int, float] = {}
         dirs: dict[int, int] = {}
 
-        # ---- E1 FII: fear intensity index --------------------------------
-        # streak counts back over at most the last 240 bars: the old
-        # loop ran over the WHOLE backfill tape (~1000 bars), so in any
-        # net-up session streak ≈ tape length, PDI pinned at 1.0 and
-        # the channel could never un-saturate within a session.
-        streak = 0
-        for p in reversed(mc[-240:]):
-            if p > open_:
-                streak += 1
+        # ══════════════════════════════════════════════════════════════
+        # FIRST-PRINCIPLES ESTIMATORS (guide §2)
+        #
+        # Every channel is a CONTINUOUS signed market variable in
+        # [-1, +1] — negative = bearish fear / stress / distribution,
+        # positive = bullish greed / FOMO / accumulation — produced by
+        # squash(x, scale) = tanh(x/scale).  No discrete triggers, no
+        # lag comparators that flat-line, no dead-zone 0.00 locks.
+        #
+        # The UI keeps its 0..1 dial scale (0.5 = neutral):
+        #     emos[i] = 0.5 + 0.5 * signed[i]
+        # so the banner, the E1–E22 grid and CERC all quote one array.
+        # ══════════════════════════════════════════════════════════════
+        signed: dict[int, float] = {}
+        ohlc = market.get("ohlc") or {}
+        Hi = [float(x) for x in (ohlc.get("highs") or [])]
+        Lo = [float(x) for x in (ohlc.get("lows") or [])]
+        degenerate = (not Hi or not Lo
+                      or sum(max(0.0, h_ - l_) for h_, l_ in zip(Hi, Lo)) <= 0.0)
+        if degenerate or len(Hi) < len(mc) or len(Lo) < len(mc):
+            # kline proxy: bar range from the close-to-close move. Without
+            # this a tape whose high == low == close (a synthetic feed, or a
+            # quiet print) made E7/E8/E9 identically 0.000 — the dead zeros
+            # the audit is about.
+            Hi = [max(mc[i - 1] if i else mc[i], mc[i]) for i in range(len(mc))]
+            Lo = [min(mc[i - 1] if i else mc[i], mc[i]) for i in range(len(mc))]
+        try:
+            atr_v = float(market.get("atr") or 0.0)
+        except (TypeError, ValueError):
+            atr_v = 0.0
+        if not (atr_v > 0):
+            atr_v = _atr5(ohlc, mc)
+        px = live if live > 0 else (mc[-1] if mc else 0.0)
+        atr_pct = (atr_v / px) if px > 0 else 0.0
+
+        def col(name: str, default: float = 0.0) -> float:
+            try:
+                v = float(market.get(name))
+            except (TypeError, ValueError):
+                return default
+            return v if math.isfinite(v) else default
+
+        def ret_at(k: int) -> float:
+            return (mc[-1] / mc[-1 - k] - 1.0) if len(mc) > k and mc[-1 - k] else 0.0
+
+        # order-flow / micro seams — kline proxies when the book is silent
+        dbi = _clamp(col("dbi", col("ofti", 0.0)), -1.0, 1.0)
+        mpd = _clamp(col("mpd", col("cmp_divergence", 0.0)), -1.0, 1.0)
+        news_pol = 0.0
+        try:
+            news_pol = _clamp(float(news_agg.get("polarity") or 0.0), -1.0, 1.0)
+        except (TypeError, ValueError):
+            news_pol = 0.0
+        news_count = 0
+        try:
+            news_count = int(news_agg.get("count") or 0)
+        except (TypeError, ValueError):
+            news_count = 0
+
+        seg = [mc[i] / mc[i - 1] - 1.0 for i in range(max(1, len(mc) - 20), len(mc))
+               if mc[i - 1]]
+
+        # ---- E1  FEAR — downside vs upside realised semivariance --------
+        up_var = sum(max(r, 0.0) ** 2 for r in seg) / len(seg) if seg else 0.0
+        dn_var = sum(min(r, 0.0) ** 2 for r in seg) / len(seg) if seg else 0.0
+        signed[1] = squash((up_var - dn_var) / (up_var + dn_var + 1e-12), 0.4)
+
+        # ---- E2  LOSS AVERSION — position in the trailing 24-bar range --
+        win = mc[-24:] if len(mc) >= 24 else mc
+        lo24, hi24 = (min(win), max(win)) if win else (px, px)
+        pos24 = 2.0 * (px - lo24) / (hi24 - lo24 + 1e-9) - 1.0
+        signed[2] = squash(pos24, 0.8)
+
+        # ---- E3  HEDGE DEMAND — depth imbalance less spread expansion ---
+        sp20 = _mean_range(Hi, Lo, mc, 20)
+        sp60 = _mean_range(Hi, Lo, mc, 60)
+        spread_z = (sp20 / sp60 - 1.0) if sp60 > 1e-12 else 0.0
+        signed[3] = squash(dbi - 0.3 * spread_z, 0.8)
+
+        # ---- E4  PANIC — 3-bar return over the 3-bar ATR ----------------
+        signed[4] = squash(ret_at(3) / (atr_pct * math.sqrt(3.0) + 1e-9), 1.2)
+
+        # ---- E5  STARTLE REFLEX — true-range shock, signed by the bar ---
+        tr = (Hi[-1] - Lo[-1]) if Hi else 0.0
+        bar_dir = sign(mc[-1] - (mc[-2] if len(mc) > 1 else mc[-1]))
+        signed[5] = squash(bar_dir * ((tr / (atr_v + 1e-9)) - 1.0), 1.0)
+
+        # ---- E6  SESSION GREED — 60-bar drift over 60-bar volatility ----
+        c60 = mc[-61] if len(mc) > 60 else (mc[0] if mc else px)
+        r60 = [mc[i] / mc[i - 1] - 1.0
+               for i in range(max(1, len(mc) - 60), len(mc)) if mc[i - 1]]
+        sd60 = (std_pop(r60) * math.sqrt(60.0)) if len(r60) > 2 else 0.0
+        signed[6] = squash((px - c60) / (px * sd60 + 1e-9), 1.5)
+
+        # ---- E7  SMART-MONEY FLOW — 8-bar volume-weighted CLV -----------
+        signed[7] = squash(_ad_impulse(Hi, Lo, mc, vols, 8), 0.5)
+
+        # ---- E8  VOLATILITY STRESS — Garman-Klass expansion, signed -----
+        gk10, gk60 = _gk_vol(Hi, Lo, mc, 10), _gk_vol(Hi, Lo, mc, 60)
+        gk_ratio = (gk10 / gk60 - 1.0) if gk60 > 1e-12 else 0.0
+        signed[8] = squash((sign(ret_at(5)) or sign(trend_w)) * gk_ratio, 0.6)
+
+        # ---- E9  ROLLOVER PANIC — upper-wick rejection pressure ---------
+        pain = _wick_pressure(Hi, Lo, mc, 10)          # 0..1, 1 = heavy top
+        signed[9] = -pain
+
+        # ---- E10 ABSORPTION — heavy volume, low displacement ------------
+        v_sma20 = (sum(vols[-20:]) / len(vols[-20:])) if vols else 0.0
+        vol_z = ((vols[-1] / v_sma20 - 1.0) if v_sma20 > 0 else 0.0)
+        disp = abs(ret_at(1)) / (atr_pct + 1e-9)
+        sgn_mpd = sign(mpd) or (-sign(ret_at(1)))
+        signed[10] = squash(vol_z * sgn_mpd / (disp + 0.5), 1.5)
+
+        # ---- E11 HERDING — signed run length + lag-1 autocorrelation ----
+        fwd = (seg[-1] > 0) if seg else False
+        run = 0
+        for r in reversed(seg):
+            if r != 0 and (r > 0) == fwd:
+                run += 1
             else:
                 break
-        dpi_ring = hist.ring(hist.tf_key(ctx.symbol, ctx.tf, "dpi"), HIST_EMOTION_LAG)
-        dpi_mean = dpi_ring.mean() if len(dpi_ring) else 0.0
-        tau_half = ctx.intermediates.get("tau")
-        if tau_half is None or not (tau_half > 0):
-            tau_half = 60.0
-        tau_eff = max(1.0, tau_half * (1.0 - 0.5 * dpi_mean))
-        pdi_fii = 1.0 - math.exp(-3.0 * (streak / tau_eff))
-        emos[1] = sig(5.0 * (pdi_fii - 0.5))
-        if pdi_fii >= 0.85:
-            dirs[1] = -1
-        elif pdi_fii <= 0.15:
-            dirs[1] = 1
+        ac1 = pearson(seg[:-1], seg[1:]) if len(seg) > 3 else 0.0
+        signed[11] = squash(0.25 * (1 if fwd else -1) * min(run, 8) if run else 0.0
+                            + 1.5 * ac1, 1.0)
+
+        # ---- E12 RANGE FATIGUE — Kaufman efficiency ratio ---------------
+        eff = 0.0
+        if len(mc) > 12 and mc[-13]:
+            path = sum(abs(mc[i] - mc[i - 1])
+                       for i in range(len(mc) - 12, len(mc)))
+            eff = (mc[-1] - mc[-13]) / (path + 1e-9)
+        signed[12] = squash(eff, 0.5)
+
+        # ---- E13 REVERSAL FEAR — mean-reversion tension vs the VWAP -----
+        vwap20 = _vwap(mc, vols, 20)
+        signed[13] = squash(-(px - vwap20) / (2.0 * atr_v + 1e-9), 1.0)
+
+        # ---- E14 SENTIMENT — fast/slow EMA spread -----------------------
+        signed[14] = squash((_ema(mc, 5) - _ema(mc, 20)) / (atr_v + 1e-9), 1.2)
+
+        # ---- E15 INTENT TO ACT — signed volume surge --------------------
+        if vols:
+            signed[15] = squash(bar_dir * (vols[-1] / (v_sma20 + 1e-9) - 1.0), 1.0)
         else:
-            dirs[1] = trend_w
+            signed[15] = 0.0
 
-        # ---- E2 GSL: guardian-of-loss syndrome ---------------------------
-        p_hit = hist.p_hit(ctx.symbol)
-        p_min60 = min(mc[-min(60, len(mc)):])
-        atr5 = _atr5(market.get("ohlc"), mc)
-        # BUG (Greed pegged for days): pen mixed horizons — the SESSION
-        # open (day-scale, tape start) minus the last-60m low. In any
-        # up day open_ sits far BELOW p_min60, pen went hugely negative
-        # and sig() pinned E2 at exactly 1.00 all day. Measure the dip
-        # within the SAME 60m window the low comes from.
-        open60 = mc[-min(60, len(mc))]
-        pen = p_hit + (open60 - p_min60) / atr5 if atr5 > 0 else p_hit
-        emos[2] = sig(-4.0 * (pen - 1.0))
-        dirs[2] = 1 if emos[2] > 0.5 else -1
+        # ---- E16 ANNOUNCEMENT SHOCK — news velocity × tick-rate surge ---
+        tick_ratio = _clamp(col("tick_rate", 1.0)
+                            / (col("tick_rate_baseline", 1.0) + 1e-9), 0.5, 3.0)
+        signed[16] = squash(news_pol * max(0.5, tick_ratio) * 2.0, 0.5)
 
-        # ---- E3 FPR: fear put ratio -------------------------------------
-        ratio = (s1 / s30) if s30 > 1e-12 else 1.0
-        emos[3] = sig(-5.0 * (1.0 - ratio - r30))
-        dirs[3] = -sign(r30 + (ratio - 1.0)) if (r30 or ratio != 1.0) else 0
+        # ---- E17 CROWD PULL — second-order price acceleration -----------
+        accel3 = 0.0
+        if len(mc) > 6:
+            accel3 = ((mc[-1] - mc[-4]) - (mc[-4] - mc[-7])) / (atr_v + 1e-9)
+        signed[17] = squash(accel3, 1.0)
 
-        # ---- E4 PCP: panic coefficient (rising) --------------------------
-        v10_30 = (v10 / v30) if v30 > 0 else 1.0
-        emos[4] = sig(6.0 * (ratio - 1.0))          # sigma expanding
-        _ = v10_30
-        dirs[4] = -sign(trend_w)
+        # ---- E18 TREND-CHASE FATIGUE — late leg vs early leg ------------
+        r12, late3 = ret_at(12), ret_at(3)
+        signed[18] = squash(late3 / (abs(r12) + atr_pct + 1e-9)
+                            - 0.25 * (sign(r12) or sign(trend_w)), 0.8)
 
-        # ---- E5 CD: octopamine reflex (original variant) -----------------
-        octo_raw = market.get("octo_move")
-        if octo_raw is None:
-            octo_raw = rets[-1] if rets else 0.0
-        volchg = vols[-1] / v10 if v10 > 0 else 1.0
-        octo_now = sig(4.0 * octo_raw * (1.0 + max(0.0, volchg - 1.0)))
-        octo_ring = hist.ring(hist.tf_key(ctx.symbol, ctx.tf, "octo"), HIST_EMOTION_LAG)
-        octo_lag_v = _lag_value(octo_ring)
-        octo_lag = sig(4.0 * octo_lag_v) if octo_lag_v is not None else 0.5
-        # zeros cause-1: the binary cliff (1.0 / exact 0.0) became a
-        # logistic ramp on the reflex ratio — ordering preserved, never
-        # an exact zero while the inputs are alive
-        _ratio = (octo_now / (2.0 * octo_lag)) if octo_lag > 1e-9 else                  (1.0 if octo_now > 0.5 else 0.0)
-        emos[5] = 1.0 / (1.0 + math.exp(-8.0 * (_ratio - 0.75)))
-        dirs[5] = 1 if emos[5] > 0.5 else -1        # fear reflex -> buy bias
+        # ---- E19 SMART-MONEY DIVERGENCE — book vs crowd -----------------
+        signed[19] = squash(0.5 * (dbi + mpd) - 0.5 * signed[11], 0.8)
 
-        # ---- E6 ESI: endorphin session intensity -------------------------
-        p_min_floor = max(p_min60, open_ * 0.995)
-        p_max_sess = max(market.get("session_high", p_min_floor), live, p_min_floor)
-        pdi_sess = ((live - p_min_floor) / (p_max_sess - p_min_floor)
-                    if p_max_sess > p_min_floor else 0.5)
-        # brain->emotion hormone averaging: averaged serotonergic tone
-        # (complacency) modulates the session endorphin intensity
-        serotonin_brain = brain_res.get("hormones_avg", {}).get("serotonin", 0.5)
-        emos[6] = sig(10.0 * (pdi_sess - 0.5) + 3.0 * (serotonin_brain - 0.5))
-        dirs[6] = -sign(live - open_) if live != open_ else 0
-        # G-4: complacency (E6 session calm) is GATED by 1 − panic — it
-        # cannot show in a violent market: volume climax + vol expansion
-        # scale it down, so a crash never reads "calm session".
-        climax = (v5 / v30) if v30 > 0 else 1.0
-        vol_expand = (s1 / s30) if s30 > 0 else 1.0
-        violence = max(0.0, min(1.0,
-                               0.5 * max(0.0, climax - 1.0)
-                               + 0.5 * max(0.0, vol_expand - 1.0)))
-        emos[6] *= (1.0 - 0.85 * violence)          # gated by 1 − PANIC
+        # ---- E20 NEWS FOMO — asymmetric news polarity impulse -----------
+        signed[20] = squash(news_pol * 2.0, 0.7)
 
-        # ---- E7 DPI: dopamine / smart money buying -----------------------
-        dopamine_brain = brain_res.get("hormones_avg", {}).get("dopamine", 0.0)
-        dpi_raw = (v10_30 - 1.0) + r30 - 0.1        # excess volume + move - 0.1
-        # brain->emotion hormone averaging: averaged dopaminergic input
-        dpi_raw += 0.5 * (min(1.0, dopamine_brain) - 0.5)
-        emos[7] = sig(6.0 * dpi_raw)
-        dirs[7] = 1 if emos[7] > 0.5 else -1
+        # ---- E21 TREND EXHAUSTION — centred RSI-14, volume-attenuated ---
+        rsi_c = (_rsi(mc, 14) - 50.0) / 50.0
+        v_atten = _clamp((_ema(vols, 5) / (_ema(vols, 20) + 1e-9)) if vols else 1.0,
+                         0.5, 1.5)
+        signed[21] = squash(rsi_c * v_atten, 1.0)
 
-        # ---- E8 ATR_emotion: volume climax -------------------------------
-        prior = vols[:-1]
-        if prior:
-            max_prior = max(prior[-min(240, len(prior)):])
-            if max_prior > 0 and vols[-1] >= 2.0 * max_prior:
-                emos[8] = 1.0
-            else:
-                emos[8] = sig(4.0 * (vols[-1] / max_prior - 1.5)) if max_prior > 0 else 0.5
-        else:
-            emos[8] = 0.5
-        dirs[8] = 0                                 # magnitude channel
+        # ---- map the estimators onto the UI dial scale ------------------
+        for i in range(1, 22):
+            s = _clamp(signed.get(i, 0.0), -1.0, 1.0)
+            emos[i] = 0.5 + 0.5 * s
+            dirs[i] = 0 if abs(s) < 1e-4 else (1 if s > 0 else -1)
+        # E9 keeps its 0-BASED trauma magnitude (0 = no pain) because RTP,
+        # FDT and the risk layer consume it as a probability-like scalar
+        emos[9] = _clamp(pain, 0.0, 1.0)
+        dirs[9] = 1 if pain > 0.5 else -1
+        # E8 is a magnitude channel (volatility stress), never a side
+        dirs[8] = 0
 
-        # ---- E9 RTP: roll-over trauma / panic ----------------------------
-        negf = _neg_frac(mc, 10)
-        hit5 = hist.sl_hit_ratio_recent(ctx.symbol)
-        comps = [negf]
-        if len(hist.sl_hit_events.get(ctx.symbol, [])) >= 3:
-            comps.append(hit5)
-        emos[9] = sum(comps) / len(comps)
-        dirs[9] = 1 if emos[9] > 0.5 else -1         # pain -> contrarian buy
-
-        # ---- E10 ABS: absorption by smart money --------------------------
-        btc = market.get("btc_closes") or mc
-        r_btc20 = (btc[-1] / btc[-min(21, len(btc))] - 1.0) if len(btc) > 5 else 0.0
-        emos[10] = sig(2.0 * r_btc20)
-        if abs(r_btc20) > 0.01:
-            dirs[10] = 1
-        elif abs(r_btc20) < 0.001:
-            dirs[10] = 0
-        else:
-            dirs[10] = -sign(r_btc20)
-
-        # ---- E11 HMC: herd / mirror co-movement --------------------------
-        peer = market.get("peer_returns") or []
-        agreements = []
-        for row in peer[-10:]:
-            if len(row) >= 2:
-                same = 0
-                total = 0
-                for a in range(len(row)):
-                    for b in range(a + 1, len(row)):
-                        if row[a] == 0 or row[b] == 0:
-                            continue
-                        total += 1
-                        if (row[a] > 0) == (row[b] > 0):
-                            same += 1
-                if total:
-                    agreements.append(same / total)
-        agree_ratio = sum(agreements) / len(agreements) if agreements else 0.5
-        emos[11] = sig(6.0 * (agree_ratio - 0.5))
-        if emos[11] > 0.9:
-            dirs[11] = -trend10
-        else:
-            dirs[11] = trend10
-
-        # ---- E12 DRD: daily range deviation ------------------------------
-        emos[12] = min(1.0, abs(r30))
-        dirs[12] = -1 if r30 > 0 else (1 if r30 < 0 else 0)   # spec: overbought/oversold
-
-        # ---- E13 ERI: extreme reversal index -----------------------------
-        rts = [(cl[i] - cl[i - 1]) / cl[i - 1] for i in range(1, len(cl))] if len(cl) > 2 else []
-        flips = sum(1 for i in range(1, len(rts))
-                    if rts[i] * rts[i - 1] < 0 and rts[i] != 0)
-        run_len = 0
-        for r in reversed(rts):
-            if r == 0 or (rts[-1] and r * rts[-1] > 0):
-                run_len += 1
-            else:
-                break
-        # long-run interruptions: sign flips after runs of >= 3
-        interruptions = 0
-        cur_run = 1
-        for i in range(1, len(rts)):
-            if rts[i] * rts[i - 1] > 0:
-                cur_run += 1
-            else:
-                if cur_run >= 3:
-                    interruptions += 1
-                cur_run = 1
-        abs_rts = [abs(r) for r in rts]
-        last_abs = abs_rts[-1] if abs_rts else 0.0
-        ordered = sorted(abs_rts, reverse=True)
-        rank = (ordered.index(last_abs) + 1) if last_abs in ordered else len(ordered)
-        top5_val = max(0.0, 1.0 - (rank - 1) / 5.0) if ordered else 0.0
-        extreme_count = sum(1 for r in abs_rts if s1 > 1e-12 and r > 3 * s1)
-        r_win = cl[-1] / cl[0] - 1.0 if cl[0] else 0.0
-        flags = [
-            (0.4537, (flips - 2) / 2.0),                 # major reversal >= 2
-            (0.1007, (interruptions - 1) / 1.0),         # interruption >= 1
-            (0.1734, (top5_val - 0.6) / 0.4),            # within top-5 move
-            (0.1734, (run_len - 10) / 5.0),              # stall >= 10 min
-            (0.0641, (extreme_count - 3) / 1.5),         # extremes >= 3
-            (0.0346, (abs(r_win) - 0.3) / 0.15),         # distance >= 30%
-        ]
-        wsum = sum(w for w, _ in flags)
-        emos[13] = sum(w * sig(2.0 * v) for w, v in flags) / wsum
-        dirs[13] = -sign(trend_w) if emos[13] >= 0.3 else 0
-
-        # ---- E14 OFS: optimism / fear sentiment --------------------------
-        if len(cl) > 1:
-            emos[14] = sum(1 for i in range(1, len(cl)) if cl[i] > cl[i - 1]) / (len(cl) - 1)
-        else:
-            emos[14] = 0.5
-        dirs[14] = 1 if emos[14] > 0.5 else -1
-
-        # ---- E15 IAF: intent / action fraction ---------------------------
-        intent = (v5 / vall) if vall > 0 else 1.0
-        emos[15] = _clamp(intent - 0.5, 0.0, 1.0)
-        dirs[15] = sign(cl[-1] - cl[0]) if cl[0] else 0   # TPDI fallback
-
-        # ---- E16 LAI: lead / announce impulse ----------------------------
-        vel = (rets[-1] / s1) if (rets and s1 > 1e-12) else 0.0
-        emos[16] = sig(3.0 * vel + 10.0 * (pdi_sess - 0.65))
-        dirs[16] = 1 if emos[5] >= 0.7 else -1         # spec: CD >= 0.7 -> +1
-
-        # ---- E17 CDP: crowd-directional pull -----------------------------
-        pol = news_agg.get("polarity", 0)
-        count = news_agg.get("count", 0)
-        emos[17] = sig(6.0 * pol) if count else 0.5
-        if not count:
-            dirs[17] = 0
-        else:
-            dirs[17] = 1 if pol > 0 else (-1 if pol < 0 else 0)
-
-        # ---- E18 HTI: honeymoon trend inversion --------------------------
-        pidx_ring = hist.ring(hist.tf_key(ctx.symbol, ctx.tf, "pidx"), HIST_EMOTION_LAG)
-        lo30 = min(mc[-min(30, len(mc)):])
-        hi30 = max(mc[-min(30, len(mc)):])
-        idx_now = ((live - lo30) / (hi30 - lo30)) if hi30 > lo30 else 0.5
-        idx_lag = _lag_value(pidx_ring)
-        delta = (idx_now - idx_lag) if idx_lag is not None else 0.0
-        emos[18] = min(1.0, abs(delta) * 4.0)
-        dirs[18] = -sign(delta) if abs(delta) > 0.02 else 0
-
-        # ---- E19 SMDM: smart-money divergence ----------------------------
-        cmp_div = market.get("cmp_divergence", 0.0)   # Part-3 seam (orderflow)
-        hmc = emos[11]
-        emos[19] = sig(6.0 * ((1.0 - hmc) * cmp_div - 0.5))
-        dirs[19] = 1 if emos[19] > 0.5 else -1         # spec: sign(E-0.5)
-
-        # ---- E20 NMS: news / momentum surge ------------------------------
-        pol_now = emos[17] * (1 if pol >= 0 else -1)
-        nsp_ring = hist.ring(hist.tf_key(ctx.symbol, ctx.tf, "nsp"), HIST_EMOTION_LAG)
-        pol_lag_v = _lag_value(nsp_ring)
-        pol_lag = pol_lag_v if pol_lag_v is not None else 0.5
-        accel = pol_now - pol_lag
-        corr = market.get("news_price_corr", 0.0)      # Part-3 seam
-        emos[20] = sig(6.0 * (accel + max(0.0, corr)))
-        dirs[20] = trend10 if emos[20] > 0.6 else 0    # spec: >0.6 else 0
-
-        # ---- E21 TEDR: trend exhaustion decay ratio ----------------------
-        d1 = mc[-1] - mc[-6] if len(mc) > 6 else 0.0
-        d2 = mc[-6] - mc[-11] if len(mc) > 11 else 0.0
-        denom = abs(d2) + abs(d1)
-        decay = (abs(d2) - abs(d1)) / denom if denom > 1e-12 else 0.0
-        emos[21] = sig(6.0 * decay)                    # decelerating momentum
-        dirs[21] = -sign(trend10) if emos[21] > 0.6 else 0
-
-        # ---- E22 CERC: weighted composite --------------------------------
+        # ---- E22 CERC: precision-weighted signed composite --------------
+        # guide §2: cerc = sum(w_i * E_i) / sum(w_i) over the SIGNED
+        # estimators. Publishing it as the weighted mean (not a 0..1 dial
+        # average) is what makes the banner text agree with the dials:
+        # "bears in control" now really means cerc < 0.
         w = self._weights(ctx.symbol, ctx.tf)
+        wsum = sum(w) or 1.0
         cerc = 0.0
         for i, eid in enumerate(EMO_IDS):
-            term = w[i] * emos[eid] * dirs[eid]
+            term = w[i] * _clamp(signed.get(eid, 0.0), -1.0, 1.0)
             if eid == 21:
-                term *= (1.0 - 0.5 * emos[21])         # TEDR participation mult
+                term *= (1.0 - 0.5 * emos[21])   # TEDR participation multiplier
             cerc += term
+        cerc = _clamp(cerc / wsum, -1.0, 1.0)
+
+        # ---- shared feature bundle for the lag rings / UI trace ---------
+        streak = int(run)
+        lo30 = min(mc[-30:]) if len(mc) >= 30 else (min(mc) if mc else px)
+        hi30 = max(mc[-30:]) if len(mc) >= 30 else (max(mc) if mc else px)
+        idx_now = _clamp((px - lo30) / (hi30 - lo30), 0.0, 1.0) if hi30 > lo30 else 0.5
+        climax = (v5 / v30) if v30 > 0 else 1.0
+        vol_expand = (s1 / s30) if s30 > 0 else 1.0
+        violence = max(0.0, min(1.0, 0.5 * max(0.0, climax - 1.0)
+                                + 0.5 * max(0.0, vol_expand - 1.0)))
+        pdi_sess = idx_now
+        serotonin_brain = brain_res.get("hormones_avg", {}).get("serotonin", 0.5)
+        dpi_raw = signed.get(7, 0.0)
+        octo_raw = signed.get(5, 0.0)
+        volchg = (vols[-1] / v10) if (vols and v10 > 0) else 1.0
+        pol = 1 if news_pol > 0 else (-1 if news_pol < 0 else 0)
+        count = news_count
 
         # GRC-lag rings (written by engine when record=True)
         lag_rings = {
@@ -484,14 +548,36 @@ class EmotionSystem:
         # its neutral is 0, not 0.5. Ranking it by |v-0.5| made it
         # "100% extreme" in every up-tape for days (user screenshot).
         _NEUTRAL = {9: 0.0}
-        def _dev_of(i):
+
+        def _signed(i):
+            """Signed, neutral-relative position in [-1, +1] — THE number
+            the E1–E22 dials print. Audit §5.2: the banner ranked by
+            |v − 0.5| while the dials printed (v − 0.5)·2, so a channel
+            sitting at a dead 0.0 scored a full 100 % "extreme" and won
+            the crown with nothing on the tape (E18 100 % vs +0.00)."""
             _n = _NEUTRAL.get(i, 0.5)
-            return abs(float(emos[i]) - _n) / (1.0 - _n if _n == 0 else 0.5)
+            _v = float(emos.get(i, _n))
+            if _n == 0.0:
+                return -_v                      # 0-based magnitude → bearish
+            return 2.0 * (_v - _n)
+
+        def _dev_of(i):
+            return abs(_signed(i))
+
+        # A DEAD ZERO is an absent measurement, not an extreme: if the
+        # channel computed to exactly 0.0 (and carries a zero-reason) it
+        # is neutral for ranking purposes and can never be "dominant".
+        _live = [i for i in range(1, 22) if i in emos
+                 and not (float(emos.get(i, 0.0)) == 0.0
+                          and str(i) in zero_reasons)]
+        if len(_live) < 2:
+            _live = [i for i in range(1, 22) if i in emos] or list(range(1, 22))
         _ranked = sorted(
             ((_dev_of(i),
-              abs(float(emos[i]) - float(_prev.get(i, emos[i]))),
+              abs(float(emos.get(i, 0.5))
+                  - float(_prev.get(i, emos.get(i, 0.5)))),
               float(_w[i - 1]), i)
-             for i in range(1, 22)),
+             for i in _live),
             key=lambda t: (round(t[0], 3), t[1], t[2]), reverse=True)
         _dev, _dlt, _wv, _dom_id = _ranked[0]
         # when several channels are pegged at the same extreme and
@@ -509,6 +595,9 @@ class EmotionSystem:
         dominant = {
             "id": int(_dom_id),
             "value": round(float(emos[_dom_id]), 5),
+            # the signed dial reading of the crowned channel — the banner
+            # and the E-card now quote the SAME number (audit §5.2)
+            "signed": round(_signed(_dom_id), 4),
             "intensity": round(_dev, 4),          # 0 = neutral, 1 = extreme
             "moved": round(_dlt, 5),
             "held_s": round(_held, 1),
@@ -519,10 +608,18 @@ class EmotionSystem:
         return {
             "dominant": dominant,
             "emotions": {k: round(v, 5) for k, v in emos.items()},
+            # the signed dial values the UI must render, so "DOMINANT NOW"
+            # and the E1–E22 grid are guaranteed to agree (audit §5.2)
+            "signed": {i: round(_signed(i), 5) for i in sorted(emos)},
+            "neutral": {i: _NEUTRAL.get(i, 0.5) for i in sorted(emos)},
             "zero_reasons": zero_reasons,
             "zero_causes": _causes(zero_reasons),
             "directions": dirs,
+            # E22 CERC — the signed net mood and its dial equivalent.
+            # `emotions` stays E1..E21 (the composite is not one of its
+            # own inputs); the E22 card reads `cerc` / `cerc_dial`.
             "cerc": round(cerc, 5),
+            "cerc_dial": round(_clamp(0.5 + 0.5 * cerc, 0.0, 1.0), 5),
             "rtp": emos[9],
             "tedr": emos[21],
             "prev_cerc": prev_cerc,
