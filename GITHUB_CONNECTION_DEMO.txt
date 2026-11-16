@@ -1,0 +1,3 @@
+GitHub connection demo
+
+This file was created by an Arena.ai agent and pushed to this branch as a connection test.
