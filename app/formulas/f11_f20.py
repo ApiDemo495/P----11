@@ -335,7 +335,12 @@ def current_streak(ctx) -> tuple[int, int, float]:
     W_eff = ctx.W_eff
     if W_eff < 8:
         return 0, 0, 0.0
-    r = pct_returns(ctx.P[-(W_eff + 1):])
+    # STREAK LOOKBACK (guide §3.2): the streak was cut at the window edge,
+    # so a run longer than W_eff reported N = W_eff and a run just outside
+    # the window reported N = 0 → F18 froze at 0.00. Search the trailing
+    # 30 bars instead (a documented, bounded lookback).
+    span = min(max(W_eff, 8), 30)
+    r = pct_returns(ctx.P[-(span + 1):])
     if not r:
         return 0, 0, 0.0
     streak_sign = sign(r[-1])
@@ -359,12 +364,27 @@ def current_streak(ctx) -> tuple[int, int, float]:
 
 def f18_ccmdr(ctx) -> float:
     streak_sign, N, lam_current = current_streak(ctx)
-    if N < 3:
-        return 0.0
-    lam_critical = ctx.hist.lambda_critical(ctx.symbol, N)
+    lam_critical = ctx.hist.lambda_critical(ctx.symbol, N) if N >= 3 else None
     if lam_critical is None:
         lam_critical = 0.15                  # early-session default per spec
-    return safe_tanh((lam_current - lam_critical) / (abs(lam_critical) + EPS))
+    if N >= 3:
+        return safe_tanh((lam_current - lam_critical)
+                         / (abs(lam_critical) + EPS))
+    # STREAK SHORTFALL FIX: with N < 3 the decay slope was never computed
+    # and F18 returned a flat 0.00 even though the last 30 bars carry a
+    # perfectly measurable magnitude-decay rate. Fall back to that rate
+    # against the same critical value, scaled by the streak participation
+    # N/3 so a 1-bar blip cannot shout as loudly as a 3-bar run.
+    span = min(max(ctx.W_eff, 8), 30)
+    mags = [abs(v) for v in pct_returns(ctx.P[-(span + 1):])][-(min(span, 12)):]
+    if len(mags) < 3:
+        return 0.0
+    b_est = min(mags) * 0.5
+    xs = [float(i) for i in range(1, len(mags) + 1)]
+    ys = [math.log(max(c - b_est, 1e-12)) for c in mags]
+    lam = -linear_slope(xs, ys)
+    part = N / 3.0 if N else 1.0 / 3.0
+    return safe_tanh(((lam - lam_critical) / (abs(lam_critical) + EPS)) * part)
 
 
 # =============================================================================
@@ -422,8 +442,23 @@ def f19_pmtl(ctx) -> float:
         lag_sign = sign(best_ccf)
         confidence = abs(best_ccf)
         w = 1.0 / (best_lag + 1)
-        r_a_lagged = ra[best_lag]            # other's return `optimal_lag` ago
-        num_total += lag_sign * confidence * r_a_lagged * w
+        # Z-SCORE PAIR (guide §3.2): the raw-return product mixed units with
+        # the target's own scale, so F19 read 0.00 on quiet tapes and
+        # slammed to ±1 on one volatile bar. Both legs are standardised
+        # against their own windows, and the reading is the lead MINUS the
+        # self term, squashed — a transfer, not a self-fulfilling echo.
+        def _z(seq, i):
+            vals = [v for v in seq[:n] if math.isfinite(v)]
+            if len(vals) < 3:
+                return 0.0
+            mu = sum(vals) / len(vals)
+            sd = math.sqrt(sum((v - mu) ** 2 for v in vals) / len(vals))
+            if sd <= EPS:
+                return 0.0
+            return (seq[i] - mu) / sd
+        z_lead = _z(ra, min(best_lag, n - 1))
+        z_self = _z(rt, 0)
+        num_total += lag_sign * confidence * (z_lead - z_self) * w
         w_total += w
 
     if w_total <= EPS:

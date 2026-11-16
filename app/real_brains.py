@@ -73,10 +73,34 @@ class RealCircuit:
             self.states[key] = st
         return st
 
+    def two_hop(self) -> sparse.csr_matrix:
+        """W_2hop = row-normalised A² (guide §6.1).
+
+        The recurrence used to re-apply the 1-hop matrix twice, which is
+        NOT a 2-hop traversal — paths of length 2 were never formed. The
+        squared operator is built lazily, row-normalised the same way as
+        A, and cached; if the induced subgraph is dense enough that A²
+        explodes past the budget the 1-hop matrix is returned instead
+        (documented, never silent)."""
+        m = getattr(self, "_w2", None)
+        if m is not None:
+            return m
+        A2 = (self.A @ self.A).tocsr()
+        if A2.nnz > 6_000_000:
+            m = self.A
+        else:
+            rows = np.asarray(np.abs(A2).sum(axis=1)).ravel()
+            scale = np.where(rows > 1.0, 1.0 / np.maximum(rows, 1e-9), 1.0)
+            m = (sparse.diags(scale) @ A2).tocsr()
+        self._w2 = m
+        self.w2_edges = int(m.nnz)
+        return m
+
     def sweep(self, x: np.ndarray, inp: np.ndarray,
               steps: int = 2) -> np.ndarray:
-        for _ in range(max(1, steps)):
-            x = np.tanh(self.A @ x + inp)
+        for i in range(max(1, steps)):
+            W = self.A if i == 0 else self.two_hop()
+            x = np.tanh(W @ x + inp)
         return x
 
     def act(self, x: np.ndarray, name: str) -> float:
@@ -209,7 +233,11 @@ class RealBrains:
             signal = math.tanh(2.0 * (app - avo) / (abs(app) + abs(avo)
                                                     + 1e-9))
             mb = c.groups["mbon"]
-            extra = {"pattern": signal,
+            # §6.2 the PATTERN cell must MOVE with the circuit: it is the
+            # magnitude of the live specialty vote (the sign lives on
+            # h_signal), never a frozen 0.00.
+            extra = {"pattern": abs(signal),
+                     "pattern_signed": signal,
                      "experience": 0.5,
                      "state_dist": None,
                      # legacy B1 valence hook consumes 12 pattern
@@ -221,7 +249,8 @@ class RealBrains:
             neg = c.act(x, "lh_neg")
             exp = (pos + 1.0) / ((pos + 1.0) + (neg + 1.0) + 1e-9)
             signal = (exp - 0.5) * 2.0
-            extra = {"pattern": 0.0, "experience": round(exp, 5),
+            extra = {"pattern": abs(signal), "pattern_signed": signal,
+                     "experience": round(exp, 5),
                      "state_dist": None}
         elif bid == "DB-3":
             from .config import BRAIN_MARKET_STATES
@@ -234,7 +263,8 @@ class RealBrains:
             dom = int(np.argmax(dist))
             signal = _STATE_DIR.get(BRAIN_MARKET_STATES[dom], 0) \
                 * dist[dom]
-            extra = {"pattern": 0.0, "experience": 0.5,
+            extra = {"pattern": abs(signal), "pattern_signed": signal,
+                     "experience": 0.5,
                      "state_dist": {BRAIN_MARKET_STATES[i]:
                                     round(dist[i], 4) for i in range(5)},
                      "dominant": BRAIN_MARKET_STATES[dom],
@@ -251,7 +281,8 @@ class RealBrains:
                                   if len(b) else 0.0, 5)
             signal = math.tanh(4.0 * (sum(wadj.values())
                                       / max(1, len(wadj))))
-            extra = {"pattern": 0.0, "experience": 0.5,
+            extra = {"pattern": abs(signal), "pattern_signed": signal,
+                     "experience": 0.5,
                      "state_dist": None, "weight_adj": wadj}
 
         hormones = {
@@ -265,6 +296,12 @@ class RealBrains:
             if "dn" in c.groups else 0.5,
         }
         extra.setdefault("pattern_act", [])
+        # §6.2 p_dominant = max(DOPA, SERO, OCTO, TYRA) for DB1/DB2/DB4;
+        # DB-3 keeps the CX state posterior it already published.
+        if not extra.get("state_dist"):
+            extra["p_dominant"] = round(max(hormones.values()), 5)
+        extra["dominant"] = (extra.get("dominant")
+                             or max(hormones, key=lambda k: hormones[k]))
         return {"id": bid, "role": c.role,
                 "signal": round(max(-1.0, min(1.0, float(signal))), 5),
                 "h_signal": round(max(-1.0, min(1.0, float(signal))), 5),
@@ -274,7 +311,13 @@ class RealBrains:
                 **extra}
 
     def summary(self) -> dict:
+        # §6.1: the census figure is DERIVED from the live connectome
+        # (sum of per-circuit nnz) and cached — never a hardcoded
+        # 15,091,983 that drifts away from the graph it describes.
+        total_syn = int(sum(c.edges for c in self.circuits.values()))
+        self.total_synapses = total_syn
         return {"backend": "flywire-v783-real",
+                "total_synapses": total_syn,
                 "built_ms": self.built_ms,
                 "circuits": {k: {"neurons": c.n, "synapses": c.edges,
                                  "role": c.role}

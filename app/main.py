@@ -188,6 +188,14 @@ async def _startup() -> None:
     global _learning_task
     _learning_task = asyncio.create_task(_hourly_learning_loop())
     asyncio.create_task(_startup_watchdog())
+    # guide §8: bring the LOCAL agent up at boot — probe the daemon,
+    # spawn `ollama serve` detached, kick the prebuilt wheel install and
+    # refresh the status. Daemon thread: the event loop never waits.
+    try:
+        from .agents import start_boot_worker
+        start_boot_worker(getattr(engine, "agents", None))
+    except Exception as _exc:                    # pragma: no cover
+        print(f"agent boot worker skipped: {_exc}")
     from .chartlink import LinkWatchdog as _LW
     app.state.link_watchdog = _LW(feed, SYMBOL_ORDER)
     app.state.link_watchdog.start()
@@ -731,6 +739,44 @@ def _candle_history_revision(bars: list[dict], *, mode: str = "",
     return hashlib.sha256(payload).hexdigest()[:20]
 
 
+@app.get("/api/genesis/walkforward")
+async def genesis_walkforward(symbol: str = "BTC", horizon: int = 22) -> JSONResponse:
+    """guide §3.4 — replay the 1-minute tape through the pool and score it
+    strictly out-of-sample (60 % IS / 40 % OOS)."""
+    if symbol not in SYMBOLS:
+        return JSONResponse({"ok": False, "error": "unknown symbol"},
+                            status_code=400)
+    try:
+        bars = engine._bars_1m(symbol)
+        rep = engine.genesis.evaluate_pool_walkforward(
+            bars, horizon=max(2, min(240, int(horizon))))
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": repr(exc)}, status_code=500)
+    return JSONResponse({"ok": True, "symbol": symbol, **rep})
+
+
+@app.get("/api/tf-charts")
+async def tf_charts(symbol: str = "BTC") -> JSONResponse:
+    """guide §1 — all four mini-chart series in one payload.
+
+    Each TF carries its own step, lookback, revision and epoch, so a card
+    binds to the series the server publishes instead of re-aggregating a
+    tf1 tape with its own private window."""
+    if symbol not in SYMBOLS:
+        return JSONResponse({"ok": False, "error": "unknown symbol"},
+                            status_code=400)
+    try:
+        charts = engine.tf_charts(symbol)
+    except Exception as exc:                     # never break the chart
+        return JSONResponse({"ok": False, "error": repr(exc)},
+                            status_code=500)
+    return JSONResponse({
+        "ok": True, "symbol": symbol, "charts": charts,
+        "epochs": (getattr(engine, "epoch_start_tf", {}) or {}).get(symbol, {}),
+        "server_time": int(time.time()),
+    })
+
+
 @app.get("/api/candles")
 async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONResponse:
     """OHLC bars (incl. the live partial minute), capped at 1000 source
@@ -933,6 +979,35 @@ async def learning_reset() -> JSONResponse:
 @app.get("/api/history/days")
 async def history_days() -> JSONResponse:
     return JSONResponse({"ok": True, "days": engine.historydb.days()})
+
+
+@app.get("/api/history")
+async def history_console() -> JSONResponse:
+    """guide §7.5 — the HX HISTORY console in one payload: ledger totals,
+    the 41-subject hindsight grade, the ten-module advanced scoreboard and
+    the 448-row meta grid."""
+    from .advanced import scoreboard
+    payload: dict = {"ok": True}
+    try:
+        payload["ledger"] = engine.ledger.api_payload(SYMBOL_ORDER, TF_ORDER)
+    except Exception as exc:
+        payload["ledger"] = {"error": repr(exc)}
+    try:
+        payload["hindsight"] = getattr(engine, "hindsight", None) or \
+            engine.ledger.hindsight_regrade()
+    except Exception as exc:
+        payload["hindsight"] = {"error": repr(exc)}
+    try:
+        payload["advanced"] = scoreboard(engine, SYMBOL_ORDER, TF_ORDER)
+    except Exception as exc:
+        payload["advanced"] = {"error": repr(exc)}
+    try:
+        from .meta import meta_payload
+        payload["meta"] = meta_payload(engine)
+    except Exception as exc:
+        payload["meta"] = {"error": repr(exc)}
+    payload["rows"] = sum(len(v) for v in engine.ledger.rows.values())
+    return JSONResponse(payload)
 
 
 @app.get("/api/history/advanced")

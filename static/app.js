@@ -369,16 +369,24 @@ function resetOwnChartForSymbol(symbol) {
   inst.forecastLabel.title = inst.forecastLabel.textContent;
   inst.stale.textContent = `loading ${symbol} candles…`;
 }
-function levelAutoscaleProvider(values) {
+/* TP/SL price lines must never flatten the candles. The old provider
+   widened the axis to contain EVERY level, so a stop 1.9 % away squashed
+   a 0.05 % intrabar range into one flat horizontal squiggle (audit §3.3).
+   The candle range keeps at least 75 % of the visible height: a level may
+   expand the axis by at most `maxExpand` (25 %) of the candle span, and a
+   level beyond that is clipped off-scale (LWC keeps its axis tag). */
+function levelAutoscaleProvider(values, maxExpand = 0.25) {
   return original => {
     const base = original?.();
     if (!base?.priceRange) return base;
     const finite = (values || []).filter(Number.isFinite);
     if (!finite.length) return base;
-    return { ...base, priceRange: {
-      minValue: Math.min(base.priceRange.minValue, ...finite),
-      maxValue: Math.max(base.priceRange.maxValue, ...finite),
-    }};
+    const lo0 = base.priceRange.minValue, hi0 = base.priceRange.maxValue;
+    const span = Math.max(1e-9, hi0 - lo0);
+    const pad = span * Math.max(0, maxExpand);
+    const lo = Math.min(lo0, Math.max(Math.min(...finite), lo0 - pad));
+    const hi = Math.max(hi0, Math.min(Math.max(...finite), hi0 + pad));
+    return { ...base, priceRange: { minValue: lo, maxValue: hi } };
   };
 }
 function ownMake(el) {
@@ -801,7 +809,7 @@ function renderBranches() {
     <div class="kv"><span>calibration (graded forecasts)</span><b>${S.snap?.prob_audit?.n ? `Δ ${S.snap.prob_audit.calibration_delta > 0 ? "+" : ""}${Math.round((S.snap.prob_audit.calibration_delta || 0) * 100)} pts · Brier raw ${S.snap.prob_audit.brier ?? "—"}${S.snap.prob_audit.brier_cal != null ? ` vs cal ${S.snap.prob_audit.brier_cal}` : ""} · n=${S.snap.prob_audit.n}` : "collecting — active after 30 graded windows"}</b></div>
     <div class="kv"><span>P(stop first)</span><b class="acc-dn">${_pct(b.p_stop)}</b></div>
     <div class="kv"><span>P(target | similar setups)</span><b class="acc-up">${b.p_target_cond != null ? `${_pct(b.p_target_cond)} <span class="dim" style="font-size:9px">n=${b.n_cond} · EV ${b.ev_bps_cond > 0 ? "+" : ""}${fmt(b.ev_bps_cond, 1)} bp</span>` : `<span class="dim">collecting (n=${b.n_cond || 0}/30 matched)</span>`}</b></div>
-    <div class="kv"><span>fan basis</span><b>${esc(b.fan_basis || "all windows")}</b></div>
+    <div class="kv"><span>fan basis</span><b>${esc(b.fan_basis || "all windows")}${b.drift_bps != null ? ` · q50 ${b.drift_bps >= 0 ? "+" : ""}${fmt(b.drift_bps, 1)} bp <span class="${b.fan_drift === "against" ? "acc-dn" : b.fan_drift === "with" ? "acc-up" : "dim"}">(${esc(b.fan_drift || "—")})</span>` : ""}</b></div>
     <div class="kv"><span>P(close between)</span><b>${_pct(b.p_between)}</b></div>
     <div class="kv"><span>P(close down)</span><b>${Math.round(b.p_close_down * 100)}%</b></div>
     <div class="kv"><span>σ (remaining)</span><b>${px(b.sigma)}</b></div>
@@ -816,8 +824,17 @@ function renderBranches() {
   // ---- probability bar: the answer in one glance ----
   const bar = $("#branch-bar");
   if (bar) {
-    const pt = Math.round((b.p_target_cond ?? b.p_target) * 100),
-          ps = Math.round(b.p_stop * 100), pb = Math.max(0, 100 - pt - ps);
+    // ONE measured triple per bar (audit §4.1). The old bar mixed the
+    // CONDITIONAL P(target) with the UNCONDITIONAL P(stop) and filled the
+    // remainder as "neither", so the segments printed 11 + 76 + 19 = 106 %
+    // next to cards reading 11 / 19 / 69. p_target + p_stop + p_between is
+    // 1.000 by construction; the conditional number lives in its own card.
+    const _ptv = Number(b.p_target) || 0, _psv = Number(b.p_stop) || 0;
+    const _pbv = Number.isFinite(b.p_between) ? Number(b.p_between)
+                                              : Math.max(0, 1 - _ptv - _psv);
+    const _tot = _ptv + _psv + _pbv || 1;
+    const pt = Math.round(_ptv / _tot * 100),
+          ps = Math.round(_psv / _tot * 100), pb = Math.max(0, 100 - pt - ps);
     const seg = (v, color, label) => v > 0 ? `<div style="flex:${v};background:${color};color:#0b0b14;font:700 10px ui-monospace,monospace;text-align:center;padding:4px 0;white-space:nowrap;overflow:hidden">${label} ${v}%</div>` : "";
     bar.innerHTML = `<div style="display:flex;border-radius:6px;overflow:hidden;gap:1px">
       ${seg(pt, "#26a69a", "TARGET FIRST")}${seg(pb, "#3a3f55", "NEITHER")}${seg(ps, "#ef5350", "STOP FIRST")}</div>
@@ -1023,6 +1040,16 @@ function renderHero() {
   const res = S.snap?.systems?.[`${S.symbol}|${tf}`] || {};
   const m = TF_META[tf];
   const dir = cyc?.direction ?? res.direction ?? 0;
+  // Backend now always publishes a card (provisional when no cycle is
+  // locked yet); these fallbacks keep the hero honest even mid-boot.
+  const issued = cyc?.issued ?? res.issued ?? false;
+  // ISSUED means "cleared the issue floor" — the analysis and the card now
+  // read the same gate, so the hero can never advertise a call the recheck
+  // rejects.
+  const gateOk = cyc?.gate_ok ?? res.gate_ok ?? issued;
+  const prov = !!cyc?.provisional;
+  const heroEntry = cyc?.entry ?? res.entry ?? res.lock?.price ?? null;
+  const heroSl = cyc?.sl ?? res.sl ?? null;
   const weak = String(res?.ladder?.source || "").includes("inside noise floor")
     || Number(res?.confidence ?? 0) < 0.05;
   const ttl = $("#hero-title");
@@ -1039,19 +1066,23 @@ function renderHero() {
   if (stats) {
     stats.innerHTML = `
       <div class="kv"><span>call</span><b class="${dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat"}">${dir > 0 ? "▲ BULL" : dir < 0 ? "▼ BEAR" : "● FLAT"}${weak && dir ? "*" : ""}</b></div>
-      <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} ${cyc?.issued ? "· ISSUED" : "· below floor"}</b></div>
+      <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} ${gateOk ? (prov ? "· PREVIEW" : "· ISSUED") : "· below floor"}${res.issue_note ? ` <span class="dim" style="font-size:9px">${esc(res.issue_note)}</span>` : ""}</b></div>
       <div class="kv"><span>strength (voter agreement)</span><b>${fx(cyc?.strength ?? res.strength ?? 0, 2)}</b></div>
       <div class="kv"><span>measured win-rate (this conf)</span><b>${cyc?.winrate != null ? `${Math.round(cyc.winrate * 100)}% · n=${cyc.winrate_n}` : `collecting · n=${cyc?.winrate_n ?? 0}`}</b></div>
       ${cyc?.forecast?.price ? `<div class="kv"><span>${cyc.forecast.mode === "new" ? "🎯 FORECAST (target)" : "forecast if NEW"} ${cyc.forecast.minutes}m</span><b>${px(cyc.forecast.price)} (${cyc.forecast.move_bps} bp)</b></div>` : ""}
       <div class="kv"><span>cci adj</span><b>${fx(res.cci_adjusted ?? 0, 4)}</b></div>
       <div class="kv"><span>countdown</span><b>${cyc?.countdown_s != null ? `${Math.floor(cyc.countdown_s / 60)}m ${cyc.countdown_s % 60}s` : "—"}</b></div>
-      <div class="kv"><span>entry (locked contract)</span><b>${cyc?.entry ? px(cyc.entry) : (res.lock?.price ? px(res.lock.price) : "—")}</b></div>
+      <div class="kv"><span>${prov ? "entry (preview)" : "entry (locked contract)"}</span><b>${heroEntry ? px(heroEntry) : "—"}</b></div>
       <div class="kv"><span>price now</span><b>${a.price ? px(a.price) : "—"}</b></div>
-      <div class="kv"><span>stop loss</span><b class="acc-dn">${cyc?.sl ? px(cyc.sl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:9px">prov</span>' : ""}</b></div>
+      <div class="kv"><span>stop loss</span><b class="acc-dn">${heroSl ? px(heroSl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:9px">prov</span>' : ""}</b></div>
       <div class="kv"><span>TP:SL ratio</span><b>${cyc?.ratio ? Number(cyc.ratio).toFixed(2) + ":1" : "—"}</b></div>`;
   }
   // TP ladder — the TF's own horizon ALWAYS first (user rule)
-  const tg = cyc?.targets || [];
+  // provisional card / missing cycles: fall back to the measured preview
+  // rungs the analysis already published, so the ladder is never empty
+  const tg = (cyc?.targets && cyc.targets.length) ? cyc.targets
+    : ((res.tps || []).map(t => ({ k: t.k, minutes: t.minutes,
+        level: t.level, status: "preview" })));
   const order = tg.map((_, i) => i);
   if (tg.length >= 4) order.unshift(order.pop());   // [3,0,1,2]
   const strip = $("#subtf-strip");
@@ -1060,11 +1091,19 @@ function renderHero() {
       const t = tg[i];
       if (!t) return "";
       const isTf = i === tg.length - 1;
-      const st = t.status === "hit" ? "HIT ✓" : t.status === "locked" ? "LOCK 🔒" : "open";
-      const cls = t.status === "hit" ? "acc-up" : t.status === "locked" ? "acc-warn" : "dim";
+      // FROZEN RUNG FALLBACK (audit §1.2): the canonical contract carries
+      // the price of every rung from the moment the window locks, so a
+      // not-yet-tracked TP2/TP3 shows its frozen level instead of "— OPEN".
+      const _canon = cyc?.canonical || {};
+      const _lvl = (t.level != null) ? t.level : (_canon[`tp${i + 1}`] ?? null);
+      const _frozen = t.level == null && _lvl != null;
+      const st = t.status === "hit" ? "HIT ✓"
+        : t.status === "locked" ? "LOCK 🔒"
+        : _frozen ? "FROZEN ❄" : "open";
+      const cls = t.status === "hit" ? "acc-up" : (t.status === "locked" || _frozen) ? "acc-warn" : "dim";
       const _entry = cyc?.entry || res.lock?.price || a.price || 0;
-      const _rel = (t.level && _entry) ? ` <span class="dim">${((t.level / _entry - 1) * 100).toFixed(2)}% from entry</span>` : "";
-      return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${t.level ? px(t.level) : "—"} <span class="dim">${st}</span>${_rel}</b></div>`;
+      const _rel = (_lvl && _entry) ? ` <span class="dim">${((_lvl / _entry - 1) * 100).toFixed(2)}% from entry</span>` : "";
+      return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${_lvl ? px(_lvl) : "—"} <span class="dim">${st}</span>${_rel}</b></div>`;
     }).join("") || `<div class="dim pad">waiting for the first lock…</div>`;
   }
   const rn = $("#risk-note");
@@ -1094,15 +1133,21 @@ function renderHero() {
       lines.push({ price: mgi.nearest_dn.price, color: "#a855f7",
                    title: `LIQ↓ ${Math.round(mgi.nearest_dn.bps)}bp`, dash: true });
   }
+  const _canon = cyc?.canonical || {};
   order.forEach(i => {
     const t = tg[i];
-    if (!t || !t.level) return;
+    if (!t) return;
+    // frozen rung from the canonical contract when the target itself has
+    // no level yet (pending TP2/TP3) — one ladder, drawn everywhere
+    const lvl = (t.level != null) ? t.level : (_canon[`tp${i + 1}`] ?? null);
+    if (lvl == null) return;
     const isTf = i === tg.length - 1;
+    const frozen = t.level == null;
     lines.push({
-      price: t.level,
-      color: t.status === "hit" ? "#22c98a" : t.status === "locked" ? "#c9a227" : "#00d4f0",
-      title: isTf ? `TF${t.minutes}m` : `TP${i + 1}${t.status === "hit" ? " ✓" : t.status === "locked" ? " 🔒" : ""}`,
-      dash: t.status !== "locked",
+      price: lvl,
+      color: t.status === "hit" ? "#22c98a" : (t.status === "locked" || frozen) ? "#c9a227" : "#00d4f0",
+      title: isTf ? `TF${t.minutes}m` : `TP${i + 1}${t.status === "hit" ? " ✓" : (t.status === "locked" || frozen) ? " 🔒" : ""}`,
+      dash: t.status !== "locked" && !frozen,
     });
   });
   S.charts.hero?.setLines(S.showLines === false ? [] : lines);
@@ -1275,12 +1320,18 @@ function renderQuads(opts = {}) {
     if (qd) {
       qd.className = "q-dir " + (dir > 0 ? "up" : dir < 0 ? "down" : "flat");
       qd.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "▲ BULLISH"}
-        <span class="iss">${cyc?.tier ? `${cyc.tier} · P ${fmt(cyc.p_side, 2)} · s ${fmt(res?.raw_score, 3)} (floor ${fmt(res?.noise_floor_s, 3)})` : "ISSUED · targets active"}</span>`;
+        <span class="iss">${cyc?.provisional
+          ? "PREVIEW · no lock yet"
+          : cyc?.tier
+            ? `${cyc.tier} · P ${fmt(cyc.p_side, 2)} · s ${fmt(res?.raw_score, 3)} (floor ${fmt(res?.noise_floor_s, 3)})`
+            : (res?.gate_ok ? "ISSUED · targets active" : "below issue floor")}</span>`;
     }
     $("#qf-" + tf).textContent = res ? `CCI ${fmt(res.cci_adjusted, 4)} · conf ${fmt(res.confidence, 3)}` : "";
     const ag = res?.agent;
-    $("#qa-" + tf).textContent = ag && ag.source !== "none"
-      ? `AI ${ag.direction > 0 ? "+" : ag.direction < 0 ? "−" : "0"} (${ag.source})` : "AI —";
+    const _agMode = S.snap?.agents?.mode || S.snap?.agents?.active_slot || "";
+    $("#qa-" + tf).textContent = ag && ag.source && ag.source !== "none"
+      ? `AI ${ag.direction > 0 ? "+" : ag.direction < 0 ? "−" : "0"} (${ag.source})`
+      : (_agMode ? `AI ${_agMode} · no reply` : "AI — not configured");
     const tp = $("#qt-" + tf);
     if (tp) {
       const _qtg = cyc?.targets || [];
@@ -1534,9 +1585,17 @@ function renderRail() {
   // so the dashboard can never say "nothing" while the brain is green
   try {
     const fly = S.snap?.systems?.[`${S.symbol || "BTC"}|${S.focusTf || "tf1"}`]?.brain?.flywire;
-    const bc = fly?.chip
-      || (fly?.ready ? { kind: "ok", text: "FlyWire v783 · live" }
-        : { kind: "absent", text: "brain — " + (fly?.reason || "absent") });
+    // The connectome is ONE component: snapshot.brain is its live state.
+    // Reading only the per-TF display entry let a stale lane paint
+    // "brain offline — vote withheld" while the BRAIN tab showed ready.
+    const auth = S.snap?.brain;
+    const bc = (auth && auth.state)
+      ? (auth.chip
+          || (auth.ready ? { kind: "ok", text: "FlyWire v783 · live" }
+                        : { kind: "absent", text: "brain — " + (auth.state || "absent") }))
+      : (fly?.chip
+          || (fly?.ready ? { kind: "ok", text: "FlyWire v783 · live" }
+            : { kind: "absent", text: "brain — " + (fly?.reason || "absent") }));
     led("#led-brain", bc.kind === "ok", bc.kind === "build");
     if (bc.kind === "absent") led("#led-brain", false, false);
     const bchip = $("#brain-chip");
@@ -1896,6 +1955,12 @@ async function loadCandles() {
     // covers that without synthesising history. TP/lock overlays stay
     // per-TF below.
     const md = await api(`/api/candles?symbol=${symbol}&tf=tf1&n=1000`);
+    // guide §1: the SERVER publishes tf_charts[asset][tf] with one step and
+    // one lookback per timeframe. Cards bind to that series when it is
+    // available and fall back to local aggregation only if it is not, so
+    // two cards of the same TF can no longer disagree.
+    const tfc = await api(`/api/tf-charts?symbol=${symbol}`)
+      .catch(() => null);
     // Ignore an older response after a symbol switch or a newer refetch;
     // otherwise BTC bars can be written into another asset's chart state.
     if (seq !== S._candleLoadSeq || symbol !== S.symbol ||
@@ -1942,11 +2007,25 @@ async function loadCandles() {
       return [...out.values()];
     };
     await Promise.all(TF.map(async tf => {
-      const bars = agg(md.bars || [], QINT[tf] || 1);
-      const mapped = _cut(bars, tf).map(x =>
-        ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
+      const srv = (tfc && tfc.ok && tfc.charts) ? tfc.charts[tf] : null;
+      // a short server series (or a failed /api/tf-charts) must never
+      // blank the card: fall back to local aggregation instead
+      const useSrv = !!(srv && Array.isArray(srv.candles)
+                        && srv.candles.length >= 20);
+      const bars = useSrv ? srv.candles : agg(md.bars || [], QINT[tf] || 1);
+      const mapped = useSrv
+        ? srv.candles.map(x => ({ time: x.t, open: x.o, high: x.h,
+                                  low: x.l, close: x.c, v: x.v || 0,
+                                  ...(x.live ? { live: true } : {}) }))
+        : _cut(bars, tf).map(x =>
+            ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
       S.tfBars[tf] = mapped;
-      S.tfBarsRevision[tf] = historyRevision;
+      // each TF keeps its OWN revision and epoch — a tf4 card must not
+      // re-render because tf1 got a new minute
+      S.tfBarsRevision[tf] = useSrv ? String(srv.revision || historyRevision)
+                                    : historyRevision;
+      S.tfEpoch ||= {};
+      if (useSrv) S.tfEpoch[tf] = srv.candles[0].t;
       const c = S.charts[tf]; if (!c) return;
       if (!mapped.length) {
         c.setData([]);
@@ -2089,12 +2168,21 @@ async function loadFormulas() {
       const fwEl = $("#fl-forward");
       if (fwEl) {
         const rows = Object.keys(core).sort((a, b) => a - b).map(fid => {
+          // Every cell shows a real number (audit §6.1): Laplace-smoothed
+          // bucket posterior when this reading's bucket has samples, else
+          // the pooled per-(formula, asset, tf) posterior. A "°" marks a
+          // thin sample (n < 30) — the number is shown, never implied to
+          // be settled.
           const tds = ["tf1", "tf2", "tf3", "tf4"].map(tf => {
-            const cell = (fwd.buckets?.[`F${fid} ${S.symbol} ${tf}`] || [])
-              .find(b => Math.abs(b.bucket - (Math.max(-1, Math.min(1, core[fid])) )) < 0.26);
-            return cell && cell.settled
-              ? `<td title="bucket ${cell.bucket}, n=${cell.n}">${(cell.p_up * 100).toFixed(0)}%<span class="dim"> n${cell.n}</span></td>`
-              : `<td class="dim">—</td>`;
+            const key = `F${fid} ${S.symbol} ${tf}`;
+            const cell = (fwd.buckets?.[key] || [])
+              .find(b => Math.abs(b.bucket - (Math.max(-1, Math.min(1, core[fid])))) < 0.26);
+            const marg = fwd.marginal?.[key];
+            const p = (cell && cell.n) ? cell.p_up : (marg && marg.n ? marg.p_up : null);
+            const n = (cell && cell.n) ? cell.n : (marg?.n || 0);
+            const thin = !(cell && cell.settled);
+            if (p == null) return `<td class="dim">—</td>`;
+            return `<td title="${cell && cell.n ? `bucket ${cell.bucket}` : "pooled across buckets"} · n=${n}${thin ? " · thin (<30)" : ""}" class="${thin ? "dim" : ""}">${(p * 100).toFixed(0)}%<span class="dim"> n${n}${thin ? "°" : ""}</span></td>`;
           }).join("");
           const cur = (fv.raw?.[fid] ?? core[fid]);
           const tOn = contribs[fid] ? Math.abs(contribs[fid].contribution) >= 1e-5 : null;
@@ -2104,7 +2192,7 @@ async function loadFormulas() {
         fwEl.innerHTML = `<table class="fwd-table"><thead><tr><th>formula ✓/✗</th><th>now</th>
           <th>tf1 P(up)</th><th>tf2 P(up)</th><th>tf3 P(up)</th><th>tf4 P(up)</th></tr></thead>
           <tbody>${rows}</tbody></table>
-          <div class="hint">Forward P(up) is settled strict-sign from this ledger — n≥30 per bucket before it speaks (advice §2.7). Current value beside it: superposition (§2.8).</div>`;
+          <div class="hint">Forward P(up) = strict-sign settled result from this ledger, Laplace-smoothed (up+2)/(n+4) so every cell carries a number. <b>°</b> = thin sample (n&lt;30, pooled across buckets); unmarked = settled in this reading's own bucket (advice §2.7). Current value beside it: superposition (§2.8).</div>`;
       }
     } catch (e) { console.warn("forward/flat:", e); }
     // §7 genesis: pool counts, next generation, top formula + 7 metrics
@@ -2400,8 +2488,15 @@ async function loadNews() {
         `${x.backoff_level ? " L" + x.backoff_level : ""}` +
         `${x.dropped_429 ? " · 429×" + x.dropped_429 : ""}</b></div>`).join("");
       const ex = st.filtered_examples || [];
+      // §5.1 drop accounting: last window / cumulative / the reasons behind
+      // them. "0 dropped" while the ingest gate binned half the wire was
+      // the deceptive version of this line.
+      const reasons = Object.entries(st.dropped_reasons || {})
+        .map(([k, v]) => `${v}× ${k}`).slice(0, 3).join(" · ");
       $("#nw-dropped").textContent =
-        `${st.filtered || 0} dropped for no crypto relevance` +
+        `dropped ${st.last_dropped_count || 0} since last poll · ` +
+        `${st.total_dropped_count || 0} total` +
+        (reasons ? " — " + reasons : "") +
         (ex.length ? " — e.g. " + ex.map(h => `"${h}"`).join("; ") : "");
       const em = st.emergency_history || [];
       $("#nw-emerg").innerHTML = em.length
@@ -2424,15 +2519,37 @@ async function loadNews() {
           `${fmt(h.impact, 3)} <span class="dim">niv ${fmt(h.niv, 3)} smd ${fmt(h.smd, 3)}</span></b></div>`;
       }).join("");
       const h1 = hz.tf1;
-      if (h1 && h1.niv !== undefined) pushNiv(h1.niv);
+      const liveNiv = (d.live || {}).niv_live;
+      // SEED the 90 s trace from the server's ring: the chart used to start
+      // from a single sample, which renders as a dead flat line.
+      const ring = (d.live || {}).ring;
+      if (Array.isArray(ring) && ring.length > 1) {
+        NIV_HIST.length = 0;
+        ring.slice(-60).forEach(([t, v]) => {
+          const ts = Number(t) * (Number(t) < 1e12 ? 1000 : 1);
+          if (Number.isFinite(ts) && Number.isFinite(Number(v)))
+            NIV_HIST.push({ t: ts, v: Number(v) });
+        });
+        drawNiv();
+      }
+      if (liveNiv !== undefined) pushNiv(liveNiv);
+      else if (h1 && h1.niv !== undefined) pushNiv(h1.niv);
     } catch (e) { /* status optional */ }
     $("#nw-scope").textContent = `${S.symbol} · ${d.source || ""} · ${d.count ?? (d.items || []).length} items`;
     const cats = d.categories || {};
+    // §5.1 the AGGREGATE row is the horizon-weighted mean of the four TF
+    // impacts, so it can never contradict the rows directly above it.
+    const aggImp = d.aggregate_impact ?? d.aggregate ?? 0;
     $("#nw-agg").innerHTML = TF.map(tf => {
       const imp = (d.impacts || {})[tf];
       return `<div class="kv"><span>${tf.toUpperCase()} impact</span><b>${fmt(imp, 4)}</b></div>`;
-    }).join("") + `<div class="kv"><span>aggregate</span><b>${fmt(d.aggregate, 4)}</b></div>
-      <div class="kv"><span>polarity</span><b>${fmt(d.polarity, 3)}</b></div>`;
+    }).join("") +
+      `<div class="kv"><span>aggregate <span class="dim">h-weighted</span></span>` +
+      `<b style="color:${aggImp >= 0 ? "var(--green)" : "var(--red)"}">${fmt(aggImp, 4)}</b></div>
+      <div class="kv"><span>polarity</span><b>${fmt(d.polarity, 3)}</b></div>
+      <div class="kv"><span>NIV live <span class="dim">decayed</span></span>` +
+      `<b>${fmt((d.live || {}).niv_live ?? d.niv, 4)}` +
+      ` <span class="dim">base ${fmt((d.live || {}).niv_base ?? d.niv, 4)}</span></b></div>`;
     const tb = $("#nw-table tbody"); tb.innerHTML = "";
     (d.items || []).forEach(it => {
       const cat = cats[it.category] || {};
@@ -2479,7 +2596,8 @@ function onNewsTicker(msg) {
         `<b style="color:${(h.impact || 0) >= 0 ? "var(--green)" : "var(--red)"}">` +
         `${fmt(h.impact, 3)} <span class="dim">niv ${fmt(h.niv, 3)} smd ${fmt(h.smd, 3)}</span></b></div>`;
     }).join("");
-    if (hz.tf1 && hz.tf1.niv !== undefined) pushNiv(hz.tf1.niv);
+    if (a.niv_live !== undefined) pushNiv(a.niv_live);
+    else if (hz.tf1 && hz.tf1.niv !== undefined) pushNiv(hz.tf1.niv);
     if (a.emergency) toast("⚡ auto emergency re-lock fired", "err");
     $("#nw-coverage").textContent = a.coverage || $("#nw-coverage").textContent;
   }
@@ -2508,13 +2626,23 @@ function drawNiv() {
   x.beginPath(); x.moveTo(0, h / 2); x.lineTo(w, h / 2); x.stroke();
   if (NIV_HIST.length < 2) return;
   const vs = NIV_HIST.map(p => p.v);
-  const mx = Math.max(0.05, ...vs.map(Math.abs));
+  // TRUE range: a fixed 0.05 ceiling flattened a ±0.003 NIV into a
+  // straight line. Scale to the data, with a 2 bp floor against noise.
+  const lo = Math.min(...vs), hi = Math.max(...vs);
+  const mid = (hi + lo) / 2;
+  const span = Math.max(0.002, hi - lo);
+  const yOf = v => h / 2 - ((v - mid) / span) * (h * 0.42);
   x.strokeStyle = "#4fd1c5"; x.lineWidth = 1.5; x.beginPath();
   NIV_HIST.forEach((p, i) => {
     const px = (i / (NIV_HIST.length - 1)) * w;
-    const py = h / 2 - (p.v / mx) * (h / 2 - 4);
+    const py = yOf(p.v);
     i ? x.lineTo(px, py) : x.moveTo(px, py);
   });
+  // label the scale so a flat-looking trace is never ambiguous
+  x.fillStyle = "rgba(147,160,184,.85)";
+  x.font = "9px monospace";
+  x.fillText(`+${hi.toFixed(4)}`, 4, 9);
+  x.fillText(`${lo.toFixed(4)}`, 4, h - 3);
   x.stroke();
 }
 
@@ -2574,8 +2702,9 @@ async function loadBrains() {
         <div class="logic">specialty vote ${fmt(inst.signal ?? 0, 3)} · hormone ${fmt(inst.h_signal, 3)}</div>
         <div class="logic">${inst.backend === "flywire-v783-real" ? `🧠 ${Number(inst.neurons).toLocaleString()} real neurons · ${Number(inst.synapses).toLocaleString()} real synapses (FlyWire v783)` : "synthetic graph — real circuit not ready"}</div>
         <div class="kv-row">
-          <div class="kv"><span>${inst.id === "DB-3" ? "state" : inst.id === "DB-1" ? "pattern" : inst.id === "DB-2" ? "experience" : "learn thrust"}</span><b>${inst.dominant ?? (inst.id === "DB-1" ? fmt(inst.pattern, 3) : inst.id === "DB-2" ? fmt(inst.experience, 3) : fmt(inst.signal, 3))}</b></div>
-          <div class="kv"><span>experience</span><b>${fmt(inst.experience, 3)}</b></div>
+          <div class="kv"><span>${inst.id === "DB-3" ? "state" : "pattern"}</span><b>${inst.pattern != null ? fmt(inst.pattern, 3) : fmt(Math.abs(inst.signal || 0), 3)}</b></div>
+          <div class="kv"><span>${inst.id === "DB-2" ? "calibration" : inst.id === "DB-1" ? "reliability" : "experience"}</span><b>${fmt(inst.experience, 3)}</b></div>
+          <div class="kv"><span>p_dominant</span><b>${fmt(inst.p_dominant, 3)}</b></div>
         </div>
         <div class="kv-row" style="margin-top:8px">
           ${["dopamine", "serotonin", "octopamine", "tyramine"].map(k =>
@@ -2639,9 +2768,17 @@ async function loadBrains() {
           const ki = keep.map(c => bclasses.indexOf(c)).filter(x => x >= 0);
           const matrix = (an.block?.matrix || []).filter((_, r) => ki.includes(r))
             .map(row => ki.map(ci => row[ci]));
+          // NUMERIC, NEVER A PLACEHOLDER (report: "cell class still ---"):
+          // a real measured 0 prints 0.00, a missing cell says n/a — the
+          // table can no longer look half-empty when it is fully computed.
           const cellv = v2 => {
-            const a2 = v2 > 0 ? (Math.log1p(v2) / Math.log1p(mmax)) * 0.7 : 0;
-            return `<td style="background:rgba(0,212,240,${a2.toFixed(3)});text-align:right;font-family:var(--mono);font-size:10px" title="${v2}">${v2 > 0 ? (v2 < 0.01 ? v2.toExponential(1) : v2.toFixed(2)) : "·"}</td>`;
+            const num = Number(v2);
+            const ok = Number.isFinite(num);
+            const a2 = ok && num > 0 ? (Math.log1p(num) / Math.log1p(mmax)) * 0.7 : 0;
+            const txt = !ok ? "n/a"
+              : num === 0 ? "0.00"
+              : Math.abs(num) < 0.01 ? num.toExponential(1) : num.toFixed(2);
+            return `<td style="background:rgba(0,212,240,${a2.toFixed(3)});text-align:right;font-family:var(--mono);font-size:10px" title="${ok ? num : "n/a"}">${txt}</td>`;
           };
           const ntc = Object.entries(an.nt_census || an.mbon_nt || {})
             .filter(([k]) => k && k !== "?").slice(0, 6);
@@ -2649,7 +2786,7 @@ async function loadBrains() {
             <div class="kv-row">
               <div class="kv"><span>neurons (cells)</span><b>${(an.neurons || 0).toLocaleString()}</b></div>
               <div class="kv"><span>connections (≥5 syn)</span><b>${(an.connections || 0).toLocaleString()}</b></div>
-              <div class="kv"><span>synapses (Σ)</span><b>${an.synapses != null ? an.synapses.toLocaleString() : "computing…"}</b></div>
+              <div class="kv"><span>synapses (Σ)</span><b>${an.synapses != null ? Number(an.synapses).toLocaleString() : "—"}</b></div>
               <div class="kv"><span>mean degree</span><b>${an.mean_degree ?? "—"}</b></div>
               <div class="kv"><span>density</span><b>${an.density ?? "—"}</b></div>
             </div>
@@ -2728,7 +2865,11 @@ async function loadBrains() {
           const cellv = v2 => {
             const al2 = v2 !== 0 ? Math.min(0.85, (Math.log1p(Math.abs(v2)) / Math.log1p(mmax)) * 0.85) : 0;
             const bg = v2 >= 0 ? `rgba(34,201,138,${al2.toFixed(3)})` : `rgba(240,56,90,${al2.toFixed(3)})`;
-            return `<td style="background:${bg};text-align:right;font-family:var(--mono);font-size:9.5px" title="${v2}">${v2 !== 0 ? (Math.abs(v2) < 0.01 ? v2.toExponential(1) : v2.toFixed(3)) : "·"}</td>`;
+            const num = Number(v2);
+            const txt = !Number.isFinite(num) ? "n/a"
+              : num === 0 ? "0.000"
+              : Math.abs(num) < 0.01 ? num.toExponential(1) : num.toFixed(3);
+            return `<td style="background:${bg};text-align:right;font-family:var(--mono);font-size:9.5px" title="${Number.isFinite(num) ? num : "n/a"}">${txt}</td>`;
           };
           cmEl.innerHTML = `<div style="overflow-x:auto"><table class="blk-matrix">
             <tr><th>channel</th>${kx.map(ci => `<th title="${esc(cm.classes[ci])}">${esc(cm.classes[ci]).slice(0, 8)}</th>`).join("")}</tr>
@@ -3347,16 +3488,26 @@ setInterval(() => {
   // 2b) candle series refresh (~30 s): the realised line's backfill
   // must stay current or the charts drift from the tape again
   if (_tickN % 30 === 0) loadCandles().catch(() => {});
-  // connection honesty on the chip while the socket is silent
-  if (S.lastMsgAt && Date.now() - S.lastMsgAt > 15000) {
-    const fc = $("#feed-chip");
-    if (fc && !fc.dataset.stale) {
-      fc.dataset.stale = "1";
-      fc.textContent = "⚠ connection stale — retrying";
-      fc.className = "feed-chip stale";
+  // connection honesty on the chip while the socket is silent.
+  // A dead websocket with a healthy REST poll is NORMAL behind the
+  // Codespaces/mobile proxy — say "polling", don't accuse the engine.
+  const _fc = $("#feed-chip");
+  const _wsLive = ws && ws.readyState === 1;
+  const _httpFresh = S.lastHttpAt && Date.now() - S.lastHttpAt < 10000;
+  const _msgFresh = S.lastMsgAt && Date.now() - S.lastMsgAt < 15000;
+  if (_fc) {
+    if (!_wsLive && !_msgFresh && !_httpFresh) {
+      if (!_fc.dataset.stale) {
+        _fc.dataset.stale = "1";
+        _fc.textContent = "⚠ connection stale — retrying";
+        _fc.className = "feed-chip stale";
+      }
+    } else if (_fc.dataset.stale || !_fc.dataset.mode) {
+      delete _fc.dataset.stale;
+      _fc.dataset.mode = _wsLive ? "live" : "polling";
+      _fc.textContent = _wsLive ? "live" : "polling · ws off";
+      _fc.className = "feed-chip" + (_wsLive ? "" : " poll");
     }
-  } else if ($("#feed-chip")?.dataset.stale) {
-    delete $("#feed-chip").dataset.stale;
   }
   // 3) §10.4 silent-socket guard (inside THE one interval, H-2): a socket
   // with no message for 15s is closed — onclose reconnects immediately
@@ -3503,6 +3654,7 @@ function applySnapshot(snap) {
   renderBoot(snap);   // overlay FIRST
   renderAlert(snap);
   try { renderQuads(); renderWhy(); renderRail(); } catch (e) { console.error("render", e); }
+  S.lastHttpAt = Date.now();   // REST proof of life (banner + feed chip)
   try { renderBranches(); } catch (e) { console.error("branches", e); }
   try { drawMainChart(); } catch (e) { console.error("main chart", e); }
   try { const p2 = S.prices?.[S.symbol];
@@ -3643,21 +3795,40 @@ function _netBanner(show, detail) {
   }
   b.textContent = detail || "ENGINE OFFLINE — retrying every 2s (start it: bash run.sh)";
 }
+let _lastOkAt = Date.now();
 const _origFetch = window.fetch;
 window.fetch = async (...args) => {
+  const isApi = String(args[0]).includes("/api/");
   try {
     const r = await _origFetch(...args);
-    if (r.ok) { _fetchFails = 0; _netBanner(false); }
-    else if (String(args[0]).includes("/api/")) {
-      if (++_fetchFails >= 3) _netBanner(true, `ENGINE ERROR ${r.status} — check server log`);
+    if (r.ok) {
+      _fetchFails = 0;
+      _lastOkAt = Date.now();
+      // HTTP heartbeat: the REST poll is proof of life even when the
+      // websocket is proxied away (Codespaces/mobile). The feed chip reads
+      // this instead of assuming the socket is the only truth.
+      if (isApi) S.lastHttpAt = _lastOkAt;
+      _netBanner(false);
+    } else if (isApi) {
+      _fetchFails++;
+      // Only cry OFFLINE when NOTHING has answered for 8 s — a single 4xx
+      // on one optional endpoint used to paint "ENGINE OFFLINE" over a
+      // perfectly live engine (it stayed up for the whole session).
+      if (_fetchFails >= 3 && Date.now() - _lastOkAt > 8000)
+        _netBanner(true, `ENGINE ERROR ${r.status} — check server log`);
     }
     return r;
   } catch (e) {
-    if (String(args[0]).includes("/api/") && ++_fetchFails >= 3)
-      _netBanner(true, "ENGINE OFFLINE — retrying (if in Codespaces: bash run.sh)");
+    if (isApi) {
+      _fetchFails++;
+      if (_fetchFails >= 3 && Date.now() - _lastOkAt > 8000)
+        _netBanner(true, "ENGINE UNREACHABLE — retrying (if in Codespaces: bash run.sh)");
+    }
     throw e;
   }
 };
+// (no extra timer: the 2 s REST poll already clears the banner on success —
+// the app keeps exactly ONE setInterval, per the H-2 contract)
 window.addEventListener("error", e => {
   if (_errShown++ < 3) toast("JS: " + (e.message || "error"), "err");
 });

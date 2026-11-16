@@ -140,14 +140,49 @@ class ForwardTables:
             return None, 0 if not cell else cell["n"]
         return cell["up"] / cell["n"], cell["n"]
 
+    def p_up_display(self, fid: int, symbol: str, tf: str,
+                     value: float) -> dict:
+        """Laplace-smoothed P(up) for DISPLAY, with its sample size.
+
+        Audit §6.1: the panel refused to print anything until that exact
+        bucket held 30 settled windows, so tf2/tf3/tf4 showed "—" for all
+        35 formulas and half of tf1 did too. A Beta-Binomial posterior
+        mean ``(up + 2) / (n + 4)`` never divides by zero, so every cell
+        can show a real percentage — ``settled`` still tells the reader
+        whether the sample is thick enough to act on.
+        """
+        key = (fid, symbol, tf, _bucket(float(value)))
+        cell = self.rows.get(key)
+        if cell and cell.get("n"):
+            n, up = int(cell["n"]), int(cell["up"])
+            return {"p_up": round((up + 2.0) / (n + 4.0), 4), "n": n,
+                    "settled": n >= MIN_N_USE, "basis": "bucket"}
+        return {"p_up": None, "n": 0, "settled": False, "basis": "empty"}
+
     def payload(self, symbol: str | None = None) -> dict:
-        out: dict[str, Any] = {"min_n": MIN_N_USE, "buckets": {}, "tables": {}}
+        out: dict[str, Any] = {"min_n": MIN_N_USE, "buckets": {},
+                               "marginal": {}, "tables": {}}
         for (fid, sym, tf, b), cell in self.rows.items():
             if symbol and sym != symbol:
                 continue
+            n = int(cell["n"])
             out["buckets"].setdefault(f"F{fid} {sym} {tf}", []).append({
-                "bucket": b, "n": cell["n"],
-                "p_up": round(cell["up"] / cell["n"], 4) if cell["n"] else None,
-                "settled": cell["n"] >= MIN_N_USE,
+                "bucket": b, "n": n,
+                # smoothed posterior mean — defined for n ≥ 1, so the UI
+                # never has to print "—" for a bucket that has been seen
+                "p_up": round((cell["up"] + 2.0) / (n + 4.0), 4) if n else None,
+                "p_up_raw": round(cell["up"] / n, 4) if n else None,
+                "settled": n >= MIN_N_USE,
             })
+            # per (formula, asset, timeframe) pooled across buckets: what
+            # the panel falls back to when this reading's own bucket is
+            # still thin (pools real windows — never invents a number)
+            m = out["marginal"].setdefault(
+                f"F{fid} {sym} {tf}", {"up": 0, "n": 0})
+            m["up"] += int(cell["up"])
+            m["n"] += n
+        for m in out["marginal"].values():
+            n = int(m["n"])
+            m["p_up"] = round((m["up"] + 2.0) / (n + 4.0), 4) if n else None
+            m["settled"] = n >= MIN_N_USE
         return out
