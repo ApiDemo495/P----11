@@ -484,14 +484,36 @@ class EmotionSystem:
         # its neutral is 0, not 0.5. Ranking it by |v-0.5| made it
         # "100% extreme" in every up-tape for days (user screenshot).
         _NEUTRAL = {9: 0.0}
-        def _dev_of(i):
+
+        def _signed(i):
+            """Signed, neutral-relative position in [-1, +1] — THE number
+            the E1–E22 dials print. Audit §5.2: the banner ranked by
+            |v − 0.5| while the dials printed (v − 0.5)·2, so a channel
+            sitting at a dead 0.0 scored a full 100 % "extreme" and won
+            the crown with nothing on the tape (E18 100 % vs +0.00)."""
             _n = _NEUTRAL.get(i, 0.5)
-            return abs(float(emos[i]) - _n) / (1.0 - _n if _n == 0 else 0.5)
+            _v = float(emos.get(i, _n))
+            if _n == 0.0:
+                return -_v                      # 0-based magnitude → bearish
+            return 2.0 * (_v - _n)
+
+        def _dev_of(i):
+            return abs(_signed(i))
+
+        # A DEAD ZERO is an absent measurement, not an extreme: if the
+        # channel computed to exactly 0.0 (and carries a zero-reason) it
+        # is neutral for ranking purposes and can never be "dominant".
+        _live = [i for i in range(1, 22) if i in emos
+                 and not (float(emos.get(i, 0.0)) == 0.0
+                          and str(i) in zero_reasons)]
+        if len(_live) < 2:
+            _live = [i for i in range(1, 22) if i in emos] or list(range(1, 22))
         _ranked = sorted(
             ((_dev_of(i),
-              abs(float(emos[i]) - float(_prev.get(i, emos[i]))),
+              abs(float(emos.get(i, 0.5))
+                  - float(_prev.get(i, emos.get(i, 0.5)))),
               float(_w[i - 1]), i)
-             for i in range(1, 22)),
+             for i in _live),
             key=lambda t: (round(t[0], 3), t[1], t[2]), reverse=True)
         _dev, _dlt, _wv, _dom_id = _ranked[0]
         # when several channels are pegged at the same extreme and
@@ -509,6 +531,9 @@ class EmotionSystem:
         dominant = {
             "id": int(_dom_id),
             "value": round(float(emos[_dom_id]), 5),
+            # the signed dial reading of the crowned channel — the banner
+            # and the E-card now quote the SAME number (audit §5.2)
+            "signed": round(_signed(_dom_id), 4),
             "intensity": round(_dev, 4),          # 0 = neutral, 1 = extreme
             "moved": round(_dlt, 5),
             "held_s": round(_held, 1),
@@ -519,6 +544,10 @@ class EmotionSystem:
         return {
             "dominant": dominant,
             "emotions": {k: round(v, 5) for k, v in emos.items()},
+            # the signed dial values the UI must render, so "DOMINANT NOW"
+            # and the E1–E22 grid are guaranteed to agree (audit §5.2)
+            "signed": {i: round(_signed(i), 5) for i in sorted(emos)},
+            "neutral": {i: _NEUTRAL.get(i, 0.5) for i in sorted(emos)},
             "zero_reasons": zero_reasons,
             "zero_causes": _causes(zero_reasons),
             "directions": dirs,

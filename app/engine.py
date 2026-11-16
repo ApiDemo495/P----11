@@ -28,7 +28,7 @@ from collections import deque
 from typing import Any, Awaitable, Callable
 
 from .bgn import BgnSynchronizer
-from .cci import CCIEngine, finalize_confidence
+from .cci import CCIEngine, calibrate_confidence, finalize_confidence
 from .clock import grc_id, next_grc_ts, seconds_to_next_grc
 from .config import (
     ASSET_PROFILES,
@@ -76,6 +76,13 @@ from . import genesis as genesis_mod
 NON_VOTING_IDS = frozenset({20, 97, 98, 99, 100, 101})
 EMERGENCY_RELOCK_COOLDOWN_S = 60.0
 EMERGENCY_RELOCK_MIN_MOVE_ATR = 0.5
+#: WINDOW FREEZE (audit §1.3). A locked contract is immutable for the
+#: duration of its window. The old gate (≥0.5 ATR, 60 s cooldown) fired
+#: every 10–30 s — the UI's own ">1/HOUR = BUG (N=8)" banner was right.
+#: Only a structural invalidation (>3 ATR away from the locked entry AND
+#: at least 15 minutes since the lock) may re-anchor the contract.
+RELOCK_MIN_MOVE_ATR = 3.0
+RELOCK_MIN_AGE_S = 15 * 60.0
 
 
 def _mean(xs):
@@ -1095,13 +1102,41 @@ class PredictionEngine:
             if len(_pool) < 8:
                 _pool = list(_hist)
                 _rank_val = _base_conf
+            # Percentile of this score inside its own history — kept as a
+            # DIAGNOSTIC only. It used to be the displayed confidence,
+            # which meant ANALYSING printed a rank (0.285) while the
+            # CONFIDENCE CHAIN printed the raw product (0.0002): two
+            # formulas, two numbers, same window. (audit §2.3)
             if len(_pool) >= 8:
                 _pct = sum(1 for v in _pool if v <= _rank_val) / len(_pool)
-                fin["confidence"] = round(_pct, 4)
                 fin["conf_percentile"] = round(_pct, 4)
             else:
                 fin["conf_percentile"] = None
             fin["conf_hist_n"] = len(_pool)
+            # ── CALIBRATED CONFIDENCE (audit §2.1/§2.2) ──────────────
+            # ONE number, computed once, displayed everywhere. Base is an
+            # SNR→tanh mapping of |CCI_adj| over its measured noise floor;
+            # every modulator is bounded, so six dampers can no longer
+            # multiply a real setup into 0.0002 and jam RECHECK at
+            # NO TRADE forever.
+            _cal = calibrate_confidence(
+                pack,
+                experience_quality=br["experience"],
+                p_dominant=br["p_dominant"],
+                state_aligned=aligned,
+                rtp=em["rtp"],
+                pcv=pcv,
+                wfcp=phys["wfcp"],
+                drpt=phys["drpt"],
+                gspi=phys["gspi"],
+            )
+            fin["confidence"] = _cal["confidence"]
+            fin["confidence_base_snr"] = _cal["base_confidence"]
+            fin["confidence_modulator"] = _cal["modulator"]
+            fin["confidence_chain"] = _cal["steps"]
+            fin["snr"] = _cal["snr"]
+            fin["noise_floor"] = _cal["noise_floor"]
+            fin["issued"] = _cal["issued"]
             fin["strength"] = pack.get("strength", 0.0)
             _wr, _wrn = self._measured_winrate(
                 symbol, tf, float(fin["confidence"]))
@@ -3090,12 +3125,14 @@ class PredictionEngine:
 
     def emergency_relock(self, symbol: str, tf: str = "tf1",
                          reason: str = "", *, automatic: bool = False) -> dict:
-        """Re-anchor an existing lock after an emergency.
+        """Re-anchor an existing lock after a structural invalidation.
 
-        Automatic news triggers additionally require an active lock and a
-        ≥0.5 ATR move from its entry; manual drills retain their explicit
-        behavior. All paths share a 60 s cooldown, six-per-hour N-8 cap,
-        and 30 s new-lock halt.
+        WINDOW FREEZE (audit §1.3): an active lock is immutable until
+        **both** (a) the move from its entry exceeds ``RELOCK_MIN_MOVE_ATR``
+        (3.0 ATR) and (b) ``RELOCK_MIN_AGE_S`` (15 min) have elapsed since
+        the lock. Manual drills with no open entry (audit-row only) keep
+        their explicit behaviour. All paths share the 60 s cooldown, the
+        six-per-hour N-8 cap and the 30 s new-lock halt.
         """
         now = time.time()
         hour = [r for r in self.news.emergency_history
@@ -3126,6 +3163,39 @@ class PredictionEngine:
             # never overwrite a REAL entry with0 (it would force a skip)
             return {"ok": False,
                     "error": "no price yet — emergency re-lock refused"}
+        # ── WINDOW FREEZE (audit §1.3) ──────────────────────────────────
+        # Any re-anchor of an ACTIVE lock must clear both bars: a genuine
+        # structural invalidation (>3 ATR away from the locked entry) AND
+        # 15 minutes of window elapsed. Without this the news trigger
+        # re-locked every 10–30 s, moving the entry while the ladder
+        # stayed behind — four entries, four ladders, one window.
+        if lock is not None and _old_entry > 0 and price > 0:
+            try:
+                _atr_freeze = float(self._atr(self.build_ctx(symbol, tf)))
+            except Exception:
+                _atr_freeze = 0.0
+            try:
+                _locked_ts = float(lock.get("locked_at") or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                _locked_ts = 0.0
+            _age_s = (now - _locked_ts) if _locked_ts > 0 else 0.0
+            _atr_known = math.isfinite(_atr_freeze) and _atr_freeze > 0
+            _move_atr = (abs(price - _old_entry) / _atr_freeze
+                         if _atr_known else 0.0)
+            if _atr_known and _move_atr < RELOCK_MIN_MOVE_ATR:
+                return {"ok": False, "frozen": True, "skipped": True,
+                        "move_atr": round(_move_atr, 3),
+                        "required_move_atr": RELOCK_MIN_MOVE_ATR,
+                        "error": f"window frozen — move {_move_atr:.2f} ATR "
+                                 f"< {RELOCK_MIN_MOVE_ATR:.1f} ATR structural gate"}
+            if _age_s < RELOCK_MIN_AGE_S:
+                return {"ok": False, "frozen": True, "skipped": True,
+                        "move_atr": round(_move_atr, 3),
+                        "age_s": round(_age_s, 1),
+                        "required_age_s": RELOCK_MIN_AGE_S,
+                        "error": f"window frozen — {int(_age_s)}s of "
+                                 f"{int(RELOCK_MIN_AGE_S)}s elapsed; a locked "
+                                 "contract is immutable for its window"}
         if automatic:
             if lock is None:
                 return {"ok": False, "skipped": True,
@@ -4104,6 +4174,12 @@ class PredictionEngine:
                 # unconditional ones, each with its own n.
                 _nc = _tpc = _slc = 0                    # momentum-matched
                 _rets_c = {0.25: [], 0.5: [], 0.75: [], 1.0: []}
+                # direction-matched returns: windows whose own 5-bar
+                # momentum agreed with TODAY'S side. The fan is drawn from
+                # this subset when it is thick enough, so a bullish window
+                # carries the drift of bullish windows instead of the
+                # unconditional median (which sloped into the SL).
+                _rets_d = {0.25: [], 0.5: [], 0.75: [], 1.0: []}
                 _vols = []
                 for _vi in range(10, _nb):
                     _vr = [(_cl[_vj] - _cl[_vj - 1]) / _cl[_vj - 1]
@@ -4170,6 +4246,10 @@ class PredictionEngine:
                         for _f, _lst in _rets_c.items():
                             _k = _i0 + max(1, int(round(_rem_min * _f)))
                             _lst.append(_cl[_k] / _p0 - 1.0)
+                    if _mom_i == dirn:
+                        for _f, _lst in _rets_d.items():
+                            _k = _i0 + max(1, int(round(_rem_min * _f)))
+                            _lst.append(_cl[_k] / _p0 - 1.0)
                     if _cl[_i0 + _rem_min] > _p0:
                         _up += 1
                     for _f, _lst in _rets.items():
@@ -4188,21 +4268,43 @@ class PredictionEngine:
                     _mu = sum(_end) / len(_end)
                     _sig = (sum((x - _mu) ** 2 for x in _end)
                             / len(_end)) ** 0.5
-                    # empirical cone by time fraction — the fan the
-                    # charts draw (quantiles of the measured return
-                    # distribution at each elapsed fraction, not a
-                    # Gaussian sqrt-time cone)
+                    # ── DRIFT-ALIGNED FAN (audit §4.2) ────────────────
+                    # Draw the cone from the most specific honest subset:
+                    # setup-matched (momentum+vol) > direction-matched
+                    # (momentum) > all windows. The old code always drew
+                    # the unconditional quantiles, so a BULLISH window's
+                    # q50 could slope straight into the SL. The subset and
+                    # its n are printed, and if the median still points
+                    # against the call the payload says so ("against")
+                    # instead of implying support that is not in the tape.
+                    if _nc >= 50 and len(_rets_c[1.0]) >= 50:
+                        _fan_src = _rets_c
+                        _fan_basis = f"setup-matched (momentum+vol) n={_nc}"
+                    elif len(_rets_d[1.0]) >= 30:
+                        _fan_src = _rets_d
+                        _fan_basis = (f"direction-matched (momentum) "
+                                      f"n={len(_rets_d[1.0])}")
+                    else:
+                        _fan_src = _rets
+                        _fan_basis = f"all windows n={_n}"
                     _fan = [{"f": 0.0, "q05": round(price, 6),
                              "q25": round(price, 6), "q50": round(price, 6),
                              "q75": round(price, 6), "q95": round(price, 6)}]
                     for _f in (0.25, 0.5, 0.75, 1.0):
+                        _vals = _fan_src.get(_f) or _rets[_f]
                         _fan.append({
                             "f": _f,
-                            "q05": round(price * (1 + _q(_rets[_f], 0.05)), 6),
-                            "q25": round(price * (1 + _q(_rets[_f], 0.25)), 6),
-                            "q50": round(price * (1 + _q(_rets[_f], 0.50)), 6),
-                            "q75": round(price * (1 + _q(_rets[_f], 0.75)), 6),
-                            "q95": round(price * (1 + _q(_rets[_f], 0.95)), 6)})
+                            "q05": round(price * (1 + _q(_vals, 0.05)), 6),
+                            "q25": round(price * (1 + _q(_vals, 0.25)), 6),
+                            "q50": round(price * (1 + _q(_vals, 0.50)), 6),
+                            "q75": round(price * (1 + _q(_vals, 0.75)), 6),
+                            "q95": round(price * (1 + _q(_vals, 0.95)), 6)})
+                    _drift_bps = (round((_fan[-1]["q50"] / price - 1.0) * 1e4, 1)
+                                  if price else 0.0)
+                    _fan_drift = ("flat" if abs(_drift_bps) < 1.0
+                                  else "with" if (_drift_bps > 0) == (dirn > 0)
+                                  else "against")
+
                     def _wilson(k, n):
                         if not n:
                             return [0.0, 0.0]
@@ -4213,27 +4315,17 @@ class PredictionEngine:
                                      + z * z / (4 * n * n)) ** 0.5) / den
                         return [round(max(0.0, cen - half), 4),
                                 round(min(1.0, cen + half), 4)]
-                    if _nc >= 50 and len(_rets_c[1.0]) >= 50:
-                        _fan = [{"f": 0.0, "q05": round(price, 6),
-                                 "q25": round(price, 6),
-                                 "q50": round(price, 6),
-                                 "q75": round(price, 6),
-                                 "q95": round(price, 6)}]
-                        for _f in (0.25, 0.5, 0.75, 1.0):
-                            _fan.append({
-                                "f": _f,
-                                "q05": round(price * (1 + _q(_rets_c[_f], 0.05)), 6),
-                                "q25": round(price * (1 + _q(_rets_c[_f], 0.25)), 6),
-                                "q50": round(price * (1 + _q(_rets_c[_f], 0.50)), 6),
-                                "q75": round(price * (1 + _q(_rets_c[_f], 0.75)), 6),
-                                "q95": round(price * (1 + _q(_rets_c[_f], 0.95)), 6)})
-                        _fan_basis = f"setup-matched (momentum+vol) n={_nc}"
-                    else:
-                        _fan_basis = f"all windows n={_n}"
+                    # (the fan itself is built once, above, from the
+                    # most specific honest subset — no second rebuild)
                     return {
                         "approx": True,
                         "method": "empirical-first-touch",
                         "fan_basis": _fan_basis,
+                        # does the median path point the way the call
+                        # does? "with" / "against" / "flat" — measured,
+                        # never assumed (audit §4.2)
+                        "fan_drift": _fan_drift,
+                        "drift_bps": _drift_bps,
                         "n": _n, "ambig": _amb,
                         # Wilson 95% intervals: a probability without
                         # its uncertainty is a claim; with n it is a
@@ -4773,36 +4865,32 @@ class PredictionEngine:
                               + f" · asset profile ×{_prof['sl_mult']} SL"
                                 f" TP = 2x unit ({symbol} nature)")
         _horizon_block = _blocks[_mins[-1]]     # horizon TP ALWAYS calculated FIRST
-        for k, minutes in enumerate(_mins, start=1):
-            if k == len(_mins):
-                targets.append(
-                    TargetState(
-                        k=k,
-                        minutes=minutes,
-                        level=_horizon_block["tp"],
-                        status="locked",
-                        direction=_dir,
-                        locked_at=now,
-                        locked_cci=res["cci_adjusted"],
-                    )
-                )
-            elif k == 1:
-                targets.append(
-                    TargetState(
-                        k=k,
-                        minutes=minutes,
-                        level=_blocks[minutes]["tp"],
-                        status="locked",
-                        direction=_dir,
-                        locked_at=now,
-                        locked_cci=res["cci_adjusted"],
-                    )
-                )
+        # CANONICAL LADDER (audit §1.2): TP1 is a monotone fraction of the
+        # entry → TF-TP span, built in ONE place (app/contracts.py). It used
+        # to be the separate 5-minute measured block, which printed $4
+        # above the entry while the ANALYSING panel's "Rung 1" printed
+        # +86 bps — two formulas, two ladders, one window.
+        # TP2/TP3 keep the sequential-lock status (a target is only
+        # *tracked* once the one before it is hit) but their frozen price
+        # is published on the canonical contract, so no panel ever prints
+        # "— OPEN" for a level the lock already knows.
+        from .contracts import build_ladder as _build_ladder
+        _rungs = _build_ladder(_price0, _dir, _horizon_block["tp"],
+                               list(_mins))
+        _rung1 = (_rungs[0]["level"] if _rungs
+                  else _blocks[_mins[0]]["tp"])
+        targets: list[TargetState] = []
+        for _k, _minutes in enumerate(_mins, start=1):
+            if _k == len(_mins):
+                _level, _status = _horizon_block["tp"], "locked"
+            elif _k == 1:
+                _level, _status = _rung1, "locked"
             else:
-                # Tp2/Tp3 are NOT calculated until the previous target is hit
-                targets.append(
-                    TargetState(k=k, minutes=minutes, level=None, status="pending")
-                )
+                _level, _status = None, "pending"
+            targets.append(TargetState(
+                k=_k, minutes=_minutes, level=_level, status=_status,
+                direction=_dir, locked_at=now,
+                locked_cci=res.get("cci_adjusted")))
         # window anchored to the LOCK (user: a timeframe is the time
         # FROM the prediction — 'after 22 minutes, what price?').
         # The epoch grid previously made the real duration anything
@@ -4873,6 +4961,33 @@ class PredictionEngine:
             cyc.risk["tp_dist"] = cyc.tp_dist
             cyc.risk["tp_bps"] = cyc.tp_dist / _price0 * 1e4
             cyc.risk["rr"] = cyc.risk["ratio"] = cyc.ratio
+
+        # ── ONE CANONICAL CONTRACT PER (ASSET, TF, CYCLE) ───────────────
+        # Frozen here, read by every panel: entry, TF-horizon TP, TP1..TP3
+        # rungs, SL, ATR, both confidences, digest. The ladder invariant
+        # (ENTRY < TP1 < TP2 < TP3 < TF-TP for a BUY, mirrored for a SELL)
+        # is enforced by app/contracts.py and re-verified on read.
+        from .contracts import build_contract as _build_contract
+        _eff_dir = int(cyc.direction or _dir or 1)
+        _eff_dir = 1 if _eff_dir >= 0 else -1
+        _eff_tp = float(cyc.tp or _horizon_block.get("tp") or 0.0)
+        _eff_sl = float(cyc.sl or _horizon_block.get("sl") or 0.0)
+        cyc.canonical = _build_contract(
+            symbol=symbol, timeframe=tf, direction=_eff_dir,
+            entry=_price0, horizon_tp=_eff_tp, sl=_eff_sl,
+            minutes=list(_mins), atr=float(res.get("atr") or 0.0),
+            base_confidence=float(res.get("confidence_base_snr")
+                                  or res.get("confidence") or 0.0),
+            final_confidence=float(res.get("confidence") or 0.0),
+            cci_adjusted=float(res.get("cci_adjusted") or 0.0),
+            cycle_id=cyc.cycle_id, locked_at=now,
+            source="measured-moves+canonical-ladder",
+        )
+        # NOTE: cyc.targets keeps its sequential hit-tracking order (a
+        # pending target carries no level so the touch detector ignores
+        # it). The FROZEN price of every rung lives on cyc.canonical, and
+        # the UI falls back to it — that is what removes the "— OPEN"
+        # cells without letting an untracked rung fire a hit.
         self.cycles[(symbol, tf)] = cyc
         self._apply_risk(symbol, tf, cyc, res)
         if cyc.sl is None and _price0 > 0:

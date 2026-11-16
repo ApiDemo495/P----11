@@ -476,13 +476,22 @@ class AgentInstaller:
             if self.deps_installed():
                 self._say("llama.cpp runtime already installed — skipping")
             else:
-                self._say("installing llama.cpp runtime "
-                          "(requirements-agents.txt) — a source build can "
-                          "take 10-20 min, that is normal")
-                # prebuilt CPU wheel first: a source build of
-                # llama-cpp-python takes 10-20 min and fails without
-                # a full toolchain — the wheel installs in ~1 min
+                # PREBUILT CPU WHEEL ONLY (audit §11): asking pip to
+                # resolve the whole requirements file let it fall back to
+                # the sdist and compile llama.cpp from source — the
+                # "Building wheel for llama-cpp-python … started" that ran
+                # for 20 minutes on the user's screen. `--only-binary=:all:`
+                # makes pip REFUSE to compile, so the abetlen CPU wheel
+                # index is the only possible source (≈3 s).
+                self._say("installing prebuilt llama.cpp CPU wheel "
+                          "(abetlen index, --only-binary: no source build) …")
                 rc = self._exec([sys_executable(), "-m", "pip", "install",
+                                 "--prefer-binary",
+                                 # refuse to COMPILE llama.cpp: the abetlen
+                                 # CPU index is then the only possible
+                                 # source, so this is a 3-second install
+                                 # instead of a 20-minute build
+                                 "--only-binary", "llama-cpp-python",
                                  "--extra-index-url",
                                  "https://abetlen.github.io/llama-cpp-python/whl/cpu",
                                  "-r", "requirements-agents.txt"])

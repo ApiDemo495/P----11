@@ -35,6 +35,7 @@ F30 validates the CCI after it exists; F21 is this aggregator.
 from __future__ import annotations
 
 import json
+import math
 import os
 
 from .config import (
@@ -358,6 +359,125 @@ def finalize_confidence(
         "wfcp": wfcp,
         "drpt": drpt,
         "gspi": gspi,
+    }
+
+
+#: |CCI_adjusted| that counts as ONE noise unit (F30's measured floor).
+#: A weighted mean of [-1,+1] votes lands at 0.02–0.08 in a normal tape —
+#: using that raw number as a probability is why the old chain could
+#: never reach the 0.35 issuance floor (0.0218 × 0.87 × 0.44 × 0.36 ≈
+#: 0.0003 forever).
+NOISE_FLOOR = 0.020
+#: tanh gain: |CCI| = 1 noise unit → base ≈ 0.47, 3 units → ≈ 0.92
+BASE_GAIN = 0.45
+#: bound on the TOTAL modulation so no stack of dampers can zero a signal
+MOD_MIN, MOD_MAX = 0.72, 1.12
+CONF_MIN, CONF_MAX = 0.02, 0.98
+
+
+def _clamp01(x: float) -> float:
+    return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
+
+
+def calibrate_confidence(
+    pack: dict,
+    *,
+    experience_quality: float = 0.5,
+    p_dominant: float = 0.0,
+    state_aligned: bool = False,
+    rtp: float = 0.0,
+    pcv: float = 0.0,
+    wfcp: float = 1.0,
+    drpt: float = 0.0,
+    gspi: float = 0.0,
+    agreement: float | None = None,
+    noise_floor: float = NOISE_FLOOR,
+) -> dict:
+    """Calibrated confidence — the ONE number every view displays.
+
+    The old chain multiplied ``|CCI_adj|`` (0.02–0.08) by six fractions in
+    sequence (×0.87 ×0.44 ×0.36 …), so the product was ~0.0002 and no
+    genuine setup could ever clear the 0.35 floor: RECHECK always said
+    NO TRADE and CALLS & TARGETS printed conf 0.000.
+
+    This version, in the same *documented* order:
+
+      1. SNR mapping     snr = |CCI_adj| / noise_floor
+                         base = tanh(BASE_GAIN · snr) · min(1, DRHE)
+                         → a decisive signal starts in [0.25, 0.75]
+      2. × (0.90 + 0.10·EQ)          brain-2 experience       [−10 %, 0]
+      3. + 0.05·base·P(dominant)     brain-3, only if aligned [+5 % at most]
+      4. × (1 − 0.12·ramp(RTP))      E9 trauma                [−12 %, 0]
+         × (1 − 0.10·|PCV|)          F30 conflict             [−10 %, 0]
+      5. × (0.92 + 0.08·WFCP)        P2  collapse             [−8 %, 0]
+      6. × (1 − 0.08·DRPT)           P6  decoherence          [−8 %, 0]
+      7. × (1 − 0.06·GSPI)           P19 gauge                [−6 %, 0]
+      8. clip(modulator, 0.72, 1.12) then clip(conf, 0.02, 0.98)
+
+    Every modifier is BOUNDED, so this is a calibration, not a product of
+    independent probabilities.  The returned ``steps`` list is exactly
+    what the CONFIDENCE CHAIN panel renders — no second formula.
+    """
+    cci_adj = float(pack.get("cci_adjusted") or 0.0)
+    drhe = _clamp01(float(pack.get("drhe", 1.0) or 1.0))
+    floor = max(float(noise_floor or NOISE_FLOOR), 1e-4)
+    snr = abs(cci_adj) / floor
+    base = math.tanh(BASE_GAIN * snr) * min(1.0, drhe)
+
+    eq_f = 0.90 + 0.10 * _clamp01(experience_quality)
+    p_dom = _clamp01(p_dominant)
+    align_bonus = 0.05 * base * p_dom if (state_aligned and p_dom > 0) else 0.0
+    rtp_f = 1.0 - 0.12 * _clamp01((rtp - 0.6) / 0.4)
+    pcv_f = 1.0 - 0.10 * _clamp01(abs(pcv))
+    wfcp_f = 0.92 + 0.08 * _clamp01(wfcp)
+    drpt_f = 1.0 - 0.08 * _clamp01(drpt)
+    gspi_f = 1.0 - 0.06 * _clamp01(gspi)
+
+    modulator = eq_f * rtp_f * pcv_f * wfcp_f * drpt_f * gspi_f
+    modulator = max(MOD_MIN, min(MOD_MAX, modulator))
+    conf = base * modulator + align_bonus
+    if agreement is not None:
+        # bounded ±5 % voter-agreement band (never the direction)
+        band = 0.05 * (2.0 * _clamp01(agreement) - 1.0)
+        conf *= 1.0 + band
+    conf = max(CONF_MIN, min(CONF_MAX, conf))
+    return {
+        "confidence": round(conf, 4),
+        "confidence_exact": conf,
+        "base_confidence": round(base, 4),
+        "snr": round(snr, 3),
+        "noise_floor": round(floor, 4),
+        "modulator": round(modulator, 4),
+        "modulator_bounded": True,
+        "issued": conf > CONFIDENCE_FLOOR,
+        "aligned": bool(state_aligned),
+        "wfcp": wfcp, "drpt": drpt, "gspi": gspi, "rtp": rtp, "pcv": pcv,
+        # exactly what the CHAIN panel prints, step by step
+        "steps": [
+            {"step": 1, "label": "|CCI_ADJ| × MIN(1, DRHE) — SNR → tanh",
+             "value": round(base, 5),
+             "detail": f"|{cci_adj:+.4f}| / floor {floor:.3f} = snr "
+                       f"{snr:.2f} → tanh({BASE_GAIN}·snr)·DRHE "
+                       f"{drhe:.2f}"},
+            {"step": 2, "label": "×(0.90 + 0.10 · EQ) [brain B2]",
+             "value": round(eq_f, 4), "detail": f"EQ {experience_quality:.2f}"},
+            {"step": 3, "label": "+0.05 · base · P(dominant) [brain B3, aligned]",
+             "value": round(align_bonus, 5),
+             "detail": f"P(dom) {p_dom:.2f} · aligned {bool(state_aligned)}"},
+            {"step": 4, "label": "×(1 − 0.12·ramp RTP) × (1 − 0.10·|PCV|)",
+             "value": round(rtp_f * pcv_f, 4),
+             "detail": f"RTP {rtp:.3f} · PCV {pcv:+.3f}"},
+            {"step": 5, "label": "×(0.92 + 0.08 · WFCP) [P2]",
+             "value": round(wfcp_f, 4), "detail": f"WFCP {wfcp:.3f}"},
+            {"step": 6, "label": "×(1 − 0.08 · DRPT) [P6]",
+             "value": round(drpt_f, 4), "detail": f"DRPT {drpt:.3f}"},
+            {"step": 7, "label": "×(1 − 0.06 · GSPI) [P19]",
+             "value": round(gspi_f, 4), "detail": f"GSPI {gspi:.3f}"},
+            {"step": 8, "label": "clip(base·modulator, 0.02, 0.98)",
+             "value": round(conf, 5),
+             "detail": f"base {base:.4f} × modulator {modulator:.4f}"
+                       + (f" + align {align_bonus:.4f}" if align_bonus else "")},
+        ],
     }
 
 
