@@ -1316,6 +1316,22 @@ class PredictionEngine:
             _tier = self._tier_for(symbol, tf, float(_beh["score"]))
             fin.update(_tier)
             fin["raw_score"] = round(float(_beh["score"]), 5)
+            # RE-JUDGE THE GATE on the FINAL confidence: the advanced layer
+            # multiplies confidence by its soft gate AFTER the first check,
+            # so the card could print 0.349 "ISSUED" while RECHECK compared
+            # 0.349 to a 0.350 floor and failed the same check. One number,
+            # one verdict.
+            try:
+                fin["gate_ok"] = bool(_dir_final != 0 and
+                                      float(fin["confidence"])
+                                      > float(fin["asset_floor"]))
+                fin["issue_note"] = (
+                    f"cleared the {float(fin['asset_floor']):.3f} floor"
+                    if fin["gate_ok"] else
+                    f"below floor ({float(fin['confidence']):.3f} "
+                    f"<= {float(fin['asset_floor']):.3f})")
+            except (TypeError, ValueError, KeyError):
+                fin["gate_ok"] = False
             pack = dict(pack)
             pack["direction"] = _dir_final
             pack["cci_adjusted_raw"] = pack["cci_adjusted"]

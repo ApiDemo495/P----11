@@ -1117,9 +1117,27 @@ function renderHero() {
   }
   // Frozen contract pair is explicit; measured TP rungs remain separate.
   const lines = [];
-  if (Number.isFinite(cyc?.entry)) lines.push({ price: cyc.entry, color: "#c9d1d9", title: "ENTRY", contract: true });
-  if (Number.isFinite(cyc?.tp)) lines.push({ price: cyc.tp, color: "#26a69a", title: "TP", contract: true });
-  if (Number.isFinite(cyc?.sl)) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL", contract: true });
+  const _canonL = cyc?.canonical || {};
+  const _contract = cyc?.level_contract || {};
+  // TP FALLBACK (report: "tp lines not showing in own chart"): `cyc.tp`
+  // is null whenever the levels gate publishes the TP through the level
+  // contract instead, so the chart lost its only contract anchor above
+  // the price. Read the same three places the ladder panel reads.
+  const _tpMain = [cyc?.tp, _contract.tp, _canonL.tp4, _canonL.tp3]
+    .map(Number).find(v => Number.isFinite(v) && v > 0) ?? null;
+  const _entryL = [cyc?.entry, _contract.entry, res.lock?.price, a.price]
+    .map(Number).find(v => Number.isFinite(v) && v > 0) ?? null;
+  const _slL = [cyc?.sl, _contract.sl].map(Number)
+    .find(v => Number.isFinite(v) && v > 0) ?? null;
+  if (_entryL) lines.push({ price: _entryL, color: "#c9d1d9", title: "ENTRY", contract: true });
+  if (_tpMain) lines.push({ price: _tpMain, color: "#26a69a", title: "TP", contract: true });
+  if (_slL) lines.push({ price: _slL, color: "#f0385a", title: "SL", contract: true });
+  // the intermediate rungs stay annotations (they must not squash candles)
+  [1, 2, 3].forEach(k => {
+    const lv = Number((cyc?.targets?.[k - 1]?.level) ?? _canonL[`tp${k}`]);
+    if (Number.isFinite(lv) && lv > 0 && (!_tpMain || Math.abs(lv - _tpMain) > 1e-9))
+      lines.push({ price: lv, color: "rgba(38,166,154,.70)", title: `TP${k}`, dash: true });
+  });
   const mgi = res.micro;
   if (mgi?.available) {
     // only clusters within ±2% of price: a far cluster used to widen
@@ -1535,7 +1553,7 @@ function onAnalyseDone(msg) {
   box.innerHTML = `<div class="an-box">
     <div class="an-signal ${dirCls}">
       <div class="big">${r.signal}</div>
-      <div class="conf">confidence ${fx(r.confidence, 3)}${r.issued ? " · ISSUED" : " · below floor"}</div>
+      <div class="conf">confidence ${fx(r.confidence, 3)}${(r.gate_ok ?? r.issued) ? " · ISSUED" : " · below floor"}${r.issue_note ? ` · ${esc(r.issue_note)}` : ""}</div>
       <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? Number(r.ratio).toFixed(2) + ":1" : "—"} · ${esc(r.levels_source || "preview only")}</div>
       <div class="conf">${r.contract_state === "locked" ? `LOCKED CONTRACT ${esc((r.contract_id || "").slice(0, 16))}` : "PREVIEW ONLY — NO LOCKED CONTRACT"} · ${r.execution_eligible ? "EXECUTION ELIGIBLE" : "NOT EXECUTION-ELIGIBLE"}</div>
     </div>
@@ -1549,6 +1567,8 @@ function onAnalyseDone(msg) {
       ${r.recheck ? `<div class="an-recheck" style="margin-top:6px;font-size:10.5px">
         <b class="${r.recheck.passed ? "acc-up" : "acc-dn"}">${esc(r.recheck.verdict)}</b>
         ${(r.recheck.checks || []).map(c => `<div class="kv"><span>${c.ok ? "✓" : "✗"} ${esc(c.name)}</span><b class="${c.ok ? "" : "acc-dn"}">${esc(c.detail)}</b></div>`).join("")}
+        ${r.recheck.voters ? `<div class="kv"><span>voter signs</span><b>${Object.entries(r.recheck.voters).map(([k, v]) =>
+          `<span class="${v > 0 ? "acc-up" : v < 0 ? "acc-dn" : "dim"}">${esc(k)} ${v > 0 ? "+1" : v < 0 ? "−1" : "0"}</span>`).join(" · ")}</b></div>` : ""}
         ${r.prediction ? `<div class="hint">${r.prediction.kind === "locked-contract" ? "locked contract" : "preview only"}: ${r.prediction.direction > 0 ? "BUY" : r.prediction.direction < 0 ? "SELL" : "FLAT"} · entry ${px(r.prediction.entry)} · TP ${px(r.prediction.tp)} · SL ${px(r.prediction.sl)} · TP:SL ${r.prediction.ratio != null ? Number(r.prediction.ratio).toFixed(2) + ":1" : "—"} · ${r.prediction.execution_eligible ? "execution eligible" : "never executes"}</div>` : `<div class="hint">raw analysis read was ${esc(r.raw_signal || "—")} — not produced as a prediction (see failed checks above).</div>`}
       </div>` : ""}
       <div class="an-period">calculation period: ${esc(period)} · total ${r.elapsed_ms} ms</div>
@@ -3643,10 +3663,6 @@ function checkIssuedAlerts(snap) {
 function applySnapshot(snap) {
   if (!snap || snap.type !== "snapshot") return;
   S.snap = snap;
-  // HTTP heartbeat — the REST poll is proof of life even when the
-  // websocket is proxied away (Codespaces/mobile). The offline banner and
-  // the feed chip both read this instead of assuming the socket is truth.
-  S.lastHttpAt = Date.now();
   if (snap.ts) S.serverOff = snap.ts - Date.now() / 1000;
   // snapshot = price truth only when the tick stream is dead (>5 s)
   const _tf = S._lastTickAt && (Date.now() - S._lastTickAt < 5000);
