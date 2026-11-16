@@ -795,14 +795,27 @@ function renderBranches() {
       "bands appear once the window has a direction and a seeded stop";
     return;
   }
-  const _pct = p => p > 0 && p < 0.01 ? "<1%" : `${Math.round(p * 100)}%`;
+  const _pct = p => !Number.isFinite(p) ? "—" : p > 0 && p < 0.01 ? "<1%" : `${Math.round(p * 100)}%`;
+  // Round a single first-touch distribution consistently across cards and bar.
+  const probs = [b.p_target, b.p_between, b.p_stop];
+  let percentages = null;
+  if (probs.every(p => Number.isFinite(p) && p >= 0)) {
+    const total = probs.reduce((a, v) => a + v, 0);
+    if (total > 0) {
+      const raw = probs.map(p => p * 100 / total), rounded = raw.map(Math.floor);
+      const order = raw.map((v, i) => [v - rounded[i], i]).sort((a, b) => b[0] - a[0]);
+      for (let n = 100 - rounded.reduce((a, v) => a + v, 0), i = 0; i < n; i++) rounded[order[i][1]]++;
+      percentages = rounded;
+    }
+  }
+  const outcomePct = i => percentages ? `${percentages[i]}%` : "—";
   stats.innerHTML = `
-    <div class="kv"><span>P(target before stop)</span><b class="acc-up">${_pct(b.p_target_cal ?? b.p_target)}${b.cal_delta ? ` <span class="dim" style="font-size:9px">cal (raw ${_pct(b.p_target_raw ?? b.p_target)})</span>` : ""}</b></div>
+    <div class="kv"><span>P(target before stop)</span><b class="acc-up">${outcomePct(0)}${b.cal_delta ? ` <span class="dim" style="font-size:9px">calibrated separately ${_pct(b.p_target_cal)}</span>` : ""}</b></div>
     <div class="kv"><span>calibration (graded forecasts)</span><b>${S.snap?.prob_audit?.n ? `Δ ${S.snap.prob_audit.calibration_delta > 0 ? "+" : ""}${Math.round((S.snap.prob_audit.calibration_delta || 0) * 100)} pts · Brier raw ${S.snap.prob_audit.brier ?? "—"}${S.snap.prob_audit.brier_cal != null ? ` vs cal ${S.snap.prob_audit.brier_cal}` : ""} · n=${S.snap.prob_audit.n}` : "collecting — active after 30 graded windows"}</b></div>
-    <div class="kv"><span>P(stop first)</span><b class="acc-dn">${_pct(b.p_stop)}</b></div>
+    <div class="kv"><span>P(stop first)</span><b class="acc-dn">${outcomePct(2)}</b></div>
     <div class="kv"><span>P(target | similar setups)</span><b class="acc-up">${b.p_target_cond != null ? `${_pct(b.p_target_cond)} <span class="dim" style="font-size:9px">n=${b.n_cond} · EV ${b.ev_bps_cond > 0 ? "+" : ""}${fmt(b.ev_bps_cond, 1)} bp</span>` : `<span class="dim">collecting (n=${b.n_cond || 0}/30 matched)</span>`}</b></div>
     <div class="kv"><span>fan basis</span><b>${esc(b.fan_basis || "all windows")}</b></div>
-    <div class="kv"><span>P(close between)</span><b>${_pct(b.p_between)}</b></div>
+    <div class="kv"><span>P(neither barrier touched)</span><b>${outcomePct(1)}</b></div>
     <div class="kv"><span>P(close down)</span><b>${Math.round(b.p_close_down * 100)}%</b></div>
     <div class="kv"><span>σ (remaining)</span><b>${px(b.sigma)}</b></div>
     <div class="kv"><span>expectancy (barrier pair)</span><b class="${(b.ev_bps ?? 0) >= 0 ? "acc-up" : "acc-dn"}">${b.ev_bps != null ? `${b.ev_bps >= 0 ? "+" : ""}${fmt(b.ev_bps, 1)} bp` : "—"}</b></div>
@@ -816,8 +829,8 @@ function renderBranches() {
   // ---- probability bar: the answer in one glance ----
   const bar = $("#branch-bar");
   if (bar) {
-    const pt = Math.round((b.p_target_cond ?? b.p_target) * 100),
-          ps = Math.round(b.p_stop * 100), pb = Math.max(0, 100 - pt - ps);
+    if (!percentages) { bar.innerHTML = ""; return; }
+    const [pt, pb, ps] = percentages;
     const seg = (v, color, label) => v > 0 ? `<div style="flex:${v};background:${color};color:#0b0b14;font:700 10px ui-monospace,monospace;text-align:center;padding:4px 0;white-space:nowrap;overflow:hidden">${label} ${v}%</div>` : "";
     bar.innerHTML = `<div style="display:flex;border-radius:6px;overflow:hidden;gap:1px">
       ${seg(pt, "#26a69a", "TARGET FIRST")}${seg(pb, "#3a3f55", "NEITHER")}${seg(ps, "#ef5350", "STOP FIRST")}</div>
@@ -2205,11 +2218,8 @@ async function loadEmotion() {
   try {
     const sys = await api(`/api/systems?symbol=${S.symbol}`);
     const em = sys.systems?.[`${S.symbol}|${S.focusTf}`]?.emotion || {};
-    // DOMINANT NOW — server-ranked by deviation-from-neutral (the old
-    // max(raw value) crowned the first sig()-saturated channel — E2 —
-    // on every tie, so "Greed" won forever). Server also tracks the
-    // real held-time; the local calc below is only a fallback and now
-    // uses the same deviation ranking.
+    // DOMINANT NOW — server-ranked using the same magnitudes as the grid. Server also
+    // tracks held-time; the local calculation is only a fallback.
     try {
       const dom = $("#em-dominant");
       const ev = em.emotions || {};
@@ -2222,7 +2232,7 @@ async function loadEmotion() {
         heldS = Math.round(em.dominant.held_s || 0);
       } else {
         for (let i = 1; i <= 21; i++) {
-          const dev = Math.abs(Number(ev[i] ?? 0.5) - 0.5) * 2;
+          const dev = Math.min(1, Math.abs(Number(ev[i] ?? 0)));
           if (dev > best) { second = best; ri = bi; best = dev; bi = i; }
           else if (dev > second) { second = dev; ri = i; }
         }
@@ -2401,7 +2411,7 @@ async function loadNews() {
         `${x.dropped_429 ? " · 429×" + x.dropped_429 : ""}</b></div>`).join("");
       const ex = st.filtered_examples || [];
       $("#nw-dropped").textContent =
-        `${st.filtered || 0} dropped for no crypto relevance` +
+        `${d.relevance_dropped ?? st.filtered ?? 0} dropped for no crypto relevance` +
         (ex.length ? " — e.g. " + ex.map(h => `"${h}"`).join("; ") : "");
       const em = st.emergency_history || [];
       $("#nw-emerg").innerHTML = em.length
@@ -2431,7 +2441,7 @@ async function loadNews() {
     $("#nw-agg").innerHTML = TF.map(tf => {
       const imp = (d.impacts || {})[tf];
       return `<div class="kv"><span>${tf.toUpperCase()} impact</span><b>${fmt(imp, 4)}</b></div>`;
-    }).join("") + `<div class="kv"><span>aggregate</span><b>${fmt(d.aggregate, 4)}</b></div>
+    }).join("") + `<div class="kv"><span>aggregate</span><b>${fmt(d.value, 4)}</b></div>
       <div class="kv"><span>polarity</span><b>${fmt(d.polarity, 3)}</b></div>`;
     const tb = $("#nw-table tbody"); tb.innerHTML = "";
     (d.items || []).forEach(it => {

@@ -74,8 +74,8 @@ from . import genesis as genesis_mod
 # regime routing only). 97-101 are the brain/emotion/physics/news/hedge
 # subsystem inputs to the CCI; 20 is DRHE the regime gauge.
 NON_VOTING_IDS = frozenset({20, 97, 98, 99, 100, 101})
-EMERGENCY_RELOCK_COOLDOWN_S = 60.0
-EMERGENCY_RELOCK_MIN_MOVE_ATR = 0.5
+EMERGENCY_RELOCK_COOLDOWN_S = 900.0
+EMERGENCY_RELOCK_MIN_MOVE_ATR = 3.0
 
 
 def _mean(xs):
@@ -174,7 +174,10 @@ def _recheck_prediction(*, direction: int, conf: float, floor: float,
             "checks": checks, "failed": failed,
             "verdict": ("RECHECK PASSED — prediction produced" if not failed
                         and direction != 0 else
-                        "NO TRADE — recheck failed: " + ", ".join(failed))}
+                        "NO TRADE — recheck failed: " + ", ".join(
+                            f"confidence below floor ({conf:.3f} ≤ {floor:.3f})"
+                            if name == "confidence above floor" and direction
+                            else name for name in failed))}
 
 
 def _calibration_delta(audit: dict) -> float:
@@ -3092,10 +3095,9 @@ class PredictionEngine:
                          reason: str = "", *, automatic: bool = False) -> dict:
         """Re-anchor an existing lock after an emergency.
 
-        Automatic news triggers additionally require an active lock and a
-        ≥0.5 ATR move from its entry; manual drills retain their explicit
-        behavior. All paths share a 60 s cooldown, six-per-hour N-8 cap,
-        and 30 s new-lock halt.
+        An active lock may be re-anchored only after 15 minutes and a
+        move strictly greater than 3 ATR. A manual drill without a lock
+        remains audit-only; it does not replace an active contract.
         """
         now = time.time()
         hour = [r for r in self.news.emergency_history
@@ -3126,10 +3128,22 @@ class PredictionEngine:
             # never overwrite a REAL entry with0 (it would force a skip)
             return {"ok": False,
                     "error": "no price yet — emergency re-lock refused"}
-        if automatic:
-            if lock is None:
+        if automatic and lock is None:
+            return {"ok": False, "skipped": True,
+                    "error": "automatic emergency requires an active lock"}
+        if lock is not None:
+            try:
+                locked_at = float(lock.get("locked_at") or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                locked_at = 0.0
+            if not math.isfinite(locked_at) or locked_at <= 0:
                 return {"ok": False, "skipped": True,
-                        "error": "automatic emergency requires an active lock"}
+                        "error": "emergency gated: lock time unavailable"}
+            remaining = EMERGENCY_RELOCK_COOLDOWN_S - (now - locked_at)
+            if remaining > 0:
+                return {"ok": False, "cooldown": True,
+                        "cooldown_s": round(remaining, 1),
+                        "error": "emergency gated: lock younger than 15 minutes"}
             if price <= 0 or _old_entry <= 0:
                 return {"ok": False, "skipped": True,
                         "error": "automatic emergency needs a valid entry and price"}
@@ -3141,7 +3155,7 @@ class PredictionEngine:
                 return {"ok": False, "skipped": True,
                         "error": "automatic emergency gated: ATR unavailable"}
             _move_atr = abs(price - _old_entry) / _atr_gate
-            if _move_atr < EMERGENCY_RELOCK_MIN_MOVE_ATR:
+            if _move_atr <= EMERGENCY_RELOCK_MIN_MOVE_ATR:
                 return {"ok": False, "skipped": True,
                         "move_atr": round(_move_atr, 3),
                         "required_move_atr": EMERGENCY_RELOCK_MIN_MOVE_ATR,

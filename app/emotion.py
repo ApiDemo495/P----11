@@ -469,30 +469,20 @@ class EmotionSystem:
                     "computed — channel exactly 0.0 this window "
                     "(no trigger, both sides balanced)")
         # ---- DOMINANT channel (server-side, honest) ---------------------
-        # The old UI picked max(raw value): channels are [0,1] with 0.5
-        # neutral, and several sig() channels saturate at 1.00 in calm
-        # tapes — the FIRST saturated channel in index order (E2) then
-        # won every tie, forever ("Greed is always top"). Rank instead
-        # by DEVIATION FROM NEUTRAL |v-0.5|*2, break (near-)ties by
-        # who MOVED most since the previous pass, and track held-time
-        # here so it survives page reloads.
+        # Rank the same magnitudes shown by the live grid; these legacy
+        # channels are magnitudes, not signed directional probabilities.
         import time as _time
         _key = (ctx.symbol, ctx.tf)
         _prev = self._prev_emos.get(_key) or {}
         _w = self._weights(ctx.symbol, ctx.tf)
-        # E9 (roll-over panic) is a 0-BASED magnitude: 0 = no pain, so
-        # its neutral is 0, not 0.5. Ranking it by |v-0.5| made it
-        # "100% extreme" in every up-tape for days (user screenshot).
-        _NEUTRAL = {9: 0.0}
         def _dev_of(i):
-            _n = _NEUTRAL.get(i, 0.5)
-            return abs(float(emos[i]) - _n) / (1.0 - _n if _n == 0 else 0.5)
+            return min(1.0, abs(float(emos[i])))
         _ranked = sorted(
             ((_dev_of(i),
               abs(float(emos[i]) - float(_prev.get(i, emos[i]))),
               float(_w[i - 1]), i)
              for i in range(1, 22)),
-            key=lambda t: (round(t[0], 3), t[1], t[2]), reverse=True)
+            key=lambda t: (t[0], t[1], t[2]), reverse=True)
         _dev, _dlt, _wv, _dom_id = _ranked[0]
         # when several channels are pegged at the same extreme and
         # none moved, crowning one is arbitrary — SAY so (tied count)
