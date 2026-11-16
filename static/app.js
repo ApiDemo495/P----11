@@ -3643,6 +3643,10 @@ function checkIssuedAlerts(snap) {
 function applySnapshot(snap) {
   if (!snap || snap.type !== "snapshot") return;
   S.snap = snap;
+  // HTTP heartbeat — the REST poll is proof of life even when the
+  // websocket is proxied away (Codespaces/mobile). The offline banner and
+  // the feed chip both read this instead of assuming the socket is truth.
+  S.lastHttpAt = Date.now();
   if (snap.ts) S.serverOff = snap.ts - Date.now() / 1000;
   // snapshot = price truth only when the tick stream is dead (>5 s)
   const _tf = S._lastTickAt && (Date.now() - S._lastTickAt < 5000);
