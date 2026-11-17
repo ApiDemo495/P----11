@@ -1,0 +1,334 @@
+{
+  "generated_at": 1794902536,
+  "n_folds": 5,
+  "candidates_tested": 535,
+  "summary": {
+    "open": 1,
+    "shadow": 4,
+    "closed": 12,
+    "total": 17,
+    "open_assets": [
+      "ETH"
+    ],
+    "covered_assets": [
+      "ADA",
+      "ETH",
+      "XRP"
+    ],
+    "open_sleeves": [
+      "catchup_subhour_spot_15m::ETH"
+    ]
+  },
+  "sleeves": [
+    {
+      "sleeve_id": "catchup_btc_impulse::ADA",
+      "asset": "ADA",
+      "family": "catchup_btc_impulse",
+      "status": "shadow",
+      "n": 85,
+      "net_ev_bps": 80.135,
+      "profit_factor": 1.387,
+      "win_rate": 0.4706,
+      "t_iid": 0.773,
+      "t_block_bootstrap": 1.331,
+      "t_effective": 0.773,
+      "positive_folds": 3,
+      "params": {
+        "fold0": "<no-train-window>",
+        "fold1": "catchup_btc_impulse|ADA|L_h=12|cond=plain|hold_h=24|thr=1.5",
+        "fold2": "catchup_btc_impulse|ADA|L_h=24|cond=plain|hold_h=48|thr=2.0",
+        "fold3": "catchup_btc_impulse|ADA|L_h=24|cond=plain|hold_h=48|thr=2.0",
+        "fold4": "catchup_btc_impulse|ADA|L_h=24|cond=plain|hold_h=48|thr=2.5"
+      },
+      "reasons": [
+        "|t| 0.77 < 2.0 (correlation-adjusted)",
+        "holdout Net EV -9.42 bps <= 0"
+      ],
+      "folds": [
+        {
+          "fold": 1,
+          "n": 45,
+          "net_ev_bps": 1.268,
+          "profit_factor": 1.009
+        },
+        {
+          "fold": 2,
+          "n": 17,
+          "net_ev_bps": 267.885,
+          "profit_factor": 3.138
+        },
+        {
+          "fold": 3,
+          "n": 13,
+          "net_ev_bps": 271.721,
+          "profit_factor": 1.541
+        },
+        {
+          "fold": 4,
+          "n": 10,
+          "net_ev_bps": -133.198,
+          "profit_factor": 0.527
+        }
+      ],
+      "details": {
+        "bar_seconds": 3600,
+        "candidates_in_group": 27,
+        "frozen_candidate": "catchup_btc_impulse|ADA|L_h=24|cond=plain|hold_h=48|thr=2.0",
+        "holdout_start": 1759856400,
+        "folds_with_enough_trades": 4,
+        "tested_candidates": 535,
+        "t_bonferroni_threshold": 4.728,
+        "holdout_n": 43,
+        "holdout_net_ev_bps": -9.421,
+        "holdout_profit_factor": 0.966
+      }
+    },
+    {
+      "sleeve_id": "catchup_btc_impulse::ETH",
+      "asset": "ETH",
+      "family": "catchup_btc_impulse",
+      "status": "shadow",
+      "n": 93,
+      "net_ev_bps": 45.539,
+      "profit_factor": 1.266,
+      "win_rate": 0.5054,
+      "t_iid": 0.807,
+      "t_block_bootstrap": 2.012,
+      "t_effective": 0.807,
+      "positive_folds": 4,
+      "params": {
+        "fold0": "<no-train-window>",
+        "fold1": "catchup_btc_impulse|ETH|L_h=24|cond=plain|hold_h=24|thr=1.5",
+        "fold2": "catchup_btc_impulse|ETH|L_h=48|cond=plain|hold_h=48|thr=1.5",
+        "fold3": "catchup_btc_impulse|ETH|L_h=48|cond=plain|hold_h=48|thr=2.0",
+        "fold4": "catchup_btc_impulse|ETH|L_h=48|cond=plain|hold_h=48|thr=1.5"
+      },
+      "reasons": [
+        "|t| 0.81 < 2.0 (correlation-adjusted)"
+      ],
+      "folds": [
+        {
+          "fold": 1,
+          "n": 38,
+          "net_ev_bps": 7.818,
+          "profit_factor": 1.061
+        },
+        {
+          "fold": 2,
+          "n": 20,
+          "net_ev_bps": 175.215,
+          "profit_factor": 2.185
+        },
+        {
+          "fold": 3,
+          "n": 10,
+          "net_ev_bps": 19.824,
+          "profit_factor": 1.069
+        },
+        {
+          "fold": 4,
+          "n": 25,
+          "net_ev_bps": 9.422,
+          "profit_factor": 1.046
+        }
+      ],
+      "details": {
+        "bar_seconds": 3600,
+        "candidates_in_group": 27,
+        "frozen_candidate": "catchup_btc_impulse|ETH|L_h=48|cond=plain|hold_h=48|thr=1.5",
+        "holdout_start": 1759770000,
+        "folds_with_enough_trades": 4,
+        "tested_candidates": 535,
+        "t_bonferroni_threshold": 4.728,
+        "holdout_n": 55,
+        "holdout_net_ev_bps": 13.331,
+        "holdout_profit_factor": 1.065
+      }
+    },
+    {
+      "sleeve_id": "catchup_btc_impulse::XRP",
+      "asset": "XRP",
+      "family": "catchup_btc_impulse",
+      "status": "shadow",
+      "n": 88,
+      "net_ev_bps": 103.355,
+      "profit_factor": 1.601,
+      "win_rate": 0.5,
+      "t_iid": 1.378,
+      "t_block_bootstrap": 1.272,
+      "t_effective": 1.272,
+      "positive_folds": 3,
+      "params": {
+        "fold0": "<no-train-window>",
+        "fold1": "catchup_btc_impulse|XRP|L_h=12|cond=plain|hold_h=24|thr=2.0",
+        "fold2": "catchup_btc_impulse|XRP|L_h=48|cond=plain|hold_h=48|thr=1.5",
+        "fold3": "catchup_btc_impulse|XRP|L_h=48|cond=plain|hold_h=48|thr=1.5",
+        "fold4": "catchup_btc_impulse|XRP|L_h=48|cond=plain|hold_h=48|thr=1.5"
+      },
+      "reasons": [
+        "|t| 1.27 < 2.0 (correlation-adjusted)"
+      ],
+      "folds": [
+        {
+          "fold": 1,
+          "n": 25,
+          "net_ev_bps": 52.134,
+          "profit_factor": 1.384
+        },
+        {
+          "fold": 2,
+          "n": 19,
+          "net_ev_bps": 449.816,
+          "profit_factor": 4.913
+        },
+        {
+          "fold": 3,
+          "n": 19,
+          "net_ev_bps": 72.099,
+          "profit_factor": 1.436
+        },
+        {
+          "fold": 4,
+          "n": 25,
+          "net_ev_bps": -84.979,
+          "profit_factor": 0.668
+        }
+      ],
+      "details": {
+        "bar_seconds": 3600,
+        "candidates_in_group": 27,
+        "frozen_candidate": "catchup_btc_impulse|XRP|L_h=48|cond=plain|hold_h=48|thr=1.5",
+        "holdout_start": 1759770000,
+        "folds_with_enough_trades": 4,
+        "tested_candidates": 535,
+        "t_bonferroni_threshold": 4.728,
+        "holdout_n": 55,
+        "holdout_net_ev_bps": 25.07,
+        "holdout_profit_factor": 1.106
+      }
+    },
+    {
+      "sleeve_id": "catchup_subhour_spot_15m::ETH",
+      "asset": "ETH",
+      "family": "catchup_subhour_spot_15m",
+      "status": "open",
+      "n": 297,
+      "net_ev_bps": 88.215,
+      "profit_factor": 1.484,
+      "win_rate": 0.5253,
+      "t_iid": 2.47,
+      "t_block_bootstrap": 4.229,
+      "t_effective": 2.47,
+      "positive_folds": 4,
+      "params": {
+        "fold0": "<no-train-window>",
+        "fold1": "catchup_subhour_spot_15m|ETH|L_h=12|hold_h=48|thr=2.0",
+        "fold2": "catchup_subhour_spot_15m|ETH|L_h=12|hold_h=48|thr=2.0",
+        "fold3": "catchup_subhour_spot_15m|ETH|L_h=12|hold_h=48|thr=2.5",
+        "fold4": "catchup_subhour_spot_15m|ETH|L_h=12|hold_h=48|thr=2.5"
+      },
+      "reasons": [],
+      "folds": [
+        {
+          "fold": 1,
+          "n": 75,
+          "net_ev_bps": 19.497,
+          "profit_factor": 1.088
+        },
+        {
+          "fold": 2,
+          "n": 84,
+          "net_ev_bps": 149.873,
+          "profit_factor": 1.765
+        },
+        {
+          "fold": 3,
+          "n": 66,
+          "net_ev_bps": 108.449,
+          "profit_factor": 1.624
+        },
+        {
+          "fold": 4,
+          "n": 72,
+          "net_ev_bps": 69.314,
+          "profit_factor": 1.523
+        }
+      ],
+      "details": {
+        "bar_seconds": 900,
+        "candidates_in_group": 27,
+        "frozen_candidate": "catchup_subhour_spot_15m|ETH|L_h=12|hold_h=48|thr=2.5",
+        "holdout_start": 1704152700,
+        "folds_with_enough_trades": 4,
+        "tested_candidates": 535,
+        "t_bonferroni_threshold": 4.728,
+        "holdout_n": 145,
+        "holdout_net_ev_bps": 48.214,
+        "holdout_profit_factor": 1.251,
+        "selection_multiple": 535
+      }
+    },
+    {
+      "sleeve_id": "catchup_subhour_spot_30m::ETH",
+      "asset": "ETH",
+      "family": "catchup_subhour_spot_30m",
+      "status": "shadow",
+      "n": 332,
+      "net_ev_bps": 63.542,
+      "profit_factor": 1.325,
+      "win_rate": 0.506,
+      "t_iid": 1.856,
+      "t_block_bootstrap": 2.566,
+      "t_effective": 1.856,
+      "positive_folds": 3,
+      "params": {
+        "fold0": "<no-train-window>",
+        "fold1": "catchup_subhour_spot_30m|ETH|L_h=12|hold_h=48|thr=2.0",
+        "fold2": "catchup_subhour_spot_30m|ETH|L_h=12|hold_h=48|thr=2.0",
+        "fold3": "catchup_subhour_spot_30m|ETH|L_h=12|hold_h=48|thr=2.0",
+        "fold4": "catchup_subhour_spot_30m|ETH|L_h=12|hold_h=48|thr=2.0"
+      },
+      "reasons": [
+        "|t| 1.86 < 2.0 (correlation-adjusted)"
+      ],
+      "folds": [
+        {
+          "fold": 1,
+          "n": 73,
+          "net_ev_bps": -20.838,
+          "profit_factor": 0.908
+        },
+        {
+          "fold": 2,
+          "n": 77,
+          "net_ev_bps": 145.24,
+          "profit_factor": 1.786
+        },
+        {
+          "fold": 3,
+          "n": 87,
+          "net_ev_bps": 77.041,
+          "profit_factor": 1.353
+        },
+        {
+          "fold": 4,
+          "n": 95,
+          "net_ev_bps": 49.799,
+          "profit_factor": 1.315
+        }
+      ],
+      "details": {
+        "bar_seconds": 1800,
+        "candidates_in_group": 27,
+        "frozen_candidate": "catchup_subhour_spot_30m|ETH|L_h=12|hold_h=48|thr=2.0",
+        "holdout_start": 1703080800,
+        "folds_with_enough_trades": 4,
+        "tested_candidates": 535,
+        "t_bonferroni_threshold": 4.728,
+        "holdout_n": 209,
+        "holdout_net_ev_bps": 65.78,
+        "holdout_profit_factor": 1.369
+      }
+    }
+  ]
+}

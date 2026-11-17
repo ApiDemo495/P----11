@@ -64,6 +64,7 @@ from .brain import BrainSystem
 from .rlsys import damp_all, damp_shares
 from .emotion import EmotionSystem
 from .feed import MarketFeed
+from .sleeves import evaluate_sleeves, load_registry as load_sleeve_registry
 from .formulas import FORMULA_FUNCTIONS, FORMULA_NAMES, compute_all
 from .formulas.trace import traced_compute
 from .forward import ForwardTables
@@ -212,6 +213,8 @@ class PredictionEngine:
 
         # --- session phase -------------------------------------------------
         self.phase = "analysis"                       # analysis -> live
+        # certified-sleeve snapshot cache: (timestamp, payload) or (0, None)
+        self._sleeve_cache: tuple[float, dict[str, Any] | None] = (0.0, None)
         self.phase_start = time.time()
         self.phase_deadline = self.phase_start + INITIAL_ANALYSIS_MAX_SECONDS
         self.phase_warning = False
@@ -5518,6 +5521,48 @@ class PredictionEngine:
                     "ready": bool(fresh.get("ready")),
                 }
 
+    # ------------------------------------------------------------------
+    # CERTIFIED SLEEVES (app/edge_gate.py + app/sleeves.py)
+    # ------------------------------------------------------------------
+    def sleeve_block(self, now: float | None = None) -> dict[str, Any]:
+        """Live status of every certified sleeve, plus honest coverage.
+
+        The registry is produced by ``backtest/edge_scan.py`` and is the
+        single source of truth: a sleeve that the gate did not promote to
+        ``open`` cannot emit a state here. Results are cached for a few
+        seconds because the snapshot is built far more often than the
+        15m bar grid can change.
+        """
+        ttl = 5.0
+        stamped = self._sleeve_cache
+        if (
+            stamped is not None
+            and now is not None
+            and stamped[0] + ttl > now
+        ):
+            return stamped[1]
+        try:
+            reg = load_sleeve_registry()
+            block = evaluate_sleeves(self.feed, registry=reg, now=now)
+        except Exception:
+            log.exception("sleeve evaluation failed")
+            block = {"signals": [], "assets": {}, "certified": [],
+                     "summary": {}, "note": "sleeve evaluation failed"}
+
+        # every UI asset gets a row, even with nothing certified — silence
+        # is reported as silence, never as a signal
+        for symbol in SYMBOL_ORDER:
+            block["assets"].setdefault(symbol, {
+                "sleeve_id": "",
+                "asset": symbol,
+                "status": "none",
+                "state": "none",
+                "note": "no certified sleeve for this asset (edge scan found none)",
+            })
+        block["coverage"] = sorted(block["assets"].keys())
+        self._sleeve_cache = (now if now is not None else time.time(), block)
+        return block
+
     def build_snapshot(self) -> dict[str, Any]:
         now = time.time()
         try:
@@ -5669,6 +5714,7 @@ class PredictionEngine:
                 "warning": self.phase_warning,
             },
             "assets": assets,
+            "sleeves": self.sleeve_block(now=now),
             "prob_audit": self.prob_audit_summary(),
             "bgn": {
                 sym: {

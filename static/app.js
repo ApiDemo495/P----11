@@ -1067,6 +1067,28 @@ function renderHero() {
       return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${t.level ? px(t.level) : "—"} <span class="dim">${st}</span>${_rel}</b></div>`;
     }).join("") || `<div class="dim pad">waiting for the first lock…</div>`;
   }
+  // CERTIFIED SLEEVE — evidence, not a claim. The registry only contains
+  // sleeves that passed app/edge_gate.py out of fold; anything else appears
+  // as "none" so silence is never mistaken for a signal.
+  const sl = (S.snap?.sleeves?.assets || {})[S.symbol] || null;
+  const slBlock = $("#hero-sleeve");
+  if (slBlock) {
+    if (!sl || sl.status === "none") {
+      slBlock.innerHTML = `<div class="kv"><span>certified sleeve</span><b class="dim">none for ${S.symbol}</b></div>`;
+    } else {
+      const isOpen = sl.status === "open";
+      const stTxt = isOpen ? String(sl.state || "flat").toUpperCase() : "UNPROVEN";
+      const stCls = isOpen ? (sl.state === "long" ? "acc-up" : sl.state === "short" ? "acc-dn" : "dim") : "dim";
+      const zTxt = sl.z == null ? "warming up" : `${Number(sl.z).toFixed(2)}σ / ${sl.threshold}σ`;
+      slBlock.innerHTML = `
+        <div class="kv"><span>certified sleeve ${isOpen ? "" : "(shadow)"}</span><b class="${stCls}">${stTxt}</b></div>
+        <div class="kv"><span>trigger (BTC 12h impulse → ${S.symbol})</span><b>${zTxt}</b></div>
+        <div class="kv"><span>OOF net EV · PF · n</span><b>${Number(sl.net_ev_bps).toFixed(1)} bp · ${Number(sl.profit_factor).toFixed(2)} · ${sl.n}</b></div>
+        <div class="kv"><span>corr-adj |t| (purged folds)</span><b>${Number(sl.t_effective).toFixed(2)}</b></div>
+        <div class="kv"><span>hold</span><b>${sl.hold_hours}h</b></div>
+        ${sl.note ? `<div class="kv"><span>note</span><b class="dim">${sl.note}</b></div>` : ""}`;
+    }
+  }
   const rn = $("#risk-note");
   if (rn) {
     const rk = cyc?.risk || {};
