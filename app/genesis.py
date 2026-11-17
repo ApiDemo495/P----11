@@ -608,3 +608,120 @@ def evaluate_active(features: dict, active_ids: list[str]) -> dict[str, float]:
         except Exception:
             out[fid] = 0.0
     return out
+
+
+# ══════════════════════════════════════════════════════════════════════
+# guide §3.4 — pool walk-forward evaluation on a real 1-minute tape
+#
+# The pool was only ever scored by live GRC outcomes, so a fresh install
+# had an unscored pool and every candidate sat in "candidate" forever.
+# This replays the tape: 60 % in-sample / 40 % out-of-sample, and the
+# OOS metrics decide admission. Promotion rule (guide §3.4):
+#     IC > 0.015  AND  max|ρ| < 0.75
+# ══════════════════════════════════════════════════════════════════════
+WALKFORWARD_IC_MIN = 0.015
+WALKFORWARD_MAX_RHO = 0.75
+WALKFORWARD_W = 40
+
+
+def _wf_features(closes: list[float], i: int, W: int = WALKFORWARD_W) -> dict:
+    lo = max(0, i - W + 1)
+    p = np.asarray(closes[lo:i + 1], dtype=float)
+    r = (np.diff(p) / np.maximum(p[:-1], 1e-12)) if len(p) > 1 else np.zeros(1)
+    half = max(1, len(p) // 2)
+    return {"prices": p, "returns": r, "closes": p,
+            "first_half": p[:half], "second_half": p[half:], "W": len(p)}
+
+
+def evaluate_pool_walkforward(self, bars_1m: list[dict], *,
+                             horizon: int = 22, is_frac: float = 0.6,
+                             W: int = WALKFORWARD_W) -> dict:
+    """Score the whole pool out-of-sample on a 1-minute tape.
+
+    Returns {ok, n_total, n_is, n_oos, scored, promoted, retired, per:{},
+             rule}. Never raises: a bad bar is skipped, never a crash."""
+    t_start = time.perf_counter()
+    closes = [float(b.get("c") or 0.0) for b in (bars_1m or [])
+              if isinstance(b, dict)]
+    n = len(closes)
+    report: dict = {"ok": False, "n_total": n, "scored": 0, "promoted": 0,
+                    "rule": f"IC>{WALKFORWARD_IC_MIN} and max|rho|<"
+                            f"{WALKFORWARD_MAX_RHO}", "per": {}}
+    if n < max(60, W + horizon + 10):
+        report["why"] = f"tape too thin ({n} bars)"
+        return report
+    split = int(n * max(0.1, min(0.9, is_frac)))
+    oos_lo = max(split, W)
+    oos_hi = n - max(1, horizon)
+    if oos_hi - oos_lo < 12:
+        report["why"] = "out-of-sample slice too short"
+        return report
+    report.update({"ok": True, "n_is": split, "n_oos": oos_hi - oos_lo,
+                   "is_frac": is_frac, "horizon": horizon})
+
+    # forward outcomes for the OOS slice
+    outcomes = []
+    for i in range(oos_lo, oos_hi):
+        fwd = ((closes[i + horizon] - closes[i]) / closes[i]
+               if closes[i] else 0.0)
+        outcomes.append(1 if fwd > 0 else (-1 if fwd < 0 else 0))
+
+    feats0 = _wf_features(closes, oos_lo, W)
+    actives_vals = {fid: [s[0] for s in (e.get("scored") or [])]
+                    for fid, e in self.formulas.items()
+                    if e.get("state") == "active"}
+    for did, dom in DOMAINS.items():
+        try:
+            cands = dom["gen"](feats0) or []
+        except Exception:
+            continue
+        for name, fn in cands:
+            fid = f"{did}:{name}"
+            vals: list[float] = []
+            outs: list[int] = []
+            n_bad = 0
+            t0 = time.perf_counter()
+            for i in range(oos_lo, oos_hi):
+                try:
+                    v = float(fn(_wf_features(closes, i, W)))
+                except Exception:
+                    n_bad += 1
+                    continue
+                if not math.isfinite(v):
+                    n_bad += 1
+                    continue
+                vals.append(v)
+                outs.append(outcomes[i - oos_lo])
+            latency_us = ((time.perf_counter() - t0) * 1e6
+                          / max(1, len(vals) + n_bad))
+            if len(vals) < 12:
+                report["per"][fid] = {"skipped": f"only {len(vals)} readings"}
+                continue
+            m = fitness(vals, outs, actives_vals, latency_us)
+            promoted = (m["ic"] > WALKFORWARD_IC_MIN
+                        and m["max_corr"] < WALKFORWARD_MAX_RHO)
+            with self._lock:
+                entry = self.formulas.get(fid)
+                if entry is not None:
+                    entry["walkforward"] = {
+                        "ts": time.time(), "HIT": m["hit_rate"],
+                        "IC": m["ic"], "STAB": m["stability"],
+                        "TURN": m["turnover"], "max_rho": m["max_corr"],
+                        "us": m["latency_us"], "n": m["n"],
+                        "promoted": bool(promoted)}
+                    if promoted and entry.get("state") == "candidate":
+                        entry["state"] = "probation"
+                        entry["promoted_by"] = "walkforward"
+                        report["promoted"] += 1
+            report["scored"] += 1
+            report["per"][fid] = {"HIT": m["hit_rate"], "IC": m["ic"],
+                                  "STAB": m["stability"],
+                                  "TURN": m["turnover"],
+                                  "max_rho": m["max_corr"],
+                                  "us": m["latency_us"], "n": m["n"],
+                                  "promoted": bool(promoted)}
+    report["ms"] = round((time.perf_counter() - t_start) * 1000, 1)
+    return report
+
+
+GenesisLayer.evaluate_pool_walkforward = evaluate_pool_walkforward

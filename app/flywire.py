@@ -1265,10 +1265,21 @@ class FlyWireBrain:
                              daemon=True).start()
         if self._anatomy_state == "error":
             return {"state": "error", "error": self._anatomy_error}
-        # instant part while the heavy pass runs
+        # instant part while the heavy pass runs. §6.1: the SYNAPSE TOTAL
+        # is derived from the adjacency that is already in memory
+        # (weights.sum() ≡ nnz for a signed weight matrix), so the card
+        # prints a real count immediately instead of "computing…" and can
+        # never drift from a hardcoded 15,091,983.
         classes, counts = np.unique(self.cls, return_counts=True)
+        try:
+            synapses = int(self.W.nnz)
+        except Exception:
+            synapses = None
         return {"state": "computing",
                 "neurons": int(len(self.roots)),
+                "synapses": synapses,
+                "connections": synapses,
+                "synapses_source": "W.nnz (live connectome)",
                 "classes": {str(c): int(n)
                             for c, n in zip(classes, counts)}}
 
