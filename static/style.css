@@ -490,3 +490,20 @@ html, body { overflow-x: hidden; max-width: 100vw; }
 table { max-width: 100%; }
 canvas { max-width: 100%; }
 #main { width: 100%; min-width: 0; }
+
+/* PAPER BOOK — live portfolio strip. The stat tiles reuse .kv; the bar is
+   the hold timer, so it must read as progress, not as a signal colour. */
+.book-stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 6px;
+}
+.book-stats .kv { padding: 6px 9px; gap: 1px; }
+.book-stats .kv b { font-size: 12px; }
+#book-positions .kv, #book-assets .kv, #book-sleeves .kv {
+  border-left: 2px solid var(--line2);
+}
+#book-positions .kv .bar { min-width: 40px; margin-top: 2px; }
+@media (max-width: 640px) {
+  .book-stats { grid-template-columns: repeat(3, 1fr); }
+  #book-positions .kv, #book-assets .kv, #book-sleeves .kv { padding: 7px 9px; }
+}

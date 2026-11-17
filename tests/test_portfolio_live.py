@@ -392,3 +392,62 @@ def test_ui_exposes_the_paper_book_and_sleeve_telemetry():
     assert 'sleeves?.portfolio' in js
     assert "none / blocked" in js, "UI must state when an asset has no edge"
     assert "realised slippage" in js
+
+
+# ------------------------------------------- live wiring (Pillar 2 -> server)
+def test_each_sleeve_trades_its_own_frozen_specification():
+    """The live engine must not evaluate every sleeve with one spec.
+
+    `evaluate_sleeves` used module-level defaults (lead=BTC, 12 h impulse,
+    thr 2.5) for EVERY sleeve, so the certified spillover sleeve -- frozen
+    as lead=BNB / lookback 24 h / thr 2.0 -- was live-running a different
+    strategy from the one that passed the gate. Silent, and invisible in
+    every test that only checked the certified sleeve's name.
+    """
+    from app.sleeves import parse_frozen
+
+    spec = parse_frozen(
+        "spillover_spot_15m|ETH|hold_h=48|lead=BNB|lookback_h=24|thr=2.0")
+    assert spec == {"hold_h": 48, "lead": "BNB", "lookback_h": 24, "thr": 2.0}
+    assert parse_frozen("") == {}
+    assert parse_frozen("x|Y|thr=2.5") == {"thr": 2.5}
+
+
+def test_registry_open_sleeves_carry_a_parsable_frozen_spec():
+    """Every certified sleeve the live engine trades must be reproducible."""
+    import json
+    import os
+
+    from app.sleeves import parse_frozen
+
+    root = os.path.join(os.path.dirname(__file__), "..")
+    reg = json.load(open(os.path.join(root, "app", "sleeve_registry.json")))
+    opened = [s for s in reg["sleeves"] if s.get("status") == "open"]
+    assert opened, "registry must retain the certified sleeves"
+    for s in opened:
+        frozen = (s.get("details") or {}).get("frozen_candidate") or ""
+        spec = parse_frozen(frozen)
+        assert spec.get("thr"), f"{s['sleeve_id']} has no thr in its frozen spec"
+        assert spec.get("hold_h"), f"{s['sleeve_id']} has no hold_h in its frozen spec"
+
+
+def test_positions_expose_hold_timer_and_expected_edge():
+    """The dashboard shows entry / stop / hold timer / edge -- so they must exist."""
+    book = _book(1)
+    sid = next(iter(book.sleeves))
+    rt = book.sleeves[sid]
+    rt.hold_bars = 192
+    res = book.try_enter(sid, "long", {"t": 1000, "o": 100.0}, 0, 0.01)
+    assert res["ok"], res
+    book.manage(10, {"ETH": {"t": 2000, "c": 101.0, "h": 101.0, "l": 100.0}})
+    rows = book.snapshot()["open_positions"]
+    assert len(rows) == 1
+    row = rows[0]
+    for key in ("entry_price", "stop", "hold_bars", "bars_held",
+                "bars_remaining", "expected_edge_bps", "unrealised_bps"):
+        assert key in row, f"missing {key} in position row"
+    assert row["bars_held"] == 10
+    assert row["bars_remaining"] == 192 - 10
+    # entry pays up by half the friction, so a 100 -> 101 move is slightly
+    # less than 100 bp once the entry slip is included
+    assert 90.0 < row["unrealised_bps"] < 100.0

@@ -295,6 +295,10 @@ class LivePortfolio:
         # stopping the book -- needed to measure a full holdout honestly
         self.enforce_monitors = enforce_monitors
         self.ledger_path = ledger_path or LEDGER_PATH
+        # live mark state, keyed by asset (bar indices are per-asset)
+        self._bar_now: dict[str, int] = {}
+        self._last_px: dict[str, float] = {}
+        self._now_ts: int = 0
         self.sleeves: dict[str, SleeveRuntime] = {}
         for s in self.registry.get("sleeves", []):
             if s.get("status") != "open":
@@ -461,6 +465,14 @@ class LivePortfolio:
         assumed friction (the mirror of the entry convention).
         """
         closed_now: list[ClosedTrade] = []
+        # per-asset bookkeeping the UI needs: bar index (hold timers) and
+        # last mark (unrealised P&L). Keyed by asset because bar indices are
+        # not comparable across assets.
+        for asset, px in (prices or {}).items():
+            self._bar_now[asset] = bar_index
+            if px.get("c"):
+                self._last_px[asset] = float(px["c"])
+                self._now_ts = max(self._now_ts, int(px.get("t", 0) or 0))
         for sid in list(self.positions):
             pos = self.positions[sid]
             px = prices.get(pos.asset)
@@ -692,16 +704,8 @@ class LivePortfolio:
                 for sid, v in self._observe_only.items()
             },
             "monitors_enforced": self.enforce_monitors,
-            "open_positions": [
-                {
-                    "sleeve_id": p.sleeve_id, "asset": p.asset,
-                    "direction": p.direction, "size": round(p.size, 4),
-                    "entry_price": p.entry_price, "entry_t": p.entry_t,
-                    "stop": p.stop, "hold_bars": p.target_hold_bars,
-                    "scale": round(p.scale, 3),
-                }
-                for p in self.positions.values()
-            ],
+            "open_positions": [self._position_row(p)
+                               for p in self.positions.values()],
             "gross_exposure": round(self.gross_exposure, 4),
             "realized_bps": round(self.realized_bps, 2),
             "equity": round(self.equity, 6),
@@ -722,6 +726,33 @@ class LivePortfolio:
                 "max_sleeve_corr": MAX_SLEEVE_CORR,
                 "drawdown_halt": PORTFOLIO_DRAWDOWN_HALT,
             },
+        }
+
+    def _unrealised_bps(self, pos: "Position") -> float:
+        """Open P&L in bps of the position, marked at the last real price."""
+        px = self._last_px.get(pos.asset)
+        if not px or pos.entry_price <= 0:
+            return 0.0
+        return pos.direction * (px / pos.entry_price - 1.0) * 1e4
+
+    def _position_row(self, pos: "Position") -> dict:
+        """One snapshot row for an open position (JSON-safe, UI-ready)."""
+        held = max(0, self._bar_now.get(pos.asset, pos.entry_bar) - pos.entry_bar)
+        return {
+            "sleeve_id": pos.sleeve_id,
+            "asset": pos.asset,
+            "direction": pos.direction,
+            "size": round(pos.size, 4),
+            "entry_price": pos.entry_price,
+            "entry_t": pos.entry_t,
+            "stop": pos.stop,
+            "hold_bars": pos.target_hold_bars,
+            "scale": round(pos.scale, 3),
+            "bars_held": held,
+            "bars_remaining": max(0, pos.target_hold_bars - held),
+            "expected_edge_bps": round(pos.expected_edge_bps, 2),
+            "unrealised_bps": round(self._unrealised_bps(pos), 2),
+            "age_hours": round(max(0.0, (self._now_ts - pos.entry_t) / 3600.0), 2),
         }
 
     # -- persistence --------------------------------------------------------

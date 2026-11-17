@@ -5580,45 +5580,65 @@ class PredictionEngine:
 
         The book only ever sees signals the gate promoted to ``open``, and
         every fill comes from a real bar the feed actually holds.
+
+        Every ASSET in the registry is handled, not just ETH: hard-coding
+        the cash asset meant a certified BTC/BNB/PAXG sleeve could never
+        open a position no matter how strong its trigger, and the book
+        would silently look complete while ignoring most of the registry.
         """
         from .sleeves import resample_bars
 
         pf = self.portfolio
-        # mark-to-market / exits first, using the ETH bar grid we can rebuild
-        cash_asset = "ETH"
-        st = self.feed.state(cash_asset)
-        prices: dict[str, dict[str, Any]] = {}
-        bar_index = self._portfolio_bar
-        if st.times:
-            bt, bc = resample_bars(st.times, st.closes, 900)
-            if bt:
-                self._portfolio_bar = len(bt)
-                bar_index = len(bt) - 1
-                prices[cash_asset] = {
-                    "t": bt[-1], "c": bc[-1],
-                    "h": bc[-1], "l": bc[-1],
-                }
-        pf.manage(bar_index, prices)
+        sleeve_asset = {sid: rt.asset for sid, rt in pf.sleeves.items()}
 
-        entered = []
-        for sig in block.get("signals", []):
-            if sig.get("asset") != cash_asset or sig.get("state") not in ("long", "short"):
-                continue
+        # which assets actually have sleeves in the book
+        assets = sorted(set(sleeve_asset.values())) or ["ETH"]
+
+        # one bar grid per asset: bar indices are NOT comparable across
+        # assets, so each asset keeps its own index (the same class of bug
+        # that made cross-grid cooldowns meaningless).
+        prices: dict[str, dict[str, Any]] = {}
+        bar_index: dict[str, int] = {}
+        for asset in assets:
+            st = self.feed.state(asset)
             if not st.times:
                 continue
+            bt, bc = resample_bars(st.times, st.closes, 900)
+            if not bt:
+                continue
+            prices[asset] = {"t": bt[-1], "c": bc[-1],
+                             "h": bc[-1], "l": bc[-1]}
+            bar_index[asset] = len(bt) - 1
+
+        # exits / mark-to-market first, per asset
+        for asset, px in prices.items():
+            pf.manage(bar_index[asset], {asset: px})
+
+        entered: list[dict[str, Any]] = []
+        by_id = {sig.get("sleeve_id"): sig for sig in block.get("signals", [])}
+        for sid, asset in sleeve_asset.items():
+            sig = by_id.get(sid)
+            if not sig or sig.get("state") not in ("long", "short"):
+                continue
+            if asset not in prices:
+                continue
+            st = self.feed.state(asset)
             rets = []
             for i in range(1, min(len(st.closes), 901)):
                 a, b = st.closes[-i - 1], st.closes[-i]
                 if a > 0 and b > 0:
                     rets.append(math.log(b / a))
-            vol = (sum((r - sum(rets) / len(rets)) ** 2 for r in rets) / len(rets)) ** 0.5 if len(rets) > 2 else 0.0
+            vol = 0.0
+            if len(rets) > 2:
+                m = sum(rets) / len(rets)
+                vol = (sum((r - m) ** 2 for r in rets) / len(rets)) ** 0.5
             res = pf.try_enter(
-                sig["sleeve_id"], sig["state"],
+                sid, sig["state"],
                 {"t": int(st.times[-1]), "o": float(st.closes[-1])},
-                bar_index, vol,
+                bar_index[asset], vol,
             )
             if res.get("ok"):
-                entered.append({"sleeve_id": sig["sleeve_id"], **res})
+                entered.append({"sleeve_id": sid, "asset": asset, **res})
         snap = pf.snapshot()
         snap["entered_this_bar"] = entered
         return snap

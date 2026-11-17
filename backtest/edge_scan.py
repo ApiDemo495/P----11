@@ -1105,6 +1105,156 @@ def scan(quick: bool = False, verbose: bool = True) -> dict:
                               "thr": thr, "hold_h": hold_h}
                     add(Candidate(f"basket_{tf}", "BASKET", params), trades, edges, bar)
 
+    # ---- family L: asset-native structure (BTC / BNB / PAXG) ----
+    # Families E-G test these assets with generic trend/breakout machinery.
+    # This family asks a different question per asset, chosen because the
+    # economic reason for an edge differs:
+    #
+    #  * BTC -- coiling. Families E/F ask "does a breakout continue?".
+    #    Coiling asks "does a breakout out of GENUINE quiet pay more than a
+    #    breakout out of noise?"  The compression gate in family E uses a
+    #    bottom-third percentile; this uses a hard bottom-decile of the
+    #    normalised Bollinger/Keltner width, which is a rarer, stronger state.
+    #  * BNB -- relative strength. The falsified bnb_ratio_trend traded the
+    #    ratio's own trend. This instead asks whether BNB's STRENGTH vs BTC
+    #    is itself a tradable regime: rank BNB's 7-day relative return over
+    #    the trailing 4 weeks and only act when it is in the top/bottom
+    #    quintile, in the direction of the rank.
+    #  * PAXG -- gold trend conditioned on crypto risk-off, but with the
+    #    conditioning inverted from family G's momentum variant: hold the
+    #    trend and let the risk-off state GATE entries rather than scale
+    #    them. Plus a long-only ATR trail, which is how gold is actually
+    #    traded (it is not a short instrument in a safe-haven book).
+    try:
+        import math as _m
+
+        # ---------- BTC: volatility-coil breakout (bottom-decile width) ----
+        btc_spot_l = load_series("BTC", "spot_1h")
+        if btc_spot_l is not None:
+            bar_s = btc_spot_l.t[1] - btc_spot_l.t[0] if len(btc_spot_l.t) > 1 else 3600
+            cut = holdout_start_for(btc_spot_l.t)
+            edges = fold_edges_for(btc_spot_l.t, N_FOLDS, cut)
+            fold_of = fold_of_bar_times(btc_spot_l.t, edges)
+            n = len(btc_spot_l)
+
+            def _sma(vals, w, i):
+                return sum(vals[i - w:i]) / w if i >= w else float("nan")
+
+            def _std(vals, w, i):
+                if i < w:
+                    return float("nan")
+                seg = vals[i - w:i]
+                m = sum(seg) / w
+                return _m.sqrt(sum((x - m) ** 2 for x in seg) / w)
+
+            for bb_w in ([48, 96] if not quick else [96]):
+                for dc_pct in ([0.10, 0.20] if not quick else [0.10]):
+                    for hold_h in ([48, 120, 168] if not quick else [120]):
+                        # normalised width W = (2*2sd)/sma  -> squeeze when
+                        # today's width sits in the bottom decile of its own
+                        # trailing 500-bar distribution.
+                        width = [float("nan")] * n
+                        for i in range(bb_w, n):
+                            m_ = _sma(btc_spot_l.c, bb_w, i)
+                            sd_ = _std(btc_spot_l.c, bb_w, i)
+                            if m_ == m_ and sd_ == sd_ and m_ > 0:
+                                width[i] = 4.0 * sd_ / m_
+                        sig = [0] * n
+                        lb = max(2, int(bb_w * 1.5))
+                        for i in range(max(bb_w, lb) + 500, n):
+                            hist = [x for x in width[i - 500:i] if x == x]
+                            if len(hist) < 100 or not (width[i] == width[i]):
+                                continue
+                            thresh = sorted(hist)[int(len(hist) * dc_pct)]
+                            if width[i] > thresh:
+                                continue
+                            prior = btc_spot_l.c[i - lb:i]
+                            if not prior:
+                                continue
+                            if btc_spot_l.c[i] > max(prior):
+                                sig[i] = 1
+                            elif btc_spot_l.c[i] < min(prior):
+                                sig[i] = -1
+                        params = {"bb_w": bb_w, "coil_pct": dc_pct,
+                                  "lookback_h": lb, "hold_h": hold_h}
+                        trades = make_trades(btc_spot_l, btc_spot_l, sig, hold_h,
+                                             fold_of, FRICTION_BPS["BTC"], "BTC")
+                        add(Candidate("btc_coil_breakout", "BTC", params),
+                            trades, edges, bar_s)
+
+        # ---------- BNB: relative-strength quintile regime ----------------
+        bnb_l = load_series("BNB", "spot_1h")
+        btc_l = load_series("BTC", "spot_1h")
+        if bnb_l is not None and btc_l is not None:
+            bnb_la, btc_la = align(bnb_l, btc_l)
+            bar_s = bnb_la.t[1] - bnb_la.t[0] if len(bnb_la.t) > 1 else 3600
+            cut = holdout_start_for(bnb_la.t)
+            edges = fold_edges_for(bnb_la.t, N_FOLDS, cut)
+            fold_of = fold_of_bar_times(bnb_la.t, edges)
+            n = len(bnb_la)
+            for win_h in ([168, 336] if not quick else [168]):
+                for rank_win in ([672] if not quick else [672]):
+                    for q in ([0.2, 0.4] if not quick else [0.2]):
+                        for hold_h in ([48, 120] if not quick else [120]):
+                            rel = [float("nan")] * n
+                            for i in range(win_h, n):
+                                if bnb_la.c[i - win_h] > 0 and btc_la.c[i - win_h] > 0:
+                                    rel[i] = ((bnb_la.c[i] / bnb_la.c[i - win_h])
+                                              / (btc_la.c[i] / btc_la.c[i - win_h]) - 1.0)
+                            sig = [0] * n
+                            for i in range(win_h + rank_win, n):
+                                r = rel[i]
+                                if not (r == r):
+                                    continue
+                                hist = [x for x in rel[i - rank_win:i] if x == x]
+                                if len(hist) < rank_win // 2:
+                                    continue
+                                lo = sorted(hist)[int(len(hist) * q)]
+                                hi = sorted(hist)[int(len(hist) * (1 - q))]
+                                if r >= hi:
+                                    sig[i] = 1        # persistent strength
+                                elif r <= lo:
+                                    sig[i] = -1       # persistent weakness
+                            params = {"win_h": win_h, "rank_win_h": rank_win,
+                                      "quintile": q, "hold_h": hold_h}
+                            trades = make_trades(bnb_la, bnb_la, sig, hold_h, fold_of,
+                                                 FRICTION_BPS["BNB"], "BNB")
+                            add(Candidate("bnb_relstrength_regime", "BNB", params),
+                                trades, edges, bar_s)
+
+        # ---------- PAXG: risk-off-gated gold trend + long-only ATR trail --
+        paxg_l = load_series("PAXG", "perp_1h")
+        btc_ref = load_series("BTC", "spot_1h")
+        if paxg_l is not None and btc_ref is not None:
+            paxg_a, btc_a = align(paxg_l, btc_ref)
+            bar_s = paxg_a.t[1] - paxg_a.t[0] if len(paxg_a.t) > 1 else 3600
+            cut = holdout_start_for(paxg_a.t)
+            edges = fold_edges_for(paxg_a.t, N_FOLDS, cut)
+            fold_of = fold_of_bar_times(paxg_a.t, edges)
+            riskoff = riskoff_gate(btc_a)
+            for lb_h in ([72, 168] if not quick else [168]):
+                for hold_h in ([72, 168] if not quick else [168]):
+                    params = {"lookback_h": lb_h, "hold_h": hold_h,
+                              "gate": "btc_riskoff_entries"}
+                    base = channel_breakout_signal(paxg_a, lb_h, 1.0)
+                    sig = [base[i] if riskoff[i] else 0 for i in range(len(base))]
+                    trades = make_trades(paxg_a, paxg_a, sig, hold_h, fold_of,
+                                         FRICTION_BPS["PAXG"], "PAXG")
+                    add(Candidate("paxg_riskoff_trend", "PAXG", params),
+                        trades, edges, bar_s)
+            for lb_h in ([168, 336] if not quick else [336]):
+                for hold_h in ([168, 336] if not quick else [336]):
+                    params = {"lookback_h": lb_h, "hold_h": hold_h,
+                              "side": "long_only", "kind": "atr_trail"}
+                    base = channel_breakout_signal(paxg_a, lb_h, 1.0)
+                    sig = [max(0, x) for x in base]
+                    trades = make_trades(paxg_a, paxg_a, sig, hold_h, fold_of,
+                                         FRICTION_BPS["PAXG"], "PAXG")
+                    add(Candidate("paxg_atr_trail_long", "PAXG", params),
+                        trades, edges, bar_s)
+    except Exception as exc:                      # never hide a real failure
+        failures.append(f"family L failed: {type(exc).__name__}: {exc}")
+
     # ---- purged walk-forward selection per asset family ----
     tested = len(cand_trades)
     if verbose:

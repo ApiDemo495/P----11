@@ -1017,43 +1017,109 @@ function renderDashboardMode() {
 }
 
 function renderBook() {
-  const book = S.snap?.sleeves?.portfolio;
+  const block = S.snap?.sleeves || {};
+  const book = block.portfolio;
   const wrap = $("#book-sleeves");
   if (!wrap) return;
+  const modeEl = $("#book-mode");
   const meta = $("#book-meta");
-  if (!book) {
-    wrap.innerHTML = `<div class="dim pad">paper book warming up…</div>`;
+  const stats = $("#book-stats");
+
+  if (!book || book.error) {
+    if (modeEl) modeEl.textContent = "";
+    if (meta) meta.textContent = "";
+    if (stats) stats.innerHTML = "";
+    wrap.innerHTML = `<div class="dim pad">${book?.error ? "paper book failed: " + book.error : "paper book warming up…"}</div>`;
+    const p0 = $("#book-positions"); if (p0) p0.innerHTML = "";
+    const a0 = $("#book-assets"); if (a0) a0.innerHTML = "";
     return;
   }
-  if (meta) {
-    meta.textContent = `· gross ${(Number(book.gross_exposure || 0) * 100).toFixed(0)}%`
-      + ` / max ${(Number(book.limits?.max_gross || 1) * 100).toFixed(0)}%`
-      + ` · equity ${(Number(book.equity || 1) * 100).toFixed(2)}%`
-      + ` · drawdown ${(Number(book.drawdown || 0) * 100).toFixed(2)}%`
-      + ` · ${book.closed_trades || 0} closed fills`
-      + (book.avg_slippage_bps != null ? ` · slippage ${Number(book.avg_slippage_bps).toFixed(1)} bp` : "");
+
+  const pct = v => `${(Number(v || 0) * 100).toFixed(2)}%`;
+  const bp = v => (v == null ? "—" : `${Number(v) >= 0 ? "+" : ""}${Number(v).toFixed(1)} bp`);
+  const cls = v => (Number(v) > 0 ? "acc-up" : Number(v) < 0 ? "acc-dn" : "dim");
+
+  // ---- observe vs enforced: the single most important honesty label ----
+  const enforced = book.monitors_enforced !== false;
+  if (modeEl) {
+    modeEl.innerHTML = enforced
+      ? `<b class="acc-warn">ENFORCED</b>`
+      : `<b class="acc-up">OBSERVE</b>`;
+    modeEl.title = enforced
+      ? "circuit breakers act: a decaying sleeve is de-risked to half size, then halted on sustained contradiction"
+      : "circuit breakers observe only: full research contract, monitors recorded but not acted on";
   }
+  if (meta) {
+    meta.textContent = `· gross ${pct(book.gross_exposure)}`
+      + ` / max ${pct(book.limits?.max_gross || 1)}`
+      + ` · ${book.closed_trades || 0} closed fills`
+      + (book.avg_slippage_bps != null ? ` · slip ${Number(book.avg_slippage_bps).toFixed(1)} bp` : "");
+  }
+
+  // ---- headline stats ----
+  if (stats) {
+    const unreal = (book.open_positions || [])
+      .reduce((a, p) => a + Number(p.unrealised_bps || 0) * Number(p.size || 0), 0);
+    stats.innerHTML = [
+      ["equity", `${(Number(book.equity || 1) * 100).toFixed(2)}%`, cls(Number(book.equity || 1) - 1)],
+      ["realized", bp(book.realized_bps), cls(book.realized_bps)],
+      ["open p&l", bp(unreal), cls(unreal)],
+      ["drawdown", pct(book.drawdown), Number(book.drawdown) > 0.05 ? "acc-dn" : "dim"],
+      ["positions", String((book.open_positions || []).length), "dim"],
+    ].map(([k, v, c]) => `<div class="kv"><span>${k}</span><b class="${c}">${v}</b></div>`).join("");
+  }
+
+  // ---- sleeper rows: live edge next to the certified number ----
   const rows = (book.sleeves || []).map(r => {
-    const cls = r.status === "open" ? "acc-up" : r.status === "halted" ? "acc-dn" : "acc-warn";
+    const st = String(r.status || "open").toUpperCase();
+    const c = r.status === "open" ? "acc-up" : r.status === "halted" ? "acc-dn" : "acc-warn";
     const live = r.live_trades
-      ? `${Number(r.live_ev_bps).toFixed(1)} bp · t ${Number(r.live_t).toFixed(2)} · n=${r.live_trades}`
+      ? `${bp(r.live_ev_bps)} · t ${Number(r.live_t).toFixed(2)} · n=${r.live_trades} · win ${(Number(r.live_win_rate || 0) * 100).toFixed(0)}%`
       : "no live fills yet";
     const why = (r.halt_reasons || [])[0];
     return `<div class="kv"><span>${r.sleeve_id}</span>`
-      + `<b class="${cls}">${r.status.toUpperCase()}</b>`
-      + `<span class="dim">research ${Number(r.research_ev_bps).toFixed(1)} bp · ${live}`
-      + `${why ? ` · ${why}` : ""}</span></div>`;
+      + `<b class="${c}">${st}</b>`
+      + `<span class="dim">certified ${bp(r.research_ev_bps)} · PF ${Number(r.research_pf || 0).toFixed(2)}</span>`
+      + `<span class="dim">${live}</span>`
+      + (why ? `<span class="dim acc-warn" style="text-transform:none">${why}</span>` : "")
+      + `</div>`;
   }).join("");
   wrap.innerHTML = rows || `<div class="dim pad">no certified sleeves in the book</div>`;
 
+  // ---- open positions: entry, invalidation stop, hold timer ----
   const posWrap = $("#book-positions");
   if (posWrap) {
-    const open = (book.open_positions || []).map(p =>
-      `<div class="kv"><span>${p.sleeve_id} · ${p.asset}</span>`
-      + `<b class="${p.direction > 0 ? "acc-up" : "acc-dn"}">${p.direction > 0 ? "LONG" : "SHORT"}</b>`
-      + `<span class="dim">entry ${px(p.entry_price)} · stop ${px(p.stop)} · `
-      + `${(Number(p.size) * 100).toFixed(1)}% · hold ${p.hold_bars} bars</span></div>`).join("");
+    const open = (book.open_positions || []).map(p => {
+      const total = Math.max(1, Number(p.hold_bars || 1));
+      const left = Math.max(0, Number(p.bars_remaining ?? total));
+      const done = Math.min(100, 100 * (total - left) / total);
+      const tag = Number(p.unrealised_bps) >= 0 ? "acc-up" : "acc-dn";
+      return `<div class="kv"><span>${p.sleeve_id} · ${p.asset}</span>`
+        + `<b class="${p.direction > 0 ? "acc-up" : "acc-dn"}">${p.direction > 0 ? "LONG" : "SHORT"}`
+        + ` <span class="${tag}">${bp(p.unrealised_bps)}</span></b>`
+        + `<span class="dim">entry ${px(p.entry_price)} · stop ${px(p.stop)}</span>`
+        + `<span class="dim">${(Number(p.size) * 100).toFixed(1)}% · edge ${bp(p.expected_edge_bps)}</span>`
+        + `<div class="bar" title="${left} of ${total} bars left"><i class="${tag}" style="width:${done}%"></i></div>`
+        + `<span class="dim">hold ${left}/${total} bars left · ${Number(p.age_hours || 0).toFixed(1)}h ago</span>`
+        + `</div>`;
+    }).join("");
     posWrap.innerHTML = open || `<div class="dim pad">no open paper positions</div>`;
+  }
+
+  // ---- per-asset trigger coverage (honest none / blocked) ----
+  const assetWrap = $("#book-assets");
+  if (assetWrap) {
+    const rowsA = Object.entries(block.assets || {}).map(([sym, a]) => {
+      const state = String(a.state || "none").toUpperCase();
+      const c = state === "LONG" ? "acc-up" : state === "SHORT" ? "acc-dn"
+        : state === "FLAT" ? "dim" : "acc-warn";
+      const z = a.z == null ? "" : ` · z ${Number(a.z).toFixed(2)} / ${Number(a.threshold || 2.5)}`;
+      return `<div class="kv"><span>${sym}</span>`
+        + `<b class="${c}">${state}</b>`
+        + `<span class="dim">${a.status || "none"}${z}</span>`
+        + `<span class="dim" style="text-transform:none">${a.note || ""}</span></div>`;
+    }).join("");
+    assetWrap.innerHTML = rowsA || `<div class="dim pad">no assets evaluated</div>`;
   }
 }
 

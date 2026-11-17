@@ -419,3 +419,95 @@ starts every run from the clean-clone state. Full suite: **515 passed**.
 3. **Rolling re-certification** — the ~3500 bp swing above is the case for
    it. A monitor was doing that job badly; a quarterly re-run of the scan
    with demotion on failure is the honest replacement and is not automated.
+
+---
+
+## Live wiring + family L (2026-11-17, after 24a774c)
+
+### The live engine was trading the wrong specification
+
+`evaluate_sleeves()` computed every certified sleeve's trigger with
+**module-level defaults** — `lead=BTC`, 12 h impulse, `thr=2.5` — which are
+the *catchup* parameters. The spillover sleeve was frozen by the gate as
+`lead=BNB, lookback_h=24, thr=2.0` and was live-running a different
+strategy from the one that passed. This is the most dangerous class of bug
+in the system: every test that checks the sleeve *exists*, or that the
+registry lists it, still passes. Only comparing the traded parameters
+against `details.frozen_candidate` reveals it.
+
+Fixed: `parse_frozen()` reads the registry's frozen pick and
+`impulse_z_for()` evaluates each sleeve with its own spec. A regression
+test pins the parse and asserts every `open` sleeve carries a parsable
+`thr` and `hold_h`.
+
+### The book was hard-coded to ETH
+
+`_step_portfolio()` used `cash_asset = "ETH"` for the price grid, the entry
+loop and the bar index. A certified BTC, BNB or PAXG sleeve could never
+open a position no matter how strong its trigger, while the book still
+looked complete. It now iterates every asset actually present in the
+registry and keeps a **separate bar index per asset** — bar indices are not
+comparable across assets, the same lesson that produced the cross-grid
+cooldown bug.
+
+Verified on a full-length synthetic tape: both ETH sleeves open real paper
+positions with entry, invalidation stop, hold timer and certified edge:
+
+```
+catchup_subhour_spot_15m::ETH  LONG  size 0.25  stop 4131.46  hold 48/48 bars  edge +88.22 bp
+spillover_spot_15m::ETH        LONG  size 0.25  stop 4131.46  hold 48/48 bars  edge +89.16 bp
+gross 0.50 / max 1.00   asset exposure {ETH: 0.50}
+```
+
+The per-asset cap correctly split the budget 0.25/0.25 rather than letting
+the first sleeve take all of it.
+
+### Dashboard
+
+The PAPER BOOK panel now shows `ENFORCED` vs `OBSERVE` as the headline
+label, then equity / realized / open P&L / drawdown / position count, one
+row per sleeve (status, certified edge, live edge and `t`, win rate, halt
+reason), one row per open position (direction, unrealised bp, entry,
+invalidation stop, size, certified edge, a hold-timer bar, age), and one row
+per asset with its trigger state and an honest `none` / `shadow` /
+`warming_up` note.
+
+### Family L — asset-native structures
+
+Three genuinely distinct ideas, plus the generic BTC breakout, under the
+same referee (purged walk-forward, locked holdout, `next_bar` fills, 12/18 bp
+friction, correlation-adjusted `t >= 2.0`, `PF > 1.25`):
+
+| candidate | asset | n | OOF EV | PF | t_bb | folds+ | holdout | verdict |
+|---|---|---|---|---|---|---|---|---|
+| `bnb_relstrength_regime` | BNB | 357 | **+48.1** | 1.16 | +0.78 | 3/4 | **-44.3** | shadow |
+| `btc_coil_breakout` | BTC | 127 | -32.1 | 0.89 | -0.78 | 1/4 | -6.6 | closed |
+| `paxg_riskoff_trend` | PAXG | - | - | - | - | - | - | no sleeve |
+| `paxg_atr_trail_long` | PAXG | - | - | - | - | - | - | no sleeve |
+
+**BNB relative strength is the most promising non-ETH result so far** and
+still does not pass: PF 1.16 < 1.25, `t_bb` 0.78 < 2.0, and the locked
+holdout is *negative* (-44.3 bp). A positive point estimate with a negative
+holdout is exactly the pattern that separates luck from edge, so it stays
+shadow. Its folds are -47.7 / +30.3 / +97.2 / +105.9 — one bad fold carries
+the whole result.
+
+**BTC coil (bottom-decile Bollinger width then breakout) is falsified**:
+negative in 3 of 4 folds. Squeeze breakouts do not pay on this tape once
+12 bp is charged, consistent with the earlier `btc_donchian` holdout of
+-1.8.
+
+**PAXG produces no sleeve, and it is a data-depth limit, not a strategy
+verdict.** PAXG's perp history is 18 months (13,262 bars, 2025-03-27 ->
+2026-09-30). `purged_select` needs >=30 closed training trades before a
+fold; PAXG's best entry-gated trend generates at most **2** before fold 3
+and **5** before the last research fold. The gate correctly refuses to
+certify on that. The honest statement is "cannot be measured", never "no
+edge" — which is why PAXG stays a hedge display rather than an alpha asset
+until a longer gold tape is available.
+
+### Replay and suite after the wiring changes
+
+Observe mode still reproduces the research trade counts exactly
+(165 / 167, 332 closed, +2820.08 bp, DD 0.0060), so the live wiring did not
+perturb the studied contract.

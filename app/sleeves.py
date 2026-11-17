@@ -141,6 +141,62 @@ def compute_impulse_z(
     return acc / (sd * math.sqrt(L))
 
 
+def parse_frozen(frozen: str) -> dict:
+    """Parse the registry's ``frozen_candidate`` string into parameters.
+
+    ``"spillover_spot_15m|ETH|hold_h=48|lead=BNB|lookback_h=24|thr=2.0"``
+    -> ``{"hold_h": 48, "lead": "BNB", "lookback_h": 24, "thr": 2.0}``
+
+    The registry string is the frozen modal pick from the purged
+    walk-forward, i.e. the exact parameters that passed the gate. The live
+    engine must trade THOSE, never a module-level default: until this
+    existed every sleeve was evaluated with catchup's settings
+    (lead=BTC, lookback 12 h, thr 2.5), so the spillover sleeve -- which
+    was certified as a BNB-led 24 h / 2.0 trigger -- was running a
+    different strategy live than the one that passed the gate.
+    """
+    out: dict = {}
+    for part in str(frozen or "").split("|"):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        try:
+            out[k] = float(v) if "." in v else int(v)
+        except ValueError:
+            out[k] = v
+    return out
+
+
+def impulse_z_for(
+    feed,
+    asset: str,
+    lead: str = "BTC",
+    impulse_hours: int = IMPULSE_HOURS,
+    threshold: float = Z_THRESHOLD,
+    std_window: int = STD_WINDOW_BARS,
+    bucket: int = SLEEVE_BAR_SECONDS,
+) -> tuple[float | None, str]:
+    """Certified trigger ``z`` for ONE sleeve's frozen specification.
+
+    Returns ``(z, state)`` where state is long/short/flat, or
+    ``(None, "warming_up")`` when the feed does not yet hold enough
+    history to compute the trigger honestly.
+    """
+    try:
+        st = feed.state(lead)
+    except Exception:
+        return None, "warming_up"
+    z = compute_impulse_z(st.times, st.closes, bucket=bucket,
+                          impulse_hours=impulse_hours, std_window=std_window)
+    if z is None:
+        return None, "warming_up"
+    if z > threshold:
+        return z, "long"
+    if z < -threshold:
+        return z, "short"
+    return z, "flat"
+
+
 def evaluate_sleeves(
     feed,
     registry: dict | None = None,
@@ -160,7 +216,12 @@ def evaluate_sleeves(
     signals: list[SleeveSignal] = []
     for s in open_sleeves:
         asset = s.get("asset", "")
-        lead = "BTC"
+        # trade the FROZEN specification that passed the gate
+        spec = parse_frozen((s.get("details") or {}).get("frozen_candidate") or "")
+        lead = str(spec.get("lead") or "BTC")
+        impulse_h = int(spec.get("lookback_h") or IMPULSE_HOURS)
+        thr = float(spec.get("thr") or Z_THRESHOLD)
+        hold_h = int(spec.get("hold_h") or HOLD_HOURS)
         base = dict(
             sleeve_id=s.get("sleeve_id", ""),
             asset=asset,
@@ -169,31 +230,36 @@ def evaluate_sleeves(
             profit_factor=float(s.get("profit_factor", 0.0)),
             t_effective=float(s.get("t_effective", 0.0)),
             n=int(s.get("n", 0)),
+            threshold=thr,
+            hold_hours=hold_h,
             as_of=now,
         )
         try:
-            lead_st = feed.state(lead)
-            tgt_st = feed.state(asset)
+            feed.state(asset)                      # target must exist too
         except Exception:
             signals.append(SleeveSignal(state="warming_up", note="feed unavailable", **base))
             continue
-        z = compute_impulse_z(lead_st.times, lead_st.closes)
+        z, state = impulse_z_for(feed, asset, lead=lead, impulse_hours=impulse_h,
+                                 threshold=thr)
         if z is None:
-            need = (STD_WINDOW_BARS + IMPULSE_HOURS + 2) * SLEEVE_BAR_SECONDS // 3600
+            need = (STD_WINDOW_BARS + impulse_h + 2) * SLEEVE_BAR_SECONDS // 3600
+            try:
+                have = len(feed.state(lead).closes)
+            except Exception:
+                have = 0
             signals.append(SleeveSignal(
                 state="warming_up", z=None,
-                note=f"needs ~{need}h of {SLEEVE_BAR_SECONDS // 60}m bars (have "
-                     f"{len(lead_st.closes)} 1m bars)",
+                note=f"needs ~{need}h of {SLEEVE_BAR_SECONDS // 60}m bars on the "
+                     f"{lead} lead (have {have} 1m bars)",
                 **base,
             ))
             continue
-        if z > Z_THRESHOLD:
-            state = "long"
-        elif z < -Z_THRESHOLD:
-            state = "short"
-        else:
-            state = "flat"
-        signals.append(SleeveSignal(state=state, z=z, **base))
+        signals.append(SleeveSignal(
+            state=state, z=z,
+            note=f"lead {lead} · {impulse_h}h impulse · |z| > {thr:g} · "
+                 f"hold {hold_h}h",
+            **base,
+        ))
 
     # per-asset roll-up for the hero card: prefer an OPEN sleeve, then the
     # best SHADOW observation (clearly labelled), then "none certified".

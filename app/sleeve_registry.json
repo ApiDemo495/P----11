@@ -1,12 +1,12 @@
 {
-  "generated_at": 1794906639,
+  "generated_at": 1794917569,
   "n_folds": 5,
-  "candidates_tested": 793,
+  "candidates_tested": 821,
   "summary": {
     "open": 2,
-    "shadow": 16,
-    "closed": 15,
-    "total": 33,
+    "shadow": 17,
+    "closed": 16,
+    "total": 35,
     "open_assets": [
       "ETH"
     ],
@@ -80,8 +80,8 @@
         "frozen_candidate": "basket_spot_15m|BASKET|basket=ETH+BNB|hold_h=48|lookback_h=12|thr=2.5",
         "holdout_start": 1699028100,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 146,
         "holdout_net_ev_bps": 8.272,
         "holdout_profit_factor": 1.064
@@ -144,8 +144,8 @@
         "frozen_candidate": "basket_spot_30m|BASKET|basket=ETH+BNB|hold_h=48|lookback_h=6|thr=1.5",
         "holdout_start": 1699482600,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 351,
         "holdout_net_ev_bps": 36.519,
         "holdout_profit_factor": 1.347
@@ -206,8 +206,8 @@
         "frozen_candidate": "bnb_range_expansion|BNB|hold_h=48|lookback_h=240",
         "holdout_start": 1698926400,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 97,
         "holdout_net_ev_bps": 58.74,
         "holdout_profit_factor": 1.225
@@ -268,11 +268,75 @@
         "frozen_candidate": "bnb_ratio_trend|BNB|hold_h=120|lookback_h=336|ratio_vs=BTC|z=1.5",
         "holdout_start": 1694757600,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 161,
         "holdout_net_ev_bps": -8.313,
         "holdout_profit_factor": 0.964
+      }
+    },
+    {
+      "sleeve_id": "bnb_relstrength_regime::BNB",
+      "asset": "BNB",
+      "family": "bnb_relstrength_regime",
+      "status": "shadow",
+      "n": 357,
+      "net_ev_bps": 48.126,
+      "profit_factor": 1.162,
+      "win_rate": 0.5014,
+      "t_iid": 0.895,
+      "t_block_bootstrap": 0.778,
+      "t_effective": 0.778,
+      "positive_folds": 3,
+      "params": {
+        "fold0": "<no-train-window>",
+        "fold1": "bnb_relstrength_regime|BNB|hold_h=48|quintile=0.2|rank_win_h=672|win_h=168",
+        "fold2": "bnb_relstrength_regime|BNB|hold_h=120|quintile=0.4|rank_win_h=672|win_h=168",
+        "fold3": "bnb_relstrength_regime|BNB|hold_h=120|quintile=0.2|rank_win_h=672|win_h=336",
+        "fold4": "bnb_relstrength_regime|BNB|hold_h=120|quintile=0.2|rank_win_h=672|win_h=336"
+      },
+      "reasons": [
+        "PF 1.16 <= 1.25",
+        "|t| 0.78 < 2.0 (correlation-adjusted)",
+        "holdout Net EV -44.30 bps <= 0"
+      ],
+      "folds": [
+        {
+          "fold": 1,
+          "n": 126,
+          "net_ev_bps": 30.289,
+          "profit_factor": 1.134
+        },
+        {
+          "fold": 2,
+          "n": 93,
+          "net_ev_bps": 97.176,
+          "profit_factor": 1.226
+        },
+        {
+          "fold": 3,
+          "n": 67,
+          "net_ev_bps": -47.652,
+          "profit_factor": 0.879
+        },
+        {
+          "fold": 4,
+          "n": 71,
+          "net_ev_bps": 105.913,
+          "profit_factor": 1.664
+        }
+      ],
+      "details": {
+        "bar_seconds": 3600,
+        "candidates_in_group": 8,
+        "frozen_candidate": "bnb_relstrength_regime|BNB|hold_h=120|quintile=0.2|rank_win_h=672|win_h=336",
+        "holdout_start": 1698472800,
+        "folds_with_enough_trades": 4,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
+        "holdout_n": 177,
+        "holdout_net_ev_bps": -44.298,
+        "holdout_profit_factor": 0.805
       }
     },
     {
@@ -331,8 +395,8 @@
         "frozen_candidate": "btc_donchian|BTC|compression_gate=True|hold_h=168|lookback_h=48",
         "holdout_start": 1696993200,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 89,
         "holdout_net_ev_bps": -1.769,
         "holdout_profit_factor": 0.992
@@ -394,8 +458,8 @@
         "frozen_candidate": "catchup_btc_impulse|ADA|L_h=24|cond=plain|hold_h=48|thr=2.0",
         "holdout_start": 1759856400,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 43,
         "holdout_net_ev_bps": -9.421,
         "holdout_profit_factor": 0.966
@@ -456,8 +520,8 @@
         "frozen_candidate": "catchup_btc_impulse|ETH|L_h=48|cond=plain|hold_h=48|thr=1.5",
         "holdout_start": 1759770000,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 55,
         "holdout_net_ev_bps": 13.331,
         "holdout_profit_factor": 1.065
@@ -518,8 +582,8 @@
         "frozen_candidate": "catchup_btc_impulse|XRP|L_h=48|cond=plain|hold_h=48|thr=1.5",
         "holdout_start": 1759770000,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 55,
         "holdout_net_ev_bps": 25.07,
         "holdout_profit_factor": 1.106
@@ -578,12 +642,12 @@
         "frozen_candidate": "catchup_subhour_spot_15m|ETH|L_h=12|hold_h=48|thr=2.5",
         "holdout_start": 1704152700,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 145,
         "holdout_net_ev_bps": 48.214,
         "holdout_profit_factor": 1.251,
-        "selection_multiple": 793
+        "selection_multiple": 821
       }
     },
     {
@@ -641,8 +705,8 @@
         "frozen_candidate": "catchup_subhour_spot_30m|ETH|L_h=12|hold_h=48|thr=2.0",
         "holdout_start": 1703080800,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 209,
         "holdout_net_ev_bps": 65.78,
         "holdout_profit_factor": 1.369
@@ -699,8 +763,8 @@
         "frozen_candidate": "gold_macro_channel|GOLD|atr_mult=0.5|hold_m=6|lookback_m=6",
         "holdout_start": 1364774400,
         "folds_with_enough_trades": 3,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 24,
         "holdout_net_ev_bps": 126.681,
         "holdout_profit_factor": 1.334
@@ -762,8 +826,8 @@
         "frozen_candidate": "spillover_spot_15m|BNB|hold_h=48|lead=ETH|lookback_h=12|thr=2.0",
         "holdout_start": 1701424800,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 229,
         "holdout_net_ev_bps": 22.681,
         "holdout_profit_factor": 1.168
@@ -828,12 +892,12 @@
         "frozen_candidate": "spillover_spot_15m|ETH|hold_h=48|lead=BNB|lookback_h=24|thr=2.0",
         "holdout_start": 1700591400,
         "folds_with_enough_trades": 5,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 160,
         "holdout_net_ev_bps": 28.563,
         "holdout_profit_factor": 1.15,
-        "selection_multiple": 793
+        "selection_multiple": 821
       }
     },
     {
@@ -893,8 +957,8 @@
         "frozen_candidate": "spillover_spot_30m|BTC|hold_h=48|lead=ETH|lookback_h=6|thr=2.0",
         "holdout_start": 1696224600,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 285,
         "holdout_net_ev_bps": 7.276,
         "holdout_profit_factor": 1.056
@@ -955,8 +1019,8 @@
         "frozen_candidate": "spillover_spot_30m|ETH|hold_h=48|lead=BTC|lookback_h=12|thr=2.0",
         "holdout_start": 1701194400,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 215,
         "holdout_net_ev_bps": 67.348,
         "holdout_profit_factor": 1.386
@@ -1018,8 +1082,8 @@
         "frozen_candidate": "tsmom|BNB|hold_h=168|lookback_h=720|sizing=unit",
         "holdout_start": 1695700800,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 162,
         "holdout_net_ev_bps": 28.16,
         "holdout_profit_factor": 1.111
@@ -1082,8 +1146,8 @@
         "frozen_candidate": "tsmom|BTC|hold_h=168|lookback_h=336|sizing=vol_target",
         "holdout_start": 1693292400,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 167,
         "holdout_net_ev_bps": 121.064,
         "holdout_profit_factor": 1.309
@@ -1146,8 +1210,8 @@
         "frozen_candidate": "tsmom|ETH|hold_h=168|lookback_h=336|sizing=vol_target",
         "holdout_start": 1693292400,
         "folds_with_enough_trades": 4,
-        "tested_candidates": 793,
-        "t_bonferroni_threshold": 4.899,
+        "tested_candidates": 821,
+        "t_bonferroni_threshold": 4.914,
         "holdout_n": 167,
         "holdout_net_ev_bps": -13.872,
         "holdout_profit_factor": 0.975
