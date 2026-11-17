@@ -385,8 +385,13 @@ class EmotionSystem:
         dirs[14] = 1 if emos[14] > 0.5 else -1
 
         # ---- E15 IAF: intent / action fraction ---------------------------
+        # Participation, not a truncated level: the old `clamp(v5/vall -
+        # 0.5)` pinned to exactly 0.00 whenever the last five minutes
+        # traded at or below the session mean (the normal case), so the
+        # channel was dead on most assets. Neutral = average
+        # participation (0.5); above-average activity scales to 1.
         intent = (v5 / vall) if vall > 0 else 1.0
-        emos[15] = _clamp(intent - 0.5, 0.0, 1.0)
+        emos[15] = _clamp(0.5 + 0.5 * (intent - 1.0), 0.0, 1.0)
         dirs[15] = sign(cl[-1] - cl[0]) if cl[0] else 0   # TPDI fallback
 
         # ---- E16 LAI: lead / announce impulse ----------------------------
@@ -403,15 +408,42 @@ class EmotionSystem:
         else:
             dirs[17] = 1 if pol > 0 else (-1 if pol < 0 else 0)
 
-        # ---- E18 HTI: honeymoon trend inversion --------------------------
-        pidx_ring = hist.ring(hist.tf_key(ctx.symbol, ctx.tf, "pidx"), HIST_EMOTION_LAG)
+        # ---- E18 HTI: honeymoon trend inversion (trend-chase FATIGUE) -----
+        # The old channel measured the change in 30-bar range position
+        # between consecutive GRCs: on a 4-minute cadence that delta is
+        # almost always < 0.02, so E18 sat at exactly 0.00 and the
+        # channel never voted. Rebuilt on the two literatures that
+        # actually describe trend-chase fatigue:
+        #   1. EXTRAPOLATION — Barberis, Greenwood & Shleifer (2015,
+        #      "X-CAPM") and Barberis et al. (1998): investors overweight
+        #      recent returns with geometrically decaying weights, so a
+        #      stretched trend creates a crowded, late-positioned long.
+        #   2. HABITUATION — Groves & Thompson (1970) dual-process theory,
+        #      applied to price response: the SAME stimulus produces a
+        #      smaller marginal move on repetition. We measure the
+        #      diminishing 5-bar response of the current leg versus the
+        #      preceding leg in the same direction.
         lo30 = min(mc[-min(30, len(mc)):])
         hi30 = max(mc[-min(30, len(mc)):])
         idx_now = ((live - lo30) / (hi30 - lo30)) if hi30 > lo30 else 0.5
-        idx_lag = _lag_value(pidx_ring)
-        delta = (idx_now - idx_lag) if idx_lag is not None else 0.0
-        emos[18] = min(1.0, abs(delta) * 4.0)
-        dirs[18] = -sign(delta) if abs(delta) > 0.02 else 0
+        # stretch in units of half the 30-bar range: +1 = at the high
+        stretch = ((live - (hi30 + lo30) / 2.0) / (0.5 * (hi30 - lo30))
+                   if hi30 > lo30 else 0.0)
+        d1 = mc[-1] - mc[-6] if len(mc) > 6 else 0.0
+        d2 = mc[-6] - mc[-11] if len(mc) > 11 else 0.0
+        same_leg = (d1 * d2) > 0
+        # marginal response ratio: 1 = no fatigue, →0 = the move is spent
+        resp = (min(1.0, abs(d1) / abs(d2)) if same_leg and abs(d2) > 1e-12
+                else 0.0)
+        habituation = (1.0 - resp) if same_leg else 0.35   # new leg = mild
+        # extrapolative belief: last-5 return in 5-bar volatility units
+        sd5 = (std_pop(rets[-5:]) * math.sqrt(5.0)) if len(rets) >= 5 else 0.0
+        z5 = (d1 / (sd5 * live)) if (sd5 > 1e-12 and live > 0) else 0.0
+        belief = math.tanh(1.5 * z5)               # ∈ (-1, 1)
+        over = sig(3.0 * (abs(stretch) - 0.55)) * (0.45 + 0.55 * habituation)
+        emos[18] = _clamp(over * (0.40 + 0.60 * abs(belief)), 0.0, 1.0)
+        dirs[18] = (-sign(stretch) if stretch else -sign(d1)) \
+            if emos[18] > 0.55 else 0
 
         # ---- E19 SMDM: smart-money divergence ----------------------------
         cmp_div = market.get("cmp_divergence", 0.0)   # Part-3 seam (orderflow)
@@ -437,14 +469,39 @@ class EmotionSystem:
         emos[21] = sig(6.0 * decay)                    # decelerating momentum
         dirs[21] = -sign(trend10) if emos[21] > 0.6 else 0
 
-        # ---- E22 CERC: weighted composite --------------------------------
+        # ---- E22 CERC: weighted composite (spec form, kept verbatim) ------
+        # `cerc` must stay the exact spec sum (tests + downstream
+        # confidence modulator depend on it). It is an *agreement-scaled*
+        # net: 21 channels each ≤ 1/21, so a split crowd correctly reads
+        # near zero. Two ADDITIONAL, explicitly-labelled readings are
+        # published alongside it so the UI can say what the net emotion
+        # actually is instead of showing "0.04" to a human:
+        #   net_emotion = Σ wᵢeᵢdᵢ / Σ wᵢeᵢ   (signed weighted MEAN of the
+        #                 channels that express a direction, ∈ [-1,1])
+        #   agreement   = Σ_{d≠0} wᵢeᵢ / Σ wᵢeᵢ  (how much of the emotional
+        #                 mass has any direction at all)
         w = self._weights(ctx.symbol, ctx.tf)
         cerc = 0.0
+        num = den = mass = 0.0
+        bulls = bears = 0
         for i, eid in enumerate(EMO_IDS):
             term = w[i] * emos[eid] * dirs[eid]
             if eid == 21:
                 term *= (1.0 - 0.5 * emos[21])         # TEDR participation mult
             cerc += term
+            wi_ei = w[i] * emos[eid]
+            if wi_ei <= 0:
+                continue
+            mass += wi_ei
+            if dirs[eid]:
+                num += term
+                den += wi_ei
+                if dirs[eid] > 0:
+                    bulls += 1
+                else:
+                    bears += 1
+        net_emotion = (num / den) if den > 0 else 0.0
+        agreement = (den / mass) if mass > 0 else 0.0
 
         # GRC-lag rings (written by engine when record=True)
         lag_rings = {
@@ -523,6 +580,10 @@ class EmotionSystem:
             "zero_causes": _causes(zero_reasons),
             "directions": dirs,
             "cerc": round(cerc, 5),
+            "net_emotion": round(net_emotion, 5),
+            "agreement": round(agreement, 5),
+            "breadth": {"bull": bulls, "bear": bears,
+                        "flat": 21 - bulls - bears},
             "rtp": emos[9],
             "tedr": emos[21],
             "prev_cerc": prev_cerc,
@@ -538,6 +599,9 @@ class EmotionSystem:
                 "window_streak": int(streak),
                 "r30": round(r30, 6),
                 "pdi_session": round(pdi_sess, 4),
+                "trend_stretch": round(stretch, 4),
+                "habituation": round(habituation, 4),
+                "extrapolation_z": round(z5, 4),
                 "serotonin": round(serotonin_brain, 4),
             },
             # RETAIL vs HEDGE/SMART-MONEY emotion — measured from the

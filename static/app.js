@@ -204,8 +204,45 @@ function setSymbol(sym) {
   S.symbol = sym;
   $$(".asset-btn").forEach(b => b.classList.toggle("active", b.dataset.sym === sym));
   syncToolbar();
+  // ATOMIC SWITCH (defect: the hero kept BTC's locked TP/SL, its
+  // "ANALYSING …" card and the sub-timeframe strip until the next
+  // snapshot landed). Wipe every asset-bound surface NOW, so nothing can
+  // show the previous asset's numbers under the new ticker; the first
+  // fresh snapshot/MODE card repaints them.
+  clearAssetSurfaces(sym);
   refreshActiveView(true);
   buildQuads(); loadCandles();
+}
+
+/* Blank/park every surface that is bound to ONE asset. Called on an asset
+   switch, before the new snapshot is applied. */
+function clearAssetSurfaces(sym) {
+  const ttl = $("#hero-title");
+  if (ttl) ttl.innerHTML = `${S.focusTf.toUpperCase()} · <b style="color:var(--cyan)">${TF_META[S.focusTf].mins}m</b> window`
+    + ` <span class="dim">${sym} · loading the ${sym} tape…</span>`;
+  const badge = $("#hero-badge");
+  if (badge) { badge.className = "hero-badge flat"; badge.innerHTML = `● ANALYSING ${sym}…<small>${sym} · ${S.focusTf.toUpperCase()} — waiting for the first ${sym} snapshot</small>`; }
+  const stats = $("#hero-stats");
+  if (stats) stats.innerHTML = `<div class="kv"><span>call</span><b class="dim">loading ${sym}…</b></div>`;
+  const strip = $("#subtf-strip");
+  if (strip) strip.innerHTML = `<div class="dim pad">waiting for the first ${sym} lock…</div>`;
+  const sl = $("#hero-sleeve");
+  if (sl) sl.innerHTML = `<div class="kv"><span>certified sleeve</span><b class="dim">loading ${sym}…</b></div>`;
+  const rn = $("#risk-note");
+  if (rn) rn.textContent = `${sym}: TP/SL come from the measured-moves block of the first ${sym} lock — showing nothing until then.`;
+  const ap = $("#analyse-panel");
+  if (ap) ap.classList.add("hidden");   // previous asset's ANALYSING card
+  const anT = $("#an-title");
+  if (anT) anT.textContent = `ANALYSING ${sym} · ${S.focusTf.toUpperCase()}`;
+  // charts: drop the old asset's candles + overlays immediately
+  TF.forEach(tf => {
+    try { S.charts[tf]?.setData([]); S.charts[tf]?.setLines([]); } catch (e) { /* not built yet */ }
+    try { S.charts[tf]?.tick?.(0); } catch (e) { /* noop */ }
+  });
+  if (typeof Bn !== "undefined") {
+    if (Bn.main) { try { Bn.main.candles.setData([]); } catch (e) {} Bn.main.last = null; }
+    Object.values(Bn.quads || {}).forEach(inst => { try { inst.candles.setData([]); } catch (e) {} inst.last = null; });
+  }
 }
 /* ═══════ EXCHANGE PHYSICS panel (Chrono-Sieve-inspired, measured only) ═ */
 function renderMicro() {
@@ -307,6 +344,40 @@ async function loadSystemPanel() {
 /* Realised series for [t0, now]: candle closes (full-window backfill)
    merged with live ticks after the last bar. Shared by the hero and
    the probability chart so both lines start at the window start. */
+/* Forward-table reading. Mirrors app/forward.py::estimate exactly:
+   exact bucket at n>=30, else pooled +/-0.5 then +/-1.0, else a
+   Laplace-smoothed frequency from whatever samples exist. Returns null
+   only when the table has no samples at all. */
+function fwdEstimate(cells, value) {
+  const B = [-1, -0.5, 0, 0.5, 1];
+  if (!cells || !cells.length) return null;
+  const at = new Map(cells.map(c => [Number(c.bucket), c]));
+  const b = B.reduce((a, c) => Math.abs(c - value) < Math.abs(a - value) ? c : a, B[0]);
+  const exact = at.get(b);
+  if (exact && exact.n >= 30) {
+    return { p: exact.up != null ? exact.up / exact.n : exact.p_up,
+             n: exact.n, span: 0, exact: true, bucket: b };
+  }
+  let fallback = null;
+  for (const span of [0.5, 1.0]) {
+    let up = 0, n = 0;
+    for (const bb of B) {
+      if (Math.abs(bb - b) > span + 1e-9) continue;
+      const c = at.get(bb);
+      if (c) { up += (c.up != null ? c.up : Math.round((c.p_up || 0) * c.n)); n += c.n; }
+    }
+    if (!n) continue;
+    if (n >= 30) return { p: up / n, n, span, exact: false, bucket: b };
+    fallback = { p: (up + 1) / (n + 2), n, span, exact: false,
+                 smoothed: true, bucket: b };
+  }
+  if (exact && exact.n > 0) {
+    return { p: (exact.up + 1) / (exact.n + 2), n: exact.n, span: 0,
+             exact: false, smoothed: true, bucket: b };
+  }
+  return fallback;
+}
+
 function serverNow() { return Date.now() / 1000 + (S.serverOff || 0); }
 
 function realisedSeries(t0, now) {
@@ -383,13 +454,19 @@ function levelAutoscaleProvider(values) {
 }
 function ownMake(el) {
   const LW = window.LightweightCharts; if (!LW || !el) return null;
+  // measure AFTER layout: a chart built while its container was still
+  // hidden kept a 300 px canvas inside a 1200 px panel — the reported
+  // "candles squeezed into the left 15%" of the OWN chart.
+  const rect0 = el.getBoundingClientRect();
+  const w0 = Math.max(320, Math.round(rect0.width || el.clientWidth || 0));
+  const h0 = Math.max(240, Math.round(rect0.height || el.clientHeight || 340));
   const chart = LW.createChart(el, {
-    layout: { background: { color: "transparent" }, textColor: "#8a8aa0", fontSize: 10 },
+    layout: { background: { color: "transparent" }, textColor: "#cbd5e1", fontSize: 10 },
     grid: { vertLines: { color: "rgba(140,140,170,.07)" }, horzLines: { color: "rgba(140,140,170,.07)" } },
     timeScale: { timeVisible: true, secondsVisible: false, rightOffset: 6 },
     rightPriceScale: { borderColor: "rgba(140,140,170,.25)", scaleMargins: { top: 0.08, bottom: 0.22 } },
     crosshair: { mode: LW.CrosshairMode.Normal },
-    width: el.clientWidth || 300, height: el.clientHeight || 340,
+    width: w0, height: h0,
   });
   const levelValues = [];
   const candles = chart.addCandlestickSeries({ upColor: "#26a69a", downColor: "#ef5350",
@@ -419,7 +496,15 @@ function ownMake(el) {
       ? `O ${px(bar.open)} H ${px(bar.high)} L ${px(bar.low)} C ${px(bar.close)}`
       : "";
   });
-  new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); } catch {} }).observe(el);
+  const refit = () => {
+    const r = el.getBoundingClientRect();
+    const w = Math.round(r.width || 0), h = Math.round(r.height || 0);
+    if (w > 40 && h > 40) { try { chart.applyOptions({ width: w, height: h }); } catch {} }
+  };
+  new ResizeObserver(refit).observe(el);
+  requestAnimationFrame(refit);
+  setTimeout(refit, 250);
+  window.addEventListener("resize", refit);
   return { chart, candles, vol, fan50, fan25, fan75, forecastLabel, legend, stale,
     lines: {}, levelValues, last: null };
 }
@@ -565,16 +650,26 @@ function drawOwnChart() {
   // but never request more history than the server supplied. The 22m
   // chart keeps the documented 90 one-minute-bar first-paint context.
   // Leave room through the forecast horizon so its median path is visible.
+  // Keep the same span in view, but express it as a LOGICAL bar range.
+  // setVisibleRange(frome/to) depends on both endpoints existing on the
+  // time axis; when the server tape started later than the requested
+  // window (or the cycle end sat far in the future) the candles were
+  // compressed into the left ~15% of the canvas. A logical range pins
+  // the data itself to the canvas: `contextBars` of history + the
+  // remaining window as future space, independent of timestamps.
   if (bars.length) {
+    const N = bars.length;
     const Wsec = Math.max(bucket0, (d.cycle_end || 0) - (d.cycle_start || 0)) || bucket0;
-    const minContext = (S.focusTf === "tf1" ? 90 : 30) * bucket0;
-    const contextSec = Math.max(4 * Wsec, minContext);
-    const vFrom = Math.max(bars[0].time, bt0 - contextSec);
-    const vTo = Math.max(bt0 + 2 * bucket0,
-      (d.cycle_end || bt0) + 2 * bucket0);
-    if (key !== Own.rangeKey || !Own.rangeTo || bt0 > Own.rangeTo - 2 * bucket0) {
-      Own.rangeKey = key; Own.rangeTo = vTo;
-      try { inst.chart.timeScale().setVisibleRange({ from: lt(vFrom), to: lt(vTo) }); } catch {}
+    const minContextBars = (S.focusTf === "tf1" ? 90 : 30);
+    const contextBars = Math.max(Math.round(4 * Wsec / bucket0), minContextBars);
+    const futureBars = Math.max(2,
+      Math.ceil(((d.cycle_end || bt0) - bt0) / bucket0) + 2);
+    const sig = `${key}|${N}|${futureBars}`;
+    if (sig !== Own.rangeKey || !Own.rangeTo) {
+      Own.rangeKey = sig; Own.rangeTo = bt0;
+      const from = Math.max(0, N - Math.min(contextBars, N));
+      try { inst.chart.timeScale().setVisibleLogicalRange({ from, to: N + futureBars }); } catch {}
+      try { inst.chart.timeScale().applyOptions({ rightOffset: 2 }); } catch {}
     }
   }
   // live candle from the tick stream (candles.update, never setData
@@ -663,7 +758,7 @@ const Bn = { main: null, quads: {}, key: "" };
 function bnMake(el, mini) {
   const LW = window.LightweightCharts; if (!LW || !el) return null;
   const chart = LW.createChart(el, {
-    layout: { background: { color: "transparent" }, textColor: "#8a8aa0", fontSize: 9 },
+    layout: { background: { color: "transparent" }, textColor: "#cbd5e1", fontSize: 9 },
     grid: { vertLines: { color: "rgba(140,140,170,.08)" }, horzLines: { color: "rgba(140,140,170,.08)" } },
     timeScale: { timeVisible: true, secondsVisible: false },
     rightPriceScale: { borderColor: "rgba(140,140,170,.25)" },
@@ -691,7 +786,11 @@ function bnFeed(inst, bars) {
     : { time: c.time, value: cs.slice(i - n + 1, i + 1).reduce((x, y) => x + y.close, 0) / n }).filter(Boolean);  // cs times already lt()-shifted
   inst.ma7.setData(maD(7)); inst.ma25.setData(maD(25));
   const lb = bars[bars.length - 1];
-  inst.last = { time: lb.t, open: lb.o, high: lb.h, low: lb.l, close: lb.c, v: lb.v || 0 };
+  // lb.t is the raw epoch; the series is drawn with lt(lb.t). Storing the
+  // raw value made every live update call lt() a SECOND time, shifting
+  // the tick an hour into the future and freezing the chart.
+  inst.last = { time: lt(lb.t), open: lb.o, high: lb.h, low: lb.l,
+                close: lb.c, v: lb.v || 0, bucket: Number(lb.t) };
   try { inst.chart.timeScale().scrollToRealTime(); } catch {}
 }
 async function bnLoad(tf, inst, el) {
@@ -703,13 +802,16 @@ async function bnLoad(tf, inst, el) {
 function bnEnsure() {
   if (S.chartSrc !== "binance") return;
   const mainEl = $("#chart-binance");
-  if (mainEl && !Bn.main) { Bn.main = bnMake(mainEl, false); }
-  if (Bn.main) bnLoad(S.focusTf, Bn.main, mainEl);
-  for (const tf of TF) {
-    const el = $("#qbn-" + tf); if (!el) continue;
-    if (!Bn.quads[tf]) Bn.quads[tf] = bnMake(el, true);
-    if (Bn.quads[tf]) bnLoad(tf, Bn.quads[tf], el);
+  if (!mainEl) return;
+  // The TF cards no longer host a Binance copy (it was created inside a
+  // hidden slot and stayed empty) — only the big chart is built here.
+  if (!Bn.main) {
+    if (mainEl.classList.contains("hidden")) return;   // build when visible
+    Bn.main = bnMake(mainEl, false);
+    try { Bn.main.chart.applyOptions({ width: mainEl.clientWidth || 800,
+                                       height: mainEl.clientHeight || 340 }); } catch (e) {}
   }
+  if (Bn.main) bnLoad(S.focusTf, Bn.main, mainEl);
 }
 function bnTickMain() {
   const inst = Bn.main, p = S.prices?.[S.symbol];
@@ -718,9 +820,16 @@ function bnTickMain() {
   }
   if (!inst || !inst.last || !(p > 0)) return;
   const l = inst.last;
+  // bucket rollover: the Binance series is 1-minute, so a new minute must
+  // append a bar (previously the last bar was rewritten forever).
+  const nb = Math.floor(serverNow());
+  if (inst.bucket && nb > inst.bucket) {
+    bnLoad(S.focusTf, inst);
+    return;
+  }
   l.close = p; l.high = Math.max(l.high, p); l.low = Math.min(l.low, p);
-  try { inst.candles.update({ time: lt(l.time), value: l.close }); }
-  catch { bnLoad(S.focusTf, inst); }   // bucket rolled: refetch, never freeze
+  try { inst.candles.update({ time: l.time, value: l.close }); }
+  catch { bnLoad(S.focusTf, inst); }   // chart rejected the tick: refetch
 }
 
 /* position sizing from the REAL locked stop distance per TF */
@@ -786,7 +895,8 @@ function renderBranches() {
   const a = S.snap?.assets?.[S.symbol];
   const d = a?.tfs?.[S.focusTf];
   const b = d?.branches;
-  $("#branch-scope").textContent = `${S.symbol} · ${S.focusTf.toUpperCase()} · ${b?.method === "empirical-first-touch" ? `measured first-touch · n=${b.n}` : "approx (thin tape)"}`;
+  $("#branch-scope").textContent = `${S.symbol} · ${S.focusTf.toUpperCase()} · `
+    + (b?.n ? `measured first-touch · n=${b.n}` : b?.method ? String(b.method) : "collecting");
   if (!b || !a) {
     cvHost._pc = null;
     stats.innerHTML = "";
@@ -810,8 +920,8 @@ function renderBranches() {
     <div class="kv"><span>forecast audit (all windows)</span><b>${S.snap?.prob_audit?.n ? `n=${S.snap.prob_audit.n} · pred ${Math.round(S.snap.prob_audit.mean_predicted * 100)}% vs realised ${Math.round(S.snap.prob_audit.realised_tp_first * 100)}% · ${esc(S.snap.prob_audit.verdict || "")}` : "grading after settled windows"}</b></div>
     <div class="kv"><span>basis</span><b>${b.method === "empirical-first-touch" ? `measured · n=${b.n} windows` : "approx · thin tape"}</b></div>
     <div class="kv"><span>time left</span><b>${Math.round(b.rem_s / 60)}m ${Math.round(b.rem_s % 60)}s</b></div>`;
-  $("#branch-note").textContent = b.method === "empirical-first-touch"
-    ? `measured: first-touch outcomes replayed over ${b.n} historical windows on this asset's own tape (both-barrier bars count as stop-first, ${b.ambig} ambiguous) · bands = empirical return quantiles · realised path in white`
+  $("#branch-note").textContent = b.n
+    ? `measured: first-touch outcomes replayed over ${b.n} historical windows on this asset's own tape (both-barrier bars count as stop-first, ${b.ambig} ambiguous) · bands = empirical return quantiles (${b.fan_basis || "all windows"}) · realised path in white${b.resolved ? ` · ${b.resolved.barrier} → window decided` : ""}`
     : "thin tape — driftless approximation until 20+ windows can be replayed · realised path in white";
   // ---- probability bar: the answer in one glance ----
   const bar = $("#branch-bar");
@@ -829,19 +939,58 @@ function renderBranches() {
   const t1 = d.cycle_end || (Date.now() / 1000 + b.rem_s);
   const tN = b.now || (Date.now() / 1000);
   const hist = realisedSeries(t0 - 1, Date.now() / 1000);
+  const lastP = hist.length ? hist[hist.length - 1].p : (b.entry || a.price || 0);
+  // ── plain-English takeaway: the panel must answer "so what?" ──
+  const fanEnd = (b.fan && b.fan.length) ? b.fan[b.fan.length - 1] : null;
+  const pT = Math.round((b.p_target_cond ?? b.p_target ?? 0) * 100);
+  const pS = Math.round((b.p_stop ?? 0) * 100);
+  const medTxt = fanEnd && Number.isFinite(fanEnd.q50)
+    ? `most likely price at the ${Math.round((b.rem_s || 0) / 60) || TF_META[S.focusTf].mins}-minute mark is <b>${px(fanEnd.q50)}</b>` : "";
+  const rangeTxt = fanEnd && Number.isFinite(fanEnd.q25) && Number.isFinite(fanEnd.q75)
+    ? `the middle half of outcomes lands between <b>${px(fanEnd.q25)}</b> and <b>${px(fanEnd.q75)}</b>` : "";
+  const tk = $("#branch-takeaway");
+  if (tk) {
+    const verdict = pT >= 60 ? `favours the TARGET (${pT}% target first vs ${pS}% stop first)`
+      : pS >= 60 ? `favours the STOP (${pS}% stop first vs ${pT}% target first)`
+        : `is a coin-flip (${pT}% target first vs ${pS}% stop first)`;
+    const resolvedTxt = b.resolved
+      ? `<b class="acc-warn">${esc(b.resolved.barrier || "barrier observed")}</b> — this window is already decided, so P(target first) is a fact (${pT}%), not a forecast. `
+      : "";
+    tk.innerHTML = `<b>IN PLAIN ENGLISH</b> — ${resolvedTxt}from ${b.entry ? px(b.entry) : "entry"} with TP ${b.tp ? px(b.tp) : "—"} and SL ${b.sl ? px(b.sl) : "—"}, `
+      + `the measured path ${verdict}. ${medTxt ? medTxt + "; " : ""}${rangeTxt ? rangeTxt + " — the shaded bands below show the full 10th–90th percentile spread. " : ""}`
+      + `<span class="dim">${b.method === "empirical-first-touch" ? `Measured on ${b.n} replayed windows of this asset's own tape, not a model guess.` : b.n ? `Measured on ${b.n} windows (${esc(b.fan_basis || "all windows")}).` : "Thin tape — this is a driftless approximation until 20+ windows can be replayed."}</span>`;
+  }
+  // ── zones: green TARGET band (price → TP), red STOP band (price → SL) ──
+  const zones = [];
+  if (b.entry && b.tp) zones.push({ from: b.entry, to: b.tp, label: "TARGET ZONE",
+    color: "rgba(38,166,154,.10)", text: "rgba(120,230,190,.85)" });
+  if (b.entry && b.sl) zones.push({ from: b.entry, to: b.sl, label: "STOP ZONE",
+    color: "rgba(240,56,90,.10)", text: "rgba(255,140,160,.85)" });
+  const lg = $("#branch-legend");
+  if (lg) {
+    lg.innerHTML = `<span class="lg"><i style="background:#f2f2fa"></i>realised price</span>`
+      + `<span class="lg"><i style="background:#7fd8cf"></i>median (50th)</span>`
+      + `<span class="lg"><i style="background:rgba(95,200,160,.6)"></i>bullish band 75th–90th</span>`
+      + `<span class="lg"><i style="background:rgba(240,90,110,.6)"></i>bearish band 10th–25th</span>`
+      + `<span class="lg"><i style="background:#26a69a"></i>TP</span>`
+      + `<span class="lg"><i style="background:#f0385a"></i>SL</span>`
+      + `<span class="lg"><i style="background:#c9a227"></i>NOW</span>`;
+  }
   if (!cvHost._pc) { cvHost.innerHTML = ""; cvHost._pc = new PriceChart(cvHost); }
   cvHost._pc.setModel({
     series: [{ pts: hist, color: "#f2f2fa" }],
+    zones,
     levels: [
       ...(b.tp ? [{ p: b.tp, label: "TP", color: "#26a69a", dash: true }] : []),
       ...(b.entry ? [{ p: b.entry, label: "ENTRY", color: "#e6b93d" }] : []),
-      ...(b.sl ? [{ p: b.sl, label: "SL", color: "#ef5350", dash: true }] : []),
+      ...(b.sl ? [{ p: b.sl, label: "SL", color: "#f0385a", dash: true }] : []),
     ],
     fan: (b.fan && b.fan.length > 2 && hist.length)
-      ? { originT: tN, originP: hist[hist.length - 1].p,
+      ? { originT: tN, originP: lastP,
           pts: b.fan.map(p2 => ({ t: tN + p2.f * Math.max(1, t1 - tN),
                                   lo: p2.q05, lo2: p2.q25, mid: p2.q50, hi2: p2.q75, hi: p2.q95 })) }
       : null,
+    fanLabels: true,
     nowT: tN, t0, t1, ma: 0, domainFan: "inner",
     ariaLabel: `${S.symbol} ${S.focusTf} probability chart: realised price ` +
       `with measured outcome fan to cycle end`,
@@ -1328,7 +1477,7 @@ function quadChart(el, bucketSec = 60) {
   const noop = { setData() {}, setLines() {}, tick() {} };
   if (!LW || !el) return noop;
   const chart = LW.createChart(el, {
-    layout: { background: { color: "transparent" }, textColor: "#8a8aa0", fontSize: 9 },
+    layout: { background: { color: "transparent" }, textColor: "#cbd5e1", fontSize: 9 },
     grid: { vertLines: { color: "rgba(140,140,170,.06)" }, horzLines: { color: "rgba(140,140,170,.06)" } },
     timeScale: { timeVisible: true, secondsVisible: false },
     rightPriceScale: { borderColor: "rgba(140,140,170,.25)" },
@@ -1339,13 +1488,23 @@ function quadChart(el, bucketSec = 60) {
   const candles = chart.addLineSeries({ color: "#38bdf8", lineWidth: 1,
     autoscaleInfoProvider: levelAutoscaleProvider(levelValues),
     priceLineVisible: false, lastValueVisible: true });
-  new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); } catch {} }).observe(el);
+  new ResizeObserver(() => {
+    const w = el.clientWidth, h = el.clientHeight;
+    if (w > 20 && h > 20) { try { chart.applyOptions({ width: w, height: h }); } catch {} }
+  }).observe(el);
   const inst = { chart, candles, last: null, _lines: [], levelValues,
     setData(bars) {
       if (!bars?.length) {
         candles.setData([]); inst.last = null;
         try { chart.timeScale().fitContent(); } catch {}
         return;
+      }
+      // a hidden slot can be created 0×0 (clientHeight 0): re-measure on
+      // every paint so a card that became visible always gets a real size
+      const w = el.clientWidth, h = el.clientHeight;
+      if (w > 0 && h > 0 && (chart._w !== w || chart._h !== h)) {
+        chart._w = w; chart._h = h;
+        try { chart.applyOptions({ width: w, height: h }); } catch {}
       }
       candles.setData(bars.map(b => ({ time: lt(b.time), value: b.close })));
       const lb = bars[bars.length - 1];
@@ -1526,14 +1685,27 @@ function applyChartSrc() {
   if (mode === "tv" && wrap) fill(wrap, S.focusTf);
   if (mode === "binance") bnEnsure();
   if (mode === "own") drawMainChart();
-  // every sub-timeframe card follows the same toggle: server-tape
-  // candles in OWN, Binance candles in BINANCE, TradingView in TV mode.
+  // The four TF cards ALWAYS draw the server tape (own series): that is
+  // the only renderer that can carry the entry / TP / SL / horizon-rung
+  // markers, and it cannot be blank. Previously the default BINANCE mode
+  // swapped in `#qbn-<tf>`, whose chart was created while the slot was
+  // display:none (clientHeight 0) and therefore never painted — the
+  // reported blank mini sparklines. The big chart keeps the full
+  // OWN / BINANCE / TV toggle.
   for (const tf of TF) {
     const o = $("#qc-" + tf),
           slot = $("#qtv-" + tf), bslot = $("#qbn-" + tf);
-    if (o) o.style.display = mode === "own" ? "" : "none";
-    if (slot) { slot.classList.toggle("hidden", mode !== "tv"); if (mode === "tv") fill(slot, tf); }
-    if (bslot) bslot.classList.toggle("hidden", mode !== "binance");
+    if (o) o.style.display = "";
+    if (slot) slot.classList.add("hidden");
+    if (bslot) bslot.classList.add("hidden");
+    const inst = S.charts[tf];
+    if (inst?.chart && o) {
+      const w = o.clientWidth, h = o.clientHeight;
+      if (w > 0 && h > 0) {
+        try { inst.chart.applyOptions({ width: w, height: h }); } catch (e) {}
+        try { inst.chart.timeScale().fitContent(); } catch (e) {}
+      }
+    }
   }
 }
 function bindChartSrc() {
@@ -2235,11 +2407,17 @@ async function loadFormulas() {
       if (fwEl) {
         const rows = Object.keys(core).sort((a, b) => a - b).map(fid => {
           const tds = ["tf1", "tf2", "tf3", "tf4"].map(tf => {
-            const cell = (fwd.buckets?.[`F${fid} ${S.symbol} ${tf}`] || [])
-              .find(b => Math.abs(b.bucket - (Math.max(-1, Math.min(1, core[fid])) )) < 0.26);
-            return cell && cell.settled
-              ? `<td title="bucket ${cell.bucket}, n=${cell.n}">${(cell.p_up * 100).toFixed(0)}%<span class="dim"> n${cell.n}</span></td>`
-              : `<td class="dim">—</td>`;
+            const est = fwdEstimate(fwd.buckets?.[`F${fid} ${S.symbol} ${tf}`] || [],
+                                    Math.max(-1, Math.min(1, core[fid])));
+            if (!est) {
+              return `<td class="dim" title="no settled window in this bucket yet">—</td>`;
+            }
+            const note = est.exact ? `bucket ${est.bucket}, n=${est.n}`
+              : est.smoothed
+                ? `smoothed from ±${est.span} pooled reading, n=${est.n}`
+                : `pooled ±${est.span} reading span, n=${est.n}`;
+            return `<td title="${note}" class="${est.exact ? "" : "fwd-pooled"}">${(est.p * 100).toFixed(0)}%`
+              + `<span class="dim"> n${est.n}${est.exact ? "" : est.smoothed ? " · thin" : " · ±" + est.span}</span></td>`;
           }).join("");
           const cur = (fv.raw?.[fid] ?? core[fid]);
           const tOn = contribs[fid] ? Math.abs(contribs[fid].contribution) >= 1e-5 : null;
@@ -2249,7 +2427,7 @@ async function loadFormulas() {
         fwEl.innerHTML = `<table class="fwd-table"><thead><tr><th>formula ✓/✗</th><th>now</th>
           <th>tf1 P(up)</th><th>tf2 P(up)</th><th>tf3 P(up)</th><th>tf4 P(up)</th></tr></thead>
           <tbody>${rows}</tbody></table>
-          <div class="hint">Forward P(up) is settled strict-sign from this ledger — n≥30 per bucket before it speaks (advice §2.7). Current value beside it: superposition (§2.8).</div>`;
+          <div class="hint">Forward P(up) is a walked-forward frequency from this ledger. n≥30 in the exact reading bucket → plain %; below that the reading is POOLED with neighbouring buckets (±0.5 then ±1.0) and marked, and if the whole table is still thin the cell shows a Laplace-smoothed (up+1)/(n+2) frequency tagged <b>thin</b> — never an unexplained dash. Current value beside it: superposition (§2.8).</div>`;
       }
     } catch (e) { console.warn("forward/flat:", e); }
     // §7 genesis: pool counts, next generation, top formula + 7 metrics
@@ -2389,14 +2567,16 @@ async function loadEmotion() {
     $("#em-narrative").innerHTML = `
       <div class="why-reason">${em.narrative || "waiting for the first emotion pass…"}</div>
       <div class="kv-row">
-        <div class="kv"><span>CERC composite (E22)</span><b>${fmt(em.cerc, 4)}</b></div>
-        <div class="kv"><span>aggregate</span><b>${fmt(em.aggregate, 4)}</b></div>
+        <div class="kv"><span>NET EMOTION (E22 sign-weighted mean)</span><b class="${(em.net_emotion ?? 0) > 0.05 ? "acc-up" : (em.net_emotion ?? 0) < -0.05 ? "acc-dn" : "dim"}">${em.net_emotion == null ? "—" : (em.net_emotion >= 0 ? "+" : "") + fmt(em.net_emotion, 3)}</b></div>
+        <div class="kv"><span>CERC agreement sum (spec)</span><b>${fmt(em.cerc, 4)}</b></div>
+        <div class="kv"><span>breadth / agreement</span><b>${em.breadth ? `${em.breadth.bull}▲ ${em.breadth.bear}▼ ${em.breadth.flat}·` : "—"} · ${Math.round((em.agreement ?? 0) * 100)}% has a direction</b></div>
+        <div class="kv"><span>aggregate intensity</span><b>${fmt(em.aggregate, 4)}</b></div>
         <div class="kv"><span>RTP trauma</span><b>${fmt(em.rtp, 3)}${(em.rtp || 0) > 0.6 ? " ⚠" : ""}</b></div>
         <div class="kv"><span>TEDR → P6</span><b>${fmt(em.tedr, 4)}</b></div>
       </div>
       ${em.features ? `<div class="kv-row"><div class="kv"><span>measured features (tape only — never the signal, G-3)</span>
         <b>samples ${em.features.samples ?? "—"} · vol-z ${fmt(em.features.vol_z, 3)} · climax ×${fmt(em.features.climax_ratio, 2)} · violence gate ${fmt(em.features.violence_gate, 2)} · streak ${em.features.window_streak ?? "—"}</b></div></div>` : ""}
-      <div class="hint">22 spec emotion formulas feed E22 CERC → confidence modulator ±15 % (never the direction, advice §5.1). Circles: conic ring = |value|, border = direction.</div>
+      <div class="hint">22 channels feed E22. <b>NET EMOTION</b> is the sign-weighted mean of the channels that express a direction (Σ wᵢeᵢdᵢ / Σ wᵢeᵢ, ∈ −1…+1): a split crowd reads near zero while the breadth line shows the split. The spec's raw CERC agreement sum is shown beside it unchanged and drives the ±15 % confidence modulator (never the direction, advice §5.1). Circles: conic ring = |value|, border = direction.</div>
       <div class="kv-grid" style="margin:8px 0">
         <div class="kv"><span>RETAIL emotion (herd/crowd/news channels)</span><b>${em.retail ? `${em.retail.score >= 0 ? "+" : ""}${fmt(em.retail.score, 3)} · ${esc(em.retail.label)}` : "—"}</b></div>
         <div class="kv"><span>HEDGE / smart-money emotion (absorption/divergence)</span><b>${em.hedge ? `${em.hedge.score >= 0 ? "+" : ""}${fmt(em.hedge.score, 3)} · ${esc(em.hedge.label)}` : "—"}</b></div>
@@ -2719,8 +2899,8 @@ async function loadBrains() {
         <div class="logic">specialty vote ${fmt(inst.signal ?? 0, 3)} · hormone ${fmt(inst.h_signal, 3)}</div>
         <div class="logic">${inst.backend === "flywire-v783-real" ? `🧠 ${Number(inst.neurons).toLocaleString()} real neurons · ${Number(inst.synapses).toLocaleString()} real synapses (FlyWire v783)` : "synthetic graph — real circuit not ready"}</div>
         <div class="kv-row">
-          <div class="kv"><span>${inst.id === "DB-3" ? "state" : inst.id === "DB-1" ? "pattern" : inst.id === "DB-2" ? "experience" : "learn thrust"}</span><b>${inst.dominant ?? (inst.id === "DB-1" ? fmt(inst.pattern, 3) : inst.id === "DB-2" ? fmt(inst.experience, 3) : fmt(inst.signal, 3))}</b></div>
-          <div class="kv"><span>experience</span><b>${fmt(inst.experience, 3)}</b></div>
+          <div class="kv"><span>${inst.id === "DB-3" ? "state" : inst.id === "DB-1" ? "pattern" : inst.id === "DB-2" ? "experience EQ (MB · LH balance)" : "learn thrust"}</span><b>${inst.dominant ?? (inst.id === "DB-1" ? fmt(inst.pattern, 3) : inst.id === "DB-2" ? fmt(inst.experience, 3) : fmt(inst.signal, 3))}</b></div>
+          ${inst.id === "DB-2" ? "" : `<div class="kv"><span>experience</span><b>${fmt(inst.experience, 3)}</b></div>`}
         </div>
         <div class="kv-row" style="margin-top:8px">
           ${["dopamine", "serotonin", "octopamine", "tyramine"].map(k =>
@@ -2794,7 +2974,7 @@ async function loadBrains() {
             <div class="kv-row">
               <div class="kv"><span>neurons (cells)</span><b>${(an.neurons || 0).toLocaleString()}</b></div>
               <div class="kv"><span>connections (≥5 syn)</span><b>${(an.connections || 0).toLocaleString()}</b></div>
-              <div class="kv"><span>synapses (Σ)</span><b>${an.synapses != null ? an.synapses.toLocaleString() : "computing…"}</b></div>
+              <div class="kv"><span>synapses (Σ)</span><b title="${esc(an.synapses_basis || "measured census")}">${an.synapses != null ? Number(an.synapses).toLocaleString() : "unknown — connectome cache has no census"}</b></div>
               <div class="kv"><span>mean degree</span><b>${an.mean_degree ?? "—"}</b></div>
               <div class="kv"><span>density</span><b>${an.density ?? "—"}</b></div>
             </div>
@@ -2811,7 +2991,14 @@ async function loadBrains() {
             </table></div>
             ${an.top_cell_types && Object.keys(an.top_cell_types).length ? `<div class="hint">top cell types: ${Object.entries(an.top_cell_types).slice(0, 8).map(([t, n]) => `${esc(t)} (${n})`).join(" · ")}</div>` : ""}`;
         } else if (an.state === "computing") {
-          anEl.innerHTML = `<div class="dim pad">anatomy pass running — full neurons/cells/synapses census in a few seconds…</div>`;
+          anEl.innerHTML = `<div class="kv-row">
+              <div class="kv"><span>neurons (cells)</span><b>${Number(an.neurons || 0).toLocaleString()}</b></div>
+              <div class="kv"><span>connections (≥5 syn)</span><b>${Number(an.connections || 0).toLocaleString()}</b></div>
+              <div class="kv"><span>synapses (Σ)</span><b>${an.synapses != null ? Number(an.synapses).toLocaleString() : "unknown"}</b></div>
+              <div class="kv"><span>mean degree</span><b>${an.mean_degree ?? "—"}</b></div>
+              <div class="kv"><span>density</span><b>${an.density ?? "—"}</b></div>
+            </div>
+            <div class="hint">census from the loaded graph — the class × class heatmap finishes in a few seconds…</div>`;
           if (!anEl.dataset.retry) {
             anEl.dataset.retry = "1";
             setTimeout(() => { delete anEl.dataset.retry; loadBrains(); }, 4000);
@@ -3180,6 +3367,14 @@ async function loadHistory() {
           const reason = s.why || "verified history is not sufficient for a complete replay";
           el.innerHTML = `<div class="pad"><b>🌱 24H WARM-HISTORY SEED</b> — <span class="acc-warn">${esc(reason)}</span>` +
             `${expected ? ` <span class="dim">verified minute coverage: ${bars}/${expected} requested across assets; missing bars were not filled.</span>` : ""}</div>`;
+        } else if (s.state === "done-sim" || s.state === "fresh-sim" || s.state === "done") {
+          const subs = Object.entries(s.subsystems || {})
+            .map(([k, v]) => `${k} ${v.acc == null ? "—" : Math.round(v.acc * 100) + "%"} (n=${v.n})`)
+            .join(" · ");
+          el.innerHTML = `<div class="pad"><b>🌱 WARM-HISTORY REPLAY</b> — walked the backfilled ${Math.round((s.hours || 168) / 24)}-day tape forward through the app's own formulas, brains, emotions, physics, hedge-flow and advanced layers: ` +
+            `<b>${s.new_settled ?? s.settled ?? 0} windows settled</b> · <b>${s.graded ?? 0} graded</b>` +
+            `${s.duplicates ? ` · ${s.duplicates} already present (idempotent)` : ""}` +
+            `<div class="dim" style="margin-top:4px">${esc(s.why || "")}${subs ? ` · subsystem hit-rates: ${subs}` : ""} · seeded rows are flagged “warm-v2” and can be excluded from any export.</div></div>`;
         } else if (s.state === "fresh") {
           el.innerHTML = `<div class="pad"><b>🌱 24H WARM-HISTORY SEED</b> — <span class="dim">already seeded in the last 24h (${s.rows ?? sd.ledger_rows ?? 0} ledger rows) — history below includes the replayed tape, flagged per row.</span></div>`;
         } else if (s.state === "failed") {
@@ -3189,19 +3384,27 @@ async function loadHistory() {
     } catch { /* banner optional */ }
     // advanced module scoreboard (per-module walk-forward accuracy)
     try {
-      const adv = await api(`/api/history/advanced?symbol=${state.symbol}&tf=${state.tf}`);
+      // BUG FIX: this block referenced an undefined `state` object, so the
+      // request URL threw a ReferenceError which the outer catch swallowed —
+      // the panel kept its static "Loading…" forever. It now uses the live
+      // selection and renders a plain-English state for thin/absent data.
+      const advSym = S.symbol, advTf = S.focusTf;
+      const adv = await api(`/api/history/advanced?symbol=${advSym}&tf=${advTf}`);
       const mods = adv.modules || {};
       const names = Object.keys(mods);
       const elA = $("#hs-advanced");
       if (elA) {
+        const head = `<div class="hint" style="margin:0 0 6px">${advSym} · ${advTf.toUpperCase()} (${TF_META[advTf]?.mins ?? "?"}m) — follows the asset/timeframe selected in the toolbar.</div>`;
         if (!names.length) {
-          elA.innerHTML = `<div class="dim pad">No module history for ${state.symbol} ${state.tf.toUpperCase()} yet — settles one bar behind each locked call.</div>`;
+          elA.innerHTML = head + `<div class="dim pad">No module history for ${advSym} ${advTf.toUpperCase()} yet — each module is graded one bar after a lock settles.</div>`;
         } else {
-          elA.innerHTML = names.map(m => { const d = mods[m];
-            const enough = (d.n || 0) >= 8;
+          elA.innerHTML = head + names.map(m => { const d = mods[m] || {};
+            const nn = Number(d.n || 0);
+            const acc = Number.isFinite(Number(d.acc)) && d.acc != null ? Number(d.acc) : null;
+            const enough = nn >= 8 && acc != null;
             return `<div class="kv"><span>${m}</span>` + (enough
-              ? `<b class="${d.acc >= 0.55 ? "acc-up" : d.acc <= 0.45 ? "acc-dn" : ""}">${(d.acc * 100).toFixed(1)}% <span class="dim" style="font-weight:400">n=${d.n} · weight ×${d.scale}</span></b>`
-              : `<b class="dim">— n=${d.n} (needs ≥8)</b>`) + `</div>`; }).join("")
+              ? `<b class="${acc >= 0.55 ? "acc-up" : acc <= 0.45 ? "acc-dn" : ""}">${(acc * 100).toFixed(1)}% <span class="dim" style="font-weight:400">n=${nn} · weight ×${d.scale ?? 1}</span></b>`
+              : `<b class="dim">— n=${nn}/${8} · ${nn === 0 ? "no graded sample yet" : "collecting"}${d.scale != null && Number(d.scale) < 0 ? ` · voting flipped ×${d.scale}` : ""}</b>`) + `</div>`; }).join("")
             + `<div class="hint">Walk-forward graded: module sign locked one pass, settled against the realised bar. Weight scale is SIGNED and learned per asset+TF: acc 50% → ×+0.5, 65% → ×+1.5, below 50% the module votes FLIPPED (×−0.5…−1.5); arms at n≥40. Path-signature: ${adv.signature_samples || 0}/500 graded → ${adv.signature_floor ? "<b>floor weight</b> (unproven)" : "<b>earned weight</b>"}${adv.conformal && adv.conformal.q_bps != null ? ` · conformal q ${adv.conformal.q_bps} bps (n=${adv.conformal.n})` : ""}</div>`;
         }
       }

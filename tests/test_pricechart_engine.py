@@ -78,8 +78,11 @@ def test_own_chart_keeps_at_least_30_real_candles():
     assert "n = max(10, min(1000, n))" in API
     assert "Math.max(4 * windowMin, 30 * intervalMin" in JS
     assert 'tf === "tf1" ? 90 * intervalMin : 0' in JS
-    assert "const contextSec = Math.max(4 * Wsec, minContext);" in JS
-    assert "(d.cycle_end || bt0) + 2 * bucket0" in JS
+    # the view window is a LOGICAL bar range now: setVisibleRange(frome/to)
+    # compressed the candles into the left of the canvas whenever the tape
+    # or the cycle end did not sit where the time window expected
+    assert "setVisibleLogicalRange" in JS
+    assert "const futureBars = Math.max(2," in JS
     assert "history warming: ${tapeArr.length}/${minVisibleBars} source candles" in JS
 
 

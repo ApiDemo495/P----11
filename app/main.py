@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import math
 import json
 import logging
 import time
@@ -136,39 +137,49 @@ async def _boot() -> None:
 
 
 def _spawn_history_seed() -> None:
-    """24h warm-history seed (app/history_seed.py): once a day, in
-    the background, once the engine is live — and only on a REAL
-    feed (a sim tape dressed as backtest history would be a lie)
-    while the settlement ledger is still thin."""
+    """Warm-history replay (app/warmup.py), in the background at boot.
+
+    Every subsystem is replayed walk-forward over the backfilled tape so
+    the ledger, forward P(up) buckets, advanced module board, subsystem
+    scorecards, meta-combiner and calibration rings are populated on the
+    first render instead of showing ``n=0 (needs ≥8)`` for days.  Runs once
+    per boot (rings are in-memory) and once a day for the durable tables.
+    """
     import os as _os
     import threading as _th
     import time as _time
 
     def work():
-        _time.sleep(30)                     # let the app settle first
+        _time.sleep(8)                      # let the app settle first
+        if _os.environ.get("PYTEST_CURRENT_TEST"):
+            engine.seed_info = {"state": "skipped-test"}
+            return
+        if _os.environ.get("PREDICT_SKIP_WARMUP") == "1":
+            engine.seed_info = {"state": "skipped-env"}
+            return
         try:
             stamp = "data/.history_seed_stamp"
             fresh = (_os.path.exists(stamp)
                      and _time.time() - _os.path.getmtime(stamp) < 86400)
+            # rings reset on restart, so the replay is always worth running;
+            # only the durable ledger/forward write is skipped when fresh
             rows = sum(len(v) for v in engine.ledger.rows.values())
-            if fresh and rows >= 20:
-                engine.seed_info = {"state": "fresh", "rows": rows}
-                return
-            if getattr(feed, "mode", "sim") != "binance":
-                engine.seed_info = {"state": "skipped-sim",
-                                    "why": "seed needs a real Binance tape"}
-                return
             engine.seed_info = {"state": "seeding"}
-            from .history_seed import seed_history
-            engine.seed_info = {"state": "done",
-                                **seed_history(engine, hours=24)}
+            from .warmup import warm_history
+            info = warm_history(engine, hours=168)
+            if fresh and rows >= 200:
+                info["state"] = ("fresh-sim" if info.get("family") == "sim"
+                                 else "fresh")
+                info["why"] = ("rings re-seeded on boot; durable tables "
+                               "already fresh")
+            engine.seed_info = info
             _os.makedirs("data", exist_ok=True)
             open(stamp, "a").close()
         except Exception:
-            log.exception("history seed failed")
+            log.exception("warm history replay failed")
             engine.seed_info = {"state": "failed"}
 
-    _th.Thread(target=work, daemon=True, name="history-seed").start()
+    _th.Thread(target=work, daemon=True, name="warm-history").start()
 
 
 @app.get("/api/history/seed")
@@ -355,9 +366,43 @@ async def watchdog() -> JSONResponse:
     })
 
 
+def _clean_json(obj, bad: set[str] | None = None, path: str = ""):
+    """Replace NaN/±Inf with None (JSON has no such literals).
+
+    One stray NaN used to 500 the ENTIRE snapshot — every panel blank.
+    A single unavailable number must degrade to "—", not take the page
+    down; the offending path is logged once per boot so the cause is
+    still visible instead of silently papered over.
+    """
+    if isinstance(obj, float) and not math.isfinite(obj):
+        if bad is not None:
+            bad.add(path or "<root>")
+        return None
+    if isinstance(obj, dict):
+        return {k: _clean_json(v, bad, f"{path}.{k}" if path else str(k))
+                for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_clean_json(v, bad, f"{path}[{i}]") for i, v in enumerate(obj)]
+    return obj
+
+
+_NONFINITE_SEEN: set[str] = set()
+
+
+def _json_safe(payload):
+    bad: set[str] = set()
+    out = _clean_json(payload, bad)
+    new = {b.split(".")[:3].__str__() for b in bad} - _NONFINITE_SEEN
+    if new:
+        _NONFINITE_SEEN.update(new)
+        log.warning("non-finite numbers replaced with null at: %s",
+                    sorted(bad)[:8])
+    return out
+
+
 @app.get("/api/snapshot")
 async def snapshot() -> JSONResponse:
-    return JSONResponse(engine.build_snapshot())
+    return JSONResponse(_json_safe(engine.build_snapshot()))
 
 
 @app.get("/api/formula-traces")
@@ -936,13 +981,24 @@ async def history_days() -> JSONResponse:
 
 
 @app.get("/api/history/advanced")
-async def history_advanced(symbol: str = "BTCUSDT",
-                           tf: str = "tf3") -> JSONResponse:
-    """Per-module walk-forward accuracy for the advanced layer."""
+async def history_advanced(symbol: str = "BTC",
+                           tf: str = "tf1") -> JSONResponse:
+    """Per-module walk-forward accuracy for the advanced layer.
+
+    Accepts either the UI asset key (BTC) or the exchange symbol
+    (BTCUSDT); the old defaults (BTCUSDT/tf3) never matched an engine key,
+    so the scoreboard stayed on "Loading…" forever.
+    """
     from .config import SYMBOLS, TIMEFRAMES
-    return JSONResponse({"ok": True, **engine.advanced_history(
-        symbol if symbol in SYMBOLS else "BTCUSDT",
-        tf if tf in TIMEFRAMES else "tf3")})
+    sym = str(symbol or "").upper()
+    if sym not in SYMBOLS:
+        sym = str(symbol or "").upper().replace("USDT", "")
+    if sym not in SYMBOLS:
+        sym = "BTC"
+    t = str(tf or "").lower()
+    if t not in TIMEFRAMES:
+        t = "tf1"
+    return JSONResponse({"ok": True, **engine.advanced_history(sym, t)})
 
 
 @app.get("/api/history/day")

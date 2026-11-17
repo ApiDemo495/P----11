@@ -131,8 +131,14 @@ class SettlementLedger:
                conf: float | None = None, record_id: str | None = None,
                first_touch: str | None = None,
                barriers_available: bool | None = None,
-               ambiguous: bool = False) -> dict:
-        """Record one settlement; ``record_id`` makes inserts idempotent."""
+               ambiguous: bool = False,
+               persist: bool = True) -> dict:
+        """Record one settlement; ``record_id`` makes inserts idempotent.
+
+        ``persist=False`` is for bulk warm-history replay: rows are added
+        in memory and written once by the caller (``save()``). Without it
+        a 500-window replay performed 500 fsyncs and boot stalled.
+        """
         entry_value, settle_value = _positive(entry), _positive(settle_price)
         try:
             side_value = int(side)
@@ -195,6 +201,14 @@ class SettlementLedger:
             bucket.append(row)
             if len(bucket) > 500:
                 del bucket[:-500]
+            if not persist:
+                self.settle_calls += 1
+                self.last_settle_ts = row["ts"]
+                self.last_settle = {"symbol": str(symbol), "tf": str(tf),
+                                    "result": result, "side": side_value,
+                                    "entry": row["entry"]}
+                self.totals[result] = self.totals.get(result, 0) + 1
+                return {**row, "_persisted": True, "_deferred": True}
             if not self.save():
                 self.rows[key] = old_rows
                 if not old_rows:

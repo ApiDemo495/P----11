@@ -1295,6 +1295,14 @@ class PredictionEngine:
                     -1 if cerc_sync[tf] < -1e-6 else 0
                 ),
                 "cerc": em["cerc"],
+                # E22 two extra, clearly-labelled readings: the signed
+                # weighted MEAN of the channels that express a direction,
+                # plus how much of the emotional mass has a direction and
+                # the bull/bear channel breadth. The spec's raw CERC
+                # agreement sum stays in `cerc` untouched.
+                "net_emotion": em.get("net_emotion", 0.0),
+                "agreement": em.get("agreement", 0.0),
+                "breadth": em.get("breadth"),
                 "dominant": em.get("dominant"),
                 "retail": em.get("retail"),
                 "hedge": em.get("hedge"),
@@ -1320,9 +1328,13 @@ class PredictionEngine:
                 ("Dominant flows: " + "; ".join(_eparts) + ". ") if _eparts else
                 "All 22 emotion channels flat. "
             ) + (
-                f"Net CERC {em['cerc']:+.4f} — " + (
-                    "bulls in control." if em["cerc"] > 0.02 else
-                    "bears in control." if em["cerc"] < -0.02 else
+                f"Net emotion [{em.get('net_emotion', 0.0):+.3f}] "
+                f"({em.get('breadth', {}).get('bull', 0)}▲/"
+                f"{em.get('breadth', {}).get('bear', 0)}▼, "
+                f"{round(100 * em.get('agreement', 0.0))}% directional) · "
+                f"CERC agreement sum {em['cerc']:+.4f} — " + (
+                    "bulls in control." if em.get("net_emotion", 0.0) > 0.15 else
+                    "bears in control." if em.get("net_emotion", 0.0) < -0.15 else
                     "balanced tug-of-war (conflict keeps confidence low)."
                 )
             ) + (f" Trauma index RTP {em['rtp']:.2f} > 0.6 — confidence suppressed."
@@ -1632,6 +1644,9 @@ class PredictionEngine:
                     "emotion": {
                         "aggregate": round(cerc_sync[tf], 5),
                         "cerc": em["cerc"],
+                        "net_emotion": em.get("net_emotion", 0.0),
+                        "agreement": em.get("agreement", 0.0),
+                        "breadth": em.get("breadth"),
                         "dominant": em.get("dominant"),
                         "retail": em.get("retail"),
                         "hedge": em.get("hedge"),
@@ -3487,6 +3502,32 @@ class PredictionEngine:
             }
             signals = {int(f): _sign(v)
                        for f, v in (res.get("adj") or {}).items()}
+            # SUBSYSTEM COMPONENTS (ids 97..102): they are CCI members just
+            # like the formulas, but the old signals dict only carried
+            # `adj` (formulas), so brain/emotion/physics/news/hedge/tracer
+            # never received a single walk-forward sample — the
+            # leaderboard showed "n=0 (needs ≥8)" forever for exactly
+            # those rows.
+            try:
+                from .config import (BRAIN_COMPONENT_ID, EMOTION_COMPONENT_ID,
+                                     PHYSICS_COMPONENT_ID, NEWS_COMPONENT_ID,
+                                     HEDGE_COMPONENT_ID, TRACER_COMPONENT_ID)
+                subs = {
+                    BRAIN_COMPONENT_ID:
+                        _sign((res.get("brain") or {}).get("polarity") or 0.0),
+                    EMOTION_COMPONENT_ID:
+                        _sign((res.get("emotion") or {}).get("cerc") or 0.0),
+                    PHYSICS_COMPONENT_ID:
+                        _sign((res.get("physics") or {}).get("ufp") or 0.0),
+                    NEWS_COMPONENT_ID: _sign(res.get("news_value") or 0.0),
+                    HEDGE_COMPONENT_ID:
+                        _sign((res.get("hedge") or {}).get("combined") or 0.0),
+                    TRACER_COMPONENT_ID:
+                        _sign(self._tracer_last.get((symbol, tf)) or 0.0),
+                }
+                signals.update({k: v for k, v in subs.items() if v})
+            except Exception:
+                pass
             brain_sigs = [float(inst.get("h_signal", 0.0))
                           for inst in res.get("brain", {}).get("instances", [])]
             _prev = _grade.get((symbol, tf))
@@ -3520,8 +3561,14 @@ class PredictionEngine:
                 _ag2 = self._adv_grade = {}
             _ag2[(symbol, tf)] = (
                 (res.get("advanced") or {}).get("signs") or {}, price)
-            if res.get("direction") and prev_price:
-                self.learning.feed_return(symbol, tf, price / prev_price - 1.0)
+            # feed the MSRC return ring from the SAME previous-pass price
+            # that graded the pass. (The old name ``prev_price`` did not
+            # exist in this scope: every GRC raised NameError after the
+            # grade, which silently killed the history row write and the
+            # return ring — a root cause of empty module scorecards.)
+            _pp = float(_prev[1]) if _prev else 0.0
+            if res.get("direction") and _pp > 0 and price > 0:
+                self.learning.feed_return(symbol, tf, price / _pp - 1.0)
             # --- Section 13 per-GRC record ------------------------------
             record["predictions"][tf] = {
                 "direction": res.get("direction"),
@@ -4057,22 +4104,29 @@ class PredictionEngine:
             tp1 = float(d.get("tp") or 0.0) or (
                 float((targets[0] or {}).get("level") or 0.0)
                 if targets else 0.0)
+            # A barrier that has ALREADY been touched is a resolved window,
+            # not a reason to blank the panel. The old early-return threw
+            # away the measured distribution too, so the whole
+            # Probability-Branches chart (bands, median, NOW marker,
+            # target / stop zones) rendered empty for the rest of the
+            # window. Keep the empirical/fan computation, then state the
+            # outcome plainly: a first touch of the target IS P(target
+            # before stop) = 100% for this window.
+            resolved: dict | None = None
             if dirn in (-1, 1) and price > 0 and tp1 > 0 and sl > 0:
                 tp_touched = (price >= tp1 if dirn > 0 else price <= tp1)
                 sl_touched = (price <= sl if dirn > 0 else price >= sl)
                 hit_name = ("TP" if tp_touched else "SL" if sl_touched else None)
                 if (d.get("contract_tp_hit") or d.get("sl_observed")
                         or tp_touched or sl_touched):
-                    return {
-                        "approx": True, "method": "barrier observed — probability withheld",
-                        "n": 0, "ambig": 0, "ci_target": None,
-                        "ci_stop": None, "p_target": None, "p_stop": None,
-                        "p_between": None, "p_close_down": None,
-                        "ev_bps": None, "entry": (d.get("level_contract") or {}).get("entry"),
-                        "tp": tp1, "sl": sl, "direction": dirn,
-                        "barrier": ("TP already observed" if d.get("contract_tp_hit")
-                                    else "SL already observed" if d.get("sl_observed")
-                                    else f"price at/past {hit_name}"),
+                    tpf = bool(d.get("contract_tp_hit") or tp_touched)
+                    slf = bool(d.get("sl_observed") or sl_touched) and not tpf
+                    resolved = {
+                        "tp_first": tpf,
+                        "sl_first": slf,
+                        "barrier": ("target already touched" if tpf else
+                                    "stop already touched" if slf else
+                                    f"price at/past {hit_name}"),
                     }
             if not dirn or price <= 0 or sl <= 0 or tp1 <= 0:
                 return None
@@ -4090,10 +4144,14 @@ class PredictionEngine:
             # A bar that hits both barriers counts as STOP first
             # (conservative; also counted in `ambig`).
             _sym = d.get("symbol") or "BTC"
-            _st = self.feed.state(_sym)
-            _cl = list(_st.closes or [])
-            _hi = list(_st.highs or _cl)
-            _lo = list(_st.lows or _cl)
+            # self may be None in the pure-function contract tests; the
+            # empirical replay then simply has no tape and the driftless
+            # fallback below answers instead of raising.
+            _feed = getattr(self, "feed", None)
+            _st = _feed.state(_sym) if _feed is not None else None
+            _cl = list(_st.closes or []) if _st is not None else []
+            _hi = list(_st.highs or _cl) if _st is not None else []
+            _lo = list(_st.lows or _cl) if _st is not None else []
             _rem_min = max(1, int(round(rem_s / 60.0)))
             _nb = min(len(_cl), len(_hi), len(_lo))
             if _nb >= _rem_min + 20 and price > 0:
@@ -4237,7 +4295,7 @@ class PredictionEngine:
                         _fan_basis = f"setup-matched (momentum+vol) n={_nc}"
                     else:
                         _fan_basis = f"all windows n={_n}"
-                    return {
+                    out = {
                         "approx": True,
                         "method": "empirical-first-touch",
                         "fan_basis": _fan_basis,
@@ -4270,8 +4328,9 @@ class PredictionEngine:
                         "bands": _bands,
                         "fan": _fan,
                     }
-            lr = self.last_result.get((d.get("symbol") or "BTC",
-                                       tf)) or {}
+                    return PredictionEngine._apply_resolved(out, resolved)
+            _lr_map = getattr(self, "last_result", None) or {}
+            lr = _lr_map.get((d.get("symbol") or "BTC", tf)) or {}
             atr = float(lr.get("atr") or 0.0)
             if atr <= 0:
                 atr = abs(price) * 1e-3
@@ -4316,7 +4375,7 @@ class PredictionEngine:
                                 * math.sqrt(max(t_min * f, 1e-4)
                                             / max(_hz_min, 1.0)))
                 bands.append({"f": f, "level": round(price + qv * sig_f, 6)})
-            return {
+            out = {
                 "approx": True,
                 "method": "driftless-fallback (thin tape)",
                 "n": 0, "ambig": 0,
@@ -4344,8 +4403,35 @@ class PredictionEngine:
                          "q95": round(price + 1.6449 * sigma * (f ** 0.5), 6)}
                         for f in (0.0, 0.25, 0.5, 0.75, 1.0)],
             }
+            return PredictionEngine._apply_resolved(out, resolved)
         except Exception:
             return None
+
+    @staticmethod
+    def _apply_resolved(out: dict, resolved: dict | None) -> dict:
+        """Fold an already-observed barrier into the branch payload.
+
+        The probabilities become the realised first-touch (1/0), the
+        distribution stays visible for the remaining time, and the
+        payload says in words that this window is decided.
+        """
+        if not resolved:
+            return out
+        out = dict(out)
+        out["resolved"] = resolved
+        out["method"] = "measured first-touch — barrier already observed"
+        if resolved.get("tp_first"):
+            out["p_target"] = 1.0
+            out["p_stop"] = 0.0
+            out["p_between"] = 0.0
+        elif resolved.get("sl_first"):
+            out["p_target"] = 0.0
+            out["p_stop"] = 1.0
+            out["p_between"] = 0.0
+        out["note"] = (
+            f"{resolved.get('barrier')} — this window is decided; the bands "
+            "show where price can still travel before it closes")
+        return out
 
     def brain_fusion_weight(self, symbol: str, tf: str) -> float:
         """brain.md §6: 0.25 start, hindsight moves it, 0 when the
@@ -5643,6 +5729,26 @@ class PredictionEngine:
         snap["entered_this_bar"] = entered
         return snap
 
+    def _current_meta_inputs(self) -> dict:
+        """Latest frozen subsystem readings, for the meta gauge."""
+        for (sym, tf) in (("BTC", "tf1"),) + tuple(self.locks.keys()):
+            lock = self.locks.get((sym, tf))
+            if lock and lock.get("inputs"):
+                return dict(lock["inputs"])
+        sysd = self.display_systems.get(("BTC", "tf1")) or {}
+        ph = sysd.get("physics") or {}
+        ufp = ph.get("ufp") if isinstance(ph, dict) else None
+        return {
+            "score": float(sysd.get("cci_adjusted") or 0.0),
+            "brain": int((((sysd.get("brain") or {}).get("polarity")) or 0)),
+            "physics": float((ufp or {}).get("value") if isinstance(ufp, dict)
+                             else (ufp or 0.0)),
+            "emotion": float(((sysd.get("emotion") or {}).get("aggregate"))
+                             or 0.0),
+            "news": float((sysd.get("news_value")) or 0.0),
+            "agent": int((((sysd.get("agent") or {}).get("direction")) or 0)),
+        }
+
     def build_snapshot(self) -> dict[str, Any]:
         now = time.time()
         try:
@@ -5853,7 +5959,11 @@ class PredictionEngine:
                 "degrade": self.degrade_status()["level"],
                 "deadline_misses": self.agent_deadline_misses,
             },
-            "meta": self.meta.payload(),
+            # pass the CURRENT frozen subsystem readings so the panel can
+            # show the predictability gauge (1 − H₂) and this window's
+            # P(up); the payload was called with no inputs, so the gauge
+            # never appeared even after the 40-window record was complete.
+            "meta": self.meta.payload(self._current_meta_inputs()),
             "formula_values": {
                 f"{s}|{tf}": data
                 for (s, tf), data in self.display_formulas.items()

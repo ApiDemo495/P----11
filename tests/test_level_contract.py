@@ -44,15 +44,31 @@ def test_simulated_feed_cannot_be_marked_execution_eligible():
     assert not ok and "live Binance feed required" in why
 
 
-def test_first_touch_probability_is_withheld_after_a_contract_barrier():
+def test_first_touch_is_reported_as_resolved_after_a_contract_barrier():
+    """A touched barrier is a RESOLVED window, not a blank panel.
+
+    The old contract returned `p_target=None` and dropped the whole
+    distribution, which left the Probability-Branches chart empty for the
+    rest of the window. A first touch of the target IS P(target before
+    stop) = 100% for this window, so it is reported as such, together
+    with the distribution of the time that is left.
+    """
     from app.engine import PredictionEngine
     payload = {"symbol": "BTC", "direction": 1, "entry": 100.0,
                "tp": 102.0, "sl": 99.0, "countdown_s": 60,
                "level_contract": {"entry": 100.0},
                "contract_tp_hit": False, "sl_observed": False}
     result = PredictionEngine.branch_stats(None, payload, 102.0, 2_000.0, "tf1")
-    assert result["p_target"] is None and result["p_stop"] is None
-    assert "probability withheld" in result["method"]
+    assert result["resolved"]["tp_first"] is True
+    assert result["p_target"] == 1.0 and result["p_stop"] == 0.0
+    assert result["p_between"] == 0.0
+    assert "already observed" in result["method"]
+    assert result["fan"] and result["bands"]        # chart still renders
+    # a stop-first touch is the mirror case
+    payload_sl = {**payload, "sl_observed": True}
+    r2 = PredictionEngine.branch_stats(None, payload_sl, 98.5, 2_000.0, "tf1")
+    assert r2["resolved"]["sl_first"] is True
+    assert r2["p_target"] == 0.0 and r2["p_stop"] == 1.0
 
 
 def test_contract_snapshot_and_analysis_share_one_pair():

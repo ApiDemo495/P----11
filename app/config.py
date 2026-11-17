@@ -187,7 +187,12 @@ LEVEL_BASE_SCALE = 0.25           # provisional TP/SL base distance scale (F29 s
 # ---------------------------------------------------------------------------
 BINANCE_REST = "https://api.binance.com"
 BINANCE_WS = "wss://stream.binance.com:9443/stream"
-BACKFILL_BARS = 1500              # 1m klines at startup = 25h tape (24h seed + context)
+# 1m klines at startup = 7 days of tape. 25 hours (1500) was enough for the
+# 247-minute window, but NOT for the certified sleeves (500+48 fifteen-minute
+# bars ≈ 5.7 days of 1m bars) nor for a settled tf4 history — so both sat in
+# WARMING_UP / n=0 for days after every restart. 10_080 bars = 7 days is
+# fetched in 11 paginated REST calls per symbol (Binance limit 1000).
+BACKFILL_BARS = 10_080            # 1m klines at startup = 7 days of tape
 MIN_BARS_FULL_WINDOW = TIMEFRAMES["tf4"]["minutes"] + 1   # 248
 MIN_BARS_COMPUTE = 30             # below this a formula pass returns zeros
 FEED_MODE = "auto"                # auto | binance | sim   (auto falls back to simulator)

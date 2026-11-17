@@ -166,7 +166,7 @@ class PriceChart {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, W, H);
     const ink = getComputedStyle(document.documentElement).getPropertyValue("--ink").trim() || "#e8e8f2";
-    const dim = "#9a9ab2";
+    const dim = "#cbd5e1";   // minimum muted tone (contrast audit)
 
     const series = (m.series || [])
       .map(s => ({ ...s, pts: (s.pts || []).filter(p => Number.isFinite(p.t) && Number.isFinite(p.p) && p.p > 0)
@@ -251,9 +251,29 @@ class PriceChart {
       return;
     }
 
+    /* ── price zones (target / stop bands): drawn UNDER the grid so they
+       read as background context, never as a data series ── */
+    if (!spark && Array.isArray(m.zones) && m.zones.length) {
+      for (const z of m.zones) {
+        const a = Number(z.from), b2 = Number(z.to);
+        if (!Number.isFinite(a) || !Number.isFinite(b2)) continue;
+        const yA = Y(Math.max(a, Math.min(lo, hi))), yB = Y(Math.min(b2, Math.max(lo, hi)));
+        if (!Number.isFinite(yA) || !Number.isFinite(yB)) continue;
+        const top = Math.min(yA, yB), hgt = Math.max(2, Math.abs(yB - yA));
+        g.fillStyle = z.color || "rgba(38,166,154,.08)";
+        g.fillRect(padL, top, plotW, hgt);
+        if (z.label) {
+          g.font = "bold 9px ui-monospace,monospace";
+          g.fillStyle = z.text || "rgba(230,230,245,.75)";
+          g.fillText(z.label, padL + 5, top + 11);
+          g.font = "11px ui-monospace,monospace";
+        }
+      }
+    }
+
     /* ── grid + y axis (nice-number ticks) ── */
     if (!spark) {
-      g.font = "10px ui-monospace,monospace";
+      g.font = "11px ui-monospace,monospace";
       for (let v = Math.ceil(lo / yStep) * yStep; v <= hi; v += yStep) {
         const y = Y(v);
         g.strokeStyle = "rgba(140,140,170,.11)";
@@ -278,8 +298,8 @@ class PriceChart {
       g.fillRect(x, padT, padL + plotW - x, plotH);
       g.strokeStyle = "rgba(230,185,61,.5)"; g.setLineDash([3, 3]);
       g.beginPath(); g.moveTo(x, padT); g.lineTo(x, padT + plotH); g.stroke(); g.setLineDash([]);
-      if (!spark) { g.fillStyle = PC_GOLD; g.font = "bold 8px ui-monospace,monospace";
-        g.fillText("NOW", Math.min(padL + plotW - 24, x + 5), padT + 9); g.font = "10px ui-monospace,monospace"; }
+      if (!spark) { g.fillStyle = PC_GOLD; g.font = "bold 9px ui-monospace,monospace";
+        g.fillText("NOW", Math.min(padL + plotW - 24, x + 5), padT + 9); g.font = "11px ui-monospace,monospace"; }
     }
 
     /* ── fan: nested band clipped to the price-led range; median dashed ── */
@@ -302,6 +322,26 @@ class PriceChart {
         g.strokeStyle = "#7fd8cf"; g.setLineDash([4, 3]); g.lineWidth = 1.3; g.stroke(); g.setLineDash([]);
       }
       g.lineWidth = 1;
+      /* direct band labels at the right edge — the probability chart must
+         say WHICH band is which without a legend (Median 50th, Bullish
+         upper 75th–90th, Bearish lower 10th–25th) */
+      if (!spark && Array.isArray(m.fanLabels)) {
+        const last = f[f.length - 1];
+        g.font = "bold 9px ui-monospace,monospace";
+        g.textAlign = "right";
+        const put = (val, label, color, yIf) => {
+          if (!Number.isFinite(val)) return;
+          const y = Number.isFinite(yIf) ? yIf : Y(val);
+          if (y < padT + 6 || y > padT + priceH - 2) return;
+          g.fillStyle = color;
+          g.fillText(label, padL + plotW - 3, y - 2);
+        };
+        put(last.mid, "MEDIAN 50th", "#7fd8cf");
+        put(last.hi2 ?? last.hi, "BULLISH 75–90th", "rgba(95,200,160,.95)");
+        put(last.lo2 ?? last.lo, "BEARISH 10–25th", "rgba(240,90,110,.95)");
+        g.textAlign = "left";
+        g.font = "11px ui-monospace,monospace";
+      }
     }
 
     /* ── volume sub-pane (own scale; never touches the price range) ── */
@@ -315,7 +355,7 @@ class PriceChart {
       });
       g.fillStyle = dim; g.font = "8px ui-monospace,monospace";
       g.fillText("VOL " + pcFmtVol(vmax), padL + 1, volTop + 8);
-      g.font = "10px ui-monospace,monospace";
+      g.font = "11px ui-monospace,monospace";
     }
 
     /* ── levels: in-range = line + direct tag; off-scale = edge tag ── */
@@ -336,7 +376,7 @@ class PriceChart {
         g.fillStyle = "#0b0b14";
         g.fillText(L.label, padL + plotW + 4, y + 3);
         if (!compact && !crowded(L)) { g.fillStyle = L.color; g.fillText(`${L.label} ${pcFmt(L.p, dec)}`, padL + 4, y - 3); }
-        g.font = "10px ui-monospace,monospace";
+        g.font = "11px ui-monospace,monospace";
       }
     }
 
@@ -396,7 +436,7 @@ class PriceChart {
       if (!compact && Math.abs(Y(lp2.p) - Y(main.pts[main.pts.length - 1].p)) > 13) {
         g.fillStyle = "rgba(235,235,250,.75)"; g.font = "8px ui-monospace,monospace";
         g.fillText("MA" + maN, Math.max(padL + 2, X(lp2.t) - 30), Y(lp2.p) - 3);
-        g.font = "10px ui-monospace,monospace";
+        g.font = "11px ui-monospace,monospace";
       }
     }
 
@@ -411,7 +451,7 @@ class PriceChart {
         const e = ov.pts[ov.pts.length - 1];
         g.fillStyle = ov.color || "#e8e8f2"; g.font = "8px ui-monospace,monospace";
         g.fillText(ov.label, Math.min(padL + plotW - 24, X(e.t) + 3), Y(e.p) - 3);
-        g.font = "10px ui-monospace,monospace";
+        g.font = "11px ui-monospace,monospace";
       }
     }
 
@@ -447,7 +487,7 @@ class PriceChart {
                      padL + plotW - 12, above ? ey + 4 : ey + 3);
           g.textAlign = "left";
         }
-        g.font = "10px ui-monospace,monospace";
+        g.font = "11px ui-monospace,monospace";
       }
       g.fillStyle = seriesColor;
       g.fillRect(padL + plotW + 1, ly - 9, padR - 2, 18);
@@ -464,7 +504,7 @@ class PriceChart {
         if (!nearLast(lpLow) && Math.abs(Y(lpLow.p) - Y(hp.p)) > 12)
           g.fillText("L " + pcFmt(lpLow.p, dec), Math.min(padL + plotW - 52, Math.max(padL, X(lpLow.t) - 8)), Math.min(padT + priceH - 12, Y(lpLow.p) + 10));
       }
-      g.font = "10px ui-monospace,monospace";
+      g.font = "11px ui-monospace,monospace";
     }
 
     /* ── crosshair: magnet-snapped to the nearest real point ── */

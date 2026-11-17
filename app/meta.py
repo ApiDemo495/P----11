@@ -129,7 +129,12 @@ class MetaCombiner:
         Zb = np.hstack([Z, np.ones((n, 1))])
         for _ in range(400):
             p = _sigmoid_vec(Zb @ theta)
-            grad = Zb.T @ (p - y) * (wts / wm) + lam * np.concatenate([[0.0], theta[1:]])
+            # NB: parenthesise the weighting INSIDE the matmul — `@` and `*`
+            # share precedence, so the old form became (7,)*(N,) and raised
+            # for every n != 7. The combiner could never fit, so it never
+            # picked, never took over and never appeared in the History tab.
+            grad = (Zb.T @ ((p - y) * wts) / wm
+                    + lam * np.concatenate([[0.0], theta[1:]]))
             theta -= lr * grad
         self.w, self.mu, self.sd = theta, mu, sd
         # evidence-ledger slope b on the weighted logit
@@ -216,6 +221,39 @@ class MetaCombiner:
             return True, (f"meta-combiner takeover: {len(self.pick_history[-40:])}-"
                           f"window strict-sign {rate:.0%} ≥ 53%")
         return False, f"meta record {rate:.0%} < 53% — recipe keeps the side"
+
+    def refit_pick_history(self, split: float = 0.6) -> int:
+        """Grade the combiner's OWN picks walk-forward over the replay rows.
+
+        Fit once on the older ``split`` of the settled windows and score the
+        pick on every later row, in time order.  Nothing in-sample enters
+        ``pick_history``; the live loop then keeps appending real picks.
+        Restores the full-data fit afterwards.
+        """
+        rows = list(self.rows)
+        n = len(rows)
+        if n < 40:
+            return 0
+        keep = (self.w, self.mu, self.sd, self.b_fit, self.calib_a,
+                self.coef_notes)
+        k = max(20, int(n * max(0.2, min(0.9, split))))
+        try:
+            self.rows = rows[:k]
+            self.fit()
+            picks: list[bool] = []
+            for row in rows[k:]:
+                pick = self.meta_pick(row.get("inputs") or {})
+                if pick:
+                    picks.append((pick > 0) == bool(row.get("up")))
+            self.rows = rows
+            self.fit()
+            self.pick_history = (self.pick_history + picks)[-200:]
+            return len(picks)
+        except Exception:
+            self.rows = rows
+            (self.w, self.mu, self.sd, self.b_fit, self.calib_a,
+             self.coef_notes) = keep
+            return 0
 
     def note_pick(self, inputs: dict, outcome_up: bool) -> None:
         pick = self.meta_pick(inputs)

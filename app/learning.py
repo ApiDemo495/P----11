@@ -612,6 +612,17 @@ class LearningSystem:
             "core_weights": core_w,
             "brains": (engine.brains.state_dict() if engine is not None else {}),
             "rings": _rings_snapshot(engine),
+            # accuracy windows: without these every restart reset the
+            # formula/subsystem leaderboard and the per-TF hit-rate to n=0
+            # ("needs ≥8" forever), even though the settled ledger was fine.
+            "acc500": {str(f): [int(v) for v in ring]
+                       for f, ring in self.acc500.items() if len(ring)},
+            "acc_tf": {f"{f}|{tf}": [int(v) for v in ring]
+                       for (f, tf), ring in self.acc_tf.items() if len(ring)},
+            "acc_sym": {f"{f}|{sym}": [int(v) for v in ring]
+                        for (f, sym), ring in self.acc_sym.items() if len(ring)},
+            "tf_hits": {tf: [int(v) for v in ring]
+                        for tf, ring in self.tf_hits.items() if len(ring)},
         }
 
     def load_state(self, engine=None, emotion=None, physics=None,
@@ -647,6 +658,30 @@ class LearningSystem:
         for key, hd in d.get("hmm", {}).items():
             s, tf = key.split("|", 1)
             self.hmm_for(s, tf).load_dict(hd)
+        for key, vals in (d.get("acc500") or {}).items():
+            try:
+                fid = int(key)
+            except (TypeError, ValueError):
+                continue
+            if fid in self.acc500:
+                self.acc500[fid].extend(int(v) for v in vals
+                                        if int(v) in (0, 1))
+        for tag, target in (("acc_tf", self.acc_tf), ("acc_sym", self.acc_sym)):
+            for key, vals in (d.get(tag) or {}).items():
+                if "|" not in key:
+                    continue
+                f, k2 = key.split("|", 1)
+                try:
+                    fid = int(f)
+                except (TypeError, ValueError):
+                    continue
+                ring = self._acc_ring(target, (fid, k2), ACCURACY_ROLLING)
+                if not len(ring):
+                    ring.extend(int(v) for v in vals if int(v) in (0, 1))
+        for tf, vals in (d.get("tf_hits") or {}).items():
+            if tf in self.tf_hits and not len(self.tf_hits[tf]):
+                self.tf_hits[tf].extend(int(v) for v in vals
+                                        if int(v) in (0, 1))
         if engine is not None:
             for key, w in d.get("core_weights", {}).items():
                 s, tf = key.split("|", 1)
@@ -713,7 +748,9 @@ def _rings_snapshot(engine) -> dict:
             return out
         for key, ring in list(engine.hist._rings.items()):
             name = key.rsplit(":", 1)[-1]
-            if name.startswith("adv_") or name in ("conf_q", "score_abs"):
+            if (name.startswith(("adv_", "facc", "eacc", "pacc", "calib_"))
+                    or name in ("conf_q", "score_abs", "dpi", "octo",
+                                "pidx", "nsp", "fspark29", "t_mkt")):
                 out[key] = [round(float(v), 6) for v in ring.values()][-600:]
     except Exception:
         pass
