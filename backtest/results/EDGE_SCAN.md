@@ -91,3 +91,57 @@ Fill model: decision at bar `t` close, fill at bar `t+1` **open**, exit at bar
 - `vol_z::BNB` — OOF Net EV -47.00 bps <= 0.0; PF 0.70 <= 1.25; positive folds 1/4 not a majority; |t| 1.30 < 2.0 (correlation-adjusted)
 - `vol_z::BTC` — OOF Net EV -24.30 bps <= 0.0; PF 0.81 <= 1.25; positive folds 1/4 not a majority; |t| 0.74 < 2.0 (correlation-adjusted)
 - `vol_z::ETH` — OOF Net EV -22.30 bps <= 0.0; PF 0.83 <= 1.25; positive folds 1/4 not a majority; |t| 0.64 < 2.0 (correlation-adjusted); holdout Net EV -6.81 bps <= 0
+
+---
+
+## Execution & audit findings (2026-11-17)
+
+This file records the *scan*: which candidates the referee accepted and why
+the rest were rejected. The execution layer that runs the accepted sleeves
+lives in `app/portfolio_live.py`; its replay is `backtest/paper_replay.py`.
+
+**Certified open: 2** — unchanged from the Pillar-1 scan. Nothing was
+re-certified or relaxed.
+
+| sleeve | asset | OOF n | OOF EV bp | PF | t_bb | holdout EV bp |
+|---|---|---|---|---|---|---|
+| `catchup_subhour_spot_15m::ETH` | ETH | 297 | +88.22 | 1.48 | +4.23 | +48.2 |
+| `spillover_spot_15m::ETH` | ETH | 252 | +89.16 | 1.49 | +5.53 | +28.56 |
+
+### Replay vs research
+
+| mode | closed trades | realized bp/unit | max DD |
+|---|---|---|---|
+| observe | 332 | +2820.08 | 0.0060 |
+| enforce monitors | 332 | +1191.71 | 0.0194 |
+
+Trade population matches the research **exactly** (catchup 165, spillover
+167) in both modes, which is the check that the execution layer reproduces
+the studied strategy rather than a lookalike.
+
+### Formula audit (`python -m backtest.formula_audit`)
+
+| | before | after |
+|---|---|---|
+| alive (moving on real tape) | 15 | 15 |
+| silent by design (needs live state) | 16 | 16 |
+| genuinely dead | 0 | 0 |
+| near-inert, sd < 0.02 | 1 (F8) | 0 |
+| duplicate pairs (corr >= 0.85) | 0 | 0 |
+
+The 16 "silent" formulas read GRC history rings, the order book or
+forceOrder prints. Silenced without those inputs is correct (cause-6
+honesty), not rot — they are reported separately so silence is never
+mistaken for dead code.
+
+F8 RTDI was the single real defect: it measured a did-this-minute-change
+flag, and 98.9 % of 1-minute bars are distinct, so its output sd was 0.006
+(1h) / 0.011 (1m) versus 0.3-0.9 for every other formula. It is now a
+volume-density measure around VWAP with sd 0.455.
+
+### Rejected candidates — unchanged
+
+Every rejection listed above stands. The families the brief asked for by
+name (BTC Donchian / vol-compression, BNB ratio trend, PAXG) remain
+falsified on this tape with the numbers already recorded, and no threshold
+was moved to rescue them.

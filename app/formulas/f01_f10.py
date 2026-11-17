@@ -380,21 +380,32 @@ def f08_rtdi(ctx) -> float:
     else:
         vwap = pv / vv
 
-    above_total = above_ticks = 0
-    below_total = below_ticks = 0
+    # Tick density = traded volume per minute, NOT a "did the price move"
+    # flag.  On the app's native 1-minute tape ~99% of consecutive bars are
+    # distinct, so a changed/unchanged flag carries no information and the
+    # old formulation was pinned at ~0.000 (Pillar-3 audit, 2026-11-17:
+    # sd 0.006 on 1h bars, 0.011 on 1m - structurally unable to vote).
+    # Volume is what actually differs minute to minute, and it is the
+    # quantity "tick density" names.
+    above_mass = below_mass = 0.0
+    above_n = below_n = 0
     for i in range(1, len(P)):
-        changed = abs(P[i] - P[i - 1]) > 0
+        vi = abs(V[i]) if i < len(V) else 0.0
         if P[i] > vwap:
-            above_total += 1
-            above_ticks += 1 if changed else 0
+            above_mass += vi
+            above_n += 1
         elif P[i] < vwap:
-            below_total += 1
-            below_ticks += 1 if changed else 0
+            below_mass += vi
+            below_n += 1
 
-    rho_above = (above_ticks / above_total) if above_total else 0.0
-    rho_below = (below_ticks / below_total) if below_total else 0.0
-
-    return safe_tanh((rho_above - rho_below) / (rho_above + rho_below + EPS))
+    if not above_n or not below_n:
+        return 0.0
+    rho_above = above_mass / above_n          # mean volume spent above VWAP
+    rho_below = below_mass / below_n          # mean volume spent below VWAP
+    denom = rho_above + rho_below
+    if denom < EPS:
+        return 0.0
+    return safe_tanh(2.0 * (rho_above - rho_below) / denom)
 
 
 # =============================================================================

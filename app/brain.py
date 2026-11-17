@@ -296,6 +296,8 @@ class BrainSystem:
         from .flywire import get_flywire
         self.fw = get_flywire()
         self.connectome = Connectome()
+        # own copy of the calibration map: never alias the class attribute
+        self._channel_sign = dict(type(self)._channel_sign)
         self.instances = [BrainInstance(i, self.connectome) for i in range(4)]
         self.neuprint_status = self.connectome.neuprint_status
         # auto-learning scratch (B1 valence, B4 accuracy windows)
@@ -850,6 +852,13 @@ class BrainSystem:
     # advice §3.3/§3.4 probes: odd-symmetry (A-2), channel polarity (A-3),
     # wiring table (formula → channel), reconnect (A-6 loading states).
     _probe_cache: dict | None = None
+    # NOTE: a bare class-level dict here is shared by EVERY BrainSystem in the
+    # process. ``calibrate_polarity`` mutates it in place (fid -> -1), and
+    # ``load`` REPLACES it, so after one calibration every other instance --
+    # including a freshly constructed brain in a later test -- silently ran
+    # with a flipped channel sign (observed as a -0.9 affinity input where
+    # +0.9 was expected). The class attribute is now only the documented
+    # default; ``BrainSystem.__init__`` installs a per-instance copy.
     _channel_sign: dict[int, float] = {}   # A-3 boot calibration (fid -> ±1)
 
     def polarity_probe(self, symbol: str, tf: str, market: dict,

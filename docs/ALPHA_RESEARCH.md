@@ -285,3 +285,137 @@ Open work, in priority order:
 4. **Decay monitoring.** The 15m ETH sleeve's 2023+ subsample is t ≈ 1.06.
    A rolling re-certification (re-run the scan quarterly, demote on
    failure) is the honest way to keep it, and is not yet automated.
+
+---
+
+## Pillars 2–3: the execution layer and the audit (2026-11-17)
+
+Pillar 1 produced two certified sleeves. Pillars 2–3 are about the part
+that turns a research number into something the product can actually run
+— and about the things that turned out to be quietly broken.
+
+### Certified sleeves (unchanged, still the whole alpha book)
+
+| sleeve | asset | OOF n | OOF EV | PF | t_bb | holdout EV |
+|---|---|---|---|---|---|---|
+| `catchup_subhour_spot_15m::ETH` | ETH | 297 | **+88.22** | 1.48 | +4.23 | **+48.2** |
+| `spillover_spot_15m::ETH` | ETH | 252 | **+89.16** | 1.49 | +5.53 | **+28.56** |
+
+Both remain `open`. Nothing was relaxed to get here: `sleeve_gate()` and
+every threshold are untouched.
+
+### Paper replay, two modes
+
+`backtest/paper_replay.py` replays the locked holdout through the real
+`LivePortfolio`, one bar at a time, taking fills from the actual tape.
+
+| mode | closed | realized (bp/unit) | max DD | catchup | spillover |
+|---|---|---|---|---|---|
+| observe (`--quiet`) | 332 | **+2820.08** | 0.0060 | n=165, +38.0 | n=167, +29.4 |
+| enforce (`--enforce-monitors`) | 332 | +1191.71 | 0.0194 | n=165, +38.0 (throttled) | n=167, +29.4 |
+
+Observe mode is the research comparison and reproduces the study's trade
+counts **exactly** (165 / 167). Enforce mode is what the product would
+actually have earned; the difference is the circuit breaker halving the
+catchup sleeve's size through its drawdown.
+
+Live EV is measured after the per-asset 0.25 sizing split, so its `t` is
+not comparable to the OOF `t` and is not presented as if it were.
+
+### Bugs found and closed in the execution layer
+
+Each of these was a real defect that made the replay disagree with the
+research, and each is pinned by a named test in
+`tests/test_portfolio_live.py`.
+
+1. **Stale cross-grid cooldown.** `cooldown_until` stored a bar index from
+   one sleeve's calendar; bar indices are *not* comparable across grids, so
+   a sleeve re-entering on another grid was blocked for thousands of bars.
+2. **Scheduled-exit skip.** `manage()` `continue`d when the current bar was
+   before the scheduled exit time, stranding positions for ~8000 bars
+   (entry ~205426, exit 213365). Exits now always fire at the hold bar.
+3. **Budget divisor.** The per-asset budget divided by the number of *open
+   positions*, so whichever sleeve entered first took the whole ETH budget
+   and the second lost 60 of its 167 trades to "no risk budget".
+4. **Report mode corrupted the book.** Monitors halting sleeves mid-replay
+   collapsed the active-sleeve count and re-starved the budget. Report mode
+   now observes only.
+5. **`pearson()` returned 0.0 for identical series** — loop variables `a`/`b`
+   shadowed the caller's sleeve ids.
+6. **Double friction** — charged at both entry and exit, turning +38 bp into
+   −3.5 bp.
+
+### Pillar 3 — the formula audit
+
+`backtest/formula_audit.py` runs the **shipped** `compute_all` over real
+minute tape and classifies every formula. Two kinds of silence are
+distinguished, because they need opposite responses:
+
+* **silent by design** (16 of 31) — the formula reads live state the replay
+  cannot supply (GRC history rings, order book, forceOrder prints). Under
+  the project's cause-6 honesty rule a missing book must not be invented.
+  Deleting these would delete features.
+* **dead** — constant output with no live dependency. **None remain.**
+
+| | before | after |
+|---|---|---|
+| alive | 15 | 15 |
+| silent (live state, correct) | 16 | 16 |
+| genuinely dead | 0 | 0 |
+| near-inert (sd < 0.02, cannot vote) | **1 (F8)** | **0** |
+| duplicate pairs (|corr| ≥ 0.85) | 0 | 0 |
+
+**F8 RTDI was the one real find.** Its "tick density" was a
+did-this-minute-change flag; on the native 1-minute tape **98.9 %** of bars
+are distinct (measured 1.1 % identical), so the flag carried no information.
+Output sd was **0.006** on 1h bars and **0.011** on 1m, against 0.3–0.9 for
+every other formula: it could never move a consensus vote while looking
+perfectly healthy to any non-dispersion check. Rewritten to measure volume
+density around VWAP, sd rises to **0.455** (~40× the range).
+
+### Bugs found in the monitors
+
+1. **The decay detector killed both certified sleeves.** `DECAY_HALT_BPS =
+   0.0` halted any sleeve whose first 20 trades averaged negative. With
+   ~300 bp per-trade dispersion that happens to a +88 bp strategy by
+   ordinary luck: it halted them at live `t` of −0.52 and −0.19. Zero is
+   the wrong null against which to judge a certified edge.
+2. **Peeking.** Re-testing a threshold on every new trade is reached
+   eventually by any random walk. On the real catchup sleeve the z test
+   first breached −2 at exactly n=88 — its *worst* running mean (−28.7 bp)
+   — and the sleeve then recovered to **+38.0 bp** by n=165. Killing it there
+   destroyed ~3500 bp of realized edge.
+3. **A throttle that throttled nothing.** `throttled` was a status flag
+   `size_for()` never read, so the correlation breaker and the de-risk path
+   were decorative. Throttled sleeves now size at `THROTTLE_SIZE_SCALE`.
+4. **Unbounded log growth.** Monitors run every bar and appended a reason
+   each time, embedding numbers that change every bar; one replay produced
+   hundreds of entries. Reasons are now recorded once per state change.
+5. **`_channel_sign` was a mutable class attribute** shared by every
+   `BrainSystem` in the process, so one calibration silently flipped a
+   channel's sign for every brain constructed afterwards.
+
+**Lesson worth keeping:** a monitor that deletes a certified edge is a worse
+failure than the decay it was built to catch. The rule is now *de-risk now,
+halt only on sustained contradiction*, judged against the certified number
+rather than against zero.
+
+### Test-suite hygiene
+
+The suite was not repeatable: `test_engine.py`'s TP-ladder and SL tests
+passed on a clean checkout and failed on a second run, with no code change.
+The cause was `data/` — the engine loads learned state (`physics_weights`,
+`auto_learning_state`, locks) from a **git-ignored** directory at start-up
+and writes it back, so each run inherited the previous run's mutations.
+`tests/conftest.py` now snapshots and restores `data/` for the session and
+starts every run from the clean-clone state. Full suite: **515 passed**.
+
+### Still open
+
+1. **Funding data** — blocked on egress; the one conditioning in the brief
+   that could not be measured.
+2. **PAXG** — nothing certified; 18 bp friction dominates the horizons
+   available.
+3. **Rolling re-certification** — the ~3500 bp swing above is the case for
+   it. A monitor was doing that job badly; a quarterly re-run of the scan
+   with demotion on failure is the honest replacement and is not automated.

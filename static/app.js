@@ -1016,6 +1016,47 @@ function renderDashboardMode() {
   renderHero();
 }
 
+function renderBook() {
+  const book = S.snap?.sleeves?.portfolio;
+  const wrap = $("#book-sleeves");
+  if (!wrap) return;
+  const meta = $("#book-meta");
+  if (!book) {
+    wrap.innerHTML = `<div class="dim pad">paper book warming up…</div>`;
+    return;
+  }
+  if (meta) {
+    meta.textContent = `· gross ${(Number(book.gross_exposure || 0) * 100).toFixed(0)}%`
+      + ` / max ${(Number(book.limits?.max_gross || 1) * 100).toFixed(0)}%`
+      + ` · equity ${(Number(book.equity || 1) * 100).toFixed(2)}%`
+      + ` · drawdown ${(Number(book.drawdown || 0) * 100).toFixed(2)}%`
+      + ` · ${book.closed_trades || 0} closed fills`
+      + (book.avg_slippage_bps != null ? ` · slippage ${Number(book.avg_slippage_bps).toFixed(1)} bp` : "");
+  }
+  const rows = (book.sleeves || []).map(r => {
+    const cls = r.status === "open" ? "acc-up" : r.status === "halted" ? "acc-dn" : "acc-warn";
+    const live = r.live_trades
+      ? `${Number(r.live_ev_bps).toFixed(1)} bp · t ${Number(r.live_t).toFixed(2)} · n=${r.live_trades}`
+      : "no live fills yet";
+    const why = (r.halt_reasons || [])[0];
+    return `<div class="kv"><span>${r.sleeve_id}</span>`
+      + `<b class="${cls}">${r.status.toUpperCase()}</b>`
+      + `<span class="dim">research ${Number(r.research_ev_bps).toFixed(1)} bp · ${live}`
+      + `${why ? ` · ${why}` : ""}</span></div>`;
+  }).join("");
+  wrap.innerHTML = rows || `<div class="dim pad">no certified sleeves in the book</div>`;
+
+  const posWrap = $("#book-positions");
+  if (posWrap) {
+    const open = (book.open_positions || []).map(p =>
+      `<div class="kv"><span>${p.sleeve_id} · ${p.asset}</span>`
+      + `<b class="${p.direction > 0 ? "acc-up" : "acc-dn"}">${p.direction > 0 ? "LONG" : "SHORT"}</b>`
+      + `<span class="dim">entry ${px(p.entry_price)} · stop ${px(p.stop)} · `
+      + `${(Number(p.size) * 100).toFixed(1)}% · hold ${p.hold_bars} bars</span></div>`).join("");
+    posWrap.innerHTML = open || `<div class="dim pad">no open paper positions</div>`;
+  }
+}
+
 function renderHero() {
   const tf = S.focusTf;
   const a = S.snap?.assets?.[S.symbol] || {};
@@ -1067,28 +1108,44 @@ function renderHero() {
       return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${t.level ? px(t.level) : "—"} <span class="dim">${st}</span>${_rel}</b></div>`;
     }).join("") || `<div class="dim pad">waiting for the first lock…</div>`;
   }
-  // CERTIFIED SLEEVE — evidence, not a claim. The registry only contains
-  // sleeves that passed app/edge_gate.py out of fold; anything else appears
-  // as "none" so silence is never mistaken for a signal.
+  // CERTIFIED SLEEVE + PAPER BOOK — evidence, not a claim. The registry only
+  // contains sleeves that passed app/edge_gate.py out of fold; anything else
+  // appears as "none / blocked" so silence is never mistaken for a signal.
   const sl = (S.snap?.sleeves?.assets || {})[S.symbol] || null;
+  const book = (S.snap?.sleeves?.portfolio || {});
+  const pos = (book.open_positions || []).find(p => p.asset === S.symbol);
+  const rep = (book.sleeves || []).find(r => r.asset === S.symbol && r.status !== "closed");
   const slBlock = $("#hero-sleeve");
   if (slBlock) {
     if (!sl || sl.status === "none") {
-      slBlock.innerHTML = `<div class="kv"><span>certified sleeve</span><b class="dim">none for ${S.symbol}</b></div>`;
+      slBlock.innerHTML = `
+        <div class="kv"><span>certified sleeve</span><b class="dim">none / blocked for ${S.symbol}</b></div>
+        <div class="kv"><span>why</span><b class="dim">edge scan found no trigger clearing |t| ≥ 2.0 after friction · see docs/ALPHA_RESEARCH.md</b></div>`;
     } else {
       const isOpen = sl.status === "open";
-      const stTxt = isOpen ? String(sl.state || "flat").toUpperCase() : "UNPROVEN";
-      const stCls = isOpen ? (sl.state === "long" ? "acc-up" : sl.state === "short" ? "acc-dn" : "dim") : "dim";
+      const live = pos ? (pos.direction > 0 ? "LONG" : "SHORT") : (isOpen ? String(sl.state || "flat").toUpperCase() : "UNPROVEN");
+      const stCls = pos ? (pos.direction > 0 ? "acc-up" : "acc-dn")
+                        : (sl.state === "long" ? "acc-up" : sl.state === "short" ? "acc-dn" : "dim");
       const zTxt = sl.z == null ? "warming up" : `${Number(sl.z).toFixed(2)}σ / ${sl.threshold}σ`;
+      const holdTxt = pos
+        ? `${pos.hold_bars} bars`
+        : `${sl.hold_hours}h`;
       slBlock.innerHTML = `
-        <div class="kv"><span>certified sleeve ${isOpen ? "" : "(shadow)"}</span><b class="${stCls}">${stTxt}</b></div>
-        <div class="kv"><span>trigger (BTC 12h impulse → ${S.symbol})</span><b>${zTxt}</b></div>
+        <div class="kv"><span>certified sleeve ${isOpen ? "" : "(shadow)"}</span><b class="${stCls}">${live}</b></div>
+        <div class="kv"><span>trigger (lead impulse → ${S.symbol})</span><b>${zTxt}</b></div>
         <div class="kv"><span>OOF net EV · PF · n</span><b>${Number(sl.net_ev_bps).toFixed(1)} bp · ${Number(sl.profit_factor).toFixed(2)} · ${sl.n}</b></div>
         <div class="kv"><span>corr-adj |t| (purged folds)</span><b>${Number(sl.t_effective).toFixed(2)}</b></div>
-        <div class="kv"><span>hold</span><b>${sl.hold_hours}h</b></div>
+        <div class="kv"><span>hold</span><b>${holdTxt}</b></div>
+        ${pos ? `<div class="kv"><span>entry / invalidation</span><b>${px(pos.entry_price)} / <span class="acc-dn">${px(pos.stop)}</span></b></div>` : ""}
+        ${pos ? `<div class="kv"><span>size · vol-target ×</span><b>${(pos.size * 100).toFixed(1)}% · ${Number(pos.scale).toFixed(2)}×</b></div>` : ""}
+        ${rep && rep.live_trades ? `<div class="kv"><span>paper ledger (${rep.live_trades} trades)</span><b class="${rep.live_ev_bps > 0 ? "acc-up" : "acc-dn"}">${Number(rep.live_ev_bps).toFixed(1)} bp · t ${Number(rep.live_t).toFixed(2)}</b></div>` : ""}
+        ${rep && rep.realized_slippage_bps != null ? `<div class="kv"><span>realised slippage vs friction</span><b>${Number(rep.realized_slippage_bps).toFixed(1)} bp</b></div>` : ""}
+        ${rep && rep.decay_warning ? `<div class="kv"><span>alpha decay</span><b class="acc-dn">live expectancy below half of research — monitor armed</b></div>` : ""}
+        ${!isOpen ? `<div class="kv"><span>status</span><b class="dim">${(sl.reasons || []).slice(0, 2).join("; ") || "unproven"}</b></div>` : ""}
         ${sl.note ? `<div class="kv"><span>note</span><b class="dim">${sl.note}</b></div>` : ""}`;
     }
   }
+  renderBook();
   const rn = $("#risk-note");
   if (rn) {
     const rk = cyc?.risk || {};

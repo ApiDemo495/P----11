@@ -316,6 +316,62 @@ def test_engine_sleeve_block_is_cached_between_snapshots():
     assert a is b          # same object: the 15m grid cannot change in 1s
 
 
+def test_certified_definitions_match_the_committed_registry():
+    """The executable sleeve spec must be the one the scan actually certified.
+
+    ``app/sleeve_registry.json`` records per-fold picks for bookkeeping; the
+    execution layer needs ONE frozen parameter set. If those drift apart the
+    live engine would trade something the referee never approved.
+    """
+    import json
+    import os
+
+    from backtest.paper_replay import CERTIFIED_DEFS
+
+    path = os.path.join(os.path.dirname(__file__), "..", "app", "sleeve_registry.json")
+    if not os.path.exists(path):
+        pytest.skip("registry not generated in this checkout")
+    with open(path) as f:
+        reg = json.load(f)
+    open_ids = {s["sleeve_id"] for s in reg["sleeves"] if s["status"] == "open"}
+    assert open_ids == set(CERTIFIED_DEFS), (
+        f"registry open sleeves {sorted(open_ids)} != executable definitions "
+        f"{sorted(CERTIFIED_DEFS)}"
+    )
+
+
+def test_every_certified_definition_is_reproducible_from_the_cache():
+    """Re-derive each open sleeve's holdout from the frozen spec."""
+    from app.edge_gate import STATUS_OPEN
+    from backtest.edge_scan import (
+        FRICTION_BPS, align, catchup_signals, fold_edges_for, fold_of_bar_times,
+        holdout_start_for, load_series, log_returns, make_trades, rolling_std,
+    )
+    from backtest.paper_replay import CERTIFIED_DEFS
+
+    grid = {a: load_series(a, "spot_15m") for a in ("BTC", "ETH", "BNB")}
+    if any(v is None for v in grid.values()):
+        pytest.skip("cache not built in this checkout")
+
+    for sid, cfg in CERTIFIED_DEFS.items():
+        a, b = align(grid[cfg["lead"]], grid[cfg["asset"]])
+        bar = a.t[1] - a.t[0]
+        cut = holdout_start_for(b.t)
+        edges = fold_edges_for(b.t, 5, cut)
+        fof = fold_of_bar_times(b.t, edges)
+        lr = log_returns(a)
+        sd = rolling_std(lr, 500)
+        L = int(cfg["lookback_h"] * 3600 // bar)
+        H = int(cfg["hold_h"] * 3600 // bar)
+        sig = catchup_signals(lr, sd, len(a), L, cfg["thr"], False)
+        trades = [t for t in make_trades(b, b, sig, H, fof,
+                                         FRICTION_BPS[cfg["asset"]], cfg["asset"])
+                  if t.entry_t >= cut]
+        assert len(trades) > 50, f"{sid}: only {len(trades)} holdout trades"
+        ev = sum(t.pnl_bps for t in trades) / len(trades)
+        assert ev > 0, f"{sid}: frozen spec loses {ev:.1f} bp on its own holdout"
+
+
 def test_committed_registry_is_consistent_with_its_own_summary():
     reg = sleeve_mod.load_registry()
     if not reg.get("sleeves"):

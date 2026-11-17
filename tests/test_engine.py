@@ -337,15 +337,22 @@ def test_sl_safe_branch_tightens_sl_and_cuts_confidence(live_engine):
     sl_before = cyc.sl
     tighten_before = cyc.sl_tighten
     conf_before = cyc.confidence
-    # ensure the full recalc agrees with the original direction:
-    # make original direction match whatever the engine computes
-    res_probe = engine._event_result(sym, tf)
-    cyc.direction = res_probe["direction"] if res_probe["direction"] else 1
-    if cyc.direction == 0:
-        cyc.direction = 1
+    # This test is about the SAFE-branch arithmetic (SL tightened 15 %,
+    # confidence -0.15), not about what the live model happens to predict.
+    # Driving cyc.direction from a real _event_result made the assertion
+    # depend on the fused score: any honest change to one formula's scale
+    # could flip the sign and send the branch to CLOSE instead of SAFE.
+    # Pin the recalc to "no reversal", exactly as the sibling test pins it
+    # to a reversal.
+    cyc.direction = 1
+    real = engine._event_result
+    engine._event_result = lambda s, t: {**real(s, t), "direction": 1}
     emitted.clear()
     _safe_before = cyc.safe_events
-    run(engine._on_sl_hit(sym, tf, time.time()))
+    try:
+        run(engine._on_sl_hit(sym, tf, time.time()))
+    finally:
+        engine._event_result = real
     cyc = engine.cycles[(sym, tf)]
     assert cyc.safe_events == _safe_before + 1
     assert cyc.sl_tighten == tighten_before * 0.85

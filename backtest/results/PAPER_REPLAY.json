@@ -1,0 +1,64 @@
+{
+  "sleeves": [
+    {
+      "sleeve_id": "catchup_subhour_spot_15m::ETH",
+      "asset": "ETH",
+      "status": "throttled",
+      "research_ev_bps": 88.22,
+      "research_pf": 1.484,
+      "research_t": 2.47,
+      "hold_hours": 48,
+      "halt_reasons": [
+        "throttled: live expectancy -35.3 bp over 20 trades, t -0.52 not decisive"
+      ],
+      "live_trades": 165,
+      "live_ev_bps": 38.03,
+      "live_net_bps": 4.22,
+      "live_t": 0.88,
+      "live_win_rate": 0.473,
+      "live_profit_factor": 1.168,
+      "realized_slippage_bps": 12.0,
+      "gross_bps": 6275.36,
+      "decay_warning": true
+    },
+    {
+      "sleeve_id": "spillover_spot_15m::ETH",
+      "asset": "ETH",
+      "status": "open",
+      "research_ev_bps": 89.16,
+      "research_pf": 1.485,
+      "research_t": 2.261,
+      "hold_hours": 48,
+      "halt_reasons": [],
+      "live_trades": 167,
+      "live_ev_bps": 29.36,
+      "live_net_bps": 2.97,
+      "live_t": 0.67,
+      "live_win_rate": 0.479,
+      "live_profit_factor": 1.069,
+      "realized_slippage_bps": 12.0,
+      "gross_bps": 4903.73,
+      "decay_warning": true
+    }
+  ],
+  "monitor_verdicts": {},
+  "monitors_enforced": true,
+  "open_positions": [],
+  "gross_exposure": 0,
+  "realized_bps": 1191.71,
+  "equity": 1.008744,
+  "drawdown": 0.0194,
+  "closed_trades": 332,
+  "avg_slippage_bps": 12.0,
+  "asset_exposure": {
+    "ETH": 0
+  },
+  "limits": {
+    "cooldown_bars": 0,
+    "max_gross": 1.0,
+    "max_asset": 0.5,
+    "max_sleeve_corr": 0.8,
+    "drawdown_halt": 0.15
+  },
+  "holdout_only": true
+}

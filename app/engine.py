@@ -65,6 +65,7 @@ from .rlsys import damp_all, damp_shares
 from .emotion import EmotionSystem
 from .feed import MarketFeed
 from .sleeves import evaluate_sleeves, load_registry as load_sleeve_registry
+from .portfolio_live import LivePortfolio
 from .formulas import FORMULA_FUNCTIONS, FORMULA_NAMES, compute_all
 from .formulas.trace import traced_compute
 from .forward import ForwardTables
@@ -215,6 +216,9 @@ class PredictionEngine:
         self.phase = "analysis"                       # analysis -> live
         # certified-sleeve snapshot cache: (timestamp, payload) or (0, None)
         self._sleeve_cache: tuple[float, dict[str, Any] | None] = (0.0, None)
+        # live paper portfolio: concurrent certified sleeves + risk caps
+        self.portfolio = LivePortfolio()
+        self._portfolio_bar: int = 0
         self.phase_start = time.time()
         self.phase_deadline = self.phase_start + INITIAL_ANALYSIS_MAX_SECONDS
         self.phase_warning = False
@@ -5560,8 +5564,64 @@ class PredictionEngine:
                 "note": "no certified sleeve for this asset (edge scan found none)",
             })
         block["coverage"] = sorted(block["assets"].keys())
+
+        # drive the paper portfolio from the same certified signals
+        try:
+            block["portfolio"] = self._step_portfolio(block)
+        except Exception:
+            log.exception("portfolio step failed")
+            block["portfolio"] = {"error": "portfolio step failed"}
+
         self._sleeve_cache = (now if now is not None else time.time(), block)
         return block
+
+    def _step_portfolio(self, block: dict[str, Any]) -> dict[str, Any]:
+        """Advance the paper book one bar using the certified sleeve states.
+
+        The book only ever sees signals the gate promoted to ``open``, and
+        every fill comes from a real bar the feed actually holds.
+        """
+        from .sleeves import resample_bars
+
+        pf = self.portfolio
+        # mark-to-market / exits first, using the ETH bar grid we can rebuild
+        cash_asset = "ETH"
+        st = self.feed.state(cash_asset)
+        prices: dict[str, dict[str, Any]] = {}
+        bar_index = self._portfolio_bar
+        if st.times:
+            bt, bc = resample_bars(st.times, st.closes, 900)
+            if bt:
+                self._portfolio_bar = len(bt)
+                bar_index = len(bt) - 1
+                prices[cash_asset] = {
+                    "t": bt[-1], "c": bc[-1],
+                    "h": bc[-1], "l": bc[-1],
+                }
+        pf.manage(bar_index, prices)
+
+        entered = []
+        for sig in block.get("signals", []):
+            if sig.get("asset") != cash_asset or sig.get("state") not in ("long", "short"):
+                continue
+            if not st.times:
+                continue
+            rets = []
+            for i in range(1, min(len(st.closes), 901)):
+                a, b = st.closes[-i - 1], st.closes[-i]
+                if a > 0 and b > 0:
+                    rets.append(math.log(b / a))
+            vol = (sum((r - sum(rets) / len(rets)) ** 2 for r in rets) / len(rets)) ** 0.5 if len(rets) > 2 else 0.0
+            res = pf.try_enter(
+                sig["sleeve_id"], sig["state"],
+                {"t": int(st.times[-1]), "o": float(st.closes[-1])},
+                bar_index, vol,
+            )
+            if res.get("ok"):
+                entered.append({"sleeve_id": sig["sleeve_id"], **res})
+        snap = pf.snapshot()
+        snap["entered_this_bar"] = entered
+        return snap
 
     def build_snapshot(self) -> dict[str, Any]:
         now = time.time()
