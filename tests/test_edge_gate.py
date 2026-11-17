@@ -110,3 +110,49 @@ def test_required_accuracy_matches_barrier_algebra():
 def test_required_gross_defaults_to_friction_plus_margin():
     assert required_gross_bp(12.0) == pytest.approx(12.0 + MIN_MARGIN_BP)
     assert required_gross_bp(18.0, 5.0) == pytest.approx(23.0)
+
+
+# ───────────────────────── event sleeves (multi-year) ─────────────────────────
+
+
+def test_every_sleeve_reports_a_state_and_a_reason():
+    from app.edge_gate import SLEEVES, gates_for
+    assets = {v["asset"] for v in SLEEVES.values()}
+    for asset in assets:
+        for g in gates_for(asset):
+            assert g["asset"] == asset
+            assert g["state"] in ("open", "unproven", "blocked")
+            assert g["note"], "a sleeve verdict without a reason is not one"
+
+
+def test_positive_but_underpowered_sleeves_read_unproven():
+    g = edge_gate.sleeve_gate("eth_catchup", 8.0)
+    assert g["expected_net_bp"] > 0
+    assert g["state"] == "unproven", (
+        "|t| < 2 must never be sold as a live edge")
+    assert g["qualifies"] is False
+
+
+def test_sleeve_qualification_requires_all_three_bars(monkeypatch):
+    base = {"asset": "TEST", "tf": "session", "status": "unproven",
+            "trigger": "t", "execution": "e", "period": "p", "n": 200,
+            "gross_bp": 20.0, "fee_bp": 8.0, "net_bp": 12.0,
+            "profit_factor": 1.4, "boot_t": 1.0, "folds": "4/5", "note": "n"}
+    monkeypatch.setitem(edge_gate.SLEEVES, "ok", dict(base, boot_t=2.6))
+    assert edge_gate.sleeve_gate("ok", 8.0)["state"] == "open"
+    # t clears but the profit factor does not
+    monkeypatch.setitem(edge_gate.SLEEVES, "lowpf", dict(base, boot_t=2.6,
+                                                        profit_factor=1.1))
+    assert edge_gate.sleeve_gate("lowpf", 8.0)["state"] == "unproven"
+    # everything clears but the fee swallows the edge
+    monkeypatch.setitem(edge_gate.SLEEVES, "dear", dict(base, boot_t=2.6,
+                                                        gross_bp=6.0))
+    assert edge_gate.sleeve_gate("dear", 8.0)["state"] == "blocked"
+
+
+def test_rejected_sleeves_are_recorded_not_deleted():
+    from app.edge_gate import SLEEVES
+    rejected = [k for k, v in SLEEVES.items() if v["status"] == "rejected"]
+    assert rejected, "the record of what failed is part of the evidence"
+    for name in rejected:
+        assert edge_gate.sleeve_gate(name, 8.0)["state"] == "blocked"

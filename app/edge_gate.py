@@ -68,6 +68,65 @@ MEASURED: dict[tuple[str, str], dict] = {
 _UNMEASURED = {"gross_bp": 0.0, "n": 0, "t_stat": 0.0,
                "source": "no out-of-fold measurement"}
 
+# ─────────────────────── event sleeves (third pass) ───────────────────────
+# Measured with `backtest.edge_scan --only events` on the multi-year archive
+# (spot 1h 2024-01 -> 2026-09, BTC USD-M perp 1h + funding/basis 2023-01 ->
+# 2025-11), five purged folds, asymmetric convex exits, maker-pullback entry
+# filled one bar later (adverse selection).  `status` is the verdict, not a
+# hope: "rejected" means it was tried and did not clear the fee.
+SLEEVES: dict[str, dict] = {
+    "eth_catchup": {
+        "asset": "ETH", "tf": "session", "status": "unproven",
+        "trigger": "BTC 3h impulse >= 0.5σ while ETH has priced < 30 % of it",
+        "execution": "maker pullback 0.25σ, next-bar fill, stop 1.0σ, "
+                     "trail 3.0σ, 48h horizon",
+        "period": "2024-01-01 -> 2026-09-30", "n": 180,
+        "gross_bp": 25.0, "fee_bp": 8.0, "net_bp": 17.0,
+        "profit_factor": 1.31, "boot_t": 1.26, "folds": "4/5",
+        "qualifies": False,
+        "note": "positive out-of-fold net of 8 bp maker+taker cost; "
+                "profit factor 1.30-1.46 across five pre-registered "
+                "geometries, but the block bootstrap t is 1.2-1.7, so the "
+                "edge is not yet established at |t| > 2",
+    },
+    "btc_squeeze": {
+        "asset": "BTC", "tf": "swing", "status": "unproven",
+        "trigger": "vol compression + funding crowding + breakout with "
+                   "volume surge",
+        "execution": "same convex plan", "period": "2023-01 -> 2025-11",
+        "n": 172, "gross_bp": 14.4, "fee_bp": 8.0, "net_bp": 6.4,
+        "profit_factor": 1.24, "boot_t": 1.02, "folds": "4/5",
+        "note": "positive only after the breakout test was fixed to exclude "
+                "the triggering bar; PF 1.24 is just under the 1.25 bar and "
+                "the bootstrap t is 1.0, so it is not an edge yet",
+    },
+    "btc_basis_fade": {
+        "asset": "BTC", "tf": "swing", "status": "rejected",
+        "trigger": "|funding z| >= 1.5 with basis dislocation, volume "
+                   "climax and a rejection wick",
+        "execution": "same convex plan", "period": "2023-01 -> 2025-11",
+        "n": 3, "gross_bp": -33.0, "fee_bp": 8.0, "net_bp": -41.0,
+        "profit_factor": 0.0, "boot_t": 0.0, "folds": "0/5",
+        "note": "too few exhaustion events to power a test, and negative",
+    },
+    "bnb_catchup": {
+        "asset": "BNB", "tf": "session", "status": "rejected",
+        "trigger": "as eth_catchup", "execution": "as eth_catchup",
+        "period": "2024-01 -> 2026-09", "n": 352, "gross_bp": 1.1,
+        "fee_bp": 8.0, "net_bp": -6.9, "profit_factor": 0.83,
+        "boot_t": -1.23, "folds": "1/5",
+        "note": "BNB does not catch up to BTC impulses in this sample",
+    },
+    "paxg_flight": {
+        "asset": "PAXG", "tf": "session", "status": "rejected",
+        "trigger": "as eth_catchup against gold",
+        "execution": "as eth_catchup", "period": "2026-01 -> 2026-09",
+        "n": 156, "gross_bp": 0.4, "fee_bp": 8.0, "net_bp": -7.6,
+        "profit_factor": 0.67, "boot_t": -1.44, "folds": "1/5",
+        "note": "gold decouples, it does not catch up",
+    },
+}
+
 
 def bucket(minutes: float) -> str:
     """Map a holding horizon in minutes to its measurement bucket."""
@@ -76,6 +135,39 @@ def bucket(minutes: float) -> str:
         if lo <= m < hi:
             return name
     return "position"
+
+
+def sleeve_gate(name: str, friction_bps: float = 8.0) -> dict:
+    """Verdict for one event sleeve at its own execution cost."""
+    s = SLEEVES.get(name)
+    if not s:
+        return {"state": "unknown", "name": name,
+                "note": "no such sleeve"}
+    net = float(s["gross_bp"]) - float(friction_bps)
+    t = abs(float(s["boot_t"]))
+    pf = float(s.get("profit_factor", 0.0))
+    # the acceptance bar the brief set: net > 0, |t| > 2, PF > 1.25
+    qualifies = bool(net > 0 and t >= 2.0 and pf > 1.25)
+    if s["status"] == "rejected" or net <= 0:
+        state = "blocked"
+    elif qualifies:
+        state = "open"
+    else:
+        state = "unproven"
+    return {"state": state, "name": name, "asset": s["asset"], "tf": s["tf"],
+            "gross_bp": s["gross_bp"], "fee_bp": float(friction_bps),
+            "expected_net_bp": round(net, 2),
+            "profit_factor": pf, "qualifies": qualifies, "n": s["n"],
+            "boot_t": s["boot_t"], "folds": s["folds"],
+            "trigger": s["trigger"], "execution": s["execution"],
+            "note": s["note"]}
+
+
+def gates_for(asset: str, friction_bps: float = 8.0) -> list[dict]:
+    """Every measured sleeve that trades this asset (verdicts included)."""
+    want = str(asset).upper()
+    return [sleeve_gate(k, friction_bps) for k, v in SLEEVES.items()
+            if str(v.get("asset", "")).upper() == want]
 
 
 def measured(asset: str, tf: str) -> dict:
@@ -115,8 +207,10 @@ def gate(asset: str, tf: str, friction_bps: float,
     """Tradeability verdict for one lane at the live cost level.
 
     state
-      open     measured net expectancy clears the margin
-      thin     measured net is positive but inside the margin
+      open     measured net expectancy clears the margin *and* the evidence
+               is strong (|t| >= 2)
+      thin     positive net, inside the margin
+      unproven positive net but |t| < 2 — a hypothesis, not an edge
       blocked  measured net is negative — the fee is not covered
     """
     m = measured(asset, tf)
@@ -134,6 +228,8 @@ def gate(asset: str, tf: str, friction_bps: float,
         state = "thin"
     else:
         state = "blocked"
+    if state in ("open", "thin") and evidence == "insufficient":
+        state = "unproven"
     need = required_gross_bp(friction_bps, margin_bp)
     if m["n"] == 0:
         note = f"no OOF measurement for {asset} {tf}; gross assumed 0"

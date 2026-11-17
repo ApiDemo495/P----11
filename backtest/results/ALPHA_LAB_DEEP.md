@@ -103,3 +103,40 @@ Reading it honestly:
 Consequence for the app: `payload["edge"]` now carries the measured gross, the live
 friction, the expected net and the gross that would be required, and the hero card prints
 `blocked / thin / open` accordingly. Every lane is blocked at current costs.
+
+## 7. Derivatives pass — history, leverage data, convex payoffs
+
+Eight months of spot OHLCV was the binding constraint of §5–6. This pass adds
+**2.75 years** of hourly spot (2024-01 → 2026-09, 24,096 bars per asset) and the
+first futures data this repo has held: BTC USD-M perp 1h, premium-index
+(funding/basis) and funding settlements, 2023-01 → 2025-11. Combined with
+asymmetric convex exits (tight structural stop, uncapped trail) and three
+event triggers (`app/event_alpha.py`), the outcome is one positive sleeve and
+four rejections — plus a correction to how maker fills are modelled.
+
+| sleeve | n | gross bp | net bp | PF | boot t | folds + | verdict |
+|---|---:|---:|---:|---:|---:|---|---|
+| **ETH catch-up (BTC impulse)** | 180 | +25.0 | **+17.0** | **1.31** | +1.26 | **4/5** | unproven |
+| BTC squeeze | 172 | +14.4 | +6.4 | 1.24 | +1.02 | 4/5 | unproven |
+| BNB catch-up | 352 | +1.1 | −6.9 | 0.83 | −1.23 | 1/5 | rejected |
+| PAXG catch-up | 156 | +0.4 | −7.6 | 0.67 | −1.44 | 1/5 | rejected |
+| BTC basis fade | 3 | −33.0 | −41.0 | 0.00 | n/a | 0/5 | rejected |
+
+Three things worth carrying forward:
+
+1. **The fill model was inflating everything.** "Fill at the limit inside the
+   bar that touched it" pays a coin flip **+14.76 bp** on a synthetic random
+   walk. Filling one bar later — only while the level still holds, i.e. real
+   adverse selection — brings the same coin flip to **−2.10 bp**. Every number
+   in this table uses the honest mode, and the probe is a regression test.
+2. **The per-bar null survives 4× the data.** All 17 per-bar sleeves stay
+   negative on the 2.75-year archive (900–1,900 trades each): gross −6.3 … +3.7 bp
+   against 12 bp friction.
+3. **The one survivor is a lead-lag sleeve, not a derivatives sleeve.** BTC's
+   3-hour impulse that ETH has priced less than 30 % of → long/short ETH with a
+   maker pullback entry, 1.0σ stop, 3.0σ trail, 48 h horizon. Net +17.0 bp,
+   PF 1.31, 4/5 folds, and positive across five pre-registered geometries
+   (+17.0 … +24.2 bp net). But the block-bootstrap t is 1.26 and the 95 % CI is
+   (−8, +45) bp, so it is **unproven**, not live: 180 trades cannot certify a
+   17 bp edge. It is presented in the app as `sleeve · eth_catchup — unproven`
+   with those exact numbers.

@@ -283,3 +283,149 @@ python3 -m backtest.edge_scan --write            # refresh results/EDGE_SCAN.md
 python3 -m pytest tests/test_portfolio.py tests/test_edge_gate.py \
                  tests/test_alpha_lab.py -q      # engine, gate, cascade contracts
 ```
+
+## 11. Derivatives programme (fourth pass) — four pillars, and the fill-model trap
+
+The third pass ended with a cost ceiling: gross expectancy of −8.6 … +7.7 bp
+against 12 bp of friction, measured on eight months of spot OHLCV. This pass
+attacks the three things that ceiling depends on — **history, derivatives,
+and payoff shape** — and finds one sleeve that clears it, plus a subtle
+measurement trap that had been inflating everything.
+
+### 11.1 Data actually pulled (no placeholders)
+
+`data.binance.vision` is not reachable from this environment, so the same
+archives are pulled through GitHub mirrors of the Vision exports:
+
+| what | source | span | rows |
+|---|---|---|---|
+| spot 1h, BTC/ETH/BNB | `KevinSherry2016/Crypto` `marketData/unzipped` | 2024-01-01 → 2026-09-30 | 24,096 each |
+| BTC USD-M perp 1h | `KryzPetr1533/CHRONOS-1H` `data/raw` | 2023-01-01 → 2025-11-02 | 24,883 |
+| premium-index (mark vs index) 1h | same | same span | 24,883 |
+| funding rate (8 h settlements) | same | same span | 3,111 |
+| open interest 1h | same | 2025-10-12 → 2025-11-02 | 500 |
+| taker buy/sell volume 1h | same | 2025-10-12 → 2025-11-02 | 500 |
+
+That is **4.1× the previous hourly sample** for the spot lanes and the first
+leverage data this repo has ever had. The open-interest and taker archives
+only cover three weeks, which is stated rather than papered over: `Setup A`
+uses OI only where it exists (`oi_seen`), and no claim rests on it.
+
+New fetcher paths: `--source vision` (multi-year, token-authenticated — the
+anonymous GitHub limit of 60 calls/hour cannot download 1,000 days) and
+`--source derivs`, which normalises ISO timestamps and writes
+`backtest/cache/derivs/BTC_{funding,basis_1h,perp_1h,oi_1h,taker_1h}.csv`.
+
+### 11.2 The four pillars, as built
+
+1. **Derivatives data** — `app/derivs.py`: funding (level, 3-day carry, 30-observation
+   z), basis in bp with a 240-hour z, 24-hour OI change and z, taker ratio and z.
+   Every field is an **as-of join**: funding is used from its settlement stamp,
+   bar aggregates only from the *next* bar. `align()` builds the whole block
+   vectorised so folds slice it without re-reading files.
+2. **Asymmetric convex payoffs** — `app/portfolio.py` gained `runner=True`
+   (no take-profit at all: tight structural stop, uncapped chandelier trail,
+   time stop) plus a per-trade fee ledger. Break-even hit rate falls from
+   `0.5 + c/(2kσ)` with symmetric barriers to roughly `1/(1+R)` with
+   `R = average win / average loss`: at 3:1 a 25 % hit rate pays.
+3. **Event-driven triggers** — `app/event_alpha.py`: `squeeze` (volatility
+   compression + funding crowding + breakout on a volume surge), `basis_fade`
+   (|funding z| ≥ 1.5 with basis dislocation, volume climax and a rejection
+   wick), `catchup` (BTC impulse the laggard has not priced). Frozen
+   parameters in `CATCHUP`/`PLAN`; the harness and the app read the same
+   constants.
+4. **Multi-year walk-forward** — `backtest/edge_scan.py --only events`,
+   `--only bias`, five purged folds, embargo ≥ 96 bars, `block_bootstrap`
+   standard errors (circular blocks of 10 trades) instead of the plain
+   `mean/sd·√n`, which flatters clustered events.
+
+### 11.3 The trap: "fill at the wick" pays a coin flip +15 bp
+
+Modelling a post-only entry is where limit-order backtests manufacture edge.
+The first implementation filled at the limit price inside the bar that pierced
+it. A **synthetic random walk with a coin-flip side** then earned
+**+14.76 bp gross per trade** — free money that no venue has ever paid:
+
+| fill model | n | gross bp | verdict |
+|---|---:|---:|---|
+| `wick` (fill at the limit inside the touched bar) | 2,333 | +14.76 | fiction — a coin flip cannot earn this |
+| `next_bar` (fill one bar later, only if the level still holds) | 1,686 | −2.10 | unbiased |
+
+`next_bar` is now the default, and it *is* adverse selection: you only get
+filled while the move keeps going against you, which is exactly what the
+maker literature measures (arXiv 2502.18625: fill probability and post-fill
+return are anti-correlated). Both modes are pinned by a regression test on a
+random walk, and the probe ships in `edge_scan --only bias`.
+
+With the honest fill model the in-sample winners of the first draft mostly
+evaporated — that is the point of the exercise.
+
+### 11.4 Results (fixed parameters, five purged folds, 8 bp round trip)
+
+| sleeve | n | gross bp | net bp | PF | boot t (95 % CI) | folds + |
+|---|---:|---:|---:|---:|---:|---|
+| **ETH catch-up (BTC impulse)** | 180 | +25.0 | **+17.0** | **1.31** | +1.26 (−8, +45) | **4/5** |
+| BTC squeeze (compression + funding) | 172 | +14.4 | +6.4 | 1.24 | +1.02 | 4/5 |
+| BNB catch-up (same trigger) | 352 | +1.1 | −6.9 | 0.83 | −1.23 | 1/5 |
+| PAXG catch-up (gold flight) | 156 | +0.4 | −7.6 | 0.67 | −1.44 | 1/5 |
+| BTC basis exhaustion fade | 3 | −33.0 | −41.0 | 0.00 | n/a | 0/5 |
+
+The per-bar sleeves of the third pass, re-run on the **2.75-year** archive,
+stay negative on all 17 rows (now with 900–1,900 trades instead of 200–400):
+gross −6.3 … +3.7 bp against 12 bp of friction. The null was not a sample-size
+artefact.
+
+**ETH catch-up** is the first sleeve in this repository with positive
+out-of-fold net expectancy: **+17.0 bp net of 8 bp cost, PF 1.31, positive in
+4 of 5 folds**. Robustness (five pre-registered geometries, no re-optimisation):
+
+| variant | n | net bp | PF | boot t | folds + |
+|---|---:|---:|---:|---:|---|
+| sl 1.0σ / hz 48 / trail 3.0σ (base) | 180 | +17.0 | 1.31 | +1.26 | 4/5 |
+| sl 0.8σ / hz 24 / trail 2.5σ | 185 | +20.5 | 1.46 | +1.65 | 4/5 |
+| sl 1.0σ / hz 72 / trail 3.5σ | 178 | +17.4 | 1.30 | +1.17 | 4/5 |
+| sl 1.2σ / hz 48 / trail 3.0σ | 177 | +23.5 | 1.40 | +1.71 | 4/5 |
+| pullback 0.4σ instead of 0.25σ | 152 | +24.2 | 1.45 | +1.65 | 3/5 |
+| taker entry (no passive fill), 8 bp | 429 | +6.9 | 1.13 | +0.75 | 4/5 |
+
+Honest reading of the acceptance criteria in the brief:
+
+* **Net EV > 0 after fees: met** (+17 bp, and every robustness variant is positive).
+* **Profit factor > 1.25: met** (1.30–1.46 on the maker variants; 1.13 when the
+  entry is a taker fill — the edge lives substantially in passive execution).
+* **|t| > 2: NOT met.** The block-bootstrap t is 1.2–1.7 and the 95 % CI
+  touches zero. 180 trades over 2.75 years is not enough to certify a 17 bp
+  edge; the sleeve is therefore shipped as **`unproven`**, never as live.
+
+Rejected and kept on the record (not deleted, so nobody re-discovers them as
+"new"): BNB catch-up (BNB does not lag-catch BTC in this sample), PAXG gold
+flight (gold decouples), BTC basis exhaustion fade (only 3 events; negative),
+and the whole per-bar family. `app/edge_gate.SLEEVES` carries every verdict.
+
+### 11.5 What shipped in the product
+
+* `payload["edge"]` gained the state **`unproven`**: positive out-of-fold net
+  expectancy whose bootstrap t is still inside the noise. It is styled as a
+  warning, and `tests/test_edge_gate.py` pins that `unproven` can never render
+  as `open`.
+* `payload["sleeves"]` lists every measured event sleeve for the asset with
+  n, gross, cost, net, PF, bootstrap t and fold count — and the hero card
+  prints a `sleeve · eth_catchup` row with those numbers.
+* `sleeve_gate()` requires **all three** bars (net > 0, |t| ≥ 2, PF > 1.25)
+  before a sleeve may be called `open`. Nothing currently is.
+
+### 11.6 Reproduce
+
+```bash
+# data (token-authenticated GitHub mirrors of Vision)
+python3 scripts/fetch_binance_mirror.py --source vision --symbols BTC ETH BNB \
+        --start 2024-01-01 --end 2026-09-30
+python3 scripts/fetch_binance_mirror.py --source derivs --symbols BTC
+
+# the measured tables
+python3 -m backtest.edge_scan                    # everything, incl. events + bias probe
+python3 -m backtest.edge_scan --only events -v    # sleeves with per-fold EVs and CI
+python3 -m backtest.edge_scan --only bias         # the random-walk fill-model guard
+python3 -m pytest tests/test_event_alpha.py tests/test_portfolio.py \
+                 tests/test_edge_gate.py -q
+```

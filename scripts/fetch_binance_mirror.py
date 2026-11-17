@@ -48,6 +48,22 @@ COLUMNS = ["t", "o", "h", "l", "c", "v",
            "quote_v", "trades", "taker_buy_v", "taker_buy_qv"]
 
 VISION_REPO = "KevinSherry2016/Crypto"
+# USD-M perpetual archives (Binance Vision layout, mirrored to GitHub).
+# KryzPetr1533/CHRONOS-1H carries 2023-01 -> 2025-11 of BTCUSDT perp data:
+# 1h klines, premium-index klines (= mark/index basis), funding rate,
+# open-interest history and taker buy/sell volume.  Nothing in this repo
+# invents them: the loader refuses to run when the files are absent.
+DERIV_REPOS = {
+    "BTC": ("KryzPetr1533/CHRONOS-1H", "data/raw", "BTCUSDT"),
+}
+DERIV_FILES = {
+    "perp_1h": "{pair}_fapi_klines_1h.csv",
+    "basis_1h": "{pair}_premiumIndexKlines_1h.csv",
+    "funding": "{pair}_fundingRate.csv",
+    "oi_1h": "{pair}_openInterestHist_1h.csv",
+    "taker_1h": "{pair}_takerBuySellVol_1h.csv",
+}
+
 ZIP_REPOS = {
     "1m": ("JienWeng/crypto-execution-timing", "data/raw"),
     "5m": ("thanhnha39/Crypto-Tail-Risk-Volatility-Forecasting-Engine",
@@ -70,6 +86,16 @@ def _norm_ts(raw: str) -> int:
     """Binance switched to MICROSECOND open_time in 2025+ exports; older
     files are milliseconds and the oldest are seconds. Normalise to
     seconds so resampling and joins are unambiguous."""
+    raw = str(raw).strip()
+    if raw and not raw.replace(".", "").replace("-", "").isdigit():
+        # ISO-8601 timestamps (the derivatives mirrors use these)
+        try:
+            d = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=dt.timezone.utc)
+            return int(d.timestamp())
+        except ValueError:
+            pass
     v = int(float(raw))
     if v > 10**14:      # microseconds
         return v // 10**6
@@ -193,6 +219,81 @@ def fetch_zips(symbols: list[str], interval: str, months: list[str],
     return out
 
 
+# ────────────────────── source 3: USD-M derivatives ──────────────────────
+
+
+def _deriv_text(repo: str, folder: str, name: str) -> str:
+    """Fetch one archive CSV (contents API, blobs above 1 MB)."""
+    d = _api(f"https://api.github.com/repos/{repo}/contents/{folder}/{name}")
+    if d.get("encoding") == "base64" and d.get("content"):
+        return base64.b64decode(d["content"]).decode("utf-8", "replace")
+    sha = d.get("sha")
+    if not sha:
+        return ""
+    return _blob(repo, sha).decode("utf-8", "replace")
+
+
+def _deriv_normalize(kind: str, text: str) -> list[list]:
+    """Archive CSV -> (t, ...) rows in seconds, oldest first."""
+    if not text.strip():
+        return []
+    rd = csv.DictReader(io.StringIO(text))
+    rows: list[list] = []
+    for r in rd:
+        def num(key, default=0.0):
+            try:
+                return float(r.get(key) or default)
+            except (TypeError, ValueError):
+                return default
+        if kind in ("perp_1h", "basis_1h"):
+            stamp = r.get("open_time") or ""
+            t = _norm_ts(stamp)
+            rows.append([t, num("open"), num("high"), num("low"), num("close"),
+                         num("volume"), num("quote_volume"), num("num_trades"),
+                         num("taker_buy_base"), num("taker_buy_quote")])
+        elif kind == "funding":
+            rows.append([_norm_ts(r.get("fundingTime") or ""),
+                         num("fundingRate"), num("markPrice")])
+        elif kind == "oi_1h":
+            rows.append([_norm_ts(r.get("timestamp") or ""),
+                         num("sumOpenInterest"), num("sumOpenInterestValue")])
+        elif kind == "taker_1h":
+            rows.append([_norm_ts(r.get("timestamp") or ""),
+                         num("buyVol"), num("sellVol"), num("buySellRatio")])
+    rows.sort(key=lambda x: x[0])
+    return rows
+
+
+def fetch_derivs(symbols: list[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    os.makedirs(os.path.join(CACHE, "derivs"), exist_ok=True)
+    for sym in symbols:
+        spec = DERIV_REPOS.get(sym)
+        if not spec:
+            out[sym] = f"no derivatives mirror for {sym}"
+            continue
+        repo, folder, pair = spec
+        for kind, tpl in DERIV_FILES.items():
+            try:
+                text = _deriv_text(repo, folder, tpl.format(pair=pair))
+            except urllib.error.HTTPError as e:
+                out[f"{sym}:{kind}"] = f"HTTP {e.code}"
+                continue
+            rows = _deriv_normalize(kind, text)
+            path = os.path.join(CACHE, "derivs", f"{sym}_{kind}.csv")
+            hdr = {"perp_1h": COLUMNS,
+                   "basis_1h": COLUMNS,
+                   "funding": ["t", "funding_rate", "mark_price"],
+                   "oi_1h": ["t", "oi_base", "oi_value"],
+                   "taker_1h": ["t", "buy_vol", "sell_vol", "buy_sell_ratio"]}[kind]
+            with open(path, "w", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(hdr)
+                w.writerows(rows)
+            out[f"{sym}:{kind}"] = f"{len(rows)} rows -> {os.path.basename(path)}"
+    return out
+
+
 # ─────────────────────────── shared writer ───────────────────────────
 
 
@@ -220,7 +321,8 @@ def _write(sym: str, interval: str, rows: list[list]) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", choices=["vision", "zips"], default="vision")
+    ap.add_argument("--source", choices=["vision", "zips", "derivs"],
+                    default="vision")
     ap.add_argument("--interval", default="1h", choices=["1m", "5m", "1h"])
     ap.add_argument("--symbols", nargs="*", default=["BTC", "ETH", "BNB", "PAXG"])
     ap.add_argument("--start", default="2026-01-01")
@@ -228,6 +330,10 @@ def main(argv=None) -> int:
     ap.add_argument("--months", nargs="*", default=None,
                     help="YYYY-MM months for --source zips")
     a = ap.parse_args(argv)
+    if a.source == "derivs":
+        for k, v in fetch_derivs(a.symbols).items():
+            print(f"  {k}: {v}")
+        return 0
     if a.source == "vision":
         res = fetch_vision(a.symbols, a.start, a.end)
     else:

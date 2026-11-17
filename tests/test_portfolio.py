@@ -156,3 +156,102 @@ def test_trailing_stop_never_moves_against_the_position():
                         sigma=np.full(10, 0.01), fees_bps=0.0)
     assert trades[0]["exit"] == "sl"
     assert trades[0]["gross"] > 0.03        # exited above entry via the trail
+
+
+# ─────────────────── maker execution and the fill-model bias ───────────────────
+
+
+def _dip_bars():
+    """Bar 1 dips 2 % below its open, then recovers; bar 2 opens at the dip."""
+    o = np.array([100.0, 100.0, 98.0, 98.0, 98.0, 98.0], float)
+    h = np.array([100.0, 100.0, 98.5, 98.0, 98.0, 98.0], float)
+    l = np.array([100.0, 96.0, 97.5, 98.0, 98.0, 98.0], float)
+    c = np.array([100.0, 97.0, 98.2, 98.0, 98.0, 98.0], float)
+    return _Bars(o, h, l, c)
+
+
+def test_maker_fill_next_bar_needs_the_level_to_hold():
+    b = _dip_bars()
+    score = np.zeros(6)
+    score[0] = 1.0                      # long, limit 0.5σ under the open
+    sig = np.full(6, 0.04)              # 0.5σ = 2 % -> limit 98
+    tr = run_sleeve(b, score, pt=6.0, sl=5.0, hz=3, sigma=sig,
+                    entry="maker_pullback", pullback=0.5,
+                    maker_fee_bps=2.0, taker_fee_bps=5.0, fill_mode="next_bar")
+    assert tr, "the order should fill: bar 2 opens at the limit"
+    assert tr[0]["i"] == 2              # filled one bar after the touch
+    assert tr[0]["fee_bp"] == pytest.approx(8.0)
+
+
+def test_maker_fill_is_dropped_when_price_bounces_away():
+    b = _dip_bars()
+    b.o[2] = 99.5                       # next open is above the limit
+    score = np.zeros(6)
+    score[0] = 1.0
+    sig = np.full(6, 0.04)
+    diag = {}
+    tr = run_sleeve(b, score, pt=6.0, sl=5.0, hz=3, sigma=sig,
+                    entry="maker_pullback", pullback=0.5, fill_mode="next_bar",
+                    diag=diag)
+    assert tr == []
+    assert diag["attempts"] == 1 and diag["fills"] == 0
+
+
+def test_wick_fill_mode_is_recorded_as_optimistic():
+    """The wick mode fills at the extreme; the guard test below proves why the
+    default is `next_bar`."""
+    b = _dip_bars()
+    score = np.zeros(6)
+    score[0] = 1.0
+    sig = np.full(6, 0.04)
+    tr = run_sleeve(b, score, pt=6.0, sl=5.0, hz=3, sigma=sig,
+                    entry="maker_pullback", pullback=0.5, fill_mode="wick")
+    assert tr and tr[0]["i"] == 1
+
+
+def test_random_walk_coin_flip_earns_nothing_under_the_default_fill_model():
+    """A coin flip on a random walk must be ~flat gross.
+
+    The naive "fill at the limit inside the touched bar" model pays a coin
+    flip ~+15 bp per trade — free money that does not exist.  This is the
+    regression guard for that artefact: the default mode must stay unbiased.
+    """
+    rng = np.random.default_rng(11)
+    n = 4000
+    r = rng.normal(0, 0.006, n)
+    c = 100 * np.exp(np.cumsum(r))
+    o = c * np.exp(rng.normal(0, 0.0024, n))
+    h = np.maximum(o, c) * (1 + np.abs(rng.normal(0, 0.003, n)))
+    lo = np.minimum(o, c) * (1 - np.abs(rng.normal(0, 0.003, n)))
+    b = _Bars(o, h, lo, c)
+    sig = np.full(n, 0.006)
+    side = np.sign(rng.normal(size=n))
+    mask = np.ones(n, bool)
+    out = {}
+    for mode in ("wick", "next_bar"):
+        tr = run_sleeve(b, side, mask, pt=6.0, sl=1.0, hz=48, trail=3.0,
+                        runner=True, sigma=sig, entry="maker_pullback",
+                        pullback=0.5, maker_fee_bps=2.0, taker_fee_bps=5.0,
+                        maker_penalty_bps=1.0, min_penetration=1e-4,
+                        fill_mode=mode)
+        out[mode] = trade_stats(tr, fees_bps=8.0)["gross_ev_bp"]
+    assert out["wick"] > 8.0, ("the wick model should show its bias; if it "
+                               "no longer does, revisit the default")
+    assert abs(out["next_bar"]) < 6.0, (
+        f"next_bar must be unbiased on a random walk, got {out['next_bar']}")
+
+
+def test_block_bootstrap_widens_the_error_for_dependent_trades():
+    """Clustered trades must not masquerade as independent evidence."""
+    from app.portfolio import block_bootstrap
+    rng = np.random.default_rng(5)
+    indep = rng.normal(0.001, 0.01, 400)
+    walk = np.cumsum(rng.normal(0, 0.002, 400))
+    walk = walk - walk.mean()                      # persistent, not iid
+    a = block_bootstrap(indep, block=20)
+    b = block_bootstrap(walk, block=20)
+    assert a["se_bp"] > 0
+    # the plain t-stat would be mean/(sd/sqrt(400)); the bootstrap must not
+    # be fooled by the persistence
+    assert b["se_bp"] > 3 * a["se_bp"]
+    assert b["lo_bp"] < b["hi_bp"]

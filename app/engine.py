@@ -1413,12 +1413,20 @@ class PredictionEngine:
                 _fric = (_fr if isinstance(_fr, float)
                          else (18.0 if symbol == "PAXG" else 12.0))
                 fin["edge"] = _edge_gate(symbol, _edge_bucket(_hz_min), _fric)
+                # ── EVENT SLEEVES (multi-year derivatives programme) ──
+                # Measured out-of-fold sleeves that trade this asset, with
+                # their verdict. `unproven` is a first-class state: positive
+                # net expectancy whose bootstrap t is still inside the noise.
+                from .edge_gate import gates_for as _gates_for
+                _sv = _gates_for(symbol)
+                fin["sleeves"] = _sv or None
             except Exception as _e:
                 fin["micro"] = None
                 fin["horizon"] = {"state": "unknown",
                                   "note": f"micro unavailable: {str(_e)[:80]}"}
                 fin["edge"] = {"state": "unknown",
                                "note": f"edge gate unavailable: {str(_e)[:80]}"}
+                fin["sleeves"] = None
             # RE-JUDGE THE GATE on the FINAL confidence: the advanced layer
             # multiplies confidence by its soft gate AFTER the first check,
             # so the card could print 0.349 "ISSUED" while RECHECK compared
@@ -1555,6 +1563,7 @@ class PredictionEngine:
                 "micro": fin.get("micro"),
                 "horizon": fin.get("horizon"),
                 "edge": fin.get("edge"),
+                "sleeves": fin.get("sleeves"),
                 "exec_ok": fin.get("exec_ok"),
                 "mom_chase_z": fin.get("mom_chase_z"),
                 "tier": fin.get("tier"),

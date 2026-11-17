@@ -40,7 +40,11 @@ def _block_neff(n: int, block: float) -> float:
 
 def run_sleeve(bars, score, mask=None, *, pt=2.0, sl=1.0, hz=60,
                sigma=None, fees_bps: float = DEFAULT_FEES_BPS,
-               trail=None, be_at=None, cooldown=0) -> list[dict]:
+               trail=None, be_at=None, cooldown=0, runner=False,
+               entry="taker", pullback=0.25, maker_fee_bps=2.0,
+               taker_fee_bps=5.0, maker_penalty_bps=1.0,
+               min_penetration=0.0, fill_mode="next_bar",
+               diag: dict | None = None) -> list[dict]:
     """Settle a single-position book over `bars`.
 
     bars    Bars object (o/h/l/c/t).
@@ -48,8 +52,17 @@ def run_sleeve(bars, score, mask=None, *, pt=2.0, sl=1.0, hz=60,
     mask    optional bool array of extra tradability conditions.
     pt/sl   barrier multiples of `sigma` (realised vol scaled to `hz`).
     hz      maximum holding bars (time stop).
-    trail   optional trailing stop distance in `sigma` units.
-    be_at   optional R multiple at which the stop moves to break-even.
+    trail   trailing stop distance in `sigma` units (chandelier).
+    be_at   R multiple at which the stop moves to break-even.
+    runner  convex mode: no take-profit at all, the trail or the clock
+            closes the trade.  Convexity comes from an uncapped right tail
+            against a tight structural stop, which is the only way a
+            sub-50 % hit rate can pay a round trip.
+    entry   "taker"  -> market at the next open (pays taker both ways)
+            "maker_pullback" -> resting limit `pullback` sigma below/above
+            the next open; fills only when the bar trades *through* it, and
+            then pays maker on entry, taker on exit, plus an adverse-fill
+            penalty.  Unfilled signals are counted in `diag`, never booked.
     """
     c = np.asarray(bars.c, dtype=float)
     h = np.asarray(bars.h, dtype=float)
@@ -64,7 +77,10 @@ def run_sleeve(bars, score, mask=None, *, pt=2.0, sl=1.0, hz=60,
     sg = np.asarray(sigma, dtype=float)
     ok = np.ones(n, bool) if mask is None else np.asarray(mask, bool).copy()
     ok &= np.isfinite(sg) & (sg > 0)
-    fee = float(fees_bps) / 1e4
+    maker = str(entry) == "maker_pullback"
+    fallback_fee = float(fees_bps) / 1e4
+    taker_leg = float(taker_fee_bps) / 1e4
+    attempts = 0
     trades: list[dict] = []
     i = 0
     while i < n - 2:
@@ -72,54 +88,113 @@ def run_sleeve(bars, score, mask=None, *, pt=2.0, sl=1.0, hz=60,
             i += 1
             continue
         j = i + 1
-        entry = float(op[j])
-        if not entry > 0:
-            i += 1
-            continue
         side = 1.0 if s[i] > 0 else -1.0
         width = float(sg[i])
-        tp_px = entry * (1.0 + side * pt * width)
-        sl_px = entry * (1.0 - side * sl * width)
+        attempts += 1
+        if maker:
+            ref = float(op[j])
+            if not ref > 0:
+                i += 1
+                continue
+            limit = ref * (1.0 - side * pullback * width)
+            # A resting order only fills if price trades *through* the level.
+            # `fill_mode` decides what price the fill actually gets:
+            #   "wick"      fill exactly at the limit inside the bar that
+            #               pierced it.  This is the standard backtest
+            #               fiction: the fill is always at the best price of
+            #               the bar, and a random-walk replay proves it — a
+            #               coin-flip side earns ~+15 bp per trade, which no
+            #               market pays for liquidity provision.
+            #   "next_bar"  (default) the order is filled one bar later, at
+            #               that bar's open if it is still at/through the
+            #               level, else dropped.  You only get filled while
+            #               the move continues against you, which is exactly
+            #               the adverse selection the maker literature
+            #               measures.
+            through = limit * (1.0 - side * float(min_penetration))
+            touched = (lo[j] <= through) if side > 0 else (h[j] >= through)
+            if not touched:
+                i += 1
+                continue
+            if str(fill_mode) == "wick":
+                entry_px = limit
+            else:
+                k = j + 1
+                if k >= n - 1:
+                    i += 1
+                    continue
+                nxt = float(op[k])
+                ok_open = (nxt <= limit) if side > 0 else (nxt >= limit)
+                if not ok_open:
+                    i += 1
+                    continue
+                entry_px = nxt
+                j = k
+                if not entry_px > 0:
+                    i += 1
+                    continue
+            fee = (float(maker_fee_bps) + float(maker_penalty_bps)
+                   + float(taker_fee_bps)) / 1e4
+        else:
+            entry_px = float(op[j])
+            if not entry_px > 0:
+                i += 1
+                continue
+            fee = fallback_fee
+        tp_px = math.inf if runner else entry_px * (1.0 + side * pt * width)
+        sl_px = entry_px * (1.0 - side * sl * width)
         stop = sl_px
-        best = entry
+        best = entry_px
         end = min(j + int(hz), n - 1)
         exit_kind, exit_px, exit_bar = "time", float(c[end]), end
         for t in range(j, end + 1):
-            # stop first: a bar that touches both is booked as a loss
+            # stop first: a bar that touches both is booked as a loss.
+            # The entry bar cannot ratchet the trail: we do not know whether
+            # its high came before or after the fill, and assuming "high
+            # first" is how trailing-stop backtests invent profits.
             if side > 0:
-                if trail is not None:
+                if trail is not None and t > j:
                     best = max(best, float(h[t]))
                 if lo[t] <= stop:
                     exit_kind, exit_px, exit_bar = "sl", stop, t
                     break
-                if h[t] >= tp_px:
+                if not runner and h[t] >= tp_px:
                     exit_kind, exit_px, exit_bar = "tp", tp_px, t
                     break
                 if trail is not None:
-                    stop = max(stop, best - trail * width)
+                    # trail distance is a fraction of price, not an absolute
+                    stop = max(stop, best * (1.0 - trail * width))
             else:
-                if trail is not None:
+                if trail is not None and t > j:
                     best = min(best, float(lo[t]))
                 if h[t] >= stop:
                     exit_kind, exit_px, exit_bar = "sl", stop, t
                     break
-                if lo[t] <= tp_px:
+                if not runner and lo[t] <= tp_px:
                     exit_kind, exit_px, exit_bar = "tp", tp_px, t
                     break
                 if trail is not None:
-                    stop = min(stop, best + trail * width)
+                    stop = min(stop, best * (1.0 + trail * width))
             if be_at is not None:
-                move = (float(c[t]) / entry - 1.0) * side
+                move = (float(c[t]) / entry_px - 1.0) * side
                 if move >= be_at * sl * width:
-                    stop = max(stop, entry) if side > 0 else min(stop, entry)
-        gross = (exit_px / entry - 1.0) * side
+                    stop = max(stop, entry_px) if side > 0 else min(stop, entry_px)
+        gross = (exit_px / entry_px - 1.0) * side
+        risk = max(1e-12, sl * width)
         trades.append({
             "i": int(j), "side": side, "exit": exit_kind,
             "bars": int(exit_bar - j), "gross": float(gross),
+            "fee_bp": round(fee * 1e4, 2),
             "net": float(gross - fee), "sigma": width,
-            "r": float(gross - fee) / max(1e-12, sl * width),
+            "r": float(gross - fee) / risk,
+            "mfe": float((best / entry_px - 1.0) * side),
         })
         i = int(exit_bar) + 1 + int(cooldown)
+    if diag is not None:
+        diag["attempts"] = attempts
+        diag["fills"] = len(trades)
+        diag["fill_rate"] = (len(trades) / attempts) if attempts else 0.0
+        diag["entry"] = entry
     return trades
 
 
@@ -133,7 +208,8 @@ def trade_stats(trades: list[dict], *, block: float | None = None,
     net = np.asarray([t["net"] for t in trades], dtype=float)
     gross = np.asarray([t["gross"] for t in trades], dtype=float)
     bars = np.asarray([max(1, t["bars"]) for t in trades], dtype=float)
-    fee = float(fees_bps) / 1e4
+    fees = np.asarray([t.get("fee_bp", fees_bps) for t in trades], dtype=float)
+    fee = float(np.mean(fees)) / 1e4 if fees.size else float(fees_bps) / 1e4
     wins = net > 0
     gsum = float(net[net > 0].sum())
     lsum = float(-net[net < 0].sum())
@@ -159,7 +235,8 @@ def trade_stats(trades: list[dict], *, block: float | None = None,
         "neff": round(float(neff), 1),
         "ev_bp": round(float(net.mean()) * 1e4, 2),
         "gross_ev_bp": round(float(gross.mean()) * 1e4, 2),
-        "fee_bp": round(fee * 1e4, 1),
+        "fee_bp": round(float(np.mean(fees)) if fees.size else fee * 1e4, 2),
+        "fills": int(n),
         "win_rate": round(float(wins.mean()), 4),
         "profit_factor": round(gsum / lsum, 3) if lsum > 0 else float("inf"),
         "sharpe": round(float(net.mean() / sd * math.sqrt(neff)) if sd > 0 else 0.0, 3),
@@ -170,6 +247,38 @@ def trade_stats(trades: list[dict], *, block: float | None = None,
         "tp_share": round(float(np.mean([t["exit"] == "tp" for t in trades])), 3),
         "sl_share": round(float(np.mean([t["exit"] == "sl" for t in trades])), 3),
     }
+
+
+def block_bootstrap(returns, block: int = 20, draws: int = 2000,
+                    seed: int = 0) -> dict:
+    """Circular block bootstrap of a trade series.
+
+    Trades cluster: a burst of events shares one price path, so the plain
+    t-statistic (`mean / sd * sqrt(n)`) overstates significance exactly when
+    the strategy is most active.  Resampling *blocks* of consecutive trades
+    preserves that autocorrelation and gives an honest standard error.
+    """
+    x = np.asarray(returns, dtype=float)
+    x = x[np.isfinite(x)]
+    n = x.size
+    if n < 8:
+        return {"n": int(n), "mean_bp": float("nan"), "se_bp": float("nan"),
+                "t": float("nan"), "lo_bp": float("nan"), "hi_bp": float("nan")}
+    block = int(max(1, min(block, n // 2)))
+    rng = np.random.default_rng(seed)
+    nblocks = int(math.ceil(n / block))
+    starts = rng.integers(0, n, size=(draws, nblocks))
+    idx = (starts[:, :, None] + np.arange(block)[None, None, :]) % n
+    samples = x[idx.reshape(draws, -1)[:, :n]]
+    means = samples.mean(axis=1)
+    se = float(means.std(ddof=1))
+    mean = float(x.mean())
+    return {"n": int(n), "block": int(block),
+            "mean_bp": round(mean * 1e4, 2),
+            "se_bp": round(se * 1e4, 2),
+            "t": round(mean / se, 2) if se > 0 else float("nan"),
+            "lo_bp": round(float(np.percentile(means, 2.5)) * 1e4, 2),
+            "hi_bp": round(float(np.percentile(means, 97.5)) * 1e4, 2)}
 
 
 def bucket_neff(n: int, per_bucket: int) -> float:
