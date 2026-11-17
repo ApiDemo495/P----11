@@ -1053,6 +1053,14 @@ function _pWinRow(res) {
     ? `<div class="kv"><span>horizon</span><b class="${hz.state === "tradable" ? "" : hz.state === "marginal" ? "acc-warn" : "acc-dn"}">${esc(hz.state)}
         <span class="dim" style="font-size:9px">σ ${hz.sigma_bps ?? "—"}bp vs ${hz.required_bps ?? "—"}bp needed · ${esc(hz.note || "")}</span></b></div>`
     : "";
+  const eg = res?.edge || {};
+  // cost gate: the ONLY tradeability claim the UI makes. Gross expectancy
+  // is read from the out-of-fold registry (never the live fit), so a lane
+  // that cannot pay its own fees says so instead of printing a nice score.
+  const edgeRow = eg.state
+    ? `<div class="kv"><span>cost gate</span><b class="${eg.state === "open" ? "" : eg.state === "thin" ? "acc-warn" : "acc-dn"}">${esc(eg.state)}
+        <span class="dim" style="font-size:9px">OOF gross ${fx(eg.gross_bp, 1)}bp vs ${fx(eg.friction_bps, 1)}bp cost · net ${fx(eg.expected_net_bp, 1)}bp${eg.state === "blocked" ? ` · needs ${fx(eg.required_gross_bp, 1)}bp` : ""} · ${esc(eg.state === "blocked" ? "fee not covered" : eg.source || "")}</span></b></div>`
+    : "";
   const mi = res?.micro || {};
   const micRow = (mi && Object.keys(mi).length)
     ? `<div class="kv"><span>microstructure</span><b class="dim" style="font-size:9px">OFI ${fx(mi.ofi, 2)} · persist ${fx(mi.ofi_persist, 2)} · VPIN ${fx(mi.vpin, 2)} · size skew ${fx(mi.size_skew, 2)} · Hawkes ${fx(mi.hawkes, 2)} · friction ${fx(mi.friction_bps, 1)}bp</b></div>`
@@ -1062,7 +1070,7 @@ function _pWinRow(res) {
     ? `<div class="kv"><span>vol barriers</span><b class="${vb.ok ? "" : "acc-warn"}">TP ${fx(vb.tp_bps, 1)}bp · SL ${fx(vb.sl_bps, 1)}bp
         <span class="dim" style="font-size:9px">${esc(vb.reason || "")}</span></b></div>` : "";
   return `<div class="kv"><span>P(win)</span>${cal}</div>
-    <div class="kv"><span>cross-asset</span>${spTxt}</div>${hzRow}${micRow}${vbRow}`;
+    <div class="kv"><span>cross-asset</span>${spTxt}</div>${hzRow}${edgeRow}${micRow}${vbRow}`;
 }
 
 function renderHero() {

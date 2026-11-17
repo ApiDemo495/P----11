@@ -331,3 +331,72 @@ def test_deep_evaluation_runs_end_to_end():
         assert key in r
     assert r["ensemble"]["features"] >= 15          # TA + flow + micro
     assert len(r["ensemble"]["kept"]) >= 1
+
+
+# ─────────────── cascade events: fixed-parameter contracts ───────────────
+
+
+def _cascade_bars():
+    """Six bars where a 5 % drop has just happened at bar 5."""
+    c = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 95.0, 95.0, 95.0, 95.0])
+    o = c.copy()
+    o[6] = 96.0                      # entry must fill here, not at 95
+    return lab.Bars(t=np.arange(c.size) * 60, o=o, h=c, l=c, c=c,
+                    v=np.ones(c.size), quote_v=c, trades=np.ones(c.size),
+                    taker_buy_v=np.ones(c.size), taker_buy_qv=c)
+
+
+def test_cascade_enters_on_the_next_bar_open():
+    b = _cascade_bars()
+    evs = [{"i": 5, "side": +1, "z": 4.0, "sigma": 0.01}]
+    params = (1, 4.0, 1.0, 1.0, 3)
+    tr = lab._cascade_trades(b, evs, params, fees_bps=0.0)
+    assert len(tr) == 1
+    assert tr[0]["i"] == 6                      # decision bar was 5
+    # trigger move is |95/100 - 1| = 0.05, so TP = 96 * 1.05
+    assert tr[0]["exit"] == "time" or tr[0]["exit"] == "tp"
+
+
+def test_cascade_stop_wins_ties():
+    b = _cascade_bars()
+    b.h = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 95.0, 110.0, 95.0, 95.0])
+    b.l = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 95.0, 80.0, 95.0, 95.0])
+    evs = [{"i": 5, "side": +1, "z": 4.0, "sigma": 0.01}]
+    tr = lab._cascade_trades(b, evs, (1, 4.0, 1.0, 1.0, 3), fees_bps=12.0)
+    assert tr[0]["exit"] == "sl"
+    assert tr[0]["net"] < tr[0]["gross"]        # taker fee is charged
+
+
+def test_cascade_fade_is_short_after_a_rally():
+    c = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 106.0, 106.0, 106.0, 99.0])
+    b = lab.Bars(t=np.arange(c.size) * 60, o=c.copy(), h=c, l=c, c=c,
+                 v=np.ones(c.size), quote_v=c, trades=np.ones(c.size),
+                 taker_buy_v=np.ones(c.size), taker_buy_qv=c)
+    tr = lab._cascade_trades(b, [{"i": 5, "side": -1, "z": 4.0, "sigma": 0.01}],
+                             (1, 4.0, 1.0, 1.0, 3), fees_bps=0.0)
+    assert tr[0]["gross"] > 0                   # a short profits when it falls
+
+
+def test_evaluate_cascade_is_fixed_parameter_and_reports_fold_dispersion():
+    rng = np.random.default_rng(11)
+    n = 9000
+    steps = rng.normal(0, 0.0015, n)
+    c = 100 * np.exp(np.cumsum(steps))
+    b = lab.Bars(t=np.arange(n) * 60, o=c, h=c * 1.001, l=c * 0.999, c=c,
+                 v=rng.lognormal(5, 0.3, n), quote_v=c * 100,
+                 trades=rng.lognormal(4, 0.3, n),
+                 taker_buy_v=rng.lognormal(5, 0.3, n) * 0.5,
+                 taker_buy_qv=c * 50)
+    params = (5, 3.0, 1.0, 1.0, 60)
+    r = lab.evaluate_cascade(b, params, fees_bps=12.0)
+    assert "error" not in r
+    assert r["params"] == list(params)          # echoed, never re-searched
+    assert isinstance(r["folds"], list) and 1 <= len(r["folds"]) <= 5
+    assert "/" in r["folds_positive"]
+    assert r["n"] >= 1 and math.isfinite(r["ev_bp"])
+    assert r["t_stat"] == r["t_stat"]           # overlap-aware t, not NaN here
+
+
+def test_evaluate_cascade_rejects_short_history():
+    b = _cascade_bars()
+    assert "error" in lab.evaluate_cascade(b, (5, 3.0, 1.0, 1.0, 60))

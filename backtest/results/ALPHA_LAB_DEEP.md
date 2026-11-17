@@ -62,3 +62,44 @@ gate requiring σ ≥ 3× friction.
   prunes noise instead of averaging it; `app/micro_alpha.py` supplies OFI/VPIN/Kyle/
   skew/Hawkes readings live; the hero shows the effective friction and horizon verdict.
 
+## 6. Sequential re-settlement (supersedes the per-bar EV column)
+
+The `Net EV` column above settles *every qualifying bar* as an independent bet on the
+same price path, so it overstates both the trade count and the precision of the number
+(the helper also caps its evaluation at the first 500 out-of-fold rows). A book holds one
+position per symbol at a time, pays taker fees on each round trip, and cannot stack
+overlapping bets.
+
+`app/portfolio.py` settles that book, and `backtest/edge_scan.py` (canonical output in
+`backtest/results/EDGE_SCAN.md`) re-runs every structure under it — five purged folds,
+parameters fixed *before* the folds were cut, entry at the next bar open, stop wins ties:
+
+| sleeve | n | gross bp | net bp | PF | t | folds + |
+|---|---:|---:|---:|---:|---:|---|
+| BTC ensemble h=12h | 425 | +2.6 | −9.4 | 0.71 | −3.30 | 1/5 |
+| BTC ensemble h=48h | 261 | +5.4 | −6.6 | 0.86 | −1.18 | 1/5 |
+| ETH ensemble h=48h | 285 | −8.6 | −20.6 | 0.68 | −3.09 | 0/5 |
+| BNB ensemble h=12h | 396 | +7.3 | −4.7 | 0.84 | −1.64 | 1/5 |
+| BNB ensemble h=48h | 286 | +2.7 | −9.3 | 0.80 | −1.83 | 0/5 |
+| PAXG ensemble h=48h | 280 | −0.7 | −18.7 | 0.50 | −5.59 | 0/5 |
+| BTC cascade fade k15/z4 | 194 | +3.6 | −8.4 | 0.77 | −1.61 | 1/5 |
+| ETH cascade fade k15/z4 | 237 | −2.4 | −14.4 | 0.71 | −2.16 | 2/5 |
+| BNB cascade fade k15/z4 | 196 | +1.3 | −10.7 | 0.71 | −2.06 | 1/5 |
+
+Reading it honestly:
+
+* The deep model's **gross** expectancy is real but tiny: −8.6 to +7.7 bp per round trip.
+  Friction is 12 bp (18 bp PAXG). Net is negative on every lane, as before — the
+  improvement in accuracy and IC did not translate into per-trade money.
+* **No lane is profitable in a majority of folds.** The strongest gross (BNB +7.3 bp)
+  comes with t = −1.6 net and one positive fold out of five.
+* The multi-day lanes are the closest to viability because the friction/σ ratio is
+  smallest there (12 bp against σ ≈ 440 bp), but 8 months of history yields ~250–400
+  trades and t ≈ 1: positive **gross** is not yet evidence of positive **expectancy**.
+* The in-sample cascade numbers from the previous round (BNB +30 … +46 bp) did not
+  survive fixed-parameter out-of-fold settlement (−10.7 bp). They were a selection
+  artefact, which is why the per-fold grid search was deleted rather than tuned.
+
+Consequence for the app: `payload["edge"]` now carries the measured gross, the live
+friction, the expected net and the gross that would be required, and the hero card prints
+`blocked / thin / open` accordingly. Every lane is blocked at current costs.

@@ -157,3 +157,129 @@ python3 -m backtest.alpha_lab                      # classic before/after
 python3 -m backtest.alpha_lab --mode deep          # deep ensemble, TF1–TF4
 python3 -m pytest tests/test_alpha_lab.py -q       # 24 contracts
 ```
+
+## 9. Sequential settlement (third pass) — the cost ceiling, measured
+
+The deep pass left a contradiction worth chasing: accuracy improved on 10/14 lanes and
+IC turned positive, yet net EV stayed around −18 bp. That is the signature of a metric
+that measures the wrong object. The per-bar lab settles *every* qualifying bar as if it
+were a separate bet, on the same price path, and its EV helper stops at the first 500
+out-of-fold rows — a sample that is neither independent nor spread over the period.
+A book cannot hold 15,000 overlapping positions in one symbol.
+
+### 9.1 What was rebuilt
+
+| module | job | why it had to exist |
+|---|---|---|
+| `app/portfolio.py` | one position per symbol, entry at the **next bar open** (taker), exits on high/low touches with **stop wins ties**, optional volatility trail, optional time stop, taker fees on every round trip, `neff`/`t_stat` with an overlap correction | the only settlement that matches how a book actually trades |
+| `app/alpha_lab.evaluate_cascade` | one **fixed** cascade configuration settled out-of-fold, per-fold EV returned | the previous version searched the grid inside each fold; it kept choosing the rarest cell (30-bar, 4σ) and the test fold then held ~25 trades, so the number described the selector, not the market |
+| `app/edge_gate.py` | tradeability verdict from an explicit registry of **out-of-fold gross expectancies**, compared with live friction | the product needs one honest sentence, not a confidence score that ignores cost |
+| `backtest/edge_scan.py` | the falsification harness behind the table below | every claim reproducible in one command |
+
+### 9.2 Literature that forced the redesign
+
+* **Maker execution is not free money.** Fill probability and post-fill return are
+  anti-correlated (arXiv 2502.18625), and a live limit-order study found entry limits
+  filled 19–48 % of the time — and the fills that happened kept going against the
+  order, losing 8–14× more per trip than market orders. Every sleeve here is therefore
+  modelled as **taker at the next open**; a maker-filled backtest is not admissible.
+* **A 2,160-strategy sweep on 1-minute crypto** found nothing positive at taker fees;
+  the only survivor under stress was the "crash bid" (buy a limit 2 % below,
+  sell +2 %), and its edge decayed on rolling windows. That is why the cascade-fade
+  sleeve is tested with **fixed** parameters and reported with per-fold dispersion
+  instead of a best-cell number.
+* **AFML event sampling** (CUSUM on σ-scaled returns, triple-barrier labels, meta-label
+  sizing) moved the target from "sign of the next window" to "did a barrier get hit
+  first", which is the quantity a barrier-managed book is actually paid on.
+
+### 9.3 The falsification table
+
+Canonical run: `python3 -m backtest.edge_scan --write` →
+`backtest/results/EDGE_SCAN.md`. Friction 12 bp round trip (18 bp PAXG), five purged
+folds, all parameters fixed before the folds were cut.
+
+| sleeve | n | gross bp | net bp | PF | t | folds + |
+|---|---:|---:|---:|---:|---:|---|
+| BTC ensemble h=12h pt2.0/sl1.0 | 425 | +2.6 | −9.4 | 0.71 | −3.30 | 1/5 |
+| BTC ensemble h=48h pt3.0/sl1.5 | 261 | +5.4 | −6.6 | 0.86 | −1.18 | 1/5 |
+| ETH ensemble h=12h pt2.0/sl1.0 | 376 | −2.5 | −14.5 | 0.67 | −3.73 | 0/5 |
+| ETH ensemble h=48h pt3.0/sl1.5 | 285 | −8.6 | −20.6 | 0.68 | −3.09 | 0/5 |
+| BNB ensemble h=12h pt2.0/sl1.0 | 396 | +7.3 | −4.7 | 0.84 | −1.64 | 1/5 |
+| BNB ensemble h=48h pt3.0/sl1.5 | 286 | +2.7 | −9.3 | 0.80 | −1.83 | 0/5 |
+| PAXG ensemble h=12h pt2.0/sl1.0 | 0 | — | — | — | — | no trades |
+| PAXG ensemble h=48h pt3.0/sl1.5 | 280 | −0.7 | −18.7 | 0.50 | −5.59 | 0/5 |
+| BTC bollinger follow h=24 | 223 | +4.4 | −7.6 | 0.83 | −1.31 | 2/5 |
+| ETH bollinger follow h=24 | 210 | +7.7 | −4.3 | 0.93 | −0.52 | 1/5 |
+| BNB bollinger follow h=24 | 230 | −6.1 | −18.1 | 0.62 | −3.41 | 0/5 |
+| PAXG bollinger follow h=24 | 214 | +3.7 | −14.3 | 0.58 | −3.76 | 1/5 |
+| BTC cascade fade k15 z4 | 194 | +3.6 | −8.4 | 0.77 | −1.61 | 1/5 |
+| ETH cascade fade k15 z4 | 237 | −2.4 | −14.4 | 0.71 | −2.16 | 2/5 |
+| BNB cascade fade k15 z4 | 196 | +1.3 | −10.7 | 0.71 | −2.06 | 1/5 |
+| ETH←BTC lead-lag k3 | 57,004 | +0.1 | −11.9 | 0.06 | −305.8 | 0/5 |
+| BNB←BTC lead-lag k3 | 56,761 | +0.2 | −11.8 | 0.02 | −398.1 | 0/5 |
+
+Also settled and rejected in the same pass (not in the canonical table because the
+constructions are auxiliary): cross-sectional pairs on ETH/BNB, ETH/BTC and BNB/BTC
+(`z > 2` log-ratio reversion, 24 bp two-leg cost) — gross +0.3 … +5.6 bp, net −18 … −27 bp,
+0–1 of 5 folds positive; and the per-fold grid search over the cascade family, which
+degenerated to the rarest cell and returned −6.8 / −22.6 / −15.0 bp.
+
+**No sleeve is net positive, and no sleeve is positive in a majority of folds.** The
+gross column is the real finding: the best structure on record is worth **+7.7 bp** per
+round trip against a **12 bp** fee.
+
+### 9.4 Why this is a cost ceiling, not a tuning gap
+
+With symmetric ±kσ barriers the gross payout is `(2p−1)·kσ`, so the break-even hit rate is
+
+```
+p* = 0.5 + c / (2·k·σ)            c = round-trip friction, k = barrier width in σ
+```
+
+`app/edge_gate.required_accuracy` implements exactly this. At 12 bp and k = 2:
+
+| hold | σ (BTC) | p* required | p measured (deep pass) |
+|---|---:|---:|---:|
+| 1 h | ≈40 bp | 57.5 % | 50.9 % |
+| 4 h | ≈80 bp | 53.8 % | 50.5 % |
+| 1 day | ≈200 bp | 51.5 % | 50.9 % |
+| 5 days | ≈440 bp | 50.7 % | 53.9 % (t ≈ 1) |
+
+The requirement falls as σ grows, and that is precisely what the scan shows: the only
+sleeves with positive gross are multi-day ones (BTC +5.4, BNB +7.3, ETH bollinger +7.7 bp).
+They are not tradable because 8 months of data gives them ~250 trades and **t ≈ 1**: the
+edge cannot be distinguished from zero, and a 2 bp margin over cost is inside the noise.
+Reporting them as "positive expectancy" would be the same mistake as the best-cell
+cascade number, one level down.
+
+### 9.5 The architecture that follows
+
+The platform stops pretending that a directional score is a tradable edge:
+
+1. `app/edge_gate.py` keeps a **registry of out-of-fold gross expectancies** per
+   (asset, horizon bucket). It never reads the live fit — that would be circular.
+2. `app/engine.py` attaches `payload["edge"]` to every lane: measured gross, live
+   friction, expected net, the gross it *would* need, and an `evidence` flag that is
+   `insufficient` whenever `|t| < 2` or fewer than 100 rounds.
+3. The hero "cost gate" row prints `blocked / thin / open` with both sides of the
+   arithmetic ("OOF gross +5.4 bp vs 12.0 bp cost · net −6.6 bp · needs 14.0 bp").
+   On today's measurements every lane is **blocked**, and the row says so.
+4. `tests/test_edge_gate.py` pins the invariant that insufficient evidence can never be
+   presented as tradable, and that no live lane is called tradable at current costs —
+   the guard fails loudly if a future change starts advertising an edge it does not have.
+
+What would legitimately turn a lane green, in order of plausibility: (a) friction at or
+below the measured gross (≈6–8 bp round trip, i.e. VIP/maker-adjacent venue economics —
+not a modelling change), (b) a signal worth 2.5× the current gross at the same horizons,
+(c) far more history so a +5 bp edge on multi-day holds can reach `t > 2`. None of the
+three is a parameter tweak, and two of them are outside this repository's data.
+
+## 10. Reproduce (third pass)
+
+```bash
+python3 -m backtest.edge_scan                    # canonical sequential table
+python3 -m backtest.edge_scan --only cascade -v  # one family only
+python3 -m backtest.edge_scan --write            # refresh results/EDGE_SCAN.md
+python3 -m pytest tests/test_portfolio.py tests/test_edge_gate.py \
+                 tests/test_alpha_lab.py -q      # engine, gate, cascade contracts
+```

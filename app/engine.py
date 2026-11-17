@@ -1401,10 +1401,24 @@ class PredictionEngine:
                 _fr = _mic.get("friction_bps")
                 fin["horizon"] = _lane_state(
                     _sig_bps, _fr if isinstance(_fr, float) else None)
+                # ── COST GATE: does the *measured* edge clear friction? ──
+                # The horizon check asks whether σ is wide enough to be
+                # worth trading at all; this asks whether the out-of-fold
+                # gross expectancy on record actually pays the round trip.
+                # Directional cards may still print, but a blocked lane is
+                # never presented as tradable telemetry.
+                from .edge_gate import bucket as _edge_bucket, gate as _edge_gate
+                _hz_min = {"TF1": 60.0, "TF2": 240.0, "TF3": 1440.0,
+                           "TF4": 10080.0}.get(str(tf), 60.0)
+                _fric = (_fr if isinstance(_fr, float)
+                         else (18.0 if symbol == "PAXG" else 12.0))
+                fin["edge"] = _edge_gate(symbol, _edge_bucket(_hz_min), _fric)
             except Exception as _e:
                 fin["micro"] = None
                 fin["horizon"] = {"state": "unknown",
                                   "note": f"micro unavailable: {str(_e)[:80]}"}
+                fin["edge"] = {"state": "unknown",
+                               "note": f"edge gate unavailable: {str(_e)[:80]}"}
             # RE-JUDGE THE GATE on the FINAL confidence: the advanced layer
             # multiplies confidence by its soft gate AFTER the first check,
             # so the card could print 0.349 "ISSUED" while RECHECK compared
@@ -1540,6 +1554,7 @@ class PredictionEngine:
                 "vol_barriers": fin.get("vol_barriers"),
                 "micro": fin.get("micro"),
                 "horizon": fin.get("horizon"),
+                "edge": fin.get("edge"),
                 "exec_ok": fin.get("exec_ok"),
                 "mom_chase_z": fin.get("mom_chase_z"),
                 "tier": fin.get("tier"),

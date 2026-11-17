@@ -930,3 +930,113 @@ def evaluate_deep(bars, horizon: int, tf: str = "TF1",
                            if oos.get("sigma_bps") else None),
     }
     return out
+
+
+# ═════════════════════════════════════════════════════════════════════
+# CASCADE MODE — event sampling instead of per-bar prediction
+# ═════════════════════════════════════════════════════════════════════
+
+CASCADE_GRID = [
+    # (lookback bars, trigger multiple of σ over that lookback,
+    #  take-profit as a fraction of the trigger move,
+    #  stop as a fraction of the trigger move, holding bars)
+    # TP >= SL on purpose: fading a cascade means the bounce is the fast
+    # part and the continuation is the risk, so the payoff must be at
+    # least 1:1 or the geometry needs a win rate no one can deliver.
+    (5, 3.0, 1.00, 1.00, 60),
+    (5, 4.0, 1.50, 1.00, 120),
+    (15, 3.0, 1.00, 1.00, 120),
+    (15, 4.0, 1.50, 1.00, 240),
+    (15, 5.0, 2.00, 1.00, 240),
+    (30, 3.0, 1.00, 0.75, 240),
+    (30, 4.0, 1.50, 1.00, 240),
+    (30, 5.0, 2.00, 1.00, 360),
+]
+
+
+def _cascade_trades(bars, events, params, fees_bps: float) -> list[dict]:
+    """Settle fade-the-cascade events with taker execution."""
+    from .events import simulate_event
+    k, z_thr, tp_frac, sl_frac, hz = params
+    out = []
+    c = bars.c
+    for ev in events:
+        i = int(ev["i"])
+        j = i + 1
+        if j >= len(c) - 1:
+            continue
+        entry = float(bars.o[j])
+        move = abs(float(c[i] / c[i - k] - 1.0))
+        if entry <= 0 or move <= 0:
+            continue
+        side = int(ev["side"])
+        tp_px = entry * (1 + side * tp_frac * move)
+        sl_px = entry * (1 - side * sl_frac * move)
+        end = min(j + hz, len(c) - 1)
+        fee = fees_bps / 1e4
+        done = None
+        for t in range(j, end + 1):
+            if side > 0:
+                if bars.l[t] <= sl_px:
+                    done = ("sl", sl_px / entry - 1.0, t - j)
+                    break
+                if bars.h[t] >= tp_px:
+                    done = ("tp", tp_px / entry - 1.0, t - j)
+                    break
+            else:
+                if bars.h[t] >= sl_px:
+                    done = ("sl", 1.0 - sl_px / entry, t - j)
+                    break
+                if bars.l[t] <= tp_px:
+                    done = ("tp", 1.0 - tp_px / entry, t - j)
+                    break
+        if done is None:
+            g = (c[end] / entry - 1.0) * side
+            done = ("time", g, end - j)
+        out.append({"taken": True, "i": j, "exit": done[0], "bars": done[2],
+                    "gross": done[1], "net": done[1] - fee,
+                    "r": done[1] - fee})
+    return out
+
+
+def evaluate_cascade(bars, params, fees_bps: float = 12.0, folds: int = 5,
+                     embargo: int = 240) -> dict:
+    """Out-of-fold proof for ONE fixed cascade configuration.
+
+    The earlier version searched the grid inside every fold.  That is a
+    selection machine: it kept picking the rarest configuration, the test
+    fold then held ~25 trades, and the "result" measured the selector, not
+    the edge.  Here the parameters are fixed *before* the folds are cut, so
+    the out-of-fold number is a plain measurement.  Per-fold dispersion is
+    returned so a single lucky fold cannot pass for an edge.
+    """
+    from .events import cusum_events, sigma_series, trade_stats
+    k, z_thr, tp_frac, sl_frac, hz = params
+    c = np.asarray(bars.c, dtype=float)
+    n = c.size
+    if n < 5000:
+        return {"error": f"only {n} bars", "n": int(n)}
+    sig = sigma_series(bars, 240)
+    events = cusum_events(bars, k_bar=k, z_thr=z_thr, sigma=sig,
+                          cooldown=2 * k)
+    folds_idx = purged_folds(n, folds=folds, embargo=max(embargo, hz))
+    if not folds_idx:
+        return {"error": "not enough folds"}
+    oos: list[dict] = []
+    per_fold = []
+    for _tr, te in folds_idx:
+        lo_i, hi_i = int(te.min()), int(te.max())
+        evs = [e for e in events if lo_i <= e["i"] <= hi_i]
+        tr = _cascade_trades(bars, evs, params, fees_bps)
+        oos.extend(tr)
+        per_fold.append(round(trade_stats(tr).get("ev_bp", float("nan")), 2)
+                        if tr else 0.0)
+    st = trade_stats(oos)
+    if st.get("n", 0) == 0:
+        return {"error": "no out-of-fold trades", "params": list(params)}
+    pos = [f for f in per_fold if f > 0]
+    st["params"] = list(params)
+    st["folds"] = per_fold
+    st["folds_positive"] = f"{len(pos)}/{len(per_fold)}"
+    st["bars"] = int(n)
+    return st
