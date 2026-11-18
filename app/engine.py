@@ -6158,7 +6158,14 @@ class PredictionEngine:
                             d["tape_veto"] = True
                             d["tape_z"] = _ds.get("tape_z")
                             d["tape_need_bps"] = _ds.get("tape_need_bps")
-                        if d.get("tier") in ("watch-only", "quarter", "half"):
+                        _rank = {"watch-only": 0, "quarter": 1,
+                                 "half": 2, "full": 3}
+                        _xr = float(d.get("score_floor_ratio") or 0.0)
+                        _band = ("full" if _xr > 2.5 else "half" if _xr > 1.5
+                                 else "quarter" if _xr > 1.0 else "watch-only")
+                        # explain ONLY a real cut below the measured band —
+                        # a window that is simply "half" needs no excuse
+                        if _rank.get(str(d.get("tier")), 0) < _rank[_band]:
                             _why = []
                             if getattr(cyc, "pending_reset", False):
                                 _why.append("window closed by a barrier — "
