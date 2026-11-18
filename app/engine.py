@@ -6165,7 +6165,8 @@ class PredictionEngine:
                                  else "quarter" if _xr > 1.0 else "watch-only")
                         # explain ONLY a real cut below the measured band —
                         # a window that is simply "half" needs no excuse
-                        if _rank.get(str(d.get("tier")), 0) < _rank[_band]:
+                        if str(d.get("tier")) == "watch-only" or \
+                                _rank.get(str(d.get("tier")), 0) < _rank[_band]:
                             _why = []
                             if getattr(cyc, "pending_reset", False):
                                 _why.append("window closed by a barrier — "
