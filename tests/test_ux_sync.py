@@ -114,11 +114,17 @@ def test_settings_endpoint_roundtrip():
             assert r.json()["settings"]["auto_predict"] is False
         finally:
             c.put("/api/settings", json={"auto_predict": True})
-        # confidence calibration (stated vs realised) — honest cold start
+        # confidence calibration (stated vs realised). The boot warm-history
+        # replay now settles replayed windows, so this is no longer a cold
+        # n=0 page: it must be INTERNALLY CONSISTENT — `enough` is exactly
+        # the n>=min_n predicate, and an empty sample never claims a Brier
+        # score (the honesty rule the old cold-start assert encoded).
         cal = c.get("/api/history/calibration").json()
         for k in ("n", "enough", "min_n", "bins", "brier", "note"):
             assert k in cal, k
-        assert cal["enough"] is False and cal["n"] == 0
+        assert cal["enough"] is (cal["n"] >= cal["min_n"])
+        if cal["n"] == 0:
+            assert cal["enough"] is False and cal["brier"] is None
         # settlement liveness — the zero-wall must explain itself
         led = c.get("/api/ledger").json()
         for k in ("settle_calls", "last_settle_ago_s", "totals",

@@ -45,6 +45,17 @@ FEED_GRACE_S = 120.0
 REAL_STALE_S = 120.0          # binance silent this long -> demote to sim
 SIM_BASE_PRICES = {"BTC": 68000.0, "PAXG": 2650.0, "ETH": 3500.0, "BNB": 600.0}
 SIM_PER_MIN_VOL = {"BTC": 120.0, "PAXG": 18.0, "ETH": 1500.0, "BNB": 4200.0}
+# Per-MINUTE return standard deviation of the simulator (matches the
+# backfill's `base_vol`): 7 bps for BTC, 2.1 bps for gold, 9 for ETH, 8 for
+# BNB. The live 1 Hz tick loop MUST divide these by sqrt(60) and every drift
+# by 60 — using the per-minute numbers per SECOND made the live tape ~60x
+# drifter than its own history (2.7%/min trends), which whipped the
+# indicators into cancellation ("always NO TRADE"), hit TP/SL within
+# seconds ("trades changing mid-window") and outran every chart refresh
+# ("chart price and analysis price don't match").
+SIM_BASE_VOL_MIN = {"BTC": 0.0007, "PAXG": 0.00021, "ETH": 0.0009, "BNB": 0.0008}
+SIM_DRIFT_CHOICES = (-0.00045, -0.0002, 0.0, 0.0002, 0.00045)   # per MINUTE
+SIM_REGIME_MIN = (30, 240)          # regime length range, minutes
 
 
 def _family(source: str) -> str:
@@ -252,9 +263,22 @@ class MarketFeed:
         self._tick_times.append(now)
         del self._tick_times[:-2000]     # depth@100ms alone is ~40 msg/s
 
+    COVERAGE_TTL_S = 2.0
+
     def history_coverage(self, now: float | None = None) -> dict[str, dict]:
-        """Measure active-family closed 1m candles; never infer missing bars."""
+        """Measure active-family closed 1m candles; never infer missing bars.
+
+        Memoised for 2 s: the scan walks every stored timestamp of every
+        asset, and the snapshot asks for it twice (feed block + chips) on
+        top of /api/health. The cache is invalidated by a new bar, so the
+        coverage numbers are never staler than the tape.
+        """
         now = time.time() if now is None else float(now)
+        _ck = (int(now // 60), len(self.states[SYMBOL_ORDER[0]].times)
+               if SYMBOL_ORDER else 0, self.mode)
+        _hit = getattr(self, "_cov_cache", None)
+        if _hit is not None and _hit[0] == _ck and now - _hit[1] < self.COVERAGE_TTL_S:
+            return _hit[2]
         current = int(now // 60) * 60
         cutoff = current - 1440 * 60
         family = _family(self.mode)
@@ -286,6 +310,7 @@ class MarketFeed:
                 "largest_gap_minutes": max(gaps, default=0) // 60,
                 **({} if ordered else {"why": "no active-family source candles"}),
             }
+        self._cov_cache = (_ck, now, out)
         return out
 
     def stats(self) -> dict:
@@ -316,6 +341,7 @@ class MarketFeed:
             "bars_sim": sum(1 for st in self.states.values()
                             for src in st.sources if _family(src) == "sim"),
             "history_24h": history,
+            "sim_refill": getattr(self, "sim_refill", None),
             "history_complete_24h": bool(history) and all(
                 row.get("continuous_24h") for row in history.values()),
             "stale": stale,
@@ -862,7 +888,9 @@ class MarketFeed:
             # collapsed CCI/confidence to ~0 forever)
             self._sim_regime[sym] = {
                 "drift": drift,
-                "left": rng.randint(600, 2400),   # 10–40 min coherent windows
+                # MINUTES — the live 1 Hz loop decrements this by 1/60 per
+                # second, so a 30–240 minute regime survives the handover
+                "left": rng.randint(*SIM_REGIME_MIN),
                 "vol_mult": vol_mult,
             }
 
@@ -870,6 +898,71 @@ class MarketFeed:
         t = asyncio.create_task(self._sim_tick_loop())
         self._sim_tasks.append(t)
         self._tasks.append(t)
+
+    # -- simulator gap repair ------------------------------------------
+    async def _sim_backfill(self, first_min: int, last_min: int) -> int:
+        """Synthesise the minutes the simulator *missed while it was asleep*.
+
+        A suspended host (VM freeze, laptop lid, Codespace pause) stops the
+        1-minute sim rolls; on resume the tape has a hole and the honest
+        `continuous_24h` check reports e.g. 642/1440 bars with one 799-minute
+        gap — which reads as "the engine was offline for hours". The
+        simulator is synthetic by definition, so it fast-forwards the same
+        regime-switching process across the hole instead of leaving it.
+        Every bar is still written with ``source="sim"``, and the refill is
+        recorded in ``stats()["sim_refill"]`` so nothing claims to be real
+        tape. At most 3 days are replayed; older holes stay visible.
+        """
+        total = last_min - first_min + 1
+        if total <= 0:
+            return 0
+        cap = 1440 * 3
+        skipped = 0
+        if total > cap:
+            skipped = total - cap
+            first_min = last_min - cap + 1
+            total = cap
+        rng = self._sim_rng
+        per_min = dict(SIM_PER_MIN_VOL)
+        for m in range(first_min, last_min + 1):
+            if (m - first_min) % 240 == 0:
+                await asyncio.sleep(0)      # never hog the loop while repairing
+            for sym in SYMBOL_ORDER:
+                st = self.states[sym]
+                reg = self._sim_regime.setdefault(
+                    sym, {"drift": 0.0, "left": float(SIM_REGIME_MIN[0]),
+                          "vol_mult": 1.0})
+                reg["left"] -= 1.0
+                if reg["left"] <= 0:
+                    reg["left"] = rng.randint(*SIM_REGIME_MIN)
+                    reg["drift"] = rng.choice(SIM_DRIFT_CHOICES)
+                    if sym == "PAXG":
+                        reg["drift"] *= 0.25
+                    reg["vol_mult"] = rng.choice([0.7, 1.0, 1.6, 2.4])
+                price = self._sim_price[sym]
+                swing = SIM_BASE_VOL_MIN[sym] * reg["vol_mult"]
+                close = price * math.exp(rng.gauss(reg["drift"], swing))
+                if sym == "PAXG":
+                    close += 0.02 * (SIM_BASE_PRICES[sym] - close)
+                wick = abs(close - price) * 0.5 + price * swing * 0.8
+                high = max(price, close) + wick * abs(rng.gauss(0.0, 1.0)) * 0.5
+                low = min(price, close) - wick * abs(rng.gauss(0.0, 1.0)) * 0.5
+                self._sim_price[sym] = close
+                st.live_price = close
+                st.push_bar(m * 60, close,
+                            per_min[sym] * rng.lognormvariate(0, 0.3),
+                            price, high, low, source="sim")
+                st.live_open = close
+                st.live_high = close
+                st.live_low = close
+                st.live_volume = 0.0
+        self.sim_refill = {"minutes": total, "skipped_minutes": skipped,
+                           "from": first_min * 60, "to": last_min * 60,
+                           "at": time.time()}
+        log.warning("sim tape: clock jumped — synthesised %s minute bars "
+                    "(skipped %s older ones); all bars source=sim",
+                    total, skipped)
+        return total
 
     async def _sim_tick_loop(self) -> None:
         rng = self._sim_rng
@@ -887,27 +980,35 @@ class MarketFeed:
                 continue               # real family owns the tape now (D-1)
             now = time.time()
             minute = int(now // 60)
+            if minute - last_minute > 1:
+                # the host slept/suspended: repair the hole in the sim tape
+                # before rolling the current minute (never in real mode)
+                try:
+                    await self._sim_backfill(last_minute + 1, minute - 1)
+                except Exception:
+                    log.exception("sim tape gap repair failed")
             rolled = minute != last_minute
             for sym in SYMBOL_ORDER:
                 st = self.states[sym]
                 price = self._sim_price[sym]
-                sigma = {"BTC": 7e-5, "PAXG": 2e-5, "ETH": 9e-5, "BNB": 8e-5}[sym]
-                # persistent regime: coherent multi-minute drift windows so the
-                # 22m+ formula windows see real trends (spec: confidence floor
-                # is only organically reachable with trending data)
+                # ONE SECOND of a process calibrated per MINUTE:
+                #   drift_1s = drift_min / 60
+                #   sigma_1s = sigma_min / sqrt(60)
+                # (regimes below are stored in MINUTES and converted here)
+                sigma_1s = SIM_BASE_VOL_MIN[sym] / math.sqrt(60.0)
                 reg = self._sim_regime[sym]
-                reg["left"] -= 1
+                reg["left"] -= 1.0 / 60.0         # seconds -> regime minutes
                 if reg["left"] <= 0:
-                    reg["left"] = rng.randint(600, 2400)
-                    reg["drift"] = rng.choice([-0.00045, -0.0002, 0.0,
-                                               0.0002, 0.00045])
+                    reg["left"] = rng.randint(*SIM_REGIME_MIN)
+                    reg["drift"] = rng.choice(SIM_DRIFT_CHOICES)
                     if sym == "PAXG":
-                        reg["drift"] *= 0.25          # gold stays peg-anchored
+                        reg["drift"] *= 0.25      # gold stays peg-anchored
                     reg["vol_mult"] = rng.choice([0.7, 1.0, 1.6, 2.4])
-                price *= math.exp(rng.gauss(reg["drift"],
-                                            sigma * reg["vol_mult"]))
+                price *= math.exp(rng.gauss(reg["drift"] / 60.0,
+                                            sigma_1s * reg["vol_mult"]))
                 if sym == "PAXG":
-                    price += 0.02 * (SIM_BASE_PRICES[sym] - price)
+                    # 2 % pull per MINUTE toward the peg (was per second)
+                    price += (0.02 / 60.0) * (SIM_BASE_PRICES[sym] - price)
                 self._sim_price[sym] = price
                 st.live_price = price
                 st.last_tick = time.time()

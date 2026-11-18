@@ -197,7 +197,11 @@ def test_j_ops_endpoints_present():
     rs = open("run.sh").read()
     assert "start.py" in rs
     sp = open("start.py").read()
-    assert "stop_engine(_child)" in sp and "fails >= 12" in sp
+    # a BUSY engine must not be killed: the supervisor now separates a
+    # closed port (dead) from a slow-but-listening port (silent)
+    assert "stop_engine(_child)" in sp
+    assert "dead >= 12" in sp and "silent >=" in sp
+    assert "def health_probe()" in sp
 
 
 # ── K: config timeframe keys ───────────────────────────────────────────

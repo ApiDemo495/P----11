@@ -1265,12 +1265,28 @@ class FlyWireBrain:
                              daemon=True).start()
         if self._anatomy_state == "error":
             return {"state": "error", "error": self._anatomy_error}
-        # instant part while the heavy pass runs
-        classes, counts = np.unique(self.cls, return_counts=True)
-        return {"state": "computing",
-                "neurons": int(len(self.roots)),
+        # instant census while the heavy pass runs: the counts below come
+        # straight from the loaded CSR (no extra pass), so the header can
+        # print real numbers instead of "computing…" for the synapses cell.
+        cheap = getattr(self, "_anatomy_cheap", None)
+        if cheap is None:
+            classes, counts = np.unique(self.cls, return_counts=True)
+            neurons = int(len(self.roots))
+            edges = int(self.W.nnz) if self.W is not None else 0
+            cheap = self._anatomy_cheap = {
+                "neurons": neurons,
+                "connections": edges,
+                "synapses": int(self.meta.get("synapses") or 0) or None,
+                "synapses_basis": ("census from the connectome cache"
+                                   if self.meta.get("synapses") else
+                                   "measured pre→post connections"),
+                "mean_degree": round(edges / neurons, 2) if neurons else 0,
+                "density": round(edges / (neurons * max(1, neurons - 1)), 6)
+                           if neurons else 0,
                 "classes": {str(c): int(n)
-                            for c, n in zip(classes, counts)}}
+                            for c, n in zip(classes, counts)},
+            }
+        return {"state": "computing", **cheap}
 
     def _build_anatomy(self) -> None:      # pragma: no cover - thread
         try:
@@ -1342,7 +1358,12 @@ class FlyWireBrain:
                                           dtype=np.int64).sum())
                 del col
             except Exception:
-                synapses = None      # honest: unknown, never invented
+                # The parquet artefact is deleted after the npz cache is
+                # built, so the synapse census was permanently None → the
+                # UI showed "computing…" forever. Fall back to the measured
+                # number of pre→post connections in the loaded graph (the
+                # same 15.09 M edges the verify step reports) and say so.
+                synapses = None
             try:
                 import pyarrow.csv as pcsv
                 tsv_path = getattr(self, "_ann_path",
@@ -1424,7 +1445,10 @@ class FlyWireBrain:
             self._anatomy = {
                 "neurons": neurons,
                 "connections": edges,
-                "synapses": synapses,
+                "synapses": int(synapses) if synapses is not None else edges,
+                "synapses_basis": ("connectivity census (parquet)"
+                                   if synapses is not None else
+                                   "measured pre→post connections"),
                 "mean_degree": round(edges / neurons, 2) if neurons else 0,
                 "density": round(edges / (neurons * max(1, neurons - 1)), 6),
                 "classes": {c: int(n) for c, n in

@@ -139,7 +139,10 @@ def test_port_made_public_from_inside():
 
 def test_watchdog_and_deferred_backtest_exist():
     src = _start_src()
-    assert "fails >= 12" in src                    # hung engine restarted
+    # "hung" is measured, not assumed: closed port restarts fast, a
+    # slow-but-listening engine gets a much longer fuse (the old
+    # 12 x 3 s rule restarted healthy engines mid-boot)
+    assert "dead >= 12" in src and "silent >=" in src
     assert "run_backtest_once.sh" in src           # daily backtest kept
     assert "time.sleep(600)" in src                # …deferred past boot
     assert "stop_engine(_child)" in src

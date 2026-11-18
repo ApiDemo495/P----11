@@ -10,13 +10,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import math
 import json
 import logging
+import threading
 import time
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .clock import MasterClock, seconds_to_next_grc
@@ -98,16 +100,23 @@ async def _startup_watchdog() -> None:
     # cold boots (bundled-brain restore + initial analysis phase)
     # take minutes on a 4-core Codespace; the old 30 s deadline
     # killed healthy boots and left the port answering 502
-    for _i in range(10):
+    for _i in range(20):
         await _a.sleep(30.0)
         if engine.phase == "live" and all(engine.readiness.values()):
             return
-    print("startup watchdog: not ready after 300s — exiting 75",
+        # a busy-but-progressing boot is not a failure: report it instead of
+        # exiting 75 (an exit here restarts the process, which replays the
+        # warm history, which delays readiness again — a restart loop)
+        print(f"startup watchdog: {30 * (_i + 1)}s phase={engine.phase} "
+              f"readiness={engine.readiness} warmup={getattr(engine, 'seed_info', {}).get('state')}",
+              flush=True)
+    print("startup watchdog: not ready after 600s — exiting 75",
           flush=True)
     _os._exit(75)
 
 
 _loop_lag = {"s": 0.0}
+_selfheal_gate = {"at": 0.0}
 
 
 async def _lag_meter() -> None:
@@ -118,6 +127,18 @@ async def _lag_meter() -> None:
         t0 = time.time()
         await _a.sleep(1.0)
         _loop_lag["s"] = round(max(0.0, time.time() - t0 - 1.0), 2)
+        # SELF-HEAL every 5 s: a scheduler that died or went silent is
+        # restarted here, and the brain is re-armed off the event loop.
+        # Neither ever needs a manual restart again.
+        try:
+            if time.time() - _selfheal_gate["at"] > 5.0:
+                _selfheal_gate["at"] = time.time()
+                await clock.watchdog()
+                _heal["last"] = engine.heal()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("self-heal pass failed")
 
 
 async def _boot() -> None:
@@ -129,46 +150,84 @@ async def _boot() -> None:
         await feed.start()
         await engine.start()
         _spawn_history_seed()
+        _spawn_agent_autostart()
         await clock.start()
         log.info("application booted (feed=%s)", feed.mode)
     except Exception:
         log.exception("background boot failed — shell stays up")
 
 
+def _spawn_agent_autostart() -> None:
+    """Arm the local-agent downloader so it arrives without a click.
+
+    Runs in its own thread (the installer delays then retries with
+    backoff), never under pytest, and can be switched off with
+    PREDICT_NO_AUTO_AGENT=1 for constrained hosts.
+    """
+    import os as _os
+    import threading as _th
+    import time as _time
+
+    def work() -> None:
+        _time.sleep(20)                     # provisioning/settle first
+        if _os.environ.get("PYTEST_CURRENT_TEST"):
+            return
+        if _os.environ.get("PREDICT_NO_AUTO_AGENT") == "1":
+            log.info("agent auto-download disabled by PREDICT_NO_AUTO_AGENT")
+            return
+        try:
+            st = engine.agents.installer.start_auto()
+            log.info("agent auto-download armed: %s", st.get("state"))
+        except Exception:
+            log.exception("agent auto-download could not start")
+
+    _th.Thread(target=work, name="agent-autostart", daemon=True).start()
+
+
 def _spawn_history_seed() -> None:
-    """24h warm-history seed (app/history_seed.py): once a day, in
-    the background, once the engine is live — and only on a REAL
-    feed (a sim tape dressed as backtest history would be a lie)
-    while the settlement ledger is still thin."""
+    """Warm-history replay (app/warmup.py), in the background at boot.
+
+    Every subsystem is replayed walk-forward over the backfilled tape so
+    the ledger, forward P(up) buckets, advanced module board, subsystem
+    scorecards, meta-combiner and calibration rings are populated on the
+    first render instead of showing ``n=0 (needs ≥8)`` for days.  Runs once
+    per boot (rings are in-memory) and once a day for the durable tables.
+    """
     import os as _os
     import threading as _th
     import time as _time
 
     def work():
-        _time.sleep(30)                     # let the app settle first
+        _time.sleep(8)                      # let the app settle first
+        if _os.environ.get("PYTEST_CURRENT_TEST"):
+            engine.seed_info = {"state": "skipped-test"}
+            return
+        if _os.environ.get("PREDICT_SKIP_WARMUP") == "1":
+            engine.seed_info = {"state": "skipped-env"}
+            return
         try:
             stamp = "data/.history_seed_stamp"
             fresh = (_os.path.exists(stamp)
                      and _time.time() - _os.path.getmtime(stamp) < 86400)
+            # rings reset on restart, so the replay is always worth running;
+            # only the durable ledger/forward write is skipped when fresh
             rows = sum(len(v) for v in engine.ledger.rows.values())
-            if fresh and rows >= 20:
-                engine.seed_info = {"state": "fresh", "rows": rows}
-                return
-            if getattr(feed, "mode", "sim") != "binance":
-                engine.seed_info = {"state": "skipped-sim",
-                                    "why": "seed needs a real Binance tape"}
-                return
             engine.seed_info = {"state": "seeding"}
-            from .history_seed import seed_history
-            engine.seed_info = {"state": "done",
-                                **seed_history(engine, hours=24)}
+            from .warmup import warm_history
+            info = warm_history(engine, hours=168)
+            if fresh and rows >= 200:
+                info["state"] = ("fresh-sim" if info.get("family") == "sim"
+                                 else "fresh")
+                info["why"] = ("rings re-seeded on boot; durable tables "
+                               "already fresh")
+            engine.seed_info = info
             _os.makedirs("data", exist_ok=True)
             open(stamp, "a").close()
         except Exception:
-            log.exception("history seed failed")
+            log.exception("warm history replay failed")
             engine.seed_info = {"state": "failed"}
 
-    _th.Thread(target=work, daemon=True, name="history-seed").start()
+    _th.Thread(target=work, daemon=True, name="warm-history").start()
 
 
 @app.get("/api/history/seed")
@@ -309,14 +368,32 @@ def _git_commit() -> str:
 _COMMIT = _git_commit()
 
 
+_BOOT_TS = time.time()
+_heal: dict[str, Any] = {"last": None}
+
+
 @app.get("/api/health")
 async def health() -> dict:
     import time as _t
     age = round(_t.time() - getattr(engine, "last_window_ts", _t.time()), 1)
+    fw = getattr(getattr(engine, "brains", None), "fw", None)
     return {
         "ok": True,
         "commit": _COMMIT,
+        "uptime_s": round(_t.time() - _BOOT_TS, 1),
         "loop_lag_s": _loop_lag["s"],
+        # scheduler liveness: a dead/silent GRC clock is the difference
+        # between "live board" and "frozen board that still answers HTTP"
+        "clock": clock.status(),
+        "busy": bool(getattr(engine, "_busy", None) is not None
+                     and engine._busy.locked()),
+        "brain": {"state": getattr(fw, "state", None),
+                  "pass_age_s": (round(_t.time() - fw.last_pass_at, 1)
+                                 if getattr(fw, "last_pass_at", 0) else None),
+                  "load_ms": getattr(fw, "load_ms", None)},
+        "snapshot_ms": _snap_cache["ms"],
+        "warmup": getattr(engine, "seed_info", {}),
+        "heal": _heal["last"],
         "phase": engine.phase,
         "feed": feed.mode,
         "feed_stats": feed.stats(),
@@ -355,9 +432,74 @@ async def watchdog() -> JSONResponse:
     })
 
 
+def _clean_json(obj, bad: set[str] | None = None, path: str = ""):
+    """Replace NaN/±Inf with None (JSON has no such literals).
+
+    One stray NaN used to 500 the ENTIRE snapshot — every panel blank.
+    A single unavailable number must degrade to "—", not take the page
+    down; the offending path is logged once per boot so the cause is
+    still visible instead of silently papered over.
+    """
+    if isinstance(obj, float) and not math.isfinite(obj):
+        if bad is not None:
+            bad.add(path or "<root>")
+        return None
+    if isinstance(obj, dict):
+        return {k: _clean_json(v, bad, f"{path}.{k}" if path else str(k))
+                for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_clean_json(v, bad, f"{path}[{i}]") for i, v in enumerate(obj)]
+    return obj
+
+
+_NONFINITE_SEEN: set[str] = set()
+
+
+def _json_safe(payload):
+    bad: set[str] = set()
+    out = _clean_json(payload, bad)
+    new = {b.split(".")[:3].__str__() for b in bad} - _NONFINITE_SEEN
+    if new:
+        _NONFINITE_SEEN.update(new)
+        log.warning("non-finite numbers replaced with null at: %s",
+                    sorted(bad)[:8])
+    return out
+
+
+_snap_cache: dict[str, Any] = {"at": 0.0, "body": None, "bytes": b"", "ms": 0.0}
+_snap_lock = threading.Lock()
+SNAPSHOT_TTL_S = 0.75
+
+
+def _snapshot_payload() -> dict:
+    """Build (or reuse <0.75 s young) the snapshot.
+
+    Snapshot assembly is pure CPU (levels, charts, subsystems). Running it
+    inline on the event loop stalled every other request — including /ws
+    ticks and /api/health — for tens of seconds under load, and the UI
+    banner then said "ENGINE OFFLINE" while the process was healthy. The
+    route is now a plain `def` (FastAPI runs it in its threadpool) and the
+    result is memoised for 0.75 s with single-flight.
+    """
+    with _snap_lock:
+        now = time.time()
+        if _snap_cache["body"] is not None and now - _snap_cache["at"] < SNAPSHOT_TTL_S:
+            return _snap_cache["body"]
+        t0 = time.perf_counter()
+        body = _json_safe(engine.build_snapshot())
+        raw = json.dumps(body, separators=(",", ":")).encode()
+        _snap_cache.update(at=time.time(), body=body, bytes=raw,
+                           ms=round((time.perf_counter() - t0) * 1000, 1))
+        return body
+
+
 @app.get("/api/snapshot")
-async def snapshot() -> JSONResponse:
-    return JSONResponse(engine.build_snapshot())
+def snapshot() -> Response:          # sync -> threadpool (never blocks /ws)
+    _snapshot_payload()
+    with _snap_lock:
+        raw = _snap_cache["bytes"]
+    # pre-serialised: ~1 MB of JSON used to be re-encoded per request
+    return Response(content=raw, media_type="application/json")
 
 
 @app.get("/api/formula-traces")
@@ -423,7 +565,7 @@ async def explain_status() -> JSONResponse:
 
 
 @app.get("/api/brain/status")
-async def brain_status() -> JSONResponse:
+def brain_status() -> JSONResponse:
     """§3.4 five-step startup verification with reasons."""
     out = dict(engine.brains.status())
     # brain.md: label the odour channels with the formulas they carry
@@ -441,7 +583,7 @@ async def brain_status() -> JSONResponse:
 
 
 @app.get("/api/system/status")
-async def system_status() -> JSONResponse:
+def system_status() -> JSONResponse:
     """One glance: what is running, what is waiting, and why
     (old-app inspiration) — assembled from the subsystems' own state,
     never from configuration."""
@@ -523,10 +665,22 @@ async def system_status() -> JSONResponse:
             slot_list = list(slots)          # list-of-slots shape
         nconn = sum(1 for v in slot_list
                     if isinstance(v, dict) and v.get("status") == "connected")
+        # local-agent download state belongs on this row: the user asked
+        # for it to arrive by itself, so "is it downloading, and why not"
+        # must be answerable without opening another tab
+        try:
+            _au = eng.agents.installer.auto_status()
+            _loc = (f" · local agent {_au['state']}"
+                    + (f" (retry in {_au['next_try_in_s']}s)"
+                       if _au.get("next_try_in_s") else "")
+                    + (f": {_au['last_error'][:80]}" if _au.get("last_error")
+                       and _au["state"] == "failed" else ""))
+        except Exception:
+            _loc = ""
         row("agents", True,
-            "keyless mode — brain + formulas carry every vote"
-            if not nconn else f"{nconn} slot(s) connected · "
-            f"deadline {ag.get('deadline_s', '—')}s",
+            ("keyless mode — brain + formulas carry every vote"
+             if not nconn else f"{nconn} slot(s) connected · "
+             f"deadline {ag.get('deadline_s', '—')}s") + _loc,
             "ok")
     except Exception as exc:
         row("agents", False, f"error: {exc}", "err")
@@ -936,13 +1090,24 @@ async def history_days() -> JSONResponse:
 
 
 @app.get("/api/history/advanced")
-async def history_advanced(symbol: str = "BTCUSDT",
-                           tf: str = "tf3") -> JSONResponse:
-    """Per-module walk-forward accuracy for the advanced layer."""
+async def history_advanced(symbol: str = "BTC",
+                           tf: str = "tf1") -> JSONResponse:
+    """Per-module walk-forward accuracy for the advanced layer.
+
+    Accepts either the UI asset key (BTC) or the exchange symbol
+    (BTCUSDT); the old defaults (BTCUSDT/tf3) never matched an engine key,
+    so the scoreboard stayed on "Loading…" forever.
+    """
     from .config import SYMBOLS, TIMEFRAMES
-    return JSONResponse({"ok": True, **engine.advanced_history(
-        symbol if symbol in SYMBOLS else "BTCUSDT",
-        tf if tf in TIMEFRAMES else "tf3")})
+    sym = str(symbol or "").upper()
+    if sym not in SYMBOLS:
+        sym = str(symbol or "").upper().replace("USDT", "")
+    if sym not in SYMBOLS:
+        sym = "BTC"
+    t = str(tf or "").lower()
+    if t not in TIMEFRAMES:
+        t = "tf1"
+    return JSONResponse({"ok": True, **engine.advanced_history(sym, t)})
 
 
 @app.get("/api/history/day")

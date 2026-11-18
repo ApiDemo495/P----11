@@ -8,7 +8,11 @@ def test_toggle_covers_all_timeframes():
     assert 'id="seg-chart"' in HTML and 'data-chart="tv"' in HTML
     assert 'id="qtv-${tf}"' in JS and 'id="qbn-${tf}"' in JS  # per-card TV + Binance slots
     assert 'id="qc-${tf}"' in JS                     # own chart slot kept
-    assert 'fill(slot, tf)' in JS and 'bnEnsure' in JS  # TV per-TF; Binance lazy-built
+    # The four TF cards now ALWAYS draw the server tape (the only renderer
+    # that carries entry/TP/SL markers and cannot be blank); the big chart
+    # keeps the three-way toggle.
+    assert 'if (o) o.style.display = "";' in JS
+    assert 'bnEnsure' in JS and 'fill(wrap, S.focusTf)' in JS
     assert 'BINANCE:BTCUSDT' in JS and 'TV_INT' in JS
     assert '"tf1": "5"' not in JS or 'tf1: "5"' in JS  # interval map exists
     assert 'grid.style.display = tv' not in JS       # grid no longer hidden in TV mode

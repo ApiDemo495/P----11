@@ -131,8 +131,14 @@ class SettlementLedger:
                conf: float | None = None, record_id: str | None = None,
                first_touch: str | None = None,
                barriers_available: bool | None = None,
-               ambiguous: bool = False) -> dict:
-        """Record one settlement; ``record_id`` makes inserts idempotent."""
+               ambiguous: bool = False,
+               persist: bool = True) -> dict:
+        """Record one settlement; ``record_id`` makes inserts idempotent.
+
+        ``persist=False`` is for bulk warm-history replay: rows are added
+        in memory and written once by the caller (``save()``). Without it
+        a 500-window replay performed 500 fsyncs and boot stalled.
+        """
         entry_value, settle_value = _positive(entry), _positive(settle_price)
         try:
             side_value = int(side)
@@ -195,6 +201,14 @@ class SettlementLedger:
             bucket.append(row)
             if len(bucket) > 500:
                 del bucket[:-500]
+            if not persist:
+                self.settle_calls += 1
+                self.last_settle_ts = row["ts"]
+                self.last_settle = {"symbol": str(symbol), "tf": str(tf),
+                                    "result": result, "side": side_value,
+                                    "entry": row["entry"]}
+                self.totals[result] = self.totals.get(result, 0) + 1
+                return {**row, "_persisted": True, "_deferred": True}
             if not self.save():
                 self.rows[key] = old_rows
                 if not old_rows:
@@ -245,8 +259,22 @@ class SettlementLedger:
         wins_bps = [value for value in bps if value > 0]
         loss_bps = [-value for value in bps if value < 0]
         target_first = resolved.count("target")
+        # REGIME-SCOPED EXPECTANCY. The all-time mean describes the whole
+        # tape history — after a feed/model fix that history no longer
+        # describes the tape in front of us, and a single all-time number
+        # kept the gate shut forever ("always NO TRADE"). Report both: the
+        # recent window (last 60 settled) for the live gate, all-time for
+        # context, each with its own n.
+        recent = bps[-60:]
         return {
             "exp_bps": round(sum(bps) / len(bps), 2) if bps else None,
+            "exp_bps_recent": (round(sum(recent) / len(recent), 2)
+                               if recent else None),
+            "exp_n_recent": len(recent),
+            "exp_sd_recent": (round((sum((x - sum(recent) / len(recent)) ** 2
+                                        for x in recent) / len(recent)) ** 0.5, 2)
+                              if len(recent) > 1 else None),
+            "exp_n_all": len(bps),
             "payoff": (round((sum(wins_bps) / len(wins_bps)) /
                              (sum(loss_bps) / len(loss_bps)), 3)
                        if wins_bps and loss_bps else None),

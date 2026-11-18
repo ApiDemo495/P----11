@@ -29,8 +29,13 @@ def test_emotion_dominant_ranks_by_deviation_not_raw_max():
         dom = em["dominant"]
         assert dom and 1 <= dom["id"] <= 21
         ev = {int(k): v for k, v in em["emotions"].items()}
-        # the crowned channel must be the deviation-from-neutral leader
-        dev = {i: abs(ev[i] - 0.5) * 2 for i in range(1, 22)}
+        # the crowned channel must be the deviation-from-ITS-OWN-neutral
+        # leader (discrete emotions are 0-based, states are 0.5-based)
+        from app.emotion import CHANNELS
+        def _dev(i):
+            _n = CHANNELS[i][3]
+            return abs(ev[i] - _n) / (1.0 - _n if _n == 0.0 else 0.5)
+        dev = {i: _dev(i) for i in range(1, 22)}
         assert dom["intensity"] == max(dev.values()) or \
             abs(dom["intensity"] - max(dev.values())) < 0.01
         assert dom["runner_up"]["intensity"] <= dom["intensity"] + 1e-9
