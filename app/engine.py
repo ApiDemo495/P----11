@@ -6164,9 +6164,20 @@ class PredictionEngine:
                                 _why.append(
                                     f"tape veto {float(_ds.get('tape_z') or 0):.2f}× "
                                     f"noise against the call")
+                            _ev = [str(e.get("type")) for e in
+                                   (getattr(cyc, "events", None) or [])]
+                            if "below_ratio_floor" in _ev and \
+                                    not any("ratio" in x for x in _why):
+                                _why.append("ratio below 1:1 at lock "
+                                            "(below_ratio_floor event)")
+                            if "sl_crossed" in _ev:
+                                _why.append("stop was crossed in this window")
                             if not _why:
-                                _why.append("tier set at lock — see ladder and "
-                                            "calibration n")
+                                # never a bare label: print the window's own
+                                # event trace so the cut is auditable
+                                _why.append("tier cut at lock by "
+                                            + (", ".join(_ev[-3:]) or
+                                               "an unrecorded rule"))
                             d["tier_why"] = "; ".join(_why)
                         d["execution_blocked_by"] = (
                             [] if d["execution_eligible"] else
