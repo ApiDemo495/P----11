@@ -86,6 +86,9 @@ def test_lock_checkpoint_is_atomic_json(tmp_path, monkeypatch):
     from app.feed import MarketFeed
 
     monkeypatch.chdir(tmp_path)
+    # the suite keeps manufactured locks off the app's file; this test is
+    # specifically about the on-disk checkpoint, so it writes the real path
+    monkeypatch.delenv("PRED_LOCKS_PATH", raising=False)
     eng = PredictionEngine(MarketFeed(), emit=lambda _message: None)
     eng.locks.clear()
     eng.locks[("BTC", "tf1")] = {"symbol": "BTC", "tf": "tf1",

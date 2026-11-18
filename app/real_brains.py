@@ -45,6 +45,10 @@ _STATE_DIR = {"accumulation": 1, "markup": 1, "distribution": -1,
               "markdown": -1, "ranging": 0}
 
 
+def _clamp01(v: float) -> float:
+    return 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
+
+
 def _blocks(n: int, k: int) -> list[np.ndarray]:
     """Split range(n) into k contiguous index blocks."""
     edges = np.linspace(0, n, k + 1).astype(int)
@@ -79,11 +83,31 @@ class RealCircuit:
             x = np.tanh(self.A @ x + inp)
         return x
 
+    def respond(self, x: np.ndarray, inp: np.ndarray,
+                steps: int = 2) -> np.ndarray:
+        """INPUT-DRIVEN response = driven state − undriven state.
+
+        The recurrent pass always settles onto its own pattern; reading raw
+        activations therefore reported the fixed point, not the signal. On a
+        bullish and a bearish window DB-3 returned the identical +0.3059.
+        Subtracting the zero-input pass leaves only what the input caused.
+        """
+        base = self.sweep(x.copy(), np.zeros_like(inp), steps=steps)
+        driven = self.sweep(x.copy(), inp, steps=steps)
+        return driven - base
+
     def act(self, x: np.ndarray, name: str) -> float:
         g = self.groups.get(name)
         if g is None or len(g) == 0:
             return 0.0
         return float(np.mean(x[g]))
+
+    def act_delta(self, d: np.ndarray, name: str) -> float:
+        """Mean input-driven change of a named group (signed)."""
+        g = self.groups.get(name)
+        if g is None or len(g) == 0:
+            return 0.0
+        return float(np.mean(d[g]))
 
 
 class RealBrains:
@@ -194,84 +218,199 @@ class RealBrains:
     # ------------------------------------------------------------ evaluate
     def evaluate_instance(self, bid: str, symbol: str, tf: str,
                           thing2: dict, advance: bool = True) -> dict:
+        """Run one brain on one window.
+
+        Every readout is taken from the INPUT-DRIVEN response (`d`), not from
+        the raw activation field: the four circuits settle onto their own
+        fixed patterns, so raw means described the wiring rather than the
+        window (DB-3 printed the same state for opposite inputs, DB-4 printed
+        ~0 and DB-2's readout was pinned to its dominant hemisphere). `d` is
+        the difference between the driven pass and the undriven pass, i.e.
+        exactly what this window's inputs caused.
+        """
         c = self.circuits[bid]
         x0 = c.state_for(symbol, tf)
-        x = c.sweep(x0.copy(), self._input_vector(c, thing2),
-                    steps=2)
+        inp = self._input_vector(c, thing2)
+        d = c.respond(x0, inp, steps=2)
+        x = c.sweep(x0.copy(), inp, steps=2)
         if advance:
             c.states[(symbol, tf)] = x
 
+        def _mean(name: str) -> float:
+            return c.act_delta(d, name)
+
+        def _pos_neg(a: float, b: float) -> float:
+            """Signed contrast in [−1,1] that cannot divide by zero."""
+            return (a - b) / (abs(a) + abs(b) + 1e-9)
+
         if bid == "DB-1":
-            app = float(np.sum(x[c.groups["approach"]])) \
-                if len(c.groups["approach"]) else 0.0
-            avo = float(np.sum(x[c.groups["avoid"]])) \
-                if len(c.groups["avoid"]) else 0.0
-            signal = math.tanh(2.0 * (app - avo) / (abs(app) + abs(avo)
-                                                    + 1e-9))
-            mb = c.groups["mbon"]
-            extra = {"pattern": signal,
+            # Market Pattern Analyzer: MBON approach vs avoid populations
+            app = _mean("approach")
+            avo = _mean("avoid")
+            # Measured: on this connectome the 96 MBONs shift as one block —
+            # the approach/avoid difference is ~1% of their common motion. So
+            # the decision variable is the input-driven shift of the pattern
+            # OUTPUT layer, and the split is reported separately (selectivity)
+            # instead of being passed off as the signal.
+            sig_mbon = _mean("mbon")
+            signal = math.tanh(3.0 * sig_mbon)
+            extra = {"pattern": round(signal, 5),
+                     "approach": round(app, 5), "avoid": round(avo, 5),
+                     "selectivity": round(_pos_neg(app, avo), 5),
                      "experience": 0.5,
                      "state_dist": None,
-                     # legacy B1 valence hook consumes 12 pattern
-                     # readouts in [0,1] — real MBON activities mapped
-                     "pattern_act": [round(float((v + 1.0) / 2.0), 5)
-                                     for v in x[mb][:12]]}
+                     "response": round(float(np.abs(d[c.groups["mbon"]]).mean())
+                                       if len(c.groups.get("mbon", [])) else 0.0,
+                                       6),
+                     "pattern_act": [round(float(v), 5)
+                                     for v in d[c.groups["mbon"]][:12]]
+                     if len(c.groups.get("mbon", [])) else []}
         elif bid == "DB-2":
-            pos = c.act(x, "lh_pos")
-            neg = c.act(x, "lh_neg")
-            exp = (pos + 1.0) / ((pos + 1.0) + (neg + 1.0) + 1e-9)
+            # User Experience Predictor: lateral-horn reward vs risk halves
+            pos = _mean("lh_pos")
+            neg = _mean("lh_neg")
+            # tanh keeps a one-sided window near (±0.96, not exactly ±1:
+            # a saturating readout cannot report "how sure")
+            # how hard this window pushed the reward/risk halves at all, so
+            # a mild window reports a mild expectation instead of ±0.96
+            strength = math.tanh(4.0 * (abs(pos) + abs(neg)))
+            exp = 0.5 + 0.5 * math.tanh(2.0 * _pos_neg(pos, neg)) * strength
             signal = (exp - 0.5) * 2.0
             extra = {"pattern": 0.0, "experience": round(exp, 5),
-                     "state_dist": None}
+                     "state_dist": None,
+                     "response": round(float(np.abs(d[c.groups["lh_pos"]]).mean()
+                                             + np.abs(d[c.groups["lh_neg"]]).mean())
+                                       / 2.0, 6)}
         elif bid == "DB-3":
+            # Market State Observer: the 5 central-complex groups are the 5
+            # market states. The posterior is a softmax over the SIGNED,
+            # input-driven response (a state is "on" when the input pushes
+            # that group up relative to the others) — the old version used
+            # |raw activation|, which is a constant of the wiring.
             from .config import BRAIN_MARKET_STATES
             blocks = _blocks(len(c.groups["cx"]), 5)
-            acts = [float(np.mean(x[b])) if len(b) else 0.0
-                    for b in blocks]
-            mags = [abs(a) + 0.01 for a in acts]
-            tot = sum(mags) or 1.0
-            dist = [m / tot for m in mags]
+            acts = [float(np.mean(d[b])) if len(b) else 0.0 for b in blocks]
+            _spread = max((abs(a) for a in acts), default=0.0)
+            temp = max(1e-9, 0.35 * _spread)
+            z = [a / temp for a in acts]
+            m = max(z) if z else 0.0
+            e = [math.exp(_z - m) for _z in z]
+            tot = sum(e) or 1.0
+            dist = [v / tot for v in e]
             dom = int(np.argmax(dist))
-            signal = _STATE_DIR.get(BRAIN_MARKET_STATES[dom], 0) \
-                * dist[dom]
+            # expected directional bias over the whole posterior: a flat
+            # posterior must produce ~0, a confident one the state's side
+            signal = sum(_STATE_DIR.get(BRAIN_MARKET_STATES[i], 0) * dist[i]
+                         for i in range(len(dist)))
+            _dist = {BRAIN_MARKET_STATES[i]: round(dist[i], 4)
+                     for i in range(5)}
+            # keep the printed posterior a distribution: put the rounding
+            # residue on the leading state instead of leaving a 0.9999
+            _lead = BRAIN_MARKET_STATES[dom]
+            _dist[_lead] = round(_dist[_lead] + (1.0 - sum(_dist.values())), 4)
             extra = {"pattern": 0.0, "experience": 0.5,
-                     "state_dist": {BRAIN_MARKET_STATES[i]:
-                                    round(dist[i], 4) for i in range(5)},
+                     "state_dist": _dist,
                      "dominant": BRAIN_MARKET_STATES[dom],
-                     "p_dominant": round(dist[dom], 4)}
+                     "p_dominant": round(dist[dom], 4),
+                     # a 5-way softmax at 0.27 is not a state, it is a shrug
+                     "confident": bool(dist[dom] >= 0.40),
+                     "response": round(float(np.abs(d[c.groups["cx"]]).mean())
+                                       if len(c.groups.get("cx", [])) else 0.0,
+                                       6)}
         else:  # DB-4
+            # Auto-Learning Controller. Its input lands in the DAN blocks, so
+            # its readout MUST come from the same population (it used to read
+            # DN, which the input never touches, hence the permanent ±0.00).
             from .config import WEIGHT_IDS
-            dn = c.groups["dn"]
-            blocks = _blocks(len(dn), len(WEIGHT_IDS))
-            base = float(np.mean(x[dn])) if len(dn) else 0.0
+            dan = c.groups["dan"]
+            blocks = _blocks(len(dan), len(WEIGHT_IDS))
+            base = float(np.mean(d[dan])) if len(dan) else 0.0
             wadj = {}
             for i, wid in enumerate(WEIGHT_IDS):
                 b = blocks[i]
-                wadj[wid] = round((float(np.mean(x[b])) - base)
+                wadj[wid] = round((float(np.mean(d[b])) - base)
                                   if len(b) else 0.0, 5)
-            signal = math.tanh(4.0 * (sum(wadj.values())
-                                      / max(1, len(wadj))))
+            spread = max((abs(v) for v in wadj.values()), default=0.0)
+            signal = math.tanh(8.0 * (sum(wadj.values()) / max(1, len(wadj))))
             extra = {"pattern": 0.0, "experience": 0.5,
-                     "state_dist": None, "weight_adj": wadj}
+                     "state_dist": None, "weight_adj": wadj,
+                     "believed": round(base, 6),
+                     "response": round(float(np.abs(d[dan]).mean())
+                                       if len(dan) else 0.0, 6),
+                     # a controller whose per-formula deltas are all equal has
+                     # nothing to say about any of them
+                     "informative": bool(spread > 1e-4)}
 
-        hormones = {
-            "dopamine": round(0.5 + 0.5 * c.act(x, "dan"), 4)
-            if "dan" in c.groups else 0.5,
-            "serotonin": round(0.5 + 0.5 * c.act(x, "mbon"), 4)
-            if "mbon" in c.groups else 0.5,
-            "octopamine": round(0.5 + 0.5 * c.act(x, "lh_pos"), 4)
-            if "lh_pos" in c.groups else 0.5,
-            "tyramine": round(0.5 + 0.5 * c.act(x, "dn"), 4)
-            if "dn" in c.groups else 0.5,
-        }
+        # ---- Thing 1 hormones: input-driven tone of each population ------
+        def _h(name: str) -> float:
+            if name not in c.groups:
+                return 0.5
+            return round(_clamp01(0.5 + 2.0 * _mean(name)), 4)
+
+        hormones = {"dopamine": _h("dan"), "serotonin": _h("mbon"),
+                    "octopamine": _h("lh_pos"), "tyramine": _h("dn")}
         extra.setdefault("pattern_act", [])
+        response = float(extra.get("response") or 0.0)
+        energy = float(np.abs(inp).mean())
         return {"id": bid, "role": c.role,
                 "signal": round(max(-1.0, min(1.0, float(signal))), 5),
                 "h_signal": round(max(-1.0, min(1.0, float(signal))), 5),
                 "hormones": hormones,
                 "neurons": c.n, "synapses": c.edges,
                 "backend": "flywire-v783-real",
+                # per-brain honesty: is it being driven, and did it answer?
+                "ready": True,
+                "input_energy": round(energy, 6),
+                "response": round(response, 6),
+                "abstain": bool(energy < 1e-9 or response < 1e-7),
                 **extra}
+
+    # ------------------------------------------------------------ self-test
+    @staticmethod
+    def _probe_inputs(sign: float) -> dict:
+        """Deterministic bullish/bearish window used only for the self-test."""
+        return {
+            "norm_returns20": [sign * ((i % 5) - 2) / 2.0 for i in range(20)],
+            "tp_dist": 2.0 if sign > 0 else 0.5,
+            "sl_dist": 0.5 if sign > 0 else 2.0,
+            "cc_inputs": [sign * 0.8, -sign * 0.6, sign * 0.4,
+                          -sign * 0.2, sign * 0.1],
+            "formula_perf": {i: float(np.tanh(sign * (i - 18) / 10.0))
+                             for i in range(1, 36)},
+            "news_value": sign * 0.7,
+        }
+
+    def self_test(self) -> dict:
+        """Drive every brain with a bullish and a bearish window.
+
+        This is the machinery behind "all four brains work": a brain that
+        cannot tell those two windows apart is not doing its job, whatever
+        its activation field looks like. `advance=False` so the probe never
+        leaks into a real symbol's state.
+        """
+        bull_in = self._probe_inputs(1.0)
+        bear_in = self._probe_inputs(-1.0)
+        out = {}
+        for bid in self.circuits:
+            b = self.evaluate_instance(bid, "__selftest__", "probe",
+                                       bear_in, advance=False)
+            u = self.evaluate_instance(bid, "__selftest__", "probe",
+                                       bull_in, advance=False)
+            sb, su = float(b["signal"]), float(u["signal"])
+            flips = (su > 1e-3 and sb < -1e-3) or (su < -1e-3 and sb > 1e-3)
+            out[bid] = {
+                "bull": round(su, 4), "bear": round(sb, 4),
+                "separation": round(abs(su - sb), 4),
+                "input_energy": u.get("input_energy"),
+                "response": u.get("response"),
+                "responds": bool(u.get("response", 0.0) > 1e-7
+                                 and abs(su - sb) > 1e-3),
+                "flips": bool(flips),
+                "dominant_state": u.get("dominant"),
+                "p_dominant": u.get("p_dominant"),
+                "informative": u.get("informative"),
+            }
+        return out
 
     def summary(self) -> dict:
         return {"backend": "flywire-v783-real",

@@ -50,9 +50,19 @@ def test_e2_not_pegged_on_a_rising_tape():
 
 
 def test_lock_emotion_is_human_text_not_a_dict():
+    """The LOCKED banner must print the emotion's NAME, never a dict repr."""
+    from app.engine import _lock_emotion_text
+    dom = {"id": 12, "name": "Loss-aversion pressure", "intensity": 0.6234,
+           "held_s": 3, "tied": 0}
+    text = _lock_emotion_text(dom)
+    assert text == "Loss-aversion pressure · 62% intensity"
+    assert "{" not in text and "'" not in text
+    # a dict without a name still never prints the mapping
+    assert _lock_emotion_text({"id": 7}) == "E7 · 0% intensity"
+    assert _lock_emotion_text(None) == ""
     eng = (ROOT / "app" / "engine.py").read_text()
-    assert 'isinstance(_dom, dict)' in eng
-    assert 'f"E{_dom[' in eng and "intensity" in eng
+    assert 'isinstance(_dom, dict)' not in eng   # single formatter, no inline copy
+    assert "_lock_emotion_text(_dom)" in eng
 
 
 def test_unissued_cycles_track_target_hits():

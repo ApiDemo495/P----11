@@ -67,7 +67,24 @@ def test_snapshot_carries_lock_feed_ledger_watchdog():
     eng, _f, _e = make_engine(); run(_boot(eng))
     now = time.time()
     res = eng._event_result("BTC", "tf1")
+    # this test is about the SNAPSHOT carrying the lock, so it must not
+    # depend on whether the boot tape happened to produce a flat signal
+    # (a FLAT call correctly refuses to lock and the snapshot is empty)
+    res = dict(res)
+    res.update({"direction": int(res.get("direction") or 1), "issued": True,
+                "tier": "full", "confidence": max(0.5, float(
+                    res.get("confidence") or 0.0))})
+    # the boot may already hold this pair's lock for its full W horizon
+    # (mid-window refashes never relock) — clear it so this test's own
+    # deterministic call is the one the snapshot must show
+    eng.locks.pop(("BTC", "tf1"), None)
+    # a boot-time emergency re-lock can hold the 30 s halt gate over this
+    # symbol; the snapshot plumbing is the subject here, not that gate
+    getattr(eng, "_halt_until", {}).pop("BTC", None)
     eng.fresh_cycle("BTC", "tf1", now, res, reason="initial_lock")
+    # snapshot["systems"] is the display pack, filled by a compute pass
+    # (a real GRC locks and then computes) — refresh it before asserting
+    eng.compute_asset("BTC", record=False, display=True)
     snap = eng.build_snapshot()
     assert "feed" in snap and "label" in snap["feed"]
     assert snap["feed"]["simulated"] is True           # honest sim label

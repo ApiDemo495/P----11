@@ -290,6 +290,34 @@ def _calibration_delta(audit: dict) -> float:
     return round(max(-0.15, min(0.15, gap)), 4)
 
 
+def _locks_path() -> str:
+    """Where the Signal Lock Protocol persists frozen contracts.
+
+    PRED_LOCKS_PATH lets the test suite keep its manufactured locks out of
+    the running app's file: engines in one pytest session used to inherit a
+    lock written by an earlier test (old price, old levels), and the fresh
+    cycle then found TP1 already satisfied — a failure with no code change
+    and no relation to the test's subject.
+    """
+    return os.environ.get("PRED_LOCKS_PATH") or "data/locks.json"
+
+
+def _lock_emotion_text(dom) -> str:
+    """Human text for the LOCKED banner's emotion field.
+
+    `dominant` is a dict (deviation ranking carries the name, the channel
+    id, the citation and the tie count). Handing that dict to an f-string
+    leaked a raw Python repr into the banner; this is the one place that
+    turns it into words, and it never prints a dict.
+    """
+    if isinstance(dom, dict):
+        name = (dom.get("name") or (f"E{dom['id']}" if dom.get("id")
+                                    else "unknown emotion"))
+        inten = float(dom.get("intensity") or 0.0)
+        return f"{name} · {inten:.0%} intensity"
+    return str(dom or "")
+
+
 class PredictionEngine:
     def __init__(
         self,
@@ -746,8 +774,13 @@ class PredictionEngine:
         }
 
     def _apply_brain4(self, symbol: str, tf: str) -> None:
-        """B4 Auto-Learning Controller: omega *= (1 + 0.01 * (A_DN - 0.5)),
-        applied on top of the reward rule, then clamped + renormalized."""
+        """B4 Auto-Learning Controller: omega *= (1 + 0.01 * adj[fid]).
+
+        adj is now the per-formula INPUT-DRIVEN delta of DB-4's DAN blocks
+        (the population the input actually reaches). It used to be read off
+        DN, which the input never touches, so every adjustment was 0.0 —
+        a controller with no output. None = not informative this window.
+        """
         adj = self.brain_weight_adj.get((symbol, tf))
         if not adj:
             return
@@ -1379,15 +1412,26 @@ class PredictionEngine:
                 "values": {i["id"]: round(i.get("signal", 0.0), 5)
                            for i in br["instances"]},
                 "instances": [
-                    {k: (round(v, 5) if isinstance(v, float) else v)
-                     for k, v in inst.items() if k != "weight_adj"}
+                    {k: (round(v, 5) if isinstance(v, float) else
+                         ({kk: round(vv, 5) if isinstance(vv, float) else vv
+                           for kk, vv in v.items()} if isinstance(v, dict) else v))
+                     for k, v in inst.items() if k != "pattern_act"}
                     for inst in br["instances"]
                 ],
                 "hormones_avg": {k: round(v, 5) for k, v in br["hormones_avg"].items()},
                 "dominant": br["dominant"],
                 "p_dominant": br["p_dominant"],
                 "state_dist": br["state_dist"],
+                "state_confident": br.get("state_confident"),
                 "experience": round(br["experience"], 5),
+                "voters": br.get("voters"),
+                "abstained": br.get("abstained") or [],
+                "spread": br.get("spread"),
+                "agreement_count": br.get("agreement_count"),
+                "votes": br.get("votes"),
+                # what the controller wanted to change, and why it could not
+                "weight_adj": br.get("weight_adj"),
+                "weight_adj_reason": br.get("weight_adj_reason"),
             }
             emotion_agg = {
                 "aggregate": cerc_sync[tf],
@@ -1410,6 +1454,17 @@ class PredictionEngine:
                 "directions": em["directions"],
                 "rtp": em["rtp"],
                 "tedr": em["tedr"],
+                # rebuilt model (see app/emotion.py): every block carries its
+                # own citation so the panel can print what it is showing
+                "model": em.get("model"),
+                "core_affect": em.get("core_affect"),
+                "pad": em.get("pad"),
+                "panas": em.get("panas"),
+                "ekman": em.get("ekman"),
+                "primary_emotion": em.get("primary_emotion"),
+                "fear_greed": em.get("fear_greed"),
+                "action_tendency": em.get("action_tendency"),
+                "risk": em.get("risk"),
                 # advice §5: measured features + print accounting (D-7)
                 "features": em.get("features") or {},
                 "zero_reasons": em.get("zero_reasons") or {},
@@ -1418,15 +1473,35 @@ class PredictionEngine:
                            "note": "quote prints excluded from volume/side stats"},
             }
             # Section 22: human-readable reasoning, not just numbers
+            from .emotion import CHANNELS as _ECH
+            _neutral = {i: _ECH[i][3] for i in _ECH}
             _top_e = sorted(em["emotions"].items(),
-                            key=lambda kv: -abs(kv[1]))[:4]
+                            key=lambda kv: -abs(kv[1] - _neutral[int(kv[0])]))[:4]
             _eparts = [
-                f"E{eid} {v:+.2f}{'▲' if em['directions'].get(eid, 0) > 0 else '▼' if em['directions'].get(eid, 0) < 0 else '·'}"
-                for eid, v in _top_e if abs(v) > 0.01
+                f"{_ECH[int(eid)][1]} {v:.2f}"
+                f"{'▲' if em['directions'].get(int(eid), 0) > 0 else '▼' if em['directions'].get(int(eid), 0) < 0 else '·'}"
+                for eid, v in _top_e
+                if abs(v - _neutral[int(eid)]) > 0.02
             ]
+            _pe = em.get("primary_emotion") or {}
+            _fg = em.get("fear_greed") or {}
+            _at = em.get("action_tendency") or {}
+            _ca = em.get("core_affect") or {}
             emotion_agg["narrative"] = (
-                ("Dominant flows: " + "; ".join(_eparts) + ". ") if _eparts else
-                "All 22 emotion channels flat. "
+                (f"Feels {_pe.get('name', '?')} "
+                 f"({100 * float(_pe.get('intensity') or 0):.0f}% prototype "
+                 f"match, runner-up "
+                 f"{( _pe.get('runner_up') or {}).get('name', '—')}); "
+                 f"valence {float(_ca.get('valence') or 0):+.2f}, "
+                 f"arousal {float(_ca.get('arousal') or 0):.2f}; "
+                 f"fear & greed {_fg.get('index', '—')} "
+                 f"({_fg.get('label', '—')}, "
+                 f"{round(100 * float(_fg.get('measured_weight') or 0))}% of "
+                 f"the published weighting measured); action tendency "
+                 f"{_at.get('name', '—')}. ") if _pe else ""
+            ) + (
+                ("Strongest channels: " + "; ".join(_eparts) + ". ") if _eparts else
+                "All 21 channels sit at their neutral reading. "
             ) + (
                 f"Net emotion [{em.get('net_emotion', 0.0):+.3f}] "
                 f"({em.get('breadth', {}).get('bull', 0)}▲/"
@@ -1508,79 +1583,85 @@ class PredictionEngine:
                 "double_check": None,
                 "lock": dict(self.locks.get((symbol, tf)) or {}),
             }
-            if record:
-                # reward-rule storage: the 28 weighted components only
-                # (DRHE is a multiplier, not a rewarded signal)
-                comp_w = {fid: comp[fid] for fid in WEIGHT_IDS}
-                self.cci.store_signals(symbol, tf, comp_w)
-                self.prev_comp[(symbol, tf)] = comp_w
-                self.prev_brain_signals[(symbol, tf)] = [
-                    inst["h_signal"] for inst in br["instances"]
-                ]
-                self.prev_emotions[(symbol, tf)] = (
-                    em["emotions"], em["directions"], float(em.get("cerc", 0.0)))
-                _prev_p = dict(phys["values"])
-                _prev_p[22] = float(phys["ufp"]["value"])
-                self.prev_physics[(symbol, tf)] = _prev_p
-                # F21 sparkline: the aggregator's own adjusted output
-                self.hist.ring(
-                    self.hist.tf_key(symbol, tf, "fspark21"), 100
-                ).append(pack["cci_adjusted"])
-                # GRC-lag rings consumed by the emotion system
-                for ring_name, val in em["lag_values"].items():
+            if record or display:
+                # learning state is written ONLY by a recording pass.
+                # The display payload below must NOT be gated behind it:
+                # ANALYSE computes with record=False, so the dashboard used
+                # to show the previous recording pass's systems block —
+                # stale lock, null ladder, panels contradicting the chart.
+                if record:
+                    # reward-rule storage: the 28 weighted components only
+                    # (DRHE is a multiplier, not a rewarded signal)
+                    comp_w = {fid: comp[fid] for fid in WEIGHT_IDS}
+                    self.cci.store_signals(symbol, tf, comp_w)
+                    self.prev_comp[(symbol, tf)] = comp_w
+                    self.prev_brain_signals[(symbol, tf)] = [
+                        inst["h_signal"] for inst in br["instances"]
+                    ]
+                    self.prev_emotions[(symbol, tf)] = (
+                        em["emotions"], em["directions"], float(em.get("cerc", 0.0)))
+                    _prev_p = dict(phys["values"])
+                    _prev_p[22] = float(phys["ufp"]["value"])
+                    self.prev_physics[(symbol, tf)] = _prev_p
+                    # F21 sparkline: the aggregator's own adjusted output
                     self.hist.ring(
-                        self.hist.tf_key(symbol, tf, ring_name), HIST_EMOTION_LAG
-                    ).append(val)
-                self.hist.ring(
-                    self.hist.tf_key(symbol, tf, "compo"), HIST_COMPOSITE_EMOTION
-                ).append(em["cerc"])
-                # news polarity series for the E20 correlation seam
-                self.news_polarity.append(news_agg.get("polarity", 0))
-                # --- sparklines (last 100 GRCs) for the formula panels -----
-                for f in FORMULA_FUNCTIONS:
+                        self.hist.tf_key(symbol, tf, "fspark21"), 100
+                    ).append(pack["cci_adjusted"])
+                    # GRC-lag rings consumed by the emotion system
+                    for ring_name, val in em["lag_values"].items():
+                        self.hist.ring(
+                            self.hist.tf_key(symbol, tf, ring_name), HIST_EMOTION_LAG
+                        ).append(val)
                     self.hist.ring(
-                        self.hist.tf_key(symbol, tf, f"fspark{f}"), 100
-                    ).append(raws[tf].get(f, 0.0))
-                self.hist.ring(
-                    self.hist.tf_key(symbol, tf, "fspark28"), 100
-                ).append(arc)
-                self.hist.ring(
-                    self.hist.tf_key(symbol, tf, "fspark30"), 100
-                ).append(pcv)
-                # physics sparklines P1..P21 + P22 (UFP) + accuracies
-                pvals = phys["values"]
-                for pid in range(1, 22):
+                        self.hist.tf_key(symbol, tf, "compo"), HIST_COMPOSITE_EMOTION
+                    ).append(em["cerc"])
+                    # news polarity series for the E20 correlation seam
+                    self.news_polarity.append(news_agg.get("polarity", 0))
+                    # --- sparklines (last 100 GRCs) for the formula panels -----
+                    for f in FORMULA_FUNCTIONS:
+                        self.hist.ring(
+                            self.hist.tf_key(symbol, tf, f"fspark{f}"), 100
+                        ).append(raws[tf].get(f, 0.0))
                     self.hist.ring(
-                        self.hist.tf_key(symbol, tf, f"pspark{pid}"), 100
-                    ).append(pvals[pid])
-                self.hist.ring(
-                    self.hist.tf_key(symbol, tf, "pspark22"), 100
-                ).append(phys["ufp"]["value"])
-                # Per-channel accuracy is graded in the reward phase above,
-                # against the PREVIOUS pass that preceded this realized move.
-                # This pass only updates the sparkline, not its own accuracy.
-                for eid, ev in em["emotions"].items():
+                        self.hist.tf_key(symbol, tf, "fspark28"), 100
+                    ).append(arc)
                     self.hist.ring(
-                        self.hist.tf_key(symbol, tf, f"emospark{eid}"), 100
-                    ).append(ev)
-                # E22 (CERC) sparkline — not part of the emotions dict
-                self.hist.ring(
-                    self.hist.tf_key(symbol, tf, "emospark22"), 100
-                ).append(em["cerc"])
-                # --- System Co-relation series (last 50 GRCs) --------------
-                for i, inst in enumerate(br["instances"]):
+                        self.hist.tf_key(symbol, tf, "fspark30"), 100
+                    ).append(pcv)
+                    # physics sparklines P1..P21 + P22 (UFP) + accuracies
+                    pvals = phys["values"]
+                    for pid in range(1, 22):
+                        self.hist.ring(
+                            self.hist.tf_key(symbol, tf, f"pspark{pid}"), 100
+                        ).append(pvals[pid])
                     self.hist.ring(
-                        self.hist.tf_key(symbol, tf, f"corr_db{i}"), 50
-                    ).append(inst["h_signal"])
-                self.hist.ring(
-                    self.hist.tf_key(symbol, tf, "corr_em"), 50
-                ).append(cerc_sync[tf])
-                self.hist.ring(
-                    self.hist.tf_key(symbol, tf, "corr_ph"), 50
-                ).append(physics_sync[tf])
-                self.hist.ring(
-                    self.hist.tf_key(symbol, tf, "corr_cci"), 50
-                ).append(pack["cci_adjusted"])
+                        self.hist.tf_key(symbol, tf, "pspark22"), 100
+                    ).append(phys["ufp"]["value"])
+                    # Per-channel accuracy is graded in the reward phase above,
+                    # against the PREVIOUS pass that preceded this realized move.
+                    # This pass only updates the sparkline, not its own accuracy.
+                    for eid, ev in em["emotions"].items():
+                        self.hist.ring(
+                            self.hist.tf_key(symbol, tf, f"emospark{eid}"), 100
+                        ).append(ev)
+                    # E22 (CERC) sparkline — not part of the emotions dict
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, "emospark22"), 100
+                    ).append(em["cerc"])
+                    # --- System Co-relation series (last 50 GRCs) --------------
+                    for i, inst in enumerate(br["instances"]):
+                        self.hist.ring(
+                            self.hist.tf_key(symbol, tf, f"corr_db{i}"), 50
+                        ).append(inst["h_signal"])
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, "corr_em"), 50
+                    ).append(cerc_sync[tf])
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, "corr_ph"), 50
+                    ).append(physics_sync[tf])
+                    self.hist.ring(
+                        self.hist.tf_key(symbol, tf, "corr_cci"), 50
+                    ).append(pack["cci_adjusted"])
                 # display snapshot — GRC cadence only (spec)
                 self.display_formulas[(symbol, tf)] = {
                     "raw": {str(f): round(raws[tf].get(f, 0.0), 5)
@@ -1756,6 +1837,15 @@ class PredictionEngine:
                         "agreement": em.get("agreement", 0.0),
                         "breadth": em.get("breadth"),
                         "dominant": em.get("dominant"),
+                        "model": em.get("model"),
+                        "core_affect": em.get("core_affect"),
+                        "pad": em.get("pad"),
+                        "panas": em.get("panas"),
+                        "ekman": em.get("ekman"),
+                        "primary_emotion": em.get("primary_emotion"),
+                        "fear_greed": em.get("fear_greed"),
+                        "action_tendency": em.get("action_tendency"),
+                        "risk": em.get("risk"),
                         "retail": em.get("retail"),
                         "hedge": em.get("hedge"),
                         "features": em.get("features") or {},
@@ -2330,9 +2420,14 @@ class PredictionEngine:
                                           thing2, advance=False,
                                           raws=raws[t])
                 em = self.emotions.compute(ctx, market, br, news_agg, None)
-                dom = max(em["emotions"], key=em["emotions"].get)
+                from .emotion import CHANNELS as _ECH
+                _pe = (em.get("primary_emotion") or {})
+                dom = _pe.get("name") or _ECH[
+                    max(em["emotions"], key=em["emotions"].get)][1]
                 em_out[t] = {"cerc": round(em["cerc"], 4),
-                             "top_emotion": f"E{dom}",
+                             "top_emotion": str(dom),
+                             "fear_greed": (em.get("fear_greed") or {}).get("index"),
+                             "valence": (em.get("core_affect") or {}).get("valence"),
                              "brain_state": br["dominant"],
                              "polarity": br["polarity"]}
             store["emotions"] = em_out
@@ -2574,6 +2669,15 @@ class PredictionEngine:
                 "weightage_note": ("per-asset, per-timeframe weights — "
                                    "every asset analyses with its own mix"),
                 "ladder": res.get("ladder"),
+                # the four brains and the affect model, verbatim from this
+                # analysis' own tf — the panel must show what the decision
+                # actually used, not a re-read of the last cycle
+                "brains": res.get("brain"),
+                "emotions": {k: v for k, v in (res.get("emotion") or {}).items()
+                             if k != "emotions"} | {
+                    "channels": (res.get("emotion") or {}).get("emotions"),
+                    "directions": (res.get("emotion") or {}).get("directions"),
+                },
                 "ai": ai,
                 "elapsed_ms": round((time.time() - t_job0) * 1000, 1),
                 "calculation_period": {
@@ -4133,14 +4237,14 @@ class PredictionEngine:
     # ---------------- Signal Lock Protocol + settlement (advice 0.3/0.4)
     def _load_locks(self) -> None:
         try:
-            with open("data/locks.json", encoding="utf-8") as fh:
+            with open(_locks_path(), encoding="utf-8") as fh:
                 data = json.load(fh)
             self.locks = {(d["symbol"], d["tf"]): d for d in data.get("locks", [])}
         except (OSError, ValueError, KeyError):
             self.locks = {}
 
     def _save_locks(self) -> bool:
-        path = "data/locks.json"
+        path = _locks_path()
         tmp = None
         try:
             directory = os.path.dirname(path) or "."
@@ -4981,12 +5085,7 @@ class PredictionEngine:
             return
         _dom = ((res.get("emotion") or {}).get("dominant")
                 or (res.get("brain") or {}).get("dominant"))
-        # dominant is a dict since the deviation-ranking fix — format
-        # it for humans; str(dict) leaked a raw Python repr into the
-        # LOCKED banner on the dashboard
-        dom = (f"E{_dom['id']} · {float(_dom.get('intensity') or 0):.0%} intensity"
-               if isinstance(_dom, dict) and _dom.get("id")
-               else str(_dom or ""))
+        dom = _lock_emotion_text(_dom)
         # freeze the formula readings with the lock (forward tables +
         # flat watch read these; the lock never repaints them)
         tr = self.last_traces.get((symbol, tf)) or {}

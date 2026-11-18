@@ -422,17 +422,24 @@ class BrainSystem:
                                           advance=advance)
                    for b in self.instances]
         wts = self._influence.get((symbol, tf), [0.25, 0.25, 0.25, 0.25])
-        w_tot = sum(wts) or 1.0
+        # a brain that was not driven, or did not move, does not vote
+        voters = [i for i, r in enumerate(results)
+                  if not r.get("abstain") and abs(r["signal"]) > 1e-6]
+        w_tot = sum(wts[i] for i in voters) or 1.0
         mean_signal = max(-1.0, min(1.0,
-                          sum(r["signal"] * wts[i]
-                              for i, r in enumerate(results)) / w_tot))
+                          sum(results[i]["signal"] * wts[i]
+                              for i in voters) / w_tot)) if voters else 0.0
         polarity = 1 if mean_signal > 1e-6 else \
             (-1 if mean_signal < -1e-6 else 0)
-        agree = sum(1 for r in results if r["signal"] != 0
-                    and (r["signal"] > 0) == (mean_signal > 0))
+        agree = sum(1 for i in voters
+                    if (results[i]["signal"] > 0) == (mean_signal > 0))
+        agree_w = sum(wts[i] for i in voters
+                      if (results[i]["signal"] > 0) == (mean_signal > 0))
+        sigs = [results[i]["signal"] for i in voters]
         db3 = results[2]
         state_dist = db3.get("state_dist") or {
             s_: 0.2 for s_ in BRAIN_MARKET_STATES}
+        db4 = results[3]
         hormones_avg = {
             k: round(sum(r["hormones"][k] for r in results) / 4.0, 4)
             for k in ("dopamine", "serotonin", "octopamine", "tyramine")}
@@ -443,7 +450,13 @@ class BrainSystem:
             "consensus": round(mean_signal, 5),
             "polarity": polarity,
             "strength": min(1.0, abs(mean_signal)),
-            "agreement": agree / 4.0,
+            "agreement": round(agree_w / w_tot, 4) if voters else 0.0,
+            "agreement_count": f"{agree}/{len(voters)}",
+            "voters": len(voters),
+            "abstained": [r["id"] for r in results if r.get("abstain")],
+            # how differently the four answered this window, and which way
+            "spread": round(max(sigs) - min(sigs), 4) if len(sigs) > 1 else 0.0,
+            "votes": {r["id"]: r["signal"] for r in results},
             "hormones_avg": hormones_avg,
             "experience": results[1].get("experience", 0.5),
             "state_dist": state_dist,
@@ -452,8 +465,14 @@ class BrainSystem:
                                key=lambda s_: state_dist[s_]),
             "p_dominant": db3.get("p_dominant")
                           or max(state_dist.values()),
-            "weight_adj": results[3].get("weight_adj")
-                          or {wid: 0.0 for wid in WEIGHT_IDS},
+            # a 5-way softmax at ~0.2-0.3 is a shrug, not an observation
+            "state_confident": bool(db3.get("confident")),
+            "weight_adj": db4.get("weight_adj")
+                          if db4.get("informative") else None,
+            "weight_adj_reason": (None if db4.get("informative")
+                                  else "DB-4 per-formula deltas are "
+                                       "identical — no formula is "
+                                       "distinguished on this window"),
         }
 
     def _flywire_eval(self, symbol: str, tf: str,
@@ -1000,6 +1019,30 @@ class BrainSystem:
             {"step": "instances ready", "ok": all(b.ready for b in self.instances),
              "detail": f'{sum(1 for b in self.instances if b.ready)}/4 brains'},
         ]
+        # drive the four real circuits with a bullish and a bearish window:
+        # a brain that cannot separate them is not working, whatever its
+        # activation field shows. Cached 120 s so /api/brain/status is cheap.
+        probe = None
+        if self._real is not None:
+            import time as _time
+            now = _time.time()
+            cached = getattr(self, "_selftest_cache", None)
+            if cached is None or now - cached[0] > 120.0:
+                try:
+                    cached = (now, self._real.self_test())
+                    self._selftest_cache = cached
+                except Exception:
+                    log.exception("brain self-test failed")
+                    cached = getattr(self, "_selftest_cache", None)
+            probe = cached[1] if cached else None
+            if probe:
+                ok = all(v["responds"] and v["flips"] for v in probe.values())
+                verify.append({
+                    "step": "each brain answers its own inputs",
+                    "ok": bool(ok),
+                    "detail": " · ".join(
+                        f"{k} bull {v['bull']:+.3f}/bear {v['bear']:+.3f}"
+                        for k, v in probe.items())})
         fw = getattr(self, "fw", None)
         return {
             "ready": self.ready,
@@ -1018,9 +1061,11 @@ class BrainSystem:
                 "dataset": f'{real.get("source", "")} · {real.get("via", "")}',
             },
             "instances": [
-                {"id": b.id, "role": b.role, "ready": b.ready}
+                {"id": b.id, "role": b.role, "ready": b.ready,
+                 "selftest": (probe or {}).get(b.id)}
                 for b in self.instances
             ],
+            "selftest": probe,
         }
 
     # ------------------------------------------------------------------

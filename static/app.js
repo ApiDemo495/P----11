@@ -14,12 +14,13 @@ const ASSETS = ["BTC", "PAXG", "ETH", "BNB"];
 // genuine MARKET emotions, named for what each E-channel measures
 // (Pride/Envy/Guilt were not market emotions — removed). Retail vs
 // hedge crowd reads are computed server-side from these channels.
-const EMO = ["Fear","Loss aversion","Hedge demand","Panic","Startle reflex",
-  "Session greed","Smart-money greed","Volatility stress","Rollover panic",
-  "Smart-money absorption","Herding","Range fatigue","Reversal fear",
-  "Sentiment","Intent to act","Announcement impulse","Crowd pull",
-  "Trend-chase fatigue","Smart-money divergence","News FOMO",
-  "Trend exhaustion","Net emotion"];
+// 21 channels from published affect models (see app/emotion.py). The server
+// sends the same list in em.model.channels — this is the offline fallback.
+const EMO = ["Valence","Arousal","Dominance","Positive affect","Negative affect",
+  "Fear","Anger","Disgust","Sadness","Surprise","Enjoyment",
+  "Loss-aversion pressure","Somatic marker","Herding","Capitulation",
+  "Extrapolation / chase","Volatility stress","Momentum vs mean",
+  "Market breadth","News sentiment","Trend exhaustion","Net emotion"];
 const P_NAMES = {
   1:"QTPB quantised price ladder",2:"WFCP wave-function collapse",3:"TME trend memory",
   4:"QTPB ladder density",5:"PSI phase state",6:"DRHE/DRPT trend decoherence",
@@ -2598,20 +2599,35 @@ async function loadEmotion() {
       }
       if (dom && bi) {
         const pct = Math.round(best * 100);
+        const names = em.model?.channels || {};
+        const nm = (i) => names[String(i)]?.name || (typeof EMO !== "undefined" && EMO[i - 1]) || ("E" + i);
+        const pe = em.primary_emotion || null;
+        const fg = em.fear_greed || null;
+        const ca = em.core_affect || null;
+        const at = em.action_tendency || null;
+        const pad = em.pad || null;
         dom.innerHTML = `
           <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
-            <div style="font:700 26px/1 var(--mono);color:var(--gold)">${esc((typeof EMO !== "undefined" && EMO[bi - 1]) || ("E" + bi))}</div>
-            <div class="dim">E${bi} · <b style="color:var(--text)">${pct}%</b> intensity · held ${heldS}s · runner-up ${esc((typeof EMO !== "undefined" && EMO[ri - 1]) || ("E" + ri))} ${Math.round(second * 100)}%${em.dominant?.tied ? ` · <span class="acc-warn">+${em.dominant.tied} channel${em.dominant.tied > 1 ? "s" : ""} tied at this extreme (saturated tape — no single winner)</span>` : ""}</div>
+            <div style="font:700 26px/1 var(--mono);color:var(--gold)">${esc((pe?.name || nm(bi)).replace(/^./, c => c.toUpperCase()))}</div>
+            <div class="dim">${pe ? `${Math.round((pe.intensity || 0) * 100)}% prototype match (Ekman 1992) · runner-up ${esc((pe.runner_up || {}).name || "—")} ${Math.round((pe.runner_up?.intensity || 0) * 100)}%` : `channel ${esc(nm(bi))} · ${pct}% from neutral`} · held ${heldS}s${em.dominant?.tied ? ` · <span class="acc-warn">+${em.dominant.tied} channel${em.dominant.tied > 1 ? "s" : ""} tied at this extreme (saturated tape — no single winner)</span>` : ""}</div>
           </div>
-          <div class="bar" style="margin-top:8px;max-width:420px"><i class="pos" style="width:${clamp(pct, 2, 100)}%"></i></div>
-          <div class="hint">confidence modifier only — never the direction (advice §5.1)</div>`;
+          <div class="bar" style="margin-top:8px;max-width:420px"><i class="pos" style="width:${clamp(pe ? (pe.intensity || 0) * 100 : pct, 2, 100)}%"></i></div>
+          <div class="kv-row" style="margin-top:8px">
+            ${ca ? `<div class="kv"><span>valence (Russell 1980)</span><b>${(ca.valence >= 0 ? "+" : "") + fmt(ca.valence, 2)}</b></div>` : ""}
+            ${ca ? `<div class="kv"><span>arousal</span><b>${fmt(ca.arousal, 2)}</b></div>` : ""}
+            ${pad ? `<div class="kv"><span>dominance (PAD)</span><b>${fmt(pad.dominance, 2)}</b></div>` : ""}
+            ${fg ? `<div class="kv"><span>fear &amp; greed</span><b>${fmt(fg.index, 0)} · ${esc(fg.label)}${fg.components ? ` <span class="dim">(vol ${fmt(fg.components.volatility, 0)} · momentum ${fmt(fg.components.momentum_volume, 0)} · ${Math.round((fg.measured_weight || 0) * 100)}% of published weight measured)</span>` : ""}</b></div>` : ""}
+            ${at ? `<div class="kv"><span>action tendency (Frijda)</span><b>${esc(at.name)} · urge ${fmt(at.urge, 2)}</b></div>` : ""}
+          </div>
+          ${fg?.vs_affect ? `<div class="hint acc-warn">${esc(fg.vs_affect)}</div>` : ""}
+          <div class="hint">${pe ? "Ekman (1992) basic emotions scored as prototype distance in (valence, arousal, dominance) — a real emotion read, not a fixed id. " : ""}confidence modifier only — never the direction (advice §5.1)</div>`;
       }
     } catch (e) { /* dominant header optional */ }
     $("#em-scope").textContent = `${S.symbol} · ${S.focusTf.toUpperCase()}`;
     $("#em-narrative").innerHTML = `
       <div class="why-reason">${em.narrative || "waiting for the first emotion pass…"}</div>
       <div class="kv-row">
-        <div class="kv"><span>NET EMOTION (E22 sign-weighted mean)</span><b class="${(em.net_emotion ?? 0) > 0.05 ? "acc-up" : (em.net_emotion ?? 0) < -0.05 ? "acc-dn" : "dim"}">${em.net_emotion == null ? "—" : (em.net_emotion >= 0 ? "+" : "") + fmt(em.net_emotion, 3)}</b></div>
+        <div class="kv"><span>net emotion (signed weighted mean, −1…+1)</span><b class="${(em.net_emotion ?? 0) > 0.05 ? "acc-up" : (em.net_emotion ?? 0) < -0.05 ? "acc-dn" : "dim"}">${em.net_emotion == null ? "—" : (em.net_emotion >= 0 ? "+" : "") + fmt(em.net_emotion, 3)}</b></div>
         <div class="kv"><span>CERC agreement sum (spec)</span><b>${fmt(em.cerc, 4)}</b></div>
         <div class="kv"><span>breadth / agreement</span><b>${em.breadth ? `${em.breadth.bull}▲ ${em.breadth.bear}▼ ${em.breadth.flat}·` : "—"} · ${Math.round((em.agreement ?? 0) * 100)}% has a direction</b></div>
         <div class="kv"><span>aggregate intensity</span><b>${fmt(em.aggregate, 4)}</b></div>
@@ -2620,7 +2636,7 @@ async function loadEmotion() {
       </div>
       ${em.features ? `<div class="kv-row"><div class="kv"><span>measured features (tape only — never the signal, G-3)</span>
         <b>samples ${em.features.samples ?? "—"} · vol-z ${fmt(em.features.vol_z, 3)} · climax ×${fmt(em.features.climax_ratio, 2)} · violence gate ${fmt(em.features.violence_gate, 2)} · streak ${em.features.window_streak ?? "—"}</b></div></div>` : ""}
-      <div class="hint">22 channels feed E22. <b>NET EMOTION</b> is the sign-weighted mean of the channels that express a direction (Σ wᵢeᵢdᵢ / Σ wᵢeᵢ, ∈ −1…+1): a split crowd reads near zero while the breadth line shows the split. The spec's raw CERC agreement sum is shown beside it unchanged and drives the ±15 % confidence modulator (never the direction, advice §5.1). Circles: conic ring = |value|, border = direction.</div>
+      <div class="hint">21 model channels feed the CERC composite (E22). <b>Net emotion</b> is the sign-weighted mean of the channels that express a direction (Σ wᵢeᵢdᵢ / Σ wᵢeᵢ, ∈ −1…+1): a split crowd reads near zero while the breadth line shows the split. The spec's raw CERC agreement sum is shown beside it unchanged and drives the ±15 % confidence modulator (never the direction, advice §5.1). Circles: conic ring = |value − that channel's own neutral|, border = direction; hover a circle for its citation.</div>
       <div class="kv-grid" style="margin:8px 0">
         <div class="kv"><span>RETAIL emotion (herd/crowd/news channels)</span><b>${em.retail ? `${em.retail.score >= 0 ? "+" : ""}${fmt(em.retail.score, 3)} · ${esc(em.retail.label)}` : "—"}</b></div>
         <div class="kv"><span>HEDGE / smart-money emotion (absorption/divergence)</span><b>${em.hedge ? `${em.hedge.score >= 0 ? "+" : ""}${fmt(em.hedge.score, 3)} · ${esc(em.hedge.label)}` : "—"}</b></div>
@@ -2636,10 +2652,17 @@ async function loadEmotion() {
         grid.appendChild(c);
       }
     }
+    const channelMeta = em.model?.channels || null;
     for (let i = 1; i <= 22; i++) {
       const v = em.emotions?.[i] ?? 0;
       const dir = em.directions?.[i] ?? 0;
       const cell = $("#ec-" + i);
+      const meta = channelMeta?.[String(i)];
+      // channels do NOT share a neutral point: the Ekman basics sit at 0.0,
+      // the affect/state channels at 0.5. Everything below is measured
+      // against the channel's OWN neutral (server-sent).
+      const neutral = meta?.neutral ?? (i >= 6 && i <= 11 ? 0.0 : 0.5);
+      const dev = Math.abs(v - neutral);
       cell.className = "em-cell " + (dir > 0 ? "bullish" : dir < 0 ? "bearish" : "");
       // an exact 0.00 is an EVENT gate, not a dead channel — say why
       const zr = em.zero_reasons?.[String(i)] || em.zero_reasons?.[i];
@@ -2656,13 +2679,18 @@ async function loadEmotion() {
         ew.textContent = (ecause ? (ZCAUSE[ecause] || ecause) + " · " : "") +
           (zr || "computed — exactly 0.0 this window");
       } else if (ew) ew.remove();
+      const alias = $(".em-alias", cell);
+      if (alias) alias.textContent = meta?.name || EMO[i - 1] || "";
+      if (meta?.cite) cell.dataset.cite = meta.cite;
+      cell.title = (cell.title ? cell.title + " · " : "") +
+        (meta ? `${meta.name}${meta.cite ? " (" + meta.cite + ")" : ""} · neutral ${fmt(neutral, 2)}` : "");
       const ring = $(".em-ring", cell);
-      ring.style.setProperty("--p", `${clamp(Math.abs(v) * 100, 0, 100)}%`);
+      ring.style.setProperty("--p", `${clamp(dev * 100, 0, 100)}%`);
       $("i", ring).textContent = (v >= 0 ? "+" : "") +
         (v === 0 ? "0.00" : fx(v, 2));   //0.004 must print0.004, not 0.00
       const tag = $(".em-tag", cell);
       let label = "NEUTRAL";
-      if (Math.abs(v) > 0.7) label = "EXTREME"; else if (Math.abs(v) > 0.45) label = "ELEVATED";
+      if (dev > 0.35) label = "EXTREME"; else if (dev > 0.15) label = "ELEVATED";
       tag.textContent = label; tag.className = "em-tag " + label;
       // live weight + predictive accuracy (accuracy-driven auto-learning)
       const wv = (em.weights || [])[i - 1];
@@ -2941,9 +2969,11 @@ async function loadBrains() {
     $("#br-consensus").innerHTML = `
       <div class="kv"><span>polarity</span><b>${br.polarity > 0 ? "▲ BULL" : br.polarity < 0 ? "▼ BEAR" : "● FLAT"}</b></div>
       <div class="kv"><span>consensus</span><b>${fmt(br.consensus, 4)}</b></div>
-      <div class="kv"><span>agreement (4×)</span><b>${fmt(br.agreement, 3)}</b></div>
+      <div class="kv"><span>agreement (${esc(br.agreement_count || "—")} voters)</span><b>${fmt(br.agreement, 3)}</b></div>
+      <div class="kv"><span>spread (max − min vote)</span><b>${fmt(br.spread, 3)}</b></div>
+      <div class="kv"><span>abstained</span><b>${(br.abstained || []).length ? esc((br.abstained || []).join(", ")) : "none"}</b></div>
       <div class="kv"><span>experience EQ</span><b>${fmt(br.experience, 3)}</b></div>
-      <div class="kv"><span>dominant state</span><b>${br.dominant || "—"} (${fmt(br.p_dominant, 2)})</b></div>
+      <div class="kv"><span>dominant state</span><b>${br.dominant || "—"} (${fmt(br.p_dominant, 2)})${br.state_confident === false ? ' <span class="dim">· posterior flat — no state called</span>' : ""}</b></div>
       <div class="kv"><span>hormones D/O/S/T</span><b>${fmt(br.hormones_avg?.dopamine, 2)} / ${fmt(br.hormones_avg?.octopamine, 2)} / ${fmt(br.hormones_avg?.serotonin, 2)} / ${fmt(br.hormones_avg?.tyramine, 2)}</b></div>`;
     const wrap = $("#br-instances"); wrap.innerHTML = "";
     (br.instances || []).forEach(inst => {
@@ -2951,11 +2981,13 @@ async function loadBrains() {
       card.className = "card";
       const h = inst.hormones || {};
       card.innerHTML = `<h4><span>${inst.id} · ${esc(inst.role || "")}</span><span>${(inst.signal ?? 0) >= 0 ? "+" : ""}${fmt(inst.signal ?? 0, 4)}</span></h4>
-        <div class="logic">specialty vote ${fmt(inst.signal ?? 0, 3)} · hormone ${fmt(inst.h_signal, 3)}</div>
+        <div class="logic">specialty vote ${fmt(inst.signal ?? 0, 3)} · hormone ${fmt(inst.h_signal, 3)} · input-driven response ${inst.response == null ? "—" : fmt(inst.response, 4)}${inst.input_energy != null ? ` (input energy ${fmt(inst.input_energy, 3)})` : ""}${inst.abstain ? ' · <span class="acc-warn">ABSTAIN — this window did not drive it</span>' : ""}</div>
         <div class="logic">${inst.backend === "flywire-v783-real" ? `🧠 ${Number(inst.neurons).toLocaleString()} real neurons · ${Number(inst.synapses).toLocaleString()} real synapses (FlyWire v783)` : "synthetic graph — real circuit not ready"}</div>
         <div class="kv-row">
           <div class="kv"><span>${inst.id === "DB-3" ? "state" : inst.id === "DB-1" ? "pattern" : inst.id === "DB-2" ? "experience EQ (MB · LH balance)" : "learn thrust"}</span><b>${inst.dominant ?? (inst.id === "DB-1" ? fmt(inst.pattern, 3) : inst.id === "DB-2" ? fmt(inst.experience, 3) : fmt(inst.signal, 3))}</b></div>
           ${inst.id === "DB-2" ? "" : `<div class="kv"><span>experience</span><b>${fmt(inst.experience, 3)}</b></div>`}
+          ${inst.id === "DB-1" ? `<div class="kv"><span>approach/avoid selectivity</span><b>${fmt(inst.selectivity, 4)} <span class="dim">(MBONs move as one block on this connectome)</span></b></div>` : ""}
+          ${inst.id === "DB-4" ? `<div class="kv"><span>per-formula Δ</span><b>${inst.informative ? esc(Object.entries(inst.weight_adj || {}).slice(0, 4).map(([k, v]) => `F${k} ${v >= 0 ? "+" : ""}${fmt(v, 3)}`).join(" · ")) : `<span class="acc-warn">${esc(inst.informative === false ? "all 35 deltas identical — controller has nothing to differentiate" : "—")}</span>`}</b></div>` : ""}
         </div>
         <div class="kv-row" style="margin-top:8px">
           ${["dopamine", "serotonin", "octopamine", "tyramine"].map(k =>
