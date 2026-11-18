@@ -94,6 +94,7 @@ class TFCycle:
     calib_n: int = 0
     calib_source: str = ""
     noise_floor_s: float = 0.0
+    score_floor_ratio: float = 0.0
     tier_rule: str = ""
     cycle_start: float = 0.0         # epoch seconds
     cycle_end: float = 0.0           # epoch seconds (countdown target)
@@ -143,6 +144,7 @@ class TFCycle:
             "calib_n": self.calib_n,
             "calib_source": self.calib_source,
             "noise_floor_s": self.noise_floor_s,
+            "score_floor_ratio": self.score_floor_ratio,
             "tier_rule": self.tier_rule,
             "symbol": self.symbol,
             "tf": self.tf,

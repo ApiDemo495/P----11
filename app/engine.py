@@ -1466,6 +1466,7 @@ class PredictionEngine:
                 "p_side": fin.get("p_side"),
                 "raw_score": fin.get("raw_score"),
                 "noise_floor_s": fin.get("noise_floor_s"),
+                "score_floor_ratio": fin.get("score_floor_ratio"),
                 "calib_n": fin.get("calib_n"),
                 "calib_source": fin.get("calib_source"),
                 "noise_floor_s": fin.get("noise_floor_s"),
@@ -1706,6 +1707,7 @@ class PredictionEngine:
                     "p_side": results[tf].get("p_side"),
                     "raw_score": results[tf].get("raw_score"),
                     "noise_floor_s": results[tf].get("noise_floor_s"),
+                    "score_floor_ratio": results[tf].get("score_floor_ratio"),
                     "calib_n": results[tf].get("calib_n"),
                     "calib_source": results[tf].get("calib_source"),
                     "noise_floor_s": results[tf].get("noise_floor_s"),
@@ -2050,28 +2052,33 @@ class PredictionEngine:
         if len(pool) >= 10:
             _o = sorted(pool); med = _o[len(_o) // 2]
         floor_s = max(0.02, 0.5 * med)
-        p_side = 0.5
-        if med > 0:
-            p_side = 1.0 / (1.0 + _m.exp(-min(20.0, abs(score) / med)))
-        elif strength is not None:
-            # no score scale at all yet: use measured VOTER AGREEMENT, shrunk
-            # toward the coin flip (0.5 + 0.4·(purity − 0.5)) — provisional,
-            # and never silently 0.5 (which froze every window to watch-only)
-            _st = max(0.0, min(1.0, float(strength)))
-            p_side = 0.5 + 0.4 * (_st - 0.5)
-            source = "voter-agreement purity (no score history yet)"
-        if abs(score) <= floor_s:
+        # THE FLOOR AND THE PROBABILITY MUST SHARE ONE SCALE. The score was
+        # compared to a floor built from `med`, but P was mapped with `med`
+        # itself — when med was tiny the floor defaulted to 0.02 while
+        # |score|/med ran to 3+, so the same window read "P 0.97" and
+        # "watch-only" at once. P is now the logistic of the score in
+        # FLOOR units, and the tier bands are those same units:
+        #   <=1.0× floor → watch-only (indistinguishable from noise)
+        #   <=1.5×       → quarter
+        #   <=2.5×       → half
+        #   > 2.5×       → full
+        if not pool:
+            source = ("absolute floor 0.02 (no score history yet) — provisional"
+                      + (f"; voter agreement {float(strength):.2f}"
+                         if strength is not None else ""))
+        x = abs(float(score)) / floor_s if floor_s > 0 else 0.0
+        p_side = 1.0 / (1.0 + _m.exp(-min(20.0, x)))
+        if x <= 1.0:
             tier = "watch-only"
-        elif p_side >= 0.62:
-            tier = "full"
-        elif p_side >= 0.56:
-            tier = "half"
-        elif p_side >= 0.52:
+        elif x <= 1.5:
             tier = "quarter"
+        elif x <= 2.5:
+            tier = "half"
         else:
-            tier = "watch-only"
+            tier = "full"
         return {"tier": tier, "p_side": round(p_side, 4),
                 "noise_floor_s": round(floor_s, 5),
+                "score_floor_ratio": round(x, 3),
                 "calib_n": len(pool), "calib_source": source,
                 "calib_provisional": len(pool) < 40,
                 "tier_rule": ("size hint only — the side is never suppressed "
@@ -5159,6 +5166,7 @@ class PredictionEngine:
             calib_n=int(res.get("calib_n") or 0),
             calib_source=str(res.get("calib_source") or ""),
             noise_floor_s=float(res.get("noise_floor_s") or 0.0),
+            score_floor_ratio=float(res.get("score_floor_ratio") or 0.0),
             tier_rule=str(res.get("tier_rule") or ""),
             cycle_start=_g_start,
             cycle_end=_g_end,
@@ -6154,7 +6162,8 @@ class PredictionEngine:
                             if _nf and abs(float(getattr(cyc, "cci", 0.0) or 0.0)) <= _nf:
                                 _why.append(
                                     f"|score| {abs(float(cyc.cci or 0.0)):.4f} ≤ "
-                                    f"noise floor {_nf:.4f}")
+                                    f"noise floor {_nf:.4f} "
+                                    f"({float(d.get('score_floor_ratio') or 0):.2f}× floor)")
                             _safe = int(getattr(cyc, "safe_events", 0) or 0)
                             if _safe:
                                 _why.append(
