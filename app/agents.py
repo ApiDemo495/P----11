@@ -343,6 +343,10 @@ class AgentInstaller:
         self.error = ""
         self.log: deque = deque(maxlen=40)
         self._thread: threading.Thread | None = None
+        self._auto_thread: threading.Thread | None = None
+        self.auto: dict[str, Any] = {"state": "idle", "attempts": 0,
+                                     "last_result": "", "last_error": "",
+                                     "next_try_at": 0.0}
 
     # -- detection ------------------------------------------------------
     def deps_installed(self) -> bool:
@@ -378,6 +382,7 @@ class AgentInstaller:
             "log": list(self.log),
             "elapsed_s": int((time.time() - self.started_at))
                          if running and self.started_at else 0,
+            "auto": self.auto_status(),
         }
 
     # -- work -----------------------------------------------------------
@@ -395,6 +400,92 @@ class AgentInstaller:
                                             name="agent-installer")
             self._thread.start()
             return self.status()
+
+    # ---------------- automatic (boot) download ------------------------
+    # The user asked for the local agent to arrive WITHOUT pressing
+    # anything. The old boot download was removed because it raced
+    # provisioning and half-downloaded on slow links — that is solved
+    # here with: a delay after boot, the same flock the button uses,
+    # bounded retries with backoff, a persisted done-marker, and an
+    # honest per-attempt record that the UI can show.
+    AUTO_FILE = os.path.join("data", ".agent_auto.json")
+    AUTO_DELAYS_S = (90.0, 600.0, 1800.0)      # 1.5 min, 10 min, 30 min
+
+    def _auto_save(self) -> None:
+        try:
+            d = os.path.dirname(self.AUTO_FILE)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            with open(self.AUTO_FILE, "w") as fh:
+                json.dump(self.auto, fh)
+        except OSError:
+            pass
+
+    def auto_status(self) -> dict:
+        now = time.time()
+        running = (self._auto_thread is not None
+                   and self._auto_thread.is_alive())
+        return {
+            "state": ("running" if running else self.auto.get("state", "idle")),
+            "attempts": self.auto.get("attempts", 0),
+            "last_result": self.auto.get("last_result", ""),
+            "last_error": self.auto.get("last_error", ""),
+            "next_try_in_s": (max(0, round(self.auto.get("next_try_at", 0) - now))
+                              if self.auto.get("next_try_at") else None),
+            "installed": self.installed(),
+            "rule": ("downloads by itself after boot: llama.cpp runtime from "
+                     "PyPI, then the GGUF model; retries with backoff and "
+                     "reports exactly what failed"),
+        }
+
+    def start_auto(self) -> dict:
+        """Arm the automatic downloader (boot path; idempotent)."""
+        with self._lock:
+            if self._auto_thread is not None and self._auto_thread.is_alive():
+                return self.auto_status()
+            if self.installed():
+                self.auto.update(state="done", last_result="already installed")
+                self._auto_save()
+                return self.auto_status()
+            self.auto = {"state": "running", "attempts": 0,
+                         "last_result": "", "last_error": "", "next_try_at": 0.0}
+            self._auto_thread = threading.Thread(
+                target=self._auto_work, name="agent-autodownload", daemon=True)
+            self._auto_thread.start()
+            return self.auto_status()
+
+    def _auto_work(self) -> None:
+        for i, delay in enumerate(self.AUTO_DELAYS_S):
+            if self.installed():
+                break
+            self.auto["next_try_at"] = time.time() + delay
+            time.sleep(delay)
+            self.auto["next_try_at"] = 0.0
+            if self.installed():
+                break
+            self.auto["attempts"] = i + 1
+            try:
+                self.start()                    # button path, one fetcher
+                th = self._thread
+                if th is not None:
+                    th.join(timeout=45 * 60)
+            except Exception as exc:            # pragma: no cover - defensive
+                self.auto["last_error"] = repr(exc)[:300]
+            if self.installed():
+                self.auto["state"] = "done"
+                self.auto["last_result"] = "installed automatically"
+                self._auto_save()
+                return
+            self.auto["last_result"] = (f"attempt {i + 1} failed: "
+                                        + (self.error or "not installed"))
+            self.auto["last_error"] = (self.error or "")[:300]
+            self._say("auto-download %s" % self.auto["last_result"])
+            self._auto_save()
+        self.auto["state"] = ("done" if self.installed() else "failed")
+        if not self.installed():
+            self.auto["last_result"] = (self.auto.get("last_result", "")
+                                        + " — press DOWNLOAD LOCAL AGENT to retry now")
+        self._auto_save()
 
     def _say(self, line: str) -> None:
         line = str(line).rstrip()
@@ -487,16 +578,28 @@ class AgentInstaller:
                                  "https://abetlen.github.io/llama-cpp-python/whl/cpu",
                                  "-r", "requirements-agents.txt"])
                 if rc != 0:
+                    # the prebuilt-wheel host is its own dependency; PyPI is
+                    # the one index that is almost always reachable
+                    self._say("prebuilt wheel index unavailable — retrying "
+                              "from PyPI (a source build can take 10-20 min)")
+                    rc = self._exec([sys_executable(), "-m", "pip", "install",
+                                     "-r", "requirements-agents.txt"])
+                if rc != 0:
                     raise RuntimeError(
-                        "runtime install failed (pip exit %d) — check your "
-                        "connection and press download again" % rc)
+                        "runtime install failed (pip exit %d): neither the "
+                        "prebuilt llama.cpp wheel index (abetlen.github.io) "
+                        "nor PyPI served it — outbound HTTPS to those hosts "
+                        "is required" % rc)
             self.phase = "model"
             rc = self._exec([sys_executable(),
                              os.path.join("scripts", "download_models.py")])
             if rc != 0 or not self.model_present():
                 raise RuntimeError(
-                    "model download did not finish — the hub may be "
-                    "unreachable; press download again to resume")
+                    "model download did not finish: the GGUF file is not on "
+                    "disk. The model comes from huggingface.co (and its CDN) "
+                    "— if this host cannot reach it the download cannot "
+                    "complete, the app stays fully usable in Drosophila "
+                    "mode, and the automatic retry keeps trying")
             try:
                 d = os.path.dirname(self.DONE_FILE)
                 if d:

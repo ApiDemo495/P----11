@@ -1,8 +1,10 @@
-"""In-app local-agent download (Agents tab button).
+"""Local-agent download (automatic at boot + the Agents-tab button).
 
-Boot no longer downloads the agent; the user presses DOWNLOAD
-LOCAL AGENT and AgentInstaller does it in the background with
-honest state/log reporting. These tests pin that contract.
+The installer is armed by the boot path (start_auto: delayed, retried with
+backoff, lock-guarded) and by the DOWNLOAD LOCAL AGENT button; both run in
+the background with honest state/log reporting. These tests pin the
+installer contract itself and are independent of what happens to be
+installed in the running venv.
 """
 import os
 import threading
@@ -16,6 +18,11 @@ def _installer(tmp_path, monkeypatch, runner):
                         str(tmp_path / "data" / "setup_ai.log"))
     monkeypatch.setattr(ag.AgentInstaller, "DONE_FILE",
                         str(tmp_path / "data" / ".ai_done"))
+    # the runtime must look absent: otherwise a llama_cpp that happens to be
+    # installed in the venv (e.g. from a real auto-download) skips step 1 and
+    # the test stops describing the code path it names
+    monkeypatch.setattr(ag.AgentInstaller, "deps_installed",
+                        lambda self: False)
     local = ag.LocalModel()
     return ag.AgentInstaller(local, runner=runner), local
 

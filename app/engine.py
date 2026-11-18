@@ -21,6 +21,7 @@ import logging
 import math
 import os
 import tempfile
+import threading
 import time
 
 import numpy as np
@@ -325,6 +326,11 @@ class PredictionEngine:
 
         self._tasks: list[asyncio.Task] = []
         self._busy = asyncio.Lock()
+        # Probability-Branches replay cache: the empirical first-touch scan
+        # is O(history x window) and was 32% of every snapshot build (the
+        # single biggest reason /api/snapshot took ~2 s). Keyed on the
+        # window's own signature, so a new cycle/bar/price move recomputes.
+        self._branch_cache: dict[tuple, tuple] = {}
         self._stop = asyncio.Event()
 
     # ==================================================================
@@ -4088,6 +4094,43 @@ class PredictionEngine:
         except Exception:
             return None
 
+    BRANCH_TTL_S = 6.0
+
+    def branch_stats_cached(self, symbol: str, tf: str, d: dict,
+                            price: float, now: float) -> dict | None:
+        """branch_stats() memoised for a few seconds.
+
+        The bar-by-bar first-touch replay is exact but expensive (tens of
+        millions of comparisons per snapshot across 16 windows). Its inputs
+        only change when a cycle rolls, a barrier moves or a new 1-minute
+        bar closes, so cache on that signature with a short TTL and a price
+        drift guard; the numbers themselves are untouched.
+        """
+        try:
+            st = self.feed.state(symbol)
+            sig = (d.get("cycle_start"), d.get("cycle_id"),
+                   int(d.get("direction") or 0), d.get("tp"), d.get("sl"),
+                   len(st.times))
+        except Exception:
+            return self.branch_stats(d, price, now, tf)
+        key = (symbol, tf)
+        # per-window jitter: without it all 16 windows recompute in the same
+        # snapshot (a 1.9 s spike); spread over the TTL the board stays < 0.4 s
+        ttl = self.BRANCH_TTL_S + (abs(hash(key)) % 9) * 0.7
+        hit = self._branch_cache.get(key)
+        if hit is not None:
+            at, sig0, price0, out = hit
+            if (sig0 == sig and now - at < ttl
+                    and price0 > 0 and abs(price / price0 - 1.0) < 0.0025):
+                return out
+        out = self.branch_stats(d, price, now, tf)
+        self._branch_cache[key] = (now, sig, price, out)
+        if len(self._branch_cache) > 64:
+            self._branch_cache.clear()
+        if out is not None:
+            self._branch_cache[key] = (now, sig, price, out)
+        return out
+
     def branch_stats(self, d: dict, price: float, now: float,
                      tf: str) -> dict | None:
         """PROBABILITY BRANCHES (old-app inspiration): where price can go
@@ -4169,25 +4212,23 @@ class PredictionEngine:
                 # unconditional ones, each with its own n.
                 _nc = _tpc = _slc = 0                    # momentum-matched
                 _rets_c = {0.25: [], 0.5: [], 0.75: [], 1.0: []}
-                _vols = []
+                # ONE pass: 10-bar rolling volatility per index (the old
+                # `_vol_at` rebuilt the same window for every start —
+                # O(n^2) and a third of the snapshot build)
+                _vol_idx: list = [None] * _nb
                 for _vi in range(10, _nb):
                     _vr = [(_cl[_vj] - _cl[_vj - 1]) / _cl[_vj - 1]
                            for _vj in range(_vi - 9, _vi + 1)
                            if _cl[_vj - 1] > 0]
                     if len(_vr) >= 8:
                         _vm = sum(_vr) / len(_vr)
-                        _vols.append((sum((x - _vm) ** 2 for x in _vr)
-                                      / len(_vr)) ** 0.5)
+                        _vol_idx[_vi] = (sum((x - _vm) ** 2 for x in _vr)
+                                         / len(_vr)) ** 0.5
+                _vols = [v for v in _vol_idx if v is not None]
                 _vol_med = sorted(_vols)[len(_vols) // 2] if _vols else 0.0
+
                 def _vol_at(i0):
-                    if i0 < 10:
-                        return None
-                    vr = [(_cl[j] - _cl[j - 1]) / _cl[j - 1]
-                          for j in range(i0 - 9, i0 + 1) if _cl[j - 1] > 0]
-                    if len(vr) < 8:
-                        return None
-                    m = sum(vr) / len(vr)
-                    return (sum((x - m) ** 2 for x in vr) / len(vr)) ** 0.5
+                    return _vol_idx[i0] if 0 <= i0 < _nb else None
                 _cur_vol = _vol_at(_nb - 1)
                 _cur_mom = (1 if _nb >= 6 and _cl[-1] > _cl[-6]
                             else -1 if _nb >= 6 else 0)
@@ -5140,12 +5181,20 @@ class PredictionEngine:
             if not self.locked:
                 return
 
+            _done = 0
             for symbol in SYMBOL_ORDER:
                 try:
                     res_pack = self.compute_asset(symbol, record=True, display=True)
                 except Exception:
                     log.exception("GRC compute failed for %s", symbol)
                     continue
+                # the pass blocks the event loop for seconds per asset; a
+                # progress frame keeps the websocket and the client's
+                # silence detector alive instead of a 10 s dead air gap
+                _done += 1
+                await self.emit({"type": "grc_progress",
+                                 "done": _done, "of": len(SYMBOL_ORDER),
+                                 "symbol": symbol, "ts": time.time()})
                 # Section 11 agent signal + multiplier, Section 16 double-check
                 try:
                     await self._apply_agents(symbol, res_pack)
@@ -5466,9 +5515,10 @@ class PredictionEngine:
             try:
                 if now - getattr(self, "_last_brain_watch", 0) > 60:
                     self._last_brain_watch = now
-                    _fw = getattr(self.brains, "fw", None)
-                    if _fw is not None and _fw.state == "absent":
-                        _fw.ensure()
+                    # heal() starts ensure() on a WORKER thread: the load is
+                    # 8.5 s of CPU and running it here froze the event loop
+                    # (health/WS dead -> the UI banner said "engine offline")
+                    self.heal()
             except Exception:
                 pass
             prices = self.feed.prices()
@@ -5583,6 +5633,73 @@ class PredictionEngine:
     # ==================================================================
     # snapshots / broadcast
     # ==================================================================
+    def _brain_live(self) -> dict:
+        """One source of truth for the brain chip, read live every snapshot.
+
+        `state` is the component's own state machine (absent | building |
+        ready); the per-(asset,tf) display copy can lag by a GRC, so a chip
+        driven from it reports "offline" over a loaded connectome. The chip
+        text always comes from the component (`fw.chip()`), and the grace
+        fields let the UI hold a green chip through a rebuild rather than
+        flashing red.
+        """
+        fw = getattr(getattr(self, "brains", None), "fw", None)
+        if fw is None:
+            return {"state": "absent", "ready": False,
+                    "chip": {"kind": "absent", "text": "brain — not wired"},
+                    "pass_age_s": None, "load_ms": None}
+        age = (round(time.time() - fw.last_pass_at, 1)
+               if getattr(fw, "last_pass_at", 0) else None)
+        return {
+            "state": fw.state,
+            "ready": fw.state == "ready",
+            "chip": fw.chip(),
+            "pass_age_s": age,
+            "pass_ms": getattr(fw, "last_pass_ms", None),
+            "load_ms": getattr(fw, "load_ms", None),
+            "neurons": (fw.meta or {}).get("neurons"),
+            "last_error": (fw.last_error or "")[:200] if fw.last_error else "",
+        }
+
+    def heal(self) -> dict:
+        """Repair the parts that used to need a manual restart.
+
+        * flywire state == absent  -> re-run ensure() on a worker thread
+          (the load itself is 8.5 s of CPU: doing it on the event loop used
+          to freeze the whole app, which is what the UI reported as
+          "engine offline").
+        * brain pass stalled       -> tell the pass thread to re-arm.
+
+        Returns a small report so /api/health can show what was done.
+        """
+        out: dict[str, Any] = {"at": time.time()}
+        fw = getattr(getattr(self, "brains", None), "fw", None)
+        if fw is not None:
+            out["brain_state"] = fw.state
+            out["pass_age_s"] = (round(time.time() - fw.last_pass_at, 1)
+                                 if getattr(fw, "last_pass_at", 0) else None)
+            th = getattr(self, "_fw_heal_thread", None)
+            if fw.state == "absent" and (th is None or not th.is_alive()):
+                def _load() -> None:
+                    try:
+                        fw.ensure()
+                    except Exception:
+                        log.exception("flywire self-heal failed")
+                self._fw_heal_thread = threading.Thread(
+                    target=_load, name="flywire-heal", daemon=True)
+                self._fw_heal_thread.start()
+                out["action"] = "flywire-ensure-thread-started"
+            elif (fw.state == "ready" and out["pass_age_s"] is not None
+                  and out["pass_age_s"] > 120):
+                try:
+                    fw._start_pass_thread()
+                    out["action"] = "brain-pass-rearmed"
+                except Exception as exc:      # pragma: no cover - defensive
+                    out["action"] = f"pass-rearm failed: {exc!r}"
+            else:
+                out.setdefault("action", "none")
+        return out
+
     def _refresh_flywire_display(self) -> None:
         """Display must never LIE about the brain: the connectome can
         hot-swap in BETWEEN GRC passes, and the user saw 'brain absent'
@@ -5805,7 +5922,7 @@ class PredictionEngine:
                                 lock_id=cyc.lock_id, side=cyc.direction,
                                 revision=cyc.level_revision)
                 if d and price > 0:
-                    bs = self.branch_stats(d, price, now, tf)
+                    bs = self.branch_stats_cached(symbol, tf, d, price, now)
                     if bs:
                         d["branches"] = bs
                         # remember this window's forecast ONCE (first
@@ -5942,6 +6059,12 @@ class PredictionEngine:
                 },
             },
             "brains": self.brains.status(),
+            # LIVE brain state, straight off the component every snapshot.
+            # The chip used to read only the per-(asset,tf) display copy,
+            # which is rebuilt at GRC — so a window that had not been
+            # re-analysed yet painted "brain offline" over a healthy
+            # connectome (the "brain disconnects at random" report).
+            "brain": self._brain_live(),
             "flat_watch": self._flat_payload(),
             # §10.3 status chips: every subsystem's honesty state on top
             "chips": {

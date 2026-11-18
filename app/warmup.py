@@ -45,7 +45,14 @@ log = logging.getLogger("warmup")
 # windows replayed per (asset, timeframe).  tf1 is cheap and settles the
 # most often, so it carries the largest sample; the long horizons only need
 # enough to clear the n≥8/n≥40 scorecard gates and to pool forward buckets.
-WINDOWS: dict[str, int] = {"tf1": 96, "tf2": 72, "tf3": 48, "tf4": 40}
+# Kept just above the scorecard gates (n>=40 for the leaderboard, n>=8 for
+# every forward bucket) but roughly half the previous count: the replay is
+# pure-Python CPU and every extra window steals the GIL from the live event
+# loop for the first minutes after a restart ("engine offline" bursts).
+WINDOWS: dict[str, int] = {"tf1": 56, "tf2": 40, "tf3": 28, "tf4": 22}
+# cooperative yield between windows: sleeping releases the GIL so /api/health
+# and the websocket keep answering during the replay
+YIELD_S = 0.012
 MIN_CONTEXT = 60            # bars of context before a window may be replayed
 FAMILY = {"sim": "sim", "binance": "binance"}
 
@@ -517,6 +524,7 @@ def warm_history(engine, *, hours: int = 168,
             status["windows"] += row["windows"]
             status["settled"] += row["settled"]
             log.info("warm replay %s/%s: %s windows", symbol, tf, row["windows"])
+            time.sleep(YIELD_S)          # let the event loop breathe
 
     # ── one durable write for everything the replay touched ──
     try:

@@ -1850,10 +1850,25 @@ function renderRail() {
   // brain connection — same component the brain tab shows, mirrored here
   // so the dashboard can never say "nothing" while the brain is green
   try {
+    // the LIVE component state (snapshot.brain) is the one source of truth;
+    // the per-(asset,tf) copy is rebuilt at GRC and used to paint "brain
+    // offline" over a healthy connectome on a not-yet-re-analysed window
+    const lb = S.snap?.brain || null;
     const fly = S.snap?.systems?.[`${S.symbol || "BTC"}|${S.focusTf || "tf1"}`]?.brain?.flywire;
-    const bc = fly?.chip
+    let bc = lb?.chip
+      || fly?.chip
       || (fly?.ready ? { kind: "ok", text: "FlyWire v783 · live" }
-        : { kind: "absent", text: "brain — " + (fly?.reason || "absent") });
+        : { kind: "absent", text: "brain — " + (fly?.reason || "no state yet") });
+    const snapAge = S.snap?.ts ? (Date.now() / 1000 - S.snap.ts) : null;
+    if (snapAge != null && snapAge > 20 && bc.kind !== "ok") {
+      bc = { kind: "build", text: `brain — state stale ${Math.round(snapAge)}s (snapshot lagging)` };
+    }
+    // a REBUILD is not an outage: hold the last green for 90 s, then be honest
+    if (bc.kind === "ok") S._brainOkAt = Date.now();
+    else if (bc.kind === "absent" && S._brainOkAt && Date.now() - S._brainOkAt < 90000) {
+      bc = { kind: "build", text: "brain — re-verifying (was ready " +
+             Math.round((Date.now() - S._brainOkAt) / 1000) + "s ago)" };
+    }
     led("#led-brain", bc.kind === "ok", bc.kind === "build");
     if (bc.kind === "absent") led("#led-brain", false, false);
     const bchip = $("#brain-chip");
@@ -3296,7 +3311,16 @@ async function loadAgents() {
            <div class="logic" style="max-height:110px;overflow:auto;font-size:10px">${(ins.log || []).slice(-6).map(esc).join("<br/>")}</div>
            <button class="btn" disabled style="margin-top:10px">downloading…</button>`
         : `<button class="btn" id="ag-download" style="margin-top:10px">⬇ DOWNLOAD LOCAL AGENT</button>
-           <div class="hint" style="margin-top:6px">One-time, on-demand: llama.cpp runtime + ${ins.model_label || "preferred model"} (${ins.model_size || ""}). Preferred model: Qwen2.5-Coder-3B. Runs in the background — nothing downloads at boot, and the app stays fully usable meanwhile.</div>
+           <div class="hint" style="margin-top:6px">One-time: llama.cpp runtime + ${ins.model_label || "preferred model"} (${ins.model_size || ""}). Preferred model: Qwen2.5-Coder-3B. Runs in the background; the app stays fully usable meanwhile.</div>
+           ${(() => {
+             const au = ins.auto || {};
+             const next = au.next_try_in_s;
+             if (au.state === "running")
+               return `<div class="hint" style="margin-top:6px">⬇ auto-download is armed — ${next != null && next > 0 ? "next attempt in " + Math.floor(next / 60) + "m " + (next % 60) + "s" : "attempting now"}${au.attempts ? " · attempt " + au.attempts + " already failed" : ""}${au.last_error ? " · " + esc(au.last_error) : ""}</div>`;
+             if (au.state === "failed")
+               return `<div class="hint" style="margin-top:6px">⚠ auto-download gave up after ${au.attempts || 0} attempt(s): ${esc(au.last_error || au.last_result || "unknown")} — press download to retry now (it also retries on the next boot)</div>`;
+             return `<div class="hint" style="margin-top:6px">auto-download: ${esc(au.state || "idle")} — the engine fetches this by itself after boot; the button is only for "now"</div>`;
+           })()}
            ${ins.state === "failed" ? `<div class="hint">⚠ last attempt stopped: ${esc(ins.error || "unknown")} — press download to retry/resume</div>` : ""}
            ${lo.error ? `<div class="hint">${lo.error}</div>` : ""}`}
       `;
@@ -3310,7 +3334,8 @@ async function loadAgents() {
       } catch (e) { toast("download start failed: " + e.message, "err"); }
       loadAgents();
     });
-    if (installing && S.view === "agents") {
+    const autoRunning = (ins.auto || {}).state === "running";
+    if ((installing || autoRunning) && S.view === "agents") {
       clearTimeout(window.__agPoll);
       window.__agPoll = setTimeout(() => { if (S.view === "agents") loadAgents(); }, 4000);
     }
@@ -3683,6 +3708,11 @@ setInterval(() => {
   if (_tickN % 5 === 0) { pollChartLink(); pollBacktest(); }
   if (_tickN % 30 === 15) {           // version watch: auto-reload
     api("/api/health").then(h => {
+      // scheduler liveness (measured, not guessed): a silent GRC clock is
+      // NOT an offline engine — surface it as its own state and let the
+      // server-side watchdog heal it
+      if (h.clock) S.clockInfo = h.clock;
+      if (h.brain?.state) S.brainLive = h.brain;
       if (!h.commit || h.commit === "?") return;
       if (!S._commit) { S._commit = h.commit; return; }
       if (h.commit !== S._commit && !S._reloaded) {
@@ -3896,6 +3926,17 @@ function applySnapshot(snap) {
                                 "chip-warn",
                                 "late answers discarded, never applied (I-3)")
                          : "");
+    const cl = S.clockInfo;
+    if (cl) {
+      const bad = cl.alive === false ||
+        (cl.last_fired_age_s != null && cl.last_fired_age_s > 600);
+      if (bad)
+        sc.innerHTML += chip("GRC SCHEDULER HEALING", "chip-warn",
+          "the master clock restarts itself; the board keeps serving while it heals");
+      else if (cl.restarts > 0)
+        sc.innerHTML += chip("GRC SELF-HEALED ×" + cl.restarts, "chip-warn",
+          "the master clock was dead or silent and was restarted automatically");
+    }
   }
   refreshActiveView();
 }
@@ -3942,12 +3983,19 @@ function connectWS() {
     // silent for 15s is closed there — never wait the browser's 30-minute
     // timeout (error J-7)
   };
-  ws.onmessage = () => { S.wsLast = Date.now(); };
   ws.onclose = () => {
     S.wsRetry++;
     setTimeout(connectWS, Math.min(8000, 1000 * S.wsRetry));
   };
-  ws.onmessage = ev => { try { handleMessage(JSON.parse(ev.data)); } catch { /* partial */ } };
+  // ONE handler. This used to be assigned twice, so the liveness stamp was
+  // overwritten by the dispatch handler: S.wsLast only ever held the open
+  // time, the master tick then judged the socket silent after 15 s and
+  // closed it — a reconnect loop every 15 s that the user saw as "the
+  // engine/brain keeps disconnecting".
+  ws.onmessage = ev => {
+    S.wsLast = Date.now();
+    try { handleMessage(JSON.parse(ev.data)); } catch { /* partial */ }
+  };
 }
 
 /* ═══════════ events ═══════════ */
@@ -3977,7 +4025,8 @@ function bindGlobal() {
 }
 
 /* ═══════════ resilience: surface errors + detect engine offline ═══════════ */
-let _errShown = 0, _fetchFails = 0;
+let _errShown = 0, _fetchFails = 0;      // _fetchFails = unreachable only
+let _httpFails = 0;                      // one panel erroring != offline
 function _netBanner(show, detail) {
   let b = $("#net-banner");
   if (!show) { if (b) b.remove(); return; }
@@ -3995,14 +4044,17 @@ const _origFetch = window.fetch;
 window.fetch = async (...args) => {
   try {
     const r = await _origFetch(...args);
-    if (r.ok) { _fetchFails = 0; _netBanner(false); }
+    if (r.ok) { _fetchFails = 0; _httpFails = 0; _netBanner(false); }
     else if (String(args[0]).includes("/api/")) {
-      if (++_fetchFails >= 3) _netBanner(true, `ENGINE ERROR ${r.status} — check server log`);
+      _fetchFails = 0;                   // the engine answered
+      if (++_httpFails >= 3)
+        _netBanner(true, `ENGINE ERROR ${r.status} — a panel failed; the engine is answering`);
     }
     return r;
   } catch (e) {
+    _httpFails = 0;
     if (String(args[0]).includes("/api/") && ++_fetchFails >= 3)
-      _netBanner(true, "ENGINE OFFLINE — retrying (if in Codespaces: bash run.sh)");
+      _netBanner(true, "ENGINE UNREACHABLE — retrying (start it: bash run.sh)");
     throw e;
   }
 };

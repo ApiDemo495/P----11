@@ -316,6 +316,7 @@ class MarketFeed:
             "bars_sim": sum(1 for st in self.states.values()
                             for src in st.sources if _family(src) == "sim"),
             "history_24h": history,
+            "sim_refill": getattr(self, "sim_refill", None),
             "history_complete_24h": bool(history) and all(
                 row.get("continuous_24h") for row in history.values()),
             "stale": stale,
@@ -871,6 +872,73 @@ class MarketFeed:
         self._sim_tasks.append(t)
         self._tasks.append(t)
 
+    # -- simulator gap repair ------------------------------------------
+    async def _sim_backfill(self, first_min: int, last_min: int) -> int:
+        """Synthesise the minutes the simulator *missed while it was asleep*.
+
+        A suspended host (VM freeze, laptop lid, Codespace pause) stops the
+        1-minute sim rolls; on resume the tape has a hole and the honest
+        `continuous_24h` check reports e.g. 642/1440 bars with one 799-minute
+        gap — which reads as "the engine was offline for hours". The
+        simulator is synthetic by definition, so it fast-forwards the same
+        regime-switching process across the hole instead of leaving it.
+        Every bar is still written with ``source="sim"``, and the refill is
+        recorded in ``stats()["sim_refill"]`` so nothing claims to be real
+        tape. At most 3 days are replayed; older holes stay visible.
+        """
+        total = last_min - first_min + 1
+        if total <= 0:
+            return 0
+        cap = 1440 * 3
+        skipped = 0
+        if total > cap:
+            skipped = total - cap
+            first_min = last_min - cap + 1
+            total = cap
+        rng = self._sim_rng
+        sig = {"BTC": 7e-5, "PAXG": 2e-5, "ETH": 9e-5, "BNB": 8e-5}
+        per_min = dict(SIM_PER_MIN_VOL)
+        minute_sig = math.sqrt(60.0)
+        for m in range(first_min, last_min + 1):
+            if (m - first_min) % 240 == 0:
+                await asyncio.sleep(0)      # never hog the loop while repairing
+            for sym in SYMBOL_ORDER:
+                st = self.states[sym]
+                reg = self._sim_regime.setdefault(
+                    sym, {"drift": 0.0, "left": 600, "vol_mult": 1.0})
+                reg["left"] -= 1
+                if reg["left"] <= 0:
+                    reg["left"] = rng.randint(600, 2400)
+                    reg["drift"] = rng.choice([-0.00045, -0.0002, 0.0,
+                                               0.0002, 0.00045])
+                    if sym == "PAXG":
+                        reg["drift"] *= 0.25
+                    reg["vol_mult"] = rng.choice([0.7, 1.0, 1.6, 2.4])
+                price = self._sim_price[sym]
+                swing = sig[sym] * minute_sig * reg["vol_mult"]
+                close = price * math.exp(rng.gauss(reg["drift"], swing))
+                if sym == "PAXG":
+                    close += 0.02 * (SIM_BASE_PRICES[sym] - close)
+                wick = abs(close - price) * 0.5 + price * swing * 0.8
+                high = max(price, close) + wick * abs(rng.gauss(0.0, 1.0)) * 0.5
+                low = min(price, close) - wick * abs(rng.gauss(0.0, 1.0)) * 0.5
+                self._sim_price[sym] = close
+                st.live_price = close
+                st.push_bar(m * 60, close,
+                            per_min[sym] * rng.lognormvariate(0, 0.3),
+                            price, high, low, source="sim")
+                st.live_open = close
+                st.live_high = close
+                st.live_low = close
+                st.live_volume = 0.0
+        self.sim_refill = {"minutes": total, "skipped_minutes": skipped,
+                           "from": first_min * 60, "to": last_min * 60,
+                           "at": time.time()}
+        log.warning("sim tape: clock jumped — synthesised %s minute bars "
+                    "(skipped %s older ones); all bars source=sim",
+                    total, skipped)
+        return total
+
     async def _sim_tick_loop(self) -> None:
         rng = self._sim_rng
         per_sec_vol = {s: SIM_PER_MIN_VOL[s] / 60.0 for s in SYMBOL_ORDER}
@@ -887,6 +955,13 @@ class MarketFeed:
                 continue               # real family owns the tape now (D-1)
             now = time.time()
             minute = int(now // 60)
+            if minute - last_minute > 1:
+                # the host slept/suspended: repair the hole in the sim tape
+                # before rolling the current minute (never in real mode)
+                try:
+                    await self._sim_backfill(last_minute + 1, minute - 1)
+                except Exception:
+                    log.exception("sim tape gap repair failed")
             rolled = minute != last_minute
             for sym in SYMBOL_ORDER:
                 st = self.states[sym]

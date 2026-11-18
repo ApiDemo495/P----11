@@ -21,8 +21,10 @@ def test_lock_created_before_levels_anchor():
 
 def test_branch_barriers_are_gated_tpsl_not_subframe():
     src = (ROOT / "app" / "engine.py").read_text()
-    i = src.index("def branch_stats")
-    seg = src[i:i + 1200]
+    # skip the memoising wrapper (branch_stats_cached) and read the
+    # measurement itself
+    i = src.index("def branch_stats(self")
+    seg = src[i:i + 1600]
     assert 'tp1 = float(d.get("tp") or 0.0)' in seg
 
 

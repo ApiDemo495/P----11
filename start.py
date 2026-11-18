@@ -72,8 +72,35 @@ def http_ok(url: str, timeout: float = 3.0) -> bool:
         return False
 
 
+def tcp_ok(port: int = PORT, timeout: float = 1.5) -> bool:
+    """Is the port accepting connections at all?"""
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def health_probe() -> tuple[bool, bool]:
+    """(port_open, http_ok).
+
+    BUSY IS NOT DEAD. The engine's event loop can be busy for tens of
+    seconds (brain restore, warm replay, a GRC pass); during that time
+    /api/health answers slowly but the process is fine. The old watchdog
+    only asked `http_ok(..., 3s)`, counted twelve 3-second timeouts as a
+    hang and killed a healthy engine — which then re-ran the whole warm
+    replay and went "offline" again: the restart loop the user saw. Now a
+    closed port is the fast-death signal and a slow-but-listening port is
+    merely silent (with a much longer fuse).
+    """
+    if not tcp_ok():
+        return False, False
+    return True, http_ok(HEALTH, 8.0)
+
+
 def healthy() -> bool:
-    return http_ok(HEALTH, 3.0)
+    return http_ok(HEALTH, 8.0)
 
 
 # ── placeholder: answers from second ~0 until the app is ready ─────
@@ -466,7 +493,7 @@ def serve() -> int:
         _state["detail"] = "uvicorn is booting"
         placeholder.stop()          # free the port BEFORE uvicorn binds
         _child = launch_engine(py)
-        deadline = time.time() + 120
+        deadline = time.time() + 240
         while time.time() < deadline:
             if _child.poll() is not None:
                 log(f"engine exited rc={_child.returncode} during boot")
@@ -488,21 +515,38 @@ def serve() -> int:
             time.sleep(10)
             continue
         # ── watchdog: child alive + health, else restart ──
+        # Grace after a boot: the warm replay + brain restore legitimately
+        # keep the loop busy for minutes. Killing the engine inside that
+        # window guarantees the next boot repeats it (restart loop).
+        launched = time.time()
+        dead = silent = 0
         while True:
             time.sleep(5)
             if _child.poll() is not None:
                 log(f"engine died rc={_child.returncode} — restarting")
                 placeholder.start()
                 break
-            if healthy():
+            port_open, ok = health_probe()
+            if ok:
+                dead = silent = 0
                 fails = 0
+            elif port_open:
+                silent += 1                    # slow but alive: never kill fast
+                dead = 0
             else:
-                fails += 1
-                if fails >= 12:                # ~60 s of bad health
-                    log("engine hung (60 s unhealthy) — restarting")
-                    stop_engine(_child)
-                    placeholder.start()
-                    break
+                dead += 1                      # port closed: real death signal
+                silent = 0
+            warm = time.time() - launched < 300
+            if dead >= 12:                     # ~60 s with the port closed
+                log("engine stopped listening (60 s) — restarting")
+                stop_engine(_child)
+                placeholder.start()
+                break
+            if silent >= (60 if not warm else 120):   # 5 min (10 in warm-up)
+                log(f"engine unresponsive for {silent * 5}s — restarting")
+                stop_engine(_child)
+                placeholder.start()
+                break
         time.sleep(3)
 
 
