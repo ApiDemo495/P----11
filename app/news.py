@@ -346,6 +346,9 @@ class NewsSystem:
     def _append(self, item: dict[str, Any]) -> bool:
         """False when the fingerprint was already seen (dedupe)."""
         now = time.time()
+        # The sim generator labels its own output (`_sim_tick`); ingestion of
+        # real wire items must NOT be relabelled here — the relevance gate
+        # below counts non-synthetic drops and tests/sources rely on it.
         enrich_item(item)
         # docs11 §4.1 / error N-5: an item irrelevant to EVERY asset is
         # dropped at ingest and COUNTED with examples — never hidden.
@@ -625,6 +628,14 @@ class NewsSystem:
             "source": src,
             "symbols": [sym],
             "ts": now,
+            # A generated headline attributed to "Reuters" is still a
+            # generated headline. Without this flag the sim fed tier-1
+            # looking items into the critical-event detector, which fired a
+            # genuine emergency re-lock every 60 s (60 s cooldown) on all
+            # four 1-minute windows — i.e. trades changed mid-window
+            # because the demo's own random news said so.
+            "synthetic": True,
+            "simulated": True,
         })
 
     # -- reads --------------------------------------------------------------
@@ -662,12 +673,22 @@ class NewsSystem:
                      "exchange", "etf", "fed", "rate", "sec", "binance",
                      "coinbase", "market", "price")
 
-    def critical(self, symbol: str, within_min: float = 30.0) -> list[dict]:
+    def critical(self, symbol: str, within_min: float = 30.0,
+                 include_synthetic: bool = False) -> list[dict]:
         """docs11 §4.4 — recent tier-1/2 headlines carrying this asset
-        (recency window in minutes, chosen by the caller)."""
+        (recency window in minutes, chosen by the caller).
+
+        SYNTHETIC items are excluded by default: a simulated/seed headline
+        must never be able to re-lock a real trade. They used to pass (the
+        sim source carries a high reliability), so the engine's own random
+        news generator fired an emergency re-lock every 60 s — the "trades
+        keep changing mid-window" report. Pass include_synthetic=True for
+        display lists only, which carry the `synthetic` flag per item.
+        """
         now = time.time()
         return [it for it in self._live_items()
-                if (it.get("reliability") or 0.0) >= 0.8
+                if (include_synthetic or not it.get("synthetic"))
+                and (it.get("reliability") or 0.0) >= 0.8
                 and float((it.get("relevance_by_asset") or {}).get(symbol, 0.0)) > 0
                 and now - float(it.get("ts") or 0) <= within_min * 60.0]
 
@@ -837,13 +858,27 @@ class NewsSystem:
         accel = float(self.tape_accel.get(symbol, 0.0))
         out: dict[str, Any] = {"symbol": symbol, "evaluated_at": now,
                                "tape_accel": accel, "horizons": {}}
-        # scored layer excludes labelled synthetic/seed items (docs11 §4.7:
-        # synthetic coverage is visible in the feed, never in the drivers)
-        relevant = [
+        # Scored layer: real items only (docs11 §4.7 — synthetic coverage is
+        # visible in the feed, never in the drivers). Synthetic items are
+        # still reported SEPARATELY per horizon as `simulated_*`, so a demo
+        # tape shows what the simulator is saying without pretending it is
+        # wire copy and without letting it reach a decision: `critical()`
+        # ignores them, so they can never fire a lock or a re-lock.
+        _by_asset = [
             it for it in self._live_items()
-            if not it.get("synthetic")
-            and float((it.get("relevance_by_asset") or {}).get(symbol, 0.0)) > 0.0
+            if float((it.get("relevance_by_asset") or {}).get(symbol, 0.0)) > 0.0
         ]
+        relevant = [it for it in _by_asset if not it.get("synthetic")]
+        synthetic_items = [it for it in _by_asset if it.get("synthetic")]
+        out["items_scored"] = len(relevant)
+        out["simulated_items"] = len(synthetic_items)
+        out["coverage_kind"] = (
+            "simulated" if synthetic_items and not relevant
+            else "mixed" if synthetic_items else
+            "live" if relevant else "none")
+        out["decision_note"] = (
+            "synthetic headlines are listed as simulated_* per horizon; they "
+            "can never trigger a lock, a re-lock or a learned theme")
         for tf in TF_ORDER:
             W = TIMEFRAMES[tf]["minutes"]
             halflife = W / 2.0
@@ -885,6 +920,25 @@ class NewsSystem:
                 niv_den += w
             niv = niv_num / (niv_den + 0.5) if (niv_den + 0.5) > 0 else 0.0
             drivers.sort(key=lambda d: -abs(d["contribution"]))
+            # simulation view (display only, never scored)
+            _sim_total = 0.0
+            _sim_drivers: list[dict] = []
+            for it in synthetic_items:
+                _age = (now - float(it.get("ts") or now)) / 60.0
+                if _age > 12.0 * halflife:
+                    continue
+                _rel = float((it.get("relevance_by_asset") or {}).get(symbol, 0.0))
+                _c = (float(it.get("credibility") or 0.45)
+                      * (0.5 ** (_age / halflife))
+                      * float(it.get("magnitude") or 0.3)
+                      * float((it.get("impacts") or {}).get(symbol, 0.0)) * _rel)
+                _sim_total += _c
+                _sim_drivers.append({
+                    "headline": str(it.get("headline"))[:110],
+                    "theme": it.get("theme"), "age_min": round(_age, 1),
+                    "impact": round(_c, 5), "source": it.get("source"),
+                    "synthetic": True})
+            _sim_drivers.sort(key=lambda d: -abs(d["impact"]))
             out["horizons"][tf] = {
                 "impact": round(math.tanh(total), 4),
                 "niv": round(niv, 4),
@@ -893,6 +947,9 @@ class NewsSystem:
                 "tau_min": tau,
                 "drivers": drivers[:4],
                 "n_items": len(drivers),
+                "simulated_impact": round(math.tanh(_sim_total), 4),
+                "simulated_drivers": _sim_drivers[:4],
+                "simulated_n": len(_sim_drivers),
             }
         # NIV history for the sentiment-swing trigger (|ΔNIV| over 90 s)
         hist = self._niv_hist.setdefault(symbol, [])
@@ -926,7 +983,12 @@ class NewsSystem:
             else:
                 trig = {"reason": "NEWS_EMERGENCY: " + "; ".join(
                             str(c.get("headline"))[:70] for c in crit[:3]),
-                        "niv_swing_90s": swing}
+                        "niv_swing_90s": swing,
+                        "items": [{"source": c.get("source"),
+                                   "at": c.get("ts"),
+                                   "headline": str(c.get("headline"))[:90]}
+                                  for c in crit[:3]],
+                        "synthetic": False}
         out["emergency_trigger"] = trig
         self.last_eval[symbol] = out
         return out

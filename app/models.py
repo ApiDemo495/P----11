@@ -89,6 +89,12 @@ class TFCycle:
     issued: bool = False             # side issued (docs11-doublecheck: always)
     tier: str = "watch-only"         # full|half|quarter|watch-only (size hint)
     p_side: float = 0.5              # calibrated P(side) in [0.50, 1)
+    # provenance of that probability — the board must be able to show the
+    # measured sample size behind a tier instead of a bare label
+    calib_n: int = 0
+    calib_source: str = ""
+    noise_floor_s: float = 0.0
+    tier_rule: str = ""
     cycle_start: float = 0.0         # epoch seconds
     cycle_end: float = 0.0           # epoch seconds (countdown target)
     targets: list[TargetState] = field(default_factory=list)
@@ -134,6 +140,10 @@ class TFCycle:
         return {
             "tier": self.tier,
             "p_side": self.p_side,
+            "calib_n": self.calib_n,
+            "calib_source": self.calib_source,
+            "noise_floor_s": self.noise_floor_s,
+            "tier_rule": self.tier_rule,
             "symbol": self.symbol,
             "tf": self.tf,
             "W": self.W,

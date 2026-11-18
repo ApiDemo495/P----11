@@ -36,6 +36,8 @@ from .config import (
     asset_profile,
     BRAIN_COMPONENT_ID,
     CONFIDENCE_FLOOR,
+    RECHECK_PASS_SCORE,
+    RECHECK_CONF_REACH,
     EMOTION_COMPONENT_ID,
     EXTREME_OVERRIDE_CCI,
     EXTREME_OVERRIDE_NEWS,
@@ -136,48 +138,139 @@ STATE_DIRECTIONS = {
 def _recheck_prediction(*, direction: int, conf: float, floor: float,
                         feed_age_s, voters: dict, levels_ok: bool,
                         ratio, lock_dir: int, tfs_computed: int,
-                        exp_bps=None, exp_n: int = 0) -> dict:
-    """The analysis RECHECK gate (user: calculate everything, take every
-    data, recheck everything, THEN produce a prediction). A prediction
-    is produced only when every check passes; otherwise the honest
-    output is NO TRADE with the failed checks named. Checks: live data
-    (feed <= 20 s old), all 4 timeframes computed, subsystem consensus
-    (>=3 of the fused/emotion/physics/news/hedge voters agree with the
-    direction), levels valid + ratio in [1:1, 4:1], confidence above the asset
-    floor, and no contradiction with the window's locked call."""
-    checks = []
-    def add(name, ok, detail):
-        checks.append({"name": name, "ok": bool(ok), "detail": detail})
-    add("live data", feed_age_s is not None and feed_age_s <= 20,
-        f"feed age {feed_age_s:.1f}s" if feed_age_s is not None else "no ticks yet")
+                        exp_bps=None, exp_n: int = 0,
+                        exp_bps_all=None, exp_n_all: int = 0,
+                        exp_sd=None) -> dict:
+    """The analysis RECHECK — correctness is hard, opinion is graded.
+
+    It used to be a flat AND of seven checks, so a single soft
+    disagreement ("only 2 of 5 voters agreed", "confidence 0.34 vs floor
+    0.35") printed NO TRADE even for a perfectly serviceable call. Markets
+    are never unanimous and the old gate demanded unanimity, so it never
+    fired: the "always says no trade / pessimistic" report.
+
+    What is HARD (never negotiable, these are correctness or user rules):
+      * the tape is live (tick <= 20 s old);
+      * all four timeframes were computed in this run;
+      * conviction is within reach of the floor (conf >= 0.6 x floor —
+        better than 40 % short is not a call, it is noise);
+      * levels are valid and TP:SL >= 1:1 (below 1:1 is never worth trading);
+      * the call does not contradict the window's locked side (the lock
+        stands; a flip mid-window is the churn the user reported);
+      * measured expectancy is not negative when the ledger has >= 20
+        settled windows.
+
+    What is GRADED (partial credit, weighted into a score):
+      * subsystem consensus (credit = agreeing/4, capped at 1);
+      * confidence above the floor (credit = conf/floor, capped at 1).
+    A prediction is produced when no hard rule fails and the weighted score
+    clears `RECHECK_PASS_SCORE` (0.55). Every check is listed with its
+    weight and credit, so a refusal always says what would have to change
+    and by how much instead of a blanket NO TRADE.
+    """
+    checks: list[dict] = []
+    hard_failed: list[str] = []
+
+    def add(name: str, ok: bool, detail: str, weight: float,
+            hard: bool = False, credit: float | None = None) -> None:
+        c = {"name": name, "ok": bool(ok), "detail": detail,
+             "weight": float(weight), "hard": bool(hard)}
+        if credit is not None:
+            c["credit"] = round(max(0.0, min(1.0, float(credit))), 4)
+        checks.append(c)
+        if hard and not ok:
+            hard_failed.append(name)
+
+    live_ok = feed_age_s is not None and feed_age_s <= 20
+    add("live data", live_ok,
+        (f"feed age {feed_age_s:.1f}s" if feed_age_s is not None
+         else "no ticks yet"), 0.0, hard=True)
     add("all timeframes computed", tfs_computed >= 4,
-        f"{tfs_computed}/4 timeframes in this run")
+        f"{tfs_computed}/4 timeframes in this run", 0.0, hard=True)
+
     agreeing = [k for k, v in voters.items()
                 if v and direction and (v > 0) == (direction > 0)]
-    add("subsystem consensus", direction != 0 and len(agreeing) >= 3,
-        f"{len(agreeing)}/{len(voters)} voters agree"
+    n_agree = len(agreeing)
+    add("subsystem consensus", direction != 0 and n_agree >= 3,
+        f"{n_agree}/{len(voters)} voters agree"
         + (f" ({', '.join(agreeing)})" if agreeing else "")
-        if direction else "no direction to agree with")
-    add("levels valid + ratio ≥ 1:1", levels_ok and ratio is not None
-        and 1.0 <= float(ratio) <= 4.0,
-        f"ratio {ratio} (band 1:1–4:1, 2:1 preferred)"
-        if ratio is not None else "no levels")
-    add("confidence above floor", direction != 0 and conf > floor,
-        f"conf {conf:.3f} vs floor {floor:.3f}")
+        if direction else "no direction to agree with",
+        0.45, credit=(min(1.0, n_agree / 4.0) if direction else 0.0))
+
+    ratio_ok = bool(levels_ok and ratio is not None
+                    and 1.0 <= float(ratio) <= 4.0)
+    add("levels valid + ratio ≥ 1:1", ratio_ok,
+        (f"ratio {ratio} (band 1:1–4:1, 2:1 preferred)"
+         if ratio is not None else "no levels"), 0.0, hard=True)
+
+    conf_credit = (min(1.0, max(0.0, conf) / floor) if floor > 0 else 0.0)
+    above_floor = direction != 0 and conf > floor
+    add("confidence above floor", above_floor,
+        f"conf {conf:.3f} vs floor {floor:.3f}"
+        + ("" if above_floor else f" — gap {floor - conf:.3f}"),
+        0.30, credit=conf_credit if direction != 0 else 0.0)
+    reachable = direction != 0 and conf >= RECHECK_CONF_REACH * floor
+    add("conviction within reach of the floor", reachable,
+        f"conf {conf:.3f} vs minimum {RECHECK_CONF_REACH * floor:.3f} "
+        f"(0.6 × floor)", 0.0, hard=True)
+
     if exp_bps is not None and exp_n >= 20:
+        # Refuse only on EVIDENCE. A negative mean over a handful of noisy
+        # windows (t ≈ −1) is indistinguishable from zero; treating it as a
+        # veto is pessimism dressed up as rigour — the "always NO TRADE"
+        # report. A mean that is negative AND significant (t ≤ −2) is a
+        # real measured edge against us, and stays hard.
+        import math as _m
+        _t = None
+        if exp_sd and exp_n > 1:
+            _t = exp_bps / (float(exp_sd) / _m.sqrt(exp_n))
+        _significant = (_t is None) or (_t <= -2.0)
+        _all = (f" · all-time {exp_bps_all:+.1f} bp/window over n={exp_n_all}"
+                if exp_bps_all is not None and exp_n_all else "")
+        _hard = bool(exp_bps <= 0 and _significant)
         add("measured expectancy (settled ledger)", exp_bps > 0,
-            f"{exp_bps:+.1f} bp/window over n={exp_n} settled")
+            f"recent {exp_bps:+.1f} bp/window over n={exp_n} settled"
+            + (f" (t={_t:.2f}" + (", significant" if _t <= -2.0 else
+                                  ", not significant") + ")"
+               if _t is not None else "")
+            + _all, 0.20, hard=_hard,
+            credit=(1.0 if exp_bps > 0 else
+                    max(0.0, min(1.0, 0.5 + 0.25 * (_t or -2.0)))))
     if lock_dir:
-        add("agrees with locked call", direction == lock_dir,
+        agrees = direction == lock_dir
+        add("agrees with locked call", agrees,
             "locked " + ("BUY" if lock_dir > 0 else "SELL")
             + " vs analysis " + ("BUY" if direction > 0 else
-                                  "SELL" if direction < 0 else "FLAT"))
+                                  "SELL" if direction < 0 else "FLAT"),
+            0.0, hard=True)
+
+    graded = [c for c in checks if c["weight"] > 0]
+    total_w = sum(c["weight"] for c in graded) or 1.0
+    score = sum(c["weight"] * (c.get("credit", 1.0 if c["ok"] else 0.0))
+                for c in graded) / total_w
     failed = [c["name"] for c in checks if not c["ok"]]
-    return {"passed": not failed and direction != 0,
-            "checks": checks, "failed": failed,
-            "verdict": ("RECHECK PASSED — prediction produced" if not failed
-                        and direction != 0 else
-                        "NO TRADE — recheck failed: " + ", ".join(failed))}
+    passed = (not hard_failed) and direction != 0 and score >= RECHECK_PASS_SCORE
+    if hard_failed:
+        _det = {c["name"]: c["detail"] for c in checks if c["hard"]}
+        verdict = ("NO TRADE — hard rule failed: " + "; ".join(
+            f"{n} ({_det.get(n, '')})" for n in hard_failed))
+    elif direction == 0:
+        verdict = "NO TRADE — no direction to issue"
+    elif passed:
+        verdict = (f"RECHECK PASSED — graded score {score:.2f} ≥ "
+                   f"{RECHECK_PASS_SCORE:.2f}"
+                   + (f" (soft flags: {', '.join(failed)})" if failed
+                      else " (every check green)"))
+    else:
+        verdict = (f"NO TRADE — graded score {score:.2f} < "
+                   f"{RECHECK_PASS_SCORE:.2f}; weakest: "
+                   + ", ".join(c["name"] for c in graded if not c["ok"]))
+    return {"passed": bool(passed), "checks": checks, "failed": failed,
+            "hard_failed": hard_failed, "score": round(score, 4),
+            "threshold": RECHECK_PASS_SCORE,
+            "note": ("correctness and user rules are hard; consensus and "
+                     "confidence are graded — the market is never unanimous"),
+            "verdict": verdict}
 
 
 def _calibration_delta(audit: dict) -> float:
@@ -1251,7 +1344,8 @@ class PredictionEngine:
             _adv_k = self._adv_blend_k(symbol, tf)
             fin["adv_blend_k"] = round(_adv_k, 4)
             _beh["score"] = float(_beh["score"]) + _adv_k * _adv["vote"]
-            _tier = self._tier_for(symbol, tf, float(_beh["score"]))
+            _tier = self._tier_for(symbol, tf, float(_beh["score"]),
+                                   strength=pack.get("strength"))
             fin.update(_tier)
             fin["raw_score"] = round(float(_beh["score"]), 5)
             pack = dict(pack)
@@ -1373,6 +1467,9 @@ class PredictionEngine:
                 "raw_score": fin.get("raw_score"),
                 "noise_floor_s": fin.get("noise_floor_s"),
                 "calib_n": fin.get("calib_n"),
+                "calib_source": fin.get("calib_source"),
+                "noise_floor_s": fin.get("noise_floor_s"),
+                "tier_rule": fin.get("tier_rule"),
                 "calib_provisional": fin.get("calib_provisional"),
                 "asset_floor": fin.get("asset_floor"),
                 "asset_nature": fin.get("asset_nature"),
@@ -1610,6 +1707,9 @@ class PredictionEngine:
                     "raw_score": results[tf].get("raw_score"),
                     "noise_floor_s": results[tf].get("noise_floor_s"),
                     "calib_n": results[tf].get("calib_n"),
+                    "calib_source": results[tf].get("calib_source"),
+                    "noise_floor_s": results[tf].get("noise_floor_s"),
+                    "tier_rule": results[tf].get("tier_rule"),
                     "calib_provisional": results[tf].get("calib_provisional"),
                     "lock": dict(self.locks.get((symbol, tf)) or {}),
                     "asset_floor": results[tf].get("asset_floor"),
@@ -1916,15 +2016,36 @@ class PredictionEngine:
             "edges": edges,
         }
 
-    def _tier_for(self, symbol: str, tf: str, score: float) -> dict:
+    def _tier_for(self, symbol: str, tf: str, score: float,
+                  strength: float | None = None) -> dict:
         """docs11-doublecheck §4: calibrated P(side) + tier. The noise
         floor lives in SCORE units and only sets the tier — it can
         never suppress the side. Provisional Platt: a = 1/median|s|
         (a typical score maps to P≈0.73), labelled provisional until
-        40 score samples exist for this asset+TF."""
+        40 score samples exist for this asset+TF.
+
+        The scale MUST come from measured score history. It used to fall
+        back to `p_side = 0.5` whenever fewer than 10 samples existed — and
+        since the ladder only appends one score per *cycle*, a fresh
+        process sat at P 0.50 → `watch-only` for hours: the permanent
+        "NO TRADE" the user reported. Now the pool falls back to the
+        persisted |score| ring (survives restarts), then to the measured
+        voter-agreement purity, each labelled with its source.
+        """
         import math as _m
         pool = [abs(float(v)) for v in
                 (self.score_hist.get((symbol, tf), []) or []) if v is not None]
+        source = "in-process score history"
+        if len(pool) < 10:
+            try:
+                ring = self.hist.ring(self.hist.tf_key(symbol, tf, "score_abs"),
+                                      200)
+                ring_vals = [abs(float(v)) for v in list(ring)
+                             if v is not None and abs(float(v)) > 0]
+                if len(ring_vals) >= 10:
+                    pool, source = ring_vals, "persisted |score| ring"
+            except Exception:
+                pass
         med = 0.0
         if len(pool) >= 10:
             _o = sorted(pool); med = _o[len(_o) // 2]
@@ -1932,6 +2053,13 @@ class PredictionEngine:
         p_side = 0.5
         if med > 0:
             p_side = 1.0 / (1.0 + _m.exp(-min(20.0, abs(score) / med)))
+        elif strength is not None:
+            # no score scale at all yet: use measured VOTER AGREEMENT, shrunk
+            # toward the coin flip (0.5 + 0.4·(purity − 0.5)) — provisional,
+            # and never silently 0.5 (which froze every window to watch-only)
+            _st = max(0.0, min(1.0, float(strength)))
+            p_side = 0.5 + 0.4 * (_st - 0.5)
+            source = "voter-agreement purity (no score history yet)"
         if abs(score) <= floor_s:
             tier = "watch-only"
         elif p_side >= 0.62:
@@ -1944,7 +2072,11 @@ class PredictionEngine:
             tier = "watch-only"
         return {"tier": tier, "p_side": round(p_side, 4),
                 "noise_floor_s": round(floor_s, 5),
-                "calib_n": len(pool), "calib_provisional": len(pool) < 40}
+                "calib_n": len(pool), "calib_source": source,
+                "calib_provisional": len(pool) < 40,
+                "tier_rule": ("size hint only — the side is never suppressed "
+                              "by the tier; watch-only = below the measured "
+                              "noise floor")}
 
     def _direction_ladder(self, symbol: str, tf: str, score: float,
                           comps: list, brain: dict, prev_side: int) -> tuple[int, str, float]:
@@ -2370,8 +2502,16 @@ class PredictionEngine:
                 ratio=ratio_used,
                 lock_dir=int(getattr(cyc, "direction", 0) or 0) if cyc else 0,
                 tfs_computed=len(res_pack),
-                exp_bps=_lstats.get("exp_bps"),
-                exp_n=int(_lstats.get("n") or 0))
+                exp_bps=(_lstats.get("exp_bps_recent")
+                         if int(_lstats.get("exp_n_recent") or 0) >= 20
+                         else _lstats.get("exp_bps")),
+                exp_n=int(_lstats.get("exp_n_recent")
+                          if int(_lstats.get("exp_n_recent") or 0) >= 20
+                          else (_lstats.get("n") or 0)),
+                exp_bps_all=_lstats.get("exp_bps"),
+                exp_n_all=int(_lstats.get("exp_n_all")
+                              or _lstats.get("n") or 0),
+                exp_sd=_lstats.get("exp_sd_recent"))
             await self._emit_stage(
                 job, "recheck", "done" if recheck["passed"] else "blocked",
                 _t_re, time.time(), recheck["verdict"],
@@ -3245,8 +3385,23 @@ class PredictionEngine:
                 "new_entry": price, "halt_s": 30, "row": row}
 
     def _apply_tape_veto(self, symbol: str, res_pack: dict[str, dict]) -> None:
-        """Last 2-3 bars contradicting the side flatten a low-conviction
-        call (advice 8.1). Printed as tape_veto in the reason."""
+        """Adverse tape cuts SIZE, graded by how adverse it actually is.
+
+        It used to trip on a flat 4 bps move over three bars whenever
+        confidence < 0.62 — on a tape whose per-minute sigma is ~7 bps that
+        is ordinary noise, so nearly every window was cut to watch-only and
+        the board read as a permanently pessimistic "no trade" system.
+
+        Now the threshold is measured: `need = max(4 bps, 2·sigma_bar·√3)`
+        (a two-sigma, three-bar adverse move for THIS asset and timeframe).
+        ratio = |move| / need:
+          * ratio >= 1.0  → tier cut to watch-only (the tape really is
+            contradicting the call), side untouched, reason printed;
+          * 0.6 … 1.0     → one notch (full→half→quarter): partial credit,
+            size reduced instead of the trade cancelled;
+          * below 0.6     → not a contradiction; only the measurement is
+            recorded (`tape_z`) so the claim can be audited later.
+        """
         price = self.feed.prices().get(symbol, 0.0)
         if price <= 0:
             return
@@ -3258,21 +3413,46 @@ class PredictionEngine:
             if len(closes) < 3:
                 continue
             move = closes[-1] - closes[0]
-            threshold = price * 0.0004          # ~4 bps over 3 bars
-            opposes = (move > threshold and res["direction"] < 0) or \
-                      (move < -threshold and res["direction"] > 0)
-            if opposes and float(res.get("confidence") or 0) < 0.62:
-                # side stands (never flattened); conviction downgraded
-                res["tier"] = "watch-only"
-                res["tape_veto"] = True
-                res["reason"] = (f"TAPE VETO: last 3 bars moved "
-                                 f"{move / price * 1e4:+.1f} bps against the call "
-                                 f"and confidence < 0.62 — tier cut to watch-only. " +
-                                 str(res.get("reason") or ""))[:400]
-                disp = self.display_systems.get((symbol, tf))
-                if disp is not None:
-                    disp["tier"] = "watch-only"
-                    disp["reason"] = res["reason"]
+            opposes = ((move > 0 and res["direction"] < 0)
+                       or (move < 0 and res["direction"] > 0))
+            if not opposes:
+                res["tape_z"] = 0.0
+                continue
+            base_bps = 4e-4
+            _ring = self.hist.ring(self.hist.tf_key(symbol, tf, "std_r"),
+                                   HIST_STD_R)
+            _sig = float(_ring.mean()) if len(_ring) else 0.0
+            _need_bps = max(base_bps, 2.0 * _sig * (3.0 ** 0.5)) if _sig else base_bps
+            ratio = abs(move) / price / _need_bps
+            res["tape_z"] = round(ratio, 3)
+            res["tape_need_bps"] = round(_need_bps * 1e4, 2)
+            conf = float(res.get("confidence") or 0.0)
+            if conf >= 0.62 or ratio < 0.6:
+                continue
+            # an issued call with no explicit tier is a full-size call
+            before = str(res.get("tier") or "full")
+            if ratio >= 1.0:
+                res["tier"] = "watch-only"     # side still stands (never 0)
+                after = "watch-only"
+            else:
+                after = {"full": "half", "half": "quarter",
+                         "quarter": "quarter"}.get(before, before)
+            if after == before:
+                continue
+            res["tier"] = after
+            res["tape_veto"] = True
+            res["reason"] = (
+                f"TAPE VETO {ratio:.2f}× noise ({abs(move) / price * 1e4:+.1f} bps "
+                f"over 3 bars vs {_need_bps * 1e4:.1f} bps needed) against the "
+                f"call at conf {conf:.2f}: size {before}→{after}, side stands. "
+                + str(res.get("reason") or ""))[:420]
+            disp = self.display_systems.get((symbol, tf))
+            if disp is not None:
+                disp["tier"] = after
+                disp["reason"] = res["reason"]
+                disp["tape_veto"] = True
+                disp["tape_z"] = res["tape_z"]
+                disp["tape_need_bps"] = res["tape_need_bps"]
 
     # cadence per advice §8.3: 4-hourly for 22/44 min, daily for 130/247
     _HINDSIGHT_CADENCE = {"tf1": 4 * 3600, "tf2": 4 * 3600,
@@ -3854,6 +4034,23 @@ class PredictionEngine:
             symbol=cyc.symbol, timeframe=cyc.tf, cycle=cycle_id,
             reason="contract construction failed", lock_id=contract_lock["lock_id"],
             side=side, revision=revision)
+        # NEW LOCK = NEW CONTRACT. Hit bookkeeping from an earlier window (or
+        # an earlier process, after a restart) used to survive into the new
+        # lock: a stale `hit_ts` from 07:53 made `contract_tp_hit` True for
+        # the 07:56 window, so a `full` tier reported paper_eligible False
+        # and the card read like another "no trade". Only crossings at or
+        # after this lock's entry can close THIS contract.
+        _prev_lock_id = ((lock_row.get("contract_lock") or {}).get("lock_id"))
+        if _prev_lock_id != contract_lock["lock_id"]:
+            cyc.contract_tp_hit = False
+            cyc.sl_observed = False
+            for _t in (cyc.targets or []):
+                _hit = getattr(_t, "hit_ts", None)
+                if _hit and float(_hit) < float(now):
+                    _t.hit_ts = None
+                    _t.status = "locked"
+                    if getattr(_t, "locked_at", None):
+                        pass
         if contract:
             cyc.tp, cyc.sl = contract["tp"], contract["sl"]
             cyc.tp_dist, cyc.sl_dist, cyc.ratio = (
@@ -4959,6 +5156,10 @@ class PredictionEngine:
             issued=res["issued"],
             tier=str(res.get("tier") or "watch-only"),
             p_side=float(res.get("p_side") or 0.5),
+            calib_n=int(res.get("calib_n") or 0),
+            calib_source=str(res.get("calib_source") or ""),
+            noise_floor_s=float(res.get("noise_floor_s") or 0.0),
+            tier_rule=str(res.get("tier_rule") or ""),
             cycle_start=_g_start,
             cycle_end=_g_end,
             strength=float(res.get("strength") or 0.0),
@@ -5908,12 +6109,79 @@ class PredictionEngine:
                         d["ratio"] = lv["ratio"]
                         d["entry"] = lv["entry"]
                         d["levels_ok"] = True
+                        _live_tape = getattr(self.feed, "mode", None) == "binance"
+                        _open = bool(cyc.issued
+                                     and cyc.tier != "watch-only"
+                                     and not cyc.contract_tp_hit
+                                     and not cyc.sl_observed
+                                     and not cyc.pending_reset)
                         d["execution_eligible"] = bool(
-                            cyc.execution_eligible and cyc.issued
-                            and cyc.tier != "watch-only"
-                            and not cyc.contract_tp_hit and not cyc.sl_observed
-                            and not cyc.pending_reset
-                            and getattr(self.feed, "mode", None) == "binance")
+                            cyc.execution_eligible and _open and _live_tape)
+                        # PAPER eligibility is separate from order routing: a
+                        # simulator tape must never send an order, but it CAN
+                        # carry a live signal — calling that "no trade" made
+                        # the whole board look broken on sim data.
+                        d["paper_eligible"] = bool(_open)
+                        # window/lock provenance: how old the anchor is and
+                        # whether anything re-anchored it (must stay 0 — a
+                        # silent mid-window re-lock is the churn report)
+                        _row = self.locks.get((symbol, tf)) or {}
+                        d["relocks"] = int(_row.get("relocks") or 0)
+                        d["relocked_at"] = _row.get("relock_at")
+                        d["lock_age_s"] = (
+                            round(now - float(_row.get("locked_at") or now), 1)
+                            if _row else None)
+                        d["entry_age_s"] = (
+                            round(now - float(cyc.cycle_start or now), 1))
+                        # why a high-P window is still watch-only: name the
+                        # rule and the measured number, never a bare label
+                        _ds = self.display_systems.get((symbol, tf)) or {}
+                        if _ds.get("tape_veto"):
+                            d["tape_veto"] = True
+                            d["tape_z"] = _ds.get("tape_z")
+                            d["tape_need_bps"] = _ds.get("tape_need_bps")
+                        if d.get("tier") in ("watch-only", "quarter", "half"):
+                            _why = []
+                            if getattr(cyc, "pending_reset", False):
+                                _why.append("window closed by a barrier — "
+                                            "side invalidated, no new entry")
+                            if getattr(cyc, "contract_tp_hit", False):
+                                _why.append("target already touched in this window")
+                            if d.get("ratio") is not None and \
+                                    float(d["ratio"]) < 1.0:
+                                _why.append(f"ratio {float(d['ratio']):.2f} < 1:1")
+                            _nf = d.get("noise_floor_s") or 0
+                            if _nf and abs(float(getattr(cyc, "cci", 0.0) or 0.0)) <= _nf:
+                                _why.append(
+                                    f"|score| {abs(float(cyc.cci or 0.0)):.4f} ≤ "
+                                    f"noise floor {_nf:.4f}")
+                            _safe = int(getattr(cyc, "safe_events", 0) or 0)
+                            if _safe:
+                                _why.append(
+                                    f"{_safe} SAFE event(s) cut size one step each "
+                                    f"(SL tightened, confidence −0.15 per event)")
+                            if _ds.get("tape_veto"):
+                                _why.append(
+                                    f"tape veto {float(_ds.get('tape_z') or 0):.2f}× "
+                                    f"noise against the call")
+                            if not _why:
+                                _why.append("tier set at lock — see ladder and "
+                                            "calibration n")
+                            d["tier_why"] = "; ".join(_why)
+                        d["execution_blocked_by"] = (
+                            [] if d["execution_eligible"] else
+                            (["simulated tape — orders are not routed"]
+                             if _open and not _live_tape else
+                             ["no open call: " + ", ".join(
+                                 k for k, v in (
+                                     ("side not issued", not cyc.issued),
+                                     ("size tier watch-only",
+                                      cyc.tier == "watch-only"),
+                                     ("target already touched",
+                                      cyc.contract_tp_hit),
+                                     ("stop already observed", cyc.sl_observed),
+                                     ("cycle resetting", cyc.pending_reset),
+                                 ) if v)]))
                         d["sl_provisional"] = bool(
                             (cyc.risk or {}).get("provisional"))
                     else:
@@ -5985,10 +6253,29 @@ class PredictionEngine:
                             "conformal": _conf,
                         }
                 tfs[tf] = d
+            # PRICE PROVENANCE — the chart, the rail and the analysis all
+            # quote a different moment in time; saying which one is which is
+            # the difference between "chart and analysis don't match" and a
+            # readable board. `price_asof` is when the feed produced this
+            # price; `chart` is the last closed/live candle the chart draws.
+            _last_t = (float(st.times[-1]) if st.times else None)
+            _last_c = (float(st.closes[-1]) if st.closes else None)
             assets[symbol] = {
                 "price": price,
+                "price_asof": (float(getattr(st, "last_tick", 0) or 0) or None),
                 "feed_age_s": (round(now - float(st.last_tick), 1)
                                if getattr(st, "last_tick", 0) else None),
+                "chart": {
+                    "last_bar_t": _last_t,
+                    "last_bar_close": _last_c,
+                    "age_s": (round(now - _last_t, 1)
+                              if _last_t else None),
+                    "delta_bps": (round((price / _last_c - 1.0) * 1e4, 2)
+                                  if _last_c else None),
+                    "note": ("last candle the chart draws vs the live price "
+                             "printed by the rail — same tape, different "
+                             "instant"),
+                },
                 "window_change_pct": round(
                     (price / base - 1.0) * 100, 3
                 ) if base else 0.0,

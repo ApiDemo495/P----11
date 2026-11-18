@@ -259,8 +259,22 @@ class SettlementLedger:
         wins_bps = [value for value in bps if value > 0]
         loss_bps = [-value for value in bps if value < 0]
         target_first = resolved.count("target")
+        # REGIME-SCOPED EXPECTANCY. The all-time mean describes the whole
+        # tape history — after a feed/model fix that history no longer
+        # describes the tape in front of us, and a single all-time number
+        # kept the gate shut forever ("always NO TRADE"). Report both: the
+        # recent window (last 60 settled) for the live gate, all-time for
+        # context, each with its own n.
+        recent = bps[-60:]
         return {
             "exp_bps": round(sum(bps) / len(bps), 2) if bps else None,
+            "exp_bps_recent": (round(sum(recent) / len(recent), 2)
+                               if recent else None),
+            "exp_n_recent": len(recent),
+            "exp_sd_recent": (round((sum((x - sum(recent) / len(recent)) ** 2
+                                        for x in recent) / len(recent)) ** 0.5, 2)
+                              if len(recent) > 1 else None),
+            "exp_n_all": len(bps),
             "payoff": (round((sum(wins_bps) / len(wins_bps)) /
                              (sum(loss_bps) / len(loss_bps)), 3)
                        if wins_bps and loss_bps else None),

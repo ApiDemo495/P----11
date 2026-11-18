@@ -80,20 +80,39 @@ def test_snapshot_carries_lock_feed_ledger_watchdog():
 
 # ── tape veto (8.1) ──
 def test_tape_veto_flattens_low_conviction():
+    """docs11 §5: the side STANDS, conviction is downgraded — and the cut is
+    graded by how adverse the tape really is, in measured noise units.
+
+    The old rule cut every call to watch-only on a flat 4 bps move, which on
+    a ~7 bps/minute tape is ordinary noise (the user's "always NO TRADE").
+    A 17.6 bps move at conf 0.40 is a real warning but not a contradiction,
+    so it must reduce size; a move beyond one noise unit must stop the
+    trade; high conviction must pass untouched.
+    """
     from tests.test_engine import make_engine, _boot, run
     eng, _f, _e = make_engine(); run(_boot(eng))
     st = eng.feed.state("BTC")
     base = 68000.0
-    # 3 bars rallying hard against a SELL call
-    st.closes = [base, base + 50, base + 120]          # +120 > 4bps*68000=27
+    st.closes = [base, base + 50, base + 120]          # 17.6 bps, 3 bars
     res = {"tf1": {"issued": True, "direction": -1, "confidence": 0.40,
                    "reason": "old"}}
     eng._apply_tape_veto("BTC", res)
-    # docs11-doublecheck §5: the side STANDS; conviction is downgraded
-    assert res["tf1"]["direction"] != 0 and res["tf1"]["issued"] is True
-    assert res["tf1"]["tier"] == "watch-only"
-    assert res["tf1"]["tape_veto"] is True
-    assert "TAPE VETO" in res["tf1"]["reason"]
+    row = res["tf1"]
+    assert row["direction"] != 0 and row["issued"] is True   # never flattened
+    assert row["tier"] in ("half", "quarter", "watch-only")  # size reduced
+    assert row["tier"] != "full"
+    assert row["tape_z"] > 0 and "tape_need_bps" in row      # measured, not flat
+    assert row["tape_veto"] is True and "TAPE VETO" in row["reason"]
+    assert "noise" in row["reason"] and "side stands" in row["reason"]
+
+    # a genuinely adverse tape (≈176 bps over 3 bars) stops the trade
+    st.closes = [base, base + 500, base + 1200]
+    hard = {"tf1": {"issued": True, "direction": -1, "confidence": 0.40,
+                    "reason": "old"}}
+    eng._apply_tape_veto("BTC", hard)
+    assert hard["tf1"]["tier"] == "watch-only"
+    assert hard["tf1"]["direction"] == -1 and hard["tf1"]["issued"] is True
+
     # high conviction passes through
     res2 = {"tf1": {"issued": True, "direction": -1, "confidence": 0.80,
                     "reason": "ok"}}

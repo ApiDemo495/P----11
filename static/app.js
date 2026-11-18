@@ -1803,7 +1803,7 @@ function onAnalyseDone(msg) {
       <div class="big">${r.signal}</div>
       <div class="conf">confidence ${fx(r.confidence, 3)}${r.issued ? " · ISSUED" : " · below floor"}</div>
       <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? Number(r.ratio).toFixed(2) + ":1" : "—"} · ${esc(r.levels_source || "preview only")}</div>
-      <div class="conf">${r.contract_state === "locked" ? `LOCKED CONTRACT ${esc((r.contract_id || "").slice(0, 16))}` : "PREVIEW ONLY — NO LOCKED CONTRACT"} · ${r.execution_eligible ? "EXECUTION ELIGIBLE" : "NOT EXECUTION-ELIGIBLE"}</div>
+      <div class="conf">${r.contract_state === "locked" ? `LOCKED CONTRACT ${esc((r.contract_id || "").slice(0, 16))}` : "PREVIEW ONLY — NO LOCKED CONTRACT"} · ${r.execution_eligible ? "EXECUTION ELIGIBLE" : (r.recheck?.passed ? "PAPER ONLY — signal produced, orders not routed (tape: " + esc((r.tape_mode || (S.snap?.feed?.source) || "sim")) + ")" : "NOT EXECUTION-ELIGIBLE")}</div>
     </div>
     <div class="an-grid">
       ${r.contract_tp ? `<div class="an-cell"><div class="k">LOCKED CONTRACT TP</div><div class="v" style="color:#26a69a">${px(r.contract_tp)}</div></div>` : ""}
@@ -1814,8 +1814,12 @@ function onAnalyseDone(msg) {
       <div class="an-ai">AI review — ${esc(aiLine)}</div>
       ${r.recheck ? `<div class="an-recheck" style="margin-top:6px;font-size:10.5px">
         <b class="${r.recheck.passed ? "acc-up" : "acc-dn"}">${esc(r.recheck.verdict)}</b>
-        ${(r.recheck.checks || []).map(c => `<div class="kv"><span>${c.ok ? "✓" : "✗"} ${esc(c.name)}</span><b class="${c.ok ? "" : "acc-dn"}">${esc(c.detail)}</b></div>`).join("")}
-        ${r.prediction ? `<div class="hint">${r.prediction.kind === "locked-contract" ? "locked contract" : "preview only"}: ${r.prediction.direction > 0 ? "BUY" : r.prediction.direction < 0 ? "SELL" : "FLAT"} · entry ${px(r.prediction.entry)} · TP ${px(r.prediction.tp)} · SL ${px(r.prediction.sl)} · TP:SL ${r.prediction.ratio != null ? Number(r.prediction.ratio).toFixed(2) + ":1" : "—"} · ${r.prediction.execution_eligible ? "execution eligible" : "never executes"}</div>` : `<div class="hint">raw analysis read was ${esc(r.raw_signal || "—")} — not produced as a prediction (see failed checks above).</div>`}
+        ${r.recheck.score != null ? `<div class="dim">weighted opinion score
+          <b>${fmt(r.recheck.score, 2)}</b> / needed ${fmt(r.recheck.threshold, 2)}
+          ${r.recheck.hard_failed && r.recheck.hard_failed.length ? ` · data blockers: ${esc(r.recheck.hard_failed.join(", "))}` : " · data checks passed"}
+          ${(r.recheck.failed || []).length ? ` · soft flags: ${esc((r.recheck.failed || []).join(", "))}` : ""}</div>` : ""}
+        ${(r.recheck.checks || []).map(c => `<div class="kv"><span>${c.ok ? "✓" : "✗"} ${esc(c.name)} ${c.hard ? "<i>(hard)</i>" : c.weight ? `<i>w ${fmt(c.weight, 2)}</i>` : ""}</span><b class="${c.ok ? "" : "acc-dn"}">${esc(c.detail)}</b></div>`).join("")}
+        ${r.prediction ? `<div class="hint">${r.prediction.kind === "locked-contract" ? "locked contract" : "preview only"}: ${r.prediction.direction > 0 ? "BUY" : r.prediction.direction < 0 ? "SELL" : "FLAT"} · entry ${px(r.prediction.entry)} · TP ${px(r.prediction.tp)} · SL ${px(r.prediction.sl)} · TP:SL ${r.prediction.ratio != null ? Number(r.prediction.ratio).toFixed(2) + ":1" : "—"} · ${r.prediction.execution_eligible ? "execution eligible" : "paper only — signal stands, no order is routed on this tape"}</div>` : `<div class="hint">raw analysis read was ${esc(r.raw_signal || "—")} — not produced as a prediction (see failed checks above).</div>`}
       </div>` : ""}
       <div class="an-period">calculation period: ${esc(period)} · total ${r.elapsed_ms} ms</div>
     </div></div>`;
@@ -1918,6 +1922,28 @@ function renderWhy() {
       <div class="dim">locked reasoning (immutable until next window): ${String(lk.reason || "").slice(0, 220)}</div>
       <div class="dim">live values below refresh continuously — they do NOT change the lock.</div>
     </div>` : "";
+  // PRICE PROVENANCE — the user's "chart price and analyse price don't
+  // match": they are different instants of the same tape, not two markets.
+  // Print each one with its own timestamp and the drift between them.
+  const pa = S.snap?.assets?.[S.symbol] || {};
+  const chp = pa.chart || {};
+  const hhmmss = (ts) => ts ? new Date(ts * 1000).toISOString().slice(11, 19) + "Z" : "—";
+  const nowPx = (S.prices?.[S.symbol] > 0) ? S.prices[S.symbol] : pa.price;
+  const entryPx = lk.price ?? s.entry ?? null;
+  const driftBps = (entryPx > 0 && nowPx > 0) ? ((nowPx / entryPx) - 1) * 1e4 : null;
+  const priceBlock = (nowPx > 0) ? `
+    <div class="lock-block">
+      <b>💲 PRICE PROVENANCE</b>
+      now ${px(nowPx)} <span class="dim">@ ${hhmmss(pa.price_asof)} · tick ${pa.feed_age_s ?? "?"}s old</span>
+      ${entryPx > 0 ? ` · entry ${px(entryPx)} <span class="dim">locked @ ${hhmmss(lk.locked_at || s.cycle_start)}</span>` : ""}
+      ${driftBps != null ? ` · drift <b class="${Math.abs(driftBps) > 25 ? "down" : ""}">${driftBps >= 0 ? "+" : ""}${driftBps.toFixed(1)} bp</b> since the lock` : ""}
+      ${(() => { const w = S.snap?.assets?.[S.symbol]?.tfs?.[S.tf] || {};
+        if (w.relocks == null) return "";
+        return ` · window ${fmt(w.entry_age_s, 0)}s old · ` + (w.relocks > 0
+          ? `<b class="down">⚡ ${w.relocks} re-lock(s)</b> at ${hhmmss(w.relocked_at)}`
+          : "no re-lock (anchor stands)"); })()}
+      ${chp.last_bar_close ? `<div class="dim">chart candle ${px(chp.last_bar_close)} @ ${hhmmss(chp.last_bar_t)} (${chp.age_s ?? "?"}s ago) · ${chp.delta_bps >= 0 ? "+" : ""}${fmt(chp.delta_bps, 1)} bp vs spot — same tape, one instant behind; the lock is the anchor, not spot</div>` : ""}
+    </div>` : "";
   // advice §8.1/8.2: WHICH ladder rung decided the side + weighted mass
   const lad = s.ladder || null;
   const mass = s.mass || null;
@@ -1991,14 +2017,17 @@ function renderWhy() {
       confidence <b>${fx(_conf)}</b>
       <div class="dim">${_size} · fused score ${fx(_score)} · window ${esc(String(s.ladder?.source || "—").slice(0, 60))}</div>
     </div>`;
-  el.innerHTML = lockBlock + ladderBlock + sparkHtml + ticksBlock + whoBlock + convBlock + exBlock + `
+  el.innerHTML = lockBlock + priceBlock + ladderBlock + sparkHtml + ticksBlock + whoBlock + convBlock + exBlock + `
     <div class="why-head">
       <div class="why-dir ${dir > 0 ? "up" : dir < 0 ? "down" : "flat"}">
         ${dir > 0 ? "▲ BULLISH" : "▼ BEARISH"}<span class="sym">${S.symbol} · ${tf.toUpperCase()} · ${TF_META[tf].mins}m</span></div>
       <div class="why-conf">CONFIDENCE
         <div class="bar"><i class="${s.confidence > 0.35 ? "pos" : "neg"}" style="width:${clamp((s.confidence || 0) * 100, 0, 100)}%"></i></div>
         <b>${fx(s.confidence, 3)}</b> / floor ${bd.floor ?? 0.35}</div>
-      <div class="why-badge ${s.issued ? "ok" : ""}">${s.issued ? `✓ ISSUED · ${esc(s.tier || "")} · P ${fmt(s.p_side, 2)}` : "side pending"}</div>
+      <div class="why-badge ${s.issued ? "ok" : ""}">${s.issued
+        ? `✓ SIGNAL ${dir > 0 ? "BUY" : dir < 0 ? "SELL" : "—"} · ${esc(s.tier || "watch-only")} · P ${fmt(s.p_side, 2)}${s.tier === "watch-only" ? ` · size 0${s.tier_why ? " — " + esc(s.tier_why) : " (below measured noise floor)"}` : ""}`
+          + (s.calib_n != null ? `<span class="dim" title="${esc(s.calib_source || "")}"> · n=${s.calib_n}${s.calib_provisional ? " (provisional scale)" : ""}</span>` : "")
+        : "side pending"}</div>
     </div>
     <div class="why-reason">${s.reason || ""}</div>
     <div class="why-grid">
@@ -2754,10 +2783,17 @@ async function loadNews() {
       const hz = (st.horizons || {})[S.symbol] || {};
       $("#nw-horizons").innerHTML = TF.map(tf => {
         const h = hz[tf] || {};
-        // honest empty state: 0.00 only prints when items actually scored
-        if ((h.n_items || 0) === 0)
+        // honest empty state: 0.00 only prints when items actually scored.
+        // In simulator mode the panel still shows what the sim is saying,
+        // explicitly marked as not scored.
+        if ((h.n_items || 0) === 0) {
+          if (h.simulated_n)
+            return `<div class="kv"><span>${tf.toUpperCase()} <span class="dim">sim</span></span>` +
+              `<b class="dim">SIM ${fmt(h.simulated_impact, 3)} · ${h.simulated_n} simulated headline(s)` +
+              ` — not scored, cannot move a trade</b></div>`;
           return `<div class="kv"><span>${tf.toUpperCase()}</span>` +
             `<b class="dim">— <span class="dim">no live items (synthetic never scores)</span></b></div>`;
+        }
         return `<div class="kv"><span>${tf.toUpperCase()} ` +
           `<span class="dim">½${Math.round(h.half_life_min || 0)}m</span></span>` +
           `<b style="color:${(h.impact || 0) >= 0 ? "var(--green)" : "var(--red)"}">` +
@@ -2812,9 +2848,13 @@ function onNewsTicker(msg) {
     const hz = a.horizons || {};
     $("#nw-horizons").innerHTML = TF.map(tf => {
       const h = hz[tf] || {};
-      if ((h.n_items || 0) === 0)
+      if ((h.n_items || 0) === 0) {
+        if (h.simulated_n)
+          return `<div class="kv"><span>${tf.toUpperCase()} <span class="dim">sim</span></span>` +
+            `<b class="dim">SIM ${fmt(h.simulated_impact, 3)} · ${h.simulated_n} simulated — not scored</b></div>`;
         return `<div class="kv"><span>${tf.toUpperCase()}</span>` +
           `<b class="dim">— <span class="dim">no live items</span></b></div>`;
+      }
       return `<div class="kv"><span>${tf.toUpperCase()}</span>` +
         `<b style="color:${(h.impact || 0) >= 0 ? "var(--green)" : "var(--red)"}">` +
         `${fmt(h.impact, 3)} <span class="dim">niv ${fmt(h.niv, 3)} smd ${fmt(h.smd, 3)}</span></b></div>`;

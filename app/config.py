@@ -55,6 +55,14 @@ LEARNING_RATE_ETA = 0.02
 WEIGHT_MIN = 0.005
 WEIGHT_MAX = 0.15
 CONFIDENCE_FLOOR = 0.35           # below -> NO TRADE
+# Analysis recheck: the weighted opinion score a call must clear. Opinion
+# checks are weighted (consensus .30, ratio .20, confidence .30,
+# expectancy .15, lock agreement .05); data correctness is hard and
+# separate. 1.0 would demand a unanimous market, which never happens.
+RECHECK_PASS_SCORE = 0.55
+# conviction must be at least this fraction of the floor to be called at all
+# (0.6 = "within 40 % of the floor counts, half of it does not")
+RECHECK_CONF_REACH = 0.60
 
 # Per-asset behaviour profiles: the app must NOT treat gold like BTC.
 # floor_mult scales the issue floor (asset gate can only tighten the

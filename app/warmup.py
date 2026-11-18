@@ -266,6 +266,25 @@ def warm_history(engine, *, hours: int = 168,
                     log.exception("warm replay compute failed %s/%s", symbol, tf)
                     status["skipped_gaps"] += 1
                     continue
+                # CALIBRATION SEED: the tier's P(side) needs the measured
+                # |score| scale. It used to be built one sample per cycle, so
+                # a fresh process stayed at P 0.50 / watch-only for hours.
+                # The replay already walks the tape walk-forward — its scores
+                # ARE that history, so record them (labelled seeded, exactly
+                # like the replayed ledger rows).
+                try:
+                    import collections as _coll
+                    _hist = engine.score_hist.setdefault(
+                        (symbol, tf), _coll.deque(maxlen=60))
+                    _sc = abs(float(pack.get("cci_adjusted") or 0.0))
+                    if _sc > 0:
+                        _hist.append(_sc)
+                        engine.hist.ring(
+                            engine.hist.tf_key(symbol, tf, "score_abs"),
+                            200).append(_sc)
+                except Exception:
+                    log.exception("warm score-history seed failed %s/%s",
+                                  symbol, tf)
 
                 entry = closes[start_i]
                 settle_price = closes[end_i]
