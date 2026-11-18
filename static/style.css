@@ -8,8 +8,10 @@
   --panel2: #12121f;
   --line: #1d1d2e;
   --line2: #2a2a40;
-  --text: #d8d8e8;
-  --dim: #6e6e8c;
+  --text: #f1f5f9;        /* secondary text — WCAG AAA on --bg */
+  --text-strong: #ffffff; /* primary text (headings, values) */
+  --dim: #cbd5e1;         /* MINIMUM muted tone allowed anywhere */
+  --dim-soft: #9aa8c0;    /* optional 4th level, still ≥ 7:1 on --bg */
   --gold: #c9a227;
   --cyan: #00d4f0;
   --green: #22c98a;
@@ -30,7 +32,7 @@ body {
   min-height: 100%;
   padding-bottom: var(--tabs-h);
 }
-b, strong { font-weight: 600; }
+b, strong { font-weight: 600; color: var(--text-strong); }
 .dim { color: var(--dim); }
 .mono { font-family: var(--mono); }
 .pad { padding: 14px; }
@@ -279,9 +281,15 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 5px; bo
 }
 
 /* ═══════ r2b: toolbar toggles · calls table · real-brain badge ═══════ */
-#toolbar { display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
-  padding: 10px 14px; margin-bottom: 14px; background: var(--panel);
+#toolbar { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap;
+  padding: 10px 12px; margin-bottom: 14px; background: var(--panel);
   border: 1px solid var(--line); border-radius: 10px; position: sticky; top: 0; z-index: 50; }
+/* the status chips get their OWN full-width line instead of being shoved
+   to the right edge by margin-left:auto and wrapped into a cramped stack */
+#toolbar #status-chips { flex: 1 1 100%; order: 9; display: flex; flex-wrap: wrap;
+  gap: 6px; margin-top: 2px; }
+#toolbar #status-chips:empty { display: none; }
+#toolbar #btn-analyse { margin-left: auto; }
 .seg { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .seg-lbl { font: 600 9.5px/1 var(--mono); letter-spacing: 2px; color: var(--dim); margin-right: 6px; }
 .seg-btn { background: var(--panel2); border: 1px solid var(--line); color: var(--dim);
@@ -316,8 +324,9 @@ td b.up { color: var(--green); } td b.down { color: var(--red); } td b.flat { co
 .em-w b { color: var(--gold); }
 
 /* ═══════ honesty: feed chip · lock block · ledger ═══════ */
-.feed-chip { margin-left: auto; font: 600 10px/1 var(--mono); letter-spacing: 1px;
-  padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line2); color: var(--dim); }
+.feed-chip { margin-left: 0; font: 600 10px/1 var(--mono); letter-spacing: 1px;
+  padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line2);
+  color: var(--dim); white-space: nowrap; }
 .feed-chip.live { color: var(--green); border-color: var(--green); }
 .feed-chip.sim { color: var(--red); border-color: var(--red); }
 .feed-chip.stale { color: var(--gold); border-color: var(--gold); }
@@ -491,6 +500,71 @@ table { max-width: 100%; }
 canvas { max-width: 100%; }
 #main { width: 100%; min-width: 0; }
 
+/* ═══════════════════════════════════════════════════════════════
+   r3 — AUDIT §12: high-contrast headings + compact terminal density
+   Section titles / table headers were --dim (#6e6e8c) on a #07070d
+   background: measured contrast ratio ≈ 2.4:1, unreadable. Headings are
+   now crisp white, metric sub-labels bright silver, and every block is
+   tightened so 40–50 % more data fits on the same screen.
+   ═══════════════════════════════════════════════════════════════ */
+:root {
+  --dim: #93a0b8;        /* secondary text: 4.9:1 on --bg (was 2.4:1) */
+  --head: #ffffff;       /* section + card titles */
+  --sub: #cbd5e1;        /* metric sub-labels */
+}
+
+/* ── crisp headings ─────────────────────────────────────────── */
+.panel-h, .tbl th, .tab-title, .why-grid h5, .why-grid h6,
+.q-foot, .tf-bar .lbl, .seg-lbl, .day-row.head, #rail-leds,
+.section-h, .blk-h, h3, h5, h6 {
+  color: var(--head);
+  font-weight: 600;
+  letter-spacing: 1.2px;
+}
+.panel-h { opacity: 1; }
+.card h4 { color: #f7f3df; font-weight: 600; }   /* card titles: warm white */
+.card h4 b, .card h4 em { color: var(--gold); }
+
+/* ── silver metric sub-labels ───────────────────────────────── */
+.kv span, .em-alias, .rs span, .q-tf small, .contrib .cname,
+.tp-cell .tp-min, .hint, .card .logic, .q-dir .iss {
+  color: var(--sub);
+}
+.kv span { letter-spacing: .7px; }
+.hint, .card .logic { color: #a8b3c7; }
+
+/* table headers: white + a hairline rule that actually shows */
+.tbl th { border-bottom: 1px solid #3a4560; }
+.tbl td { color: #e3e8f3; }
+
+/* ── compact quantitative terminal layout ───────────────────── */
+#main { padding: 10px 12px 20px; }
+.tab-head { margin-bottom: 8px; }
+.panel { padding: 8px 10px; margin-bottom: 8px; border-radius: 8px; }
+.panel-h { margin-bottom: 6px; }
+.panel-row { gap: 8px; }
+.kv-row { gap: 5px; }
+.kv { padding: 5px 8px; gap: 2px; border-radius: 6px; }
+.kv b { font-size: 12.5px; }
+.card-grid { gap: 6px; margin-bottom: 8px; }
+.card { padding: 8px 10px; border-radius: 7px; }
+.card h4 { margin-bottom: 5px; }
+.quad-grid { gap: 6px; margin-bottom: 8px; }
+.quad { padding: 8px; border-radius: 8px; }
+.tf-bar { gap: 6px; margin-bottom: 8px; }
+.tf-btn { padding: 5px 10px; }
+.em-grid { gap: 6px; }
+.em-cell { padding: 7px 6px; border-radius: 7px; }
+.em-ring { width: 38px; height: 38px; margin-bottom: 4px; }
+.em-ring i { width: 27px; height: 27px; }
+.tbl td { padding: 3px 6px; font-size: 11px; }
+.tbl th { padding: 4px 6px; }
+.why-grid { gap: 12px; }
+.why-head { margin-bottom: 8px; }
+.why-reason { padding: 8px 12px; margin-bottom: 8px; }
+.q-chart, .q-tv, .q-bn { margin-bottom: 4px; }
+.hint { margin-top: 5px; font-size: 11px; line-height: 1.4; }
+
 /* PAPER BOOK — live portfolio strip. The stat tiles reuse .kv; the bar is
    the hold timer, so it must read as progress, not as a signal colour. */
 .book-stats {
@@ -506,4 +580,22 @@ canvas { max-width: 100%; }
 @media (max-width: 640px) {
   .book-stats { grid-template-columns: repeat(3, 1fr); }
   #book-positions .kv, #book-assets .kv, #book-sleeves .kv { padding: 7px 9px; }
+}
+
+/* ── probability branches: plain-English takeaway + legend ───── */
+.branch-takeaway {
+  background: #12121f; border: 1px solid var(--line2); border-left: 3px solid var(--cyan);
+  border-radius: 7px; padding: 9px 12px; margin-bottom: 10px;
+  font-size: 12px; line-height: 1.55; color: var(--text);
+}
+.branch-takeaway b { color: var(--text-strong); letter-spacing: .5px; }
+.branch-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 10px;
+  font-size: 10.5px; color: var(--dim); }
+.branch-legend .lg { display: inline-flex; align-items: center; gap: 5px; }
+.branch-legend .lg i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
+.fwd-pooled { color: var(--gold); }
+/* keep muted text legible on the smaller phone widths */
+@media (max-width: 620px) {
+  .hint, .card .logic, .kv span { font-size: 11px; }
+  .branch-takeaway { font-size: 11.5px; }
 }

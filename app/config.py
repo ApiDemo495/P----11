@@ -55,6 +55,14 @@ LEARNING_RATE_ETA = 0.02
 WEIGHT_MIN = 0.005
 WEIGHT_MAX = 0.15
 CONFIDENCE_FLOOR = 0.35           # below -> NO TRADE
+# Analysis recheck: the weighted opinion score a call must clear. Opinion
+# checks are weighted (consensus .30, ratio .20, confidence .30,
+# expectancy .15, lock agreement .05); data correctness is hard and
+# separate. 1.0 would demand a unanimous market, which never happens.
+RECHECK_PASS_SCORE = 0.55
+# conviction must be at least this fraction of the floor to be called at all
+# (0.6 = "within 40 % of the floor counts, half of it does not")
+RECHECK_CONF_REACH = 0.60
 
 # Per-asset behaviour profiles: the app must NOT treat gold like BTC.
 # floor_mult scales the issue floor (asset gate can only tighten the
@@ -187,7 +195,12 @@ LEVEL_BASE_SCALE = 0.25           # provisional TP/SL base distance scale (F29 s
 # ---------------------------------------------------------------------------
 BINANCE_REST = "https://api.binance.com"
 BINANCE_WS = "wss://stream.binance.com:9443/stream"
-BACKFILL_BARS = 1500              # 1m klines at startup = 25h tape (24h seed + context)
+# 1m klines at startup = 7 days of tape. 25 hours (1500) was enough for the
+# 247-minute window, but NOT for the certified sleeves (500+48 fifteen-minute
+# bars ≈ 5.7 days of 1m bars) nor for a settled tf4 history — so both sat in
+# WARMING_UP / n=0 for days after every restart. 10_080 bars = 7 days is
+# fetched in 11 paginated REST calls per symbol (Binance limit 1000).
+BACKFILL_BARS = 10_080            # 1m klines at startup = 7 days of tape
 MIN_BARS_FULL_WINDOW = TIMEFRAMES["tf4"]["minutes"] + 1   # 248
 MIN_BARS_COMPUTE = 30             # below this a formula pass returns zeros
 FEED_MODE = "auto"                # auto | binance | sim   (auto falls back to simulator)

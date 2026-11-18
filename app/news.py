@@ -189,6 +189,15 @@ def source_tier(source: str) -> int:
 
 TIER_CREDIBILITY = {1: 1.0, 2: 0.7, 3: 0.45}
 
+# ── guide §5: live NIV decay + horizon weights ─────────────────────────
+# Half-life ≈ 60 min, so a stale headline fades instead of pinning the
+# aggregate; the ring is sampled at 90 s as the card draws it.
+NIV_DECAY_PER_MIN = 0.0115
+NIV_IMPULSE_WINDOW_MIN = 15.0
+NIV_RING_STEP_S = 90.0
+NIV_RING_MAX = 240
+_TF_HORIZON_WEIGHT = {"tf1": 1.0, "tf2": 5.0, "tf3": 15.0, "tf4": 60.0}
+
 
 def enrich_item(item: dict) -> dict:
     """docs11 §4: the full computed record at INGEST — tier, credibility,
@@ -346,6 +355,9 @@ class NewsSystem:
     def _append(self, item: dict[str, Any]) -> bool:
         """False when the fingerprint was already seen (dedupe)."""
         now = time.time()
+        # The sim generator labels its own output (`_sim_tick`); ingestion of
+        # real wire items must NOT be relabelled here — the relevance gate
+        # below counts non-synthetic drops and tests/sources rely on it.
         enrich_item(item)
         # docs11 §4.1 / error N-5: an item irrelevant to EVERY asset is
         # dropped at ingest and COUNTED with examples — never hidden.
@@ -625,6 +637,14 @@ class NewsSystem:
             "source": src,
             "symbols": [sym],
             "ts": now,
+            # A generated headline attributed to "Reuters" is still a
+            # generated headline. Without this flag the sim fed tier-1
+            # looking items into the critical-event detector, which fired a
+            # genuine emergency re-lock every 60 s (60 s cooldown) on all
+            # four 1-minute windows — i.e. trades changed mid-window
+            # because the demo's own random news said so.
+            "synthetic": True,
+            "simulated": True,
         })
 
     # -- reads --------------------------------------------------------------
@@ -662,12 +682,22 @@ class NewsSystem:
                      "exchange", "etf", "fed", "rate", "sec", "binance",
                      "coinbase", "market", "price")
 
-    def critical(self, symbol: str, within_min: float = 30.0) -> list[dict]:
+    def critical(self, symbol: str, within_min: float = 30.0,
+                 include_synthetic: bool = False) -> list[dict]:
         """docs11 §4.4 — recent tier-1/2 headlines carrying this asset
-        (recency window in minutes, chosen by the caller)."""
+        (recency window in minutes, chosen by the caller).
+
+        SYNTHETIC items are excluded by default: a simulated/seed headline
+        must never be able to re-lock a real trade. They used to pass (the
+        sim source carries a high reliability), so the engine's own random
+        news generator fired an emergency re-lock every 60 s — the "trades
+        keep changing mid-window" report. Pass include_synthetic=True for
+        display lists only, which carry the `synthetic` flag per item.
+        """
         now = time.time()
         return [it for it in self._live_items()
-                if (it.get("reliability") or 0.0) >= 0.8
+                if (include_synthetic or not it.get("synthetic"))
+                and (it.get("reliability") or 0.0) >= 0.8
                 and float((it.get("relevance_by_asset") or {}).get(symbol, 0.0)) > 0
                 and now - float(it.get("ts") or 0) <= within_min * 60.0]
 
@@ -758,6 +788,12 @@ class NewsSystem:
                                     (now - it["ts"]) / 60.0,
                                     it["reliability"])) for it in mine) or 0.0
         niv = max(-1.0, min(1.0, total / (wsum + 0.5))) if mine else 0.0
+        # cache the resting base so niv_live() never has to call back into
+        # aggregate() (that was an infinite recursion on the first sample)
+        _nb = getattr(self, "_niv_base", None)
+        if _nb is None:
+            _nb = self._niv_base = {}
+        _nb[symbol] = niv
         total = max(-1.0, min(1.0, total))
         # newest FIRST — the table used to render oldest-on-top so fresh
         # headlines appeared at the bottom (user: 'tilt it')
@@ -774,6 +810,14 @@ class NewsSystem:
                         for tf in TF_ORDER},
             "source": self.source,
             "niv": round(niv, 4),
+            # horizon-weighted blend of the four per-TF impacts (guide §5.1)
+            # so the card's AGGREGATE figure can never disagree with the
+            # TF1..TF4 rows it sits above.
+            "aggregate_impact": round(
+                sum(impacts[tf] * _TF_HORIZON_WEIGHT.get(tf, 1.0)
+                    for tf in TF_ORDER)
+                / (sum(_TF_HORIZON_WEIGHT.get(tf, 1.0) for tf in TF_ORDER) or 1.0),
+                4),
             "resting_evidence": 0.5,
             # in-window zeros + ingest-gate drops (N-5): never hidden
             "relevance_dropped": dropped + self.filtered,
@@ -784,7 +828,10 @@ class NewsSystem:
             "items": rows,
             "_opposing": {"bull": max(0.0, min(1.0, bull)),
                           "bear": max(0.0, min(1.0, -bear))},
+            # live decayed NIV + 90 s ring (guide §5.2)
+            "live": self.niv_live(symbol),
         }
+        agg.update(self.dropped_report())
         return agg
 
     # ==================================================================
@@ -837,13 +884,27 @@ class NewsSystem:
         accel = float(self.tape_accel.get(symbol, 0.0))
         out: dict[str, Any] = {"symbol": symbol, "evaluated_at": now,
                                "tape_accel": accel, "horizons": {}}
-        # scored layer excludes labelled synthetic/seed items (docs11 §4.7:
-        # synthetic coverage is visible in the feed, never in the drivers)
-        relevant = [
+        # Scored layer: real items only (docs11 §4.7 — synthetic coverage is
+        # visible in the feed, never in the drivers). Synthetic items are
+        # still reported SEPARATELY per horizon as `simulated_*`, so a demo
+        # tape shows what the simulator is saying without pretending it is
+        # wire copy and without letting it reach a decision: `critical()`
+        # ignores them, so they can never fire a lock or a re-lock.
+        _by_asset = [
             it for it in self._live_items()
-            if not it.get("synthetic")
-            and float((it.get("relevance_by_asset") or {}).get(symbol, 0.0)) > 0.0
+            if float((it.get("relevance_by_asset") or {}).get(symbol, 0.0)) > 0.0
         ]
+        relevant = [it for it in _by_asset if not it.get("synthetic")]
+        synthetic_items = [it for it in _by_asset if it.get("synthetic")]
+        out["items_scored"] = len(relevant)
+        out["simulated_items"] = len(synthetic_items)
+        out["coverage_kind"] = (
+            "simulated" if synthetic_items and not relevant
+            else "mixed" if synthetic_items else
+            "live" if relevant else "none")
+        out["decision_note"] = (
+            "synthetic headlines are listed as simulated_* per horizon; they "
+            "can never trigger a lock, a re-lock or a learned theme")
         for tf in TF_ORDER:
             W = TIMEFRAMES[tf]["minutes"]
             halflife = W / 2.0
@@ -885,6 +946,25 @@ class NewsSystem:
                 niv_den += w
             niv = niv_num / (niv_den + 0.5) if (niv_den + 0.5) > 0 else 0.0
             drivers.sort(key=lambda d: -abs(d["contribution"]))
+            # simulation view (display only, never scored)
+            _sim_total = 0.0
+            _sim_drivers: list[dict] = []
+            for it in synthetic_items:
+                _age = (now - float(it.get("ts") or now)) / 60.0
+                if _age > 12.0 * halflife:
+                    continue
+                _rel = float((it.get("relevance_by_asset") or {}).get(symbol, 0.0))
+                _c = (float(it.get("credibility") or 0.45)
+                      * (0.5 ** (_age / halflife))
+                      * float(it.get("magnitude") or 0.3)
+                      * float((it.get("impacts") or {}).get(symbol, 0.0)) * _rel)
+                _sim_total += _c
+                _sim_drivers.append({
+                    "headline": str(it.get("headline"))[:110],
+                    "theme": it.get("theme"), "age_min": round(_age, 1),
+                    "impact": round(_c, 5), "source": it.get("source"),
+                    "synthetic": True})
+            _sim_drivers.sort(key=lambda d: -abs(d["impact"]))
             out["horizons"][tf] = {
                 "impact": round(math.tanh(total), 4),
                 "niv": round(niv, 4),
@@ -893,6 +973,9 @@ class NewsSystem:
                 "tau_min": tau,
                 "drivers": drivers[:4],
                 "n_items": len(drivers),
+                "simulated_impact": round(math.tanh(_sim_total), 4),
+                "simulated_drivers": _sim_drivers[:4],
+                "simulated_n": len(_sim_drivers),
             }
         # NIV history for the sentiment-swing trigger (|ΔNIV| over 90 s)
         hist = self._niv_hist.setdefault(symbol, [])
@@ -926,7 +1009,12 @@ class NewsSystem:
             else:
                 trig = {"reason": "NEWS_EMERGENCY: " + "; ".join(
                             str(c.get("headline"))[:70] for c in crit[:3]),
-                        "niv_swing_90s": swing}
+                        "niv_swing_90s": swing,
+                        "items": [{"source": c.get("source"),
+                                   "at": c.get("ts"),
+                                   "headline": str(c.get("headline"))[:90]}
+                                  for c in crit[:3]],
+                        "synthetic": False}
         out["emergency_trigger"] = trig
         self.last_eval[symbol] = out
         return out
@@ -979,6 +1067,91 @@ class NewsSystem:
                 buckets[minute] = buckets.get(minute, 0.0) + it["arrival_impact"]
         return buckets
 
+    # ==================================================================
+    # docs11 §5 — drop accounting (N-5) and the 90 s live NIV ring
+    # ==================================================================
+    def dropped_report(self) -> dict:
+        """Explicit drop accounting: *what* was thrown away, *how many*,
+        *why*. A silent relevance filter was the whole of error N-5 — the
+        card showed "0 dropped" while the ingest gate binned half the wire."""
+        reasons: dict[str, int] = {}
+        total = 0
+        for name in sorted(getattr(self, "source_stats", {}) or {}):
+            st = self.source_stats[name]
+            for key, label in (("dropped_429", "rate limited (429)"),
+                               ("filtered", "no crypto relevance"),
+                               ("dupes", "duplicate headline")):
+                try:
+                    n = int(st.get(key) or 0)
+                except (TypeError, ValueError):
+                    n = 0
+                if n:
+                    reasons[f"{name}: {label}"] = n
+                    total += n
+        try:
+            feed_gate = int(self.filtered or 0)
+        except (TypeError, ValueError):
+            feed_gate = 0
+        if feed_gate:
+            reasons["feed-level relevance gate"] = feed_gate
+            total += feed_gate
+        seen = int(getattr(self, "_dropped_seen", 0) or 0)
+        last = max(0, total - seen)
+        self._dropped_seen = total
+        return {
+            "last_dropped_count": last,
+            "total_dropped_count": total,
+            "dropped_reasons": reasons,
+        }
+
+    def niv_live(self, symbol: str) -> dict:
+        """90 s-resolution live NIV: base evidence decays geometrically
+        between arrivals, and the freshest micro-impulse is added on top
+        (guide §5.2). The card plots this instead of a flat snapshot."""
+        now = time.time()
+        # same relevance gate aggregate() uses — items carry `symbols`
+        mine = [it for it in self._live_items()
+                if symbol in (it.get("symbols") or ())
+                and relevance(symbol, str(it.get("headline") or "")) > 0.0]
+        last_ts = max((float(it.get("ts") or 0.0) for it in mine), default=0.0)
+        dt_min = max(0.0, (now - last_ts) / 60.0) if last_ts else 0.0
+        base = float(getattr(self, "_niv_base", {}).get(symbol, 0.0) or 0.0)
+        decayed = base * math.exp(-NIV_DECAY_PER_MIN * dt_min)
+        impulse = 0.0
+        if mine:
+            newest = max(mine, key=lambda it: float(it.get("ts") or 0.0))
+            age_min = max(0.0, (now - float(newest.get("ts") or now)) / 60.0)
+            if age_min <= NIV_IMPULSE_WINDOW_MIN:
+                impulse = 0.5 * impact_score(
+                    newest.get("category", ""), float(newest.get("sentiment") or 0.0),
+                    age_min, float(newest.get("reliability") or 0.5))
+        ring = getattr(self, "_niv_ring", None)
+        if ring is None:
+            ring = self._niv_ring = {}
+        pts = ring.setdefault(symbol, [])
+        live = max(-1.0, min(1.0, decayed + impulse))
+        if not pts and abs(base) > 1e-9:
+            # BACKFILL: the ring used to start empty every page load, so the
+            # 90 s NIV trace drew one dot (a flat line). Reconstruct the
+            # decay curve from the resting base — same model, same units.
+            for k in range(13, 0, -1):
+                _dtk = dt_min + k * (NIV_RING_STEP_S / 60.0)
+                pts.append((now - k * NIV_RING_STEP_S,
+                            round(max(-1.0, min(1.0, base * math.exp(
+                                -NIV_DECAY_PER_MIN * _dtk))), 4)))
+        if not pts or now - float(pts[-1][0]) >= NIV_RING_STEP_S:
+            pts.append((now, round(live, 4)))
+            del pts[:-NIV_RING_MAX]
+        return {
+            "niv_base": round(base, 4),
+            "niv_live": round(live, 4),
+            "niv_decay": round(decayed, 4),
+            "niv_impulse": round(impulse, 4),
+            "age_min": round(dt_min, 2),
+            "ring": [[round(t, 1), v] for t, v in pts],
+            "ring_step_s": NIV_RING_STEP_S,
+        }
+
     def status(self) -> dict:
         live = self._live_items()
         return {
@@ -989,6 +1162,8 @@ class NewsSystem:
             "categories": len(NEWS_CATEGORIES),
             "filtered": self.filtered,
             "filtered_examples": self.filtered_examples,
+            "niv": {sym: self.niv_live(sym) for sym in
+                    ("BTC", "ETH", "SOL", "XRP")},
             "coverage": self.coverage_string(),
             "sources": self.source_lines(),
             "horizons": {sym: ev.get("horizons")
@@ -1001,6 +1176,7 @@ class NewsSystem:
             # paid ≈ $449/mo — read from the spec at build time, not live
             "price_note": "free 100 req/day (429 cools the quota window); "
                           "paid plan unlimited-ish 60s cadence",
+            **self.dropped_report(),
         }
 
     # ------------------------------------------------------------- docs11 §3.6

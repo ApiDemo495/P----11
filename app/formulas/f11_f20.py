@@ -335,7 +335,12 @@ def current_streak(ctx) -> tuple[int, int, float]:
     W_eff = ctx.W_eff
     if W_eff < 8:
         return 0, 0, 0.0
-    r = pct_returns(ctx.P[-(W_eff + 1):])
+    # STREAK LOOKBACK (guide §3.2): the streak was cut at the window edge,
+    # so a run longer than W_eff reported N = W_eff and a run just outside
+    # the window reported N = 0 → F18 froze at 0.00. Search the trailing
+    # 30 bars instead (a documented, bounded lookback).
+    span = min(max(W_eff, 8), 30)
+    r = pct_returns(ctx.P[-(span + 1):])
     if not r:
         return 0, 0, 0.0
     streak_sign = sign(r[-1])
@@ -422,8 +427,23 @@ def f19_pmtl(ctx) -> float:
         lag_sign = sign(best_ccf)
         confidence = abs(best_ccf)
         w = 1.0 / (best_lag + 1)
-        r_a_lagged = ra[best_lag]            # other's return `optimal_lag` ago
-        num_total += lag_sign * confidence * r_a_lagged * w
+        # Z-SCORE PAIR (guide §3.2): the raw-return product mixed units with
+        # the target's own scale, so F19 read 0.00 on quiet tapes and
+        # slammed to ±1 on one volatile bar. Both legs are standardised
+        # against their own windows, and the reading is the lead MINUS the
+        # self term, squashed — a transfer, not a self-fulfilling echo.
+        def _z(seq, i):
+            vals = [v for v in seq[:n] if math.isfinite(v)]
+            if len(vals) < 3:
+                return 0.0
+            mu = sum(vals) / len(vals)
+            sd = math.sqrt(sum((v - mu) ** 2 for v in vals) / len(vals))
+            if sd <= EPS:
+                return 0.0
+            return (seq[i] - mu) / sd
+        z_lead = _z(ra, min(best_lag, n - 1))
+        z_self = _z(rt, 0)
+        num_total += lag_sign * confidence * (z_lead - z_self) * w
         w_total += w
 
     if w_total <= EPS:

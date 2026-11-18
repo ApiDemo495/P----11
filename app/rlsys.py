@@ -64,6 +64,12 @@ DAMP_FLOOR = 0.4
 DAMP_STEP = 0.75         # multiply down by25% per sustained offence
 REWARD_LOW = 0.40
 REWARD_OK = 0.50
+# HYSTERESIS (report: "every active weight damper sits at ×0.75"):
+# a damped component was only restored at m >= 0.50, but a coin-flip
+# component measures 0.48–0.50 forever — so once damped it stayed at the
+# floor for the life of the process and the weights never separated.
+# Recover a little below the OK bar; keep the 0.40 bar for damping.
+REWARD_RECOVER = 0.47
 REWARD_HIGH = 0.60       # winner-boost entry bar
 BOOST_STEP = 1.10        # multiply up by10% per sustained win streak
 BOOST_CAP = 1.5
@@ -283,7 +289,7 @@ class RLSystem:
                 # under the OK bar and the earned weight is withdrawn
                 # BEFORE any damp is considered; keep winning and the
                 # boost deepens toward the cap, one step per cooldown.
-                if m < REWARD_OK:
+                if m < REWARD_RECOVER:
                     self.boost.pop(cid, None)
                     self.boosted.pop(cid, None)
                     rec = dict(bact)
@@ -326,7 +332,7 @@ class RLSystem:
                     taken.append(rec)
             else:
                 cooled = n >= int(act.get("n", 0)) + COMMIT_N
-                if m >= REWARD_OK:
+                if m >= REWARD_RECOVER:
                     self.damp.pop(cid, None)
                     self.active.pop(cid, None)
                     rec = dict(act)

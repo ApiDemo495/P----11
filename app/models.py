@@ -89,6 +89,13 @@ class TFCycle:
     issued: bool = False             # side issued (docs11-doublecheck: always)
     tier: str = "watch-only"         # full|half|quarter|watch-only (size hint)
     p_side: float = 0.5              # calibrated P(side) in [0.50, 1)
+    # provenance of that probability — the board must be able to show the
+    # measured sample size behind a tier instead of a bare label
+    calib_n: int = 0
+    calib_source: str = ""
+    noise_floor_s: float = 0.0
+    score_floor_ratio: float = 0.0
+    tier_rule: str = ""
     cycle_start: float = 0.0         # epoch seconds
     cycle_end: float = 0.0           # epoch seconds (countdown target)
     targets: list[TargetState] = field(default_factory=list)
@@ -108,6 +115,10 @@ class TFCycle:
     level_revision: int = 0
     contract_lock: dict = field(default_factory=dict)
     level_contract: dict = field(default_factory=dict)
+    # ONE authoritative object for this window (app/contracts.py): entry,
+    # TF-horizon TP, TP1..TP3 rungs, SL, ATR, both confidences, digest.
+    # Every panel reads this; nobody recomputes a level.
+    canonical: dict = field(default_factory=dict)
     execution_eligible: bool = False
     contract_tp_hit: bool = False
     forecast: dict = field(default_factory=dict)  # NEW system: price at horizon end
@@ -134,6 +145,11 @@ class TFCycle:
         return {
             "tier": self.tier,
             "p_side": self.p_side,
+            "calib_n": self.calib_n,
+            "calib_source": self.calib_source,
+            "noise_floor_s": self.noise_floor_s,
+            "score_floor_ratio": self.score_floor_ratio,
+            "tier_rule": self.tier_rule,
             "symbol": self.symbol,
             "tf": self.tf,
             "W": self.W,
@@ -160,6 +176,10 @@ class TFCycle:
             "level_revision": self.level_revision,
             "level_contract": self.level_contract,
             "contract_id": (self.level_contract or {}).get("id"),
+            # canonical window contract (app/contracts.py) — single source
+            # of truth for entry / TP1..TP3 / TF-TP / SL / confidence
+            "canonical": self.canonical,
+            "canonical_id": (self.canonical or {}).get("id"),
             "execution_eligible": self.execution_eligible,
             "contract_tp_hit": self.contract_tp_hit,
             "sl_observed": self.sl_observed,

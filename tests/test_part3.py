@@ -501,7 +501,11 @@ def test_cci_tme_scales_only_physics_component():
     adjusted[99] = 1.0
     adjusted[1] = 0.5
     out = eng.compute("BTC", "tf1", adjusted, drhe=1.0, tme=0.5)
-    w = eng.get_weights("BTC", "tf1")
+    # compute() applies the RL error-finder damp to every component, so the
+    # expectation must use the same damped weights (data/rl.json is live
+    # state; undamped weights made this assertion state-dependent).
+    from app.rlsys import damp_all
+    w = damp_all(eng.get_weights("BTC", "tf1"))
     expect = w[99] * 1.0 * 0.5 + w[1] * 0.5
     assert out["cci"] == pytest.approx(expect, abs=1e-12)
 

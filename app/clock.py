@@ -14,6 +14,7 @@ rollover, manual override — are handled by the engine, not the clock).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from typing import Awaitable, Callable
@@ -42,7 +43,20 @@ def grc_id(ts: float | None = None) -> int:
 
 
 class MasterClock:
-    """Fires `on_grc(grc_ts)` exactly at every 4-minute boundary."""
+    """Fires `on_grc(grc_ts)` exactly at every 4-minute boundary.
+
+    The scheduler must never be the silent single point of failure: if the
+    task dies (exception in the loop, cancellation) or a handler hangs, the
+    whole product looks "offline" while the socket still answers. `status()`
+    reports measured liveness and `watchdog()` restarts a dead/silent
+    scheduler, so a GRC outage self-heals instead of needing a restart.
+    """
+
+    #: a handler that runs longer than this is abandoned (the engine's own
+    #: analysis budget is 175 s; a GRC pass gets the same room + margin)
+    HANDLER_TIMEOUT_S = 240.0
+    #: scheduler is declared silent when no fire happened for this long
+    SILENT_AFTER_S = 2 * GRC_INTERVAL_SECONDS + 30.0
 
     def __init__(self, on_grc: Callable[[float], Awaitable[None]]):
         self.on_grc = on_grc
@@ -50,10 +64,69 @@ class MasterClock:
         self._stop = asyncio.Event()
         self.last_fired: float = 0.0
         self.fired_count: int = 0
+        self.started_at: float = 0.0
+        self.restarts: int = 0
+        self.last_error: str = ""
+        self.handler_ms: float = 0.0
+
+    def status(self) -> dict:
+        """Measured scheduler state — never a guess."""
+        now = time.time()
+        alive = bool(self._task is not None and not self._task.done())
+        return {
+            "alive": alive,
+            "fired_count": self.fired_count,
+            "last_fired": self.last_fired,
+            "last_fired_age_s": (round(now - self.last_fired, 1)
+                                 if self.last_fired else None),
+            "next_in_s": round(seconds_to_next_grc(now), 1),
+            "interval_s": GRC_INTERVAL_SECONDS,
+            "restarts": self.restarts,
+            "handler_ms": self.handler_ms,
+            "last_error": self.last_error,
+            "uptime_s": round(now - self.started_at, 1) if self.started_at else 0.0,
+        }
+
+    async def watchdog(self) -> dict:
+        """Restart the scheduler if it is dead or has gone silent.
+
+        Called from the app's lag meter (every few seconds), so a clock that
+        stopped firing is repaired within one interval instead of leaving a
+        frozen board until someone restarts the process.
+        """
+        now = time.time()
+        st = self.status()
+        if self._task is None and not self.started_at:
+            # never started yet (boot still in progress): nothing to heal
+            return {**st, "silent_for_s": 0.0, "action": "not-started"}
+        silent_for = (now - self.last_fired) if self.last_fired else \
+            (now - self.started_at if self.started_at else 0.0)
+        healthy = st["alive"] and silent_for <= self.SILENT_AFTER_S
+        st["silent_for_s"] = round(silent_for, 1)
+        st["action"] = "healthy" if healthy else "restart"
+        if healthy:
+            return st
+        # dead task, or alive but no fire for > 2 intervals: rebuild it
+        log.warning("clock watchdog: restarting scheduler (alive=%s silent=%.1fs)",
+                    st["alive"], silent_for)
+        try:
+            if self._task is not None and not self._task.done():
+                self._task.cancel()
+                with contextlib.suppress(BaseException):
+                    await self._task
+        except Exception:                      # pragma: no cover - defensive
+            pass
+        self.restarts += 1
+        self._stop = asyncio.Event()
+        self._task = asyncio.create_task(self._run())
+        self.started_at = time.time()
+        return {**self.status(), "action": "restarted",
+                "silent_for_s": round(silent_for, 1)}
 
     async def start(self) -> None:
-        self._stop.clear()
+        self._stop = asyncio.Event()
         self._task = asyncio.create_task(self._run())
+        self.started_at = time.time()
 
     async def stop(self) -> None:
         self._stop.set()
@@ -79,11 +152,19 @@ class MasterClock:
             # small settle so we are never early
             while time.time() < nxt:
                 await asyncio.sleep(0.01)
+            t0 = time.perf_counter()
+            self.last_fired = nxt
+            self.fired_count += 1
             try:
-                self.last_fired = nxt
-                self.fired_count += 1
-                await self.on_grc(nxt)
+                await asyncio.wait_for(self.on_grc(nxt),
+                                       timeout=self.HANDLER_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                self.last_error = (f"GRC handler exceeded "
+                                   f"{self.HANDLER_TIMEOUT_S:.0f}s — abandoned")
+                log.error(self.last_error)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                self.last_error = f"GRC handler failed: {exc!r}"
                 log.exception("GRC handler failed")
+            self.handler_ms = round((time.perf_counter() - t0) * 1000, 1)

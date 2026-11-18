@@ -35,3 +35,6 @@ backtest/replay.db
 .data_tmp/
 .venv/
 backtest/results/*.jsonl
+
+# Downloaded market data (regenerate with scripts/fetch_binance_mirror.py)
+backtest/cache/

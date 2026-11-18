@@ -511,3 +511,173 @@ until a longer gold tape is available.
 Observe mode still reproduces the research trade counts exactly
 (165 / 167, 332 closed, +2820.08 bp, DD 0.0060), so the live wiring did not
 perturb the studied contract.
+
+---
+
+## Literature that shaped the design (ported 2026-11-18)
+
+From the `f07a39b8` line. §0 retracts *measurements*, not methods — none
+of this was superseded:
+
+| Channel | Source | What it said | What we did |
+|---|---|---|---|
+| Order-flow imbalance / taker flow | arXiv 2607.09426 (*quarter-hour effect*) | volume-normalised order imbalance predicts crypto returns over hours, with the **persistent** component carrying the signal | `taker_imb`, `taker_persist` features; contrarian prior validated per fold |
+| Microstructure feature stability | arXiv 2602.00776 | OFI, spread and VWAP deviation dominate SHAP importance; OFI effect is monotone and **concave** at extremes | VWAP deviation feature; `tanh` saturation instead of linear extrapolation |
+| Meta-labeling + triple barrier | López de Prado, *AFML* ch. 3–4 | separate "which way" (primary) from "will it work" (secondary); label on first touch | `triple_barrier()`, meta-label logistic, gate on P(win) |
+| Purged / embargoed walk-forward | *AFML* ch. 7 | overlapping label spans leak; purge + embargo at every seam | `purged_folds(n, folds=5, embargo=horizon)` |
+| Isotonic vs Platt calibration | MQL5 #12, isotonic write-ups | isotonic when n ≳ 200, Platt below; monitor **Brier, ECE, slope**; a R²-ranked model can still be systematically overconfident | `app/calib.py`: PAV isotonic on settled ledger rows, Brier/ECE/slope telemetry, identity below 40 samples |
+| Maker execution is not free money | arXiv 2502.18625 + a live limit-order study | fill probability and post-fill return are anti-correlated; entry limits filled 19–48 % of the time kept going against the order, losing 8–14× more per trip than market orders | every sleeve modelled as **taker at the next open** (§2); a maker-filled backtest is not admissible |
+| Strategy-sweep base rates | a 2,160-strategy sweep on 1-minute crypto | nothing positive at taker fees; the only survivor's edge decayed on rolling windows | fixed parameters everywhere, per-fold dispersion instead of best-cell numbers |
+
+---
+
+## Microstructure + ensemble programme (ported 2026-11-18)
+
+The `f07a39b8` line's direction-accuracy programme: causal feature rig,
+flow block, calibration and cost-aware geometry. All four modules below
+are live in the merged tree; the tables are transcribed from the
+in-tree artifacts (`backtest/results/ALPHA_LAB.md`,
+`backtest/results/ALPHA_LAB_DEEP.md`), not from the line's prose copy,
+which had drifted by a rounding digit in places.
+
+**Shipped modules.**
+
+| Module | What it does |
+|---|---|
+| `app/alpha_lab.py` + `backtest/alpha_lab.py` | the rig: causal feature builder, triple-barrier labeller, purged walk-forward, IC / Brier / ECE / slope / EV, per-feature sign stability |
+| `app/spillover.py` | live cross-asset spillover + thesis-signed reversal block. Signs from the validated prior (`SIGN_PRIOR`, never re-decided at runtime), horizons in hours converted with the lane's bar length, graceful degradation (`coverage`), blended at `w = 0.25 × coverage` before the side is derived, sixth recheck voter |
+| `app/calib.py` | isotonic confidence → P(win), settled non-seeded ledger rows only, per lane with pooled fallback, persisted in `data/calibration.json`, identity below 40 samples and it *says so*; Brier raw→iso, ECE, slope |
+| `app/barriers.py` | volatility-scaled barrier multiples per TF with an explicit **friction floor** (`TP ≥ 3 × round-trip friction`); untradeable geometry is flagged watch-only with the reason |
+| `app/micro_alpha.py` | OFI `(2·taker_buy − V)/V` multi-horizon + persistence; **VPIN** on equal-volume buckets; **Kyle λ** (OLS slope of Δlog p on signed flow); Amihud illiquidity; aggressor-signed size skew; **Hawkes branching ratio**; **adaptive friction** from λ |
+| `app/ensemble.py` | noise band `1.5/√n` prunes features whose IC is indistinguishable from zero; prior sets the **sign**, the fit sets only magnitude; ridge shrinkage; cost-aware label `1[side·ret − hurdle > 0]` |
+| `app/horizon.py` | a lane is tradable only when σ ≥ 3× measured friction (marginal at 2×, untradable below) |
+
+**Strict before/after** — out-of-fold, 5-fold purged walk-forward,
+embargo = horizon, 12 bp friction (PAXG 18 bp), barriers vol-scaled and
+fitted on train folds only. BEFORE = classic technical composite,
+AFTER = + taker-imbalance / trade-size / VWAP-deviation block
+(orthogonalised, IC-shrunk weights from train folds only), meta-label
+filter, isotonic confidence. n = 4446 per lane.
+
+| Lane | sign acc B → A | IC B → A | Brier raw→iso | slope | EV bp B → A |
+|---|---|---|---|---|---|
+| BTC 2h | 47.8 → **51.6 %** | −0.045 → **+0.048** | 0.259 → 0.251 | 0.04 | −15.0 → −11.6 |
+| BTC 4h | 47.7 → **50.8 %** | −0.040 → **+0.026** | 0.260 → 0.252 | 0.03 | −19.4 → −14.1 |
+| ETH 2h | 47.4 → **53.0 %** | −0.062 → **+0.054** | 0.260 → 0.251 | 0.04 | −19.3 → −8.3 |
+| ETH 4h | 46.4 → **53.1 %** | −0.065 → **+0.046** | 0.263 → 0.252 | 0.03 | −27.1 → **+5.3** |
+| BNB 2h | 47.4 → **52.5 %** | −0.041 → **+0.034** | 0.258 → 0.254 | 0.02 | −15.6 → −10.8 |
+| BNB 4h | 47.4 → **51.2 %** | −0.034 → **+0.032** | 0.259 → 0.254 | 0.00 | −16.2 → −6.4 |
+| PAXG 2h | 49.5 → 49.7 % | −0.008 → +0.013 | 0.265 → 0.253 | 0.01 | −17.2 → −18.8 |
+| PAXG 4h | 50.3 → 50.0 % | +0.011 → +0.010 | 0.269 → 0.256 | 0.00 | −16.1 → −19.5 |
+| **mean** | **48.0 → 51.5 %** | **−0.036 → +0.033** | **0.262 → 0.253** | — | **−18.2 → −10.5** |
+
+Claimed: the direction module was pointing the wrong way, and the
+validated prior plus the flow block moves out-of-fold sign accuracy by
+**+3.5 pp** and turns a negative IC positive; calibration removes the
+overconfidence. Not claimed: profitability — net expectancy is still
+negative on seven of eight lanes and only ETH 4h clears (+5.3 bp). That
+is a *geometry* problem, which is why `app/barriers.py` refuses a target
+thinner than 3× friction. PAXG rejected: the flow block did not help
+gold, stated plainly.
+
+**Deep overhaul** — 349,920 one-minute bars per asset for BTC/ETH/BNB
+(2026-01 → 2026-08, with `taker_buy_volume`, `quote_volume`,
+`trade_count`), resampled to 5m/15m/60m; PAXG has no accessible 1-minute
+archive so TF1/TF2 are **not validated for PAXG**. Geometry: TF1 = 5m ×
+4 bars (20 min) · TF2 = 5m × 9 (45 min) · TF3 = 15m × 9 (135 min) ·
+TF4 = 60m × 4 (240 min). Means over the 14 measured lanes:
+
+| Metric | Before | After |
+|---|---|---|
+| Strict-sign accuracy | 47.9 % | **51.0 %** |
+| Out-of-fold IC | −0.040 | **+0.018** |
+| Net EV per window (adaptive friction) | −20 bp | −18 bp |
+| Break-even accuracy required by the geometry | — | **53.6 %** (gap −2.6 pp) |
+
+Per-lane highlights: BTC TF1 48.7 → 51.9 % (IC −0.036 → +0.033);
+ETH TF4 46.7 → 51.4 % (−0.068 → +0.019); PAXG TF3 50.0 → 54.3 %
+(+0.025 → **+0.108**). Where nothing cleared the noise band the
+ensemble kept **zero** features and refused to guess (ETH TF1, BNB
+TF2). Measured `tradable` share is 1–4 % at TF1 versus 59–100 % at
+TF3/TF4 — a 20-minute window whose σ is ~22 bp cannot pay a 15–27 bp
+round trip at any plausible hit rate (adaptive friction from Kyle λ
+is **15–27 bp**, not the flat 12 bp assumed before), so the app *says*
+that instead of dressing it up. Honesty flag: the artifact's prose
+claims positive expectancy in the top-20 % gated slice, but its own
+gated-EV column is negative on every non-degenerate lane (TF4: −3 /
+−22 / −37 bp) — treat the gated claim as unproven.
+
+---
+
+## Derivatives harness (ported 2026-11-18, numbers retracted)
+
+What survives from the fourth pass is the *harness*, not its two
+positive readings — those are retracted in §0 and the registry marks
+them `rejected`. Still live in the merged tree:
+
+1. **Sequential settlement** — `app/portfolio.py`: single-position book,
+   fixed parameters, entry at the next bar open, stop wins ties.
+   `backtest/derivs_scan.py` re-runs every structure under it (five
+   purged folds, embargo ≥ 96 bars, `block_bootstrap` standard errors
+   with circular 10-trade blocks). Report:
+   `backtest/results/DERIVS_SCAN.md`.
+2. **Fill-model bias probe** — `derivs_scan --only bias`: a coin flip on
+   a synthetic random walk earns **+14.76 bp** under "fill at the limit
+   inside the touched bar" and **−2.10 bp** under `next_bar` (fill one
+   bar later, only while the level holds — real adverse selection).
+   Pinned by a regression test; §2's t+1-open rule is its stricter
+   successor.
+3. **Convex payoffs** — `portfolio.py` `runner=True`: no take-profit,
+   tight structural stop, uncapped chandelier trail, time stop, per-trade
+   fee ledger. Break-even hit rate falls from `0.5 + c/(2kσ)` toward
+   `1/(1+R)`.
+4. **Event triggers** — `app/event_alpha.py`: `squeeze` (volatility
+   compression + funding crowding + breakout on a volume surge),
+   `basis_fade` (|funding z| ≥ 1.5 with basis dislocation, volume climax
+   and a rejection wick), `catchup` (a BTC impulse the laggard has not
+   priced). Frozen parameters in `CATCHUP`/`PLAN`, read by both the
+   harness and the app. The triggers stand as *definitions*; no
+   sleeve built on them is certified — the certified book is §4.
+5. **Derivatives context** — `app/derivs.py`: funding level / 3-day carry
+   / 30-observation z, basis in bp with 240-hour z, 24-hour OI change and
+   z, taker ratio and z, every field an **as-of join** (funding from its
+   settlement stamp, bar aggregates only from the next bar).
+
+Reproduce (merged tree):
+
+```bash
+python3 scripts/fetch_binance_mirror.py                       # 1h bars
+python3 scripts/fetch_binance_mirror.py --source zips --interval 1m \
+        --symbols BTC ETH BNB --months 2026-01 … 2026-08      # sub-hour bars
+python3 -m backtest.alpha_lab                                 # classic before/after
+python3 -m backtest.alpha_lab --mode deep                     # deep ensemble, TF1–TF4
+python3 -m backtest.derivs_scan                               # sequential tables + bias probe
+python3 -m backtest.derivs_scan --only events -v              # sleeves with per-fold EVs and CI
+python3 -m backtest.derivs_scan --only bias                   # random-walk fill-model guard
+python3 -m pytest tests/test_alpha_lab.py tests/test_cost_gate.py \
+                  tests/test_event_alpha.py tests/test_portfolio.py -q
+```
+
+---
+
+## Merge note (2026-11-18)
+
+Branches `arena/605bdcca-p-11` (base), `arena/f07a39b8-p-11` (research
+programme), `arena/68bbb922-p-11` (strict guards) and `main` were merged
+into one tree (`arena/4977d7a0-p-11` and `arena/023f99d5-p-11` carried no
+unique content). Conflict resolutions that affect this document:
+
+* The sleeve-certification gate is `app/edge_gate.py` (§3–§4). The
+  f07a line's cost module was renamed to `app/cost_gate.py` and its scan
+  to `backtest/derivs_scan.py` (`DERIVS_SCAN.md`); their per-bar gross
+  registry and Block 3 falsifications agree with §4's closed list.
+* The fourth-pass positives (+17.0 / +6.4 bp) are **retracted** (§0).
+  They remain visible in `DERIVS_SCAN.md` Block 1, `ALPHA_LAB_DEEP.md`
+  §7 and the `SLEEVES` registry — each flagged — so nobody re-discovers
+  them as new, but no live surface presents them as evidence.
+* `ALPHA_LAB_DEEP.md` §§6–7 are hand-written prose appended to a
+  writer-generated table; re-running `--mode deep` regenerates the table
+  only. The prose is preserved here by reference, not by the writer.
+* Emergency re-locking unions both lines' guards: the 15-minute /
+  3-ATR window freeze plus the 15-minute lock-age cooldown and a
+  strictly-greater-than 3 ATR automatic trigger (§`test_audit_regressions`).

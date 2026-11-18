@@ -6,8 +6,11 @@ import app.flywire as fw
 def test_brain_cache_in_workspace_and_watchdog():
     assert "data" in str(fw.CACHE_DIR) and "connectome" in str(fw.CACHE_DIR)
     eng = open("app/engine.py").read()
-    assert "_last_brain_watch" in eng and '_fw.state == "absent"' in eng
-    assert "_fw.ensure()" in eng          # 60 s self-heal, no button hunt
+    # 60 s self-heal, no button hunt — and it must run OFF the event loop:
+    # the 8.5 s connectome load on the loop was itself the "engine offline"
+    assert "_last_brain_watch" in eng and "self.heal()" in eng
+    assert "def heal(self)" in eng and "flywire-heal" in eng
+    assert 'if fw.state == "absent"' in eng
 
 
 def test_probability_bar_and_readable_fan_chart():

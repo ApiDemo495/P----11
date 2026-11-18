@@ -343,6 +343,10 @@ class AgentInstaller:
         self.error = ""
         self.log: deque = deque(maxlen=40)
         self._thread: threading.Thread | None = None
+        self._auto_thread: threading.Thread | None = None
+        self.auto: dict[str, Any] = {"state": "idle", "attempts": 0,
+                                     "last_result": "", "last_error": "",
+                                     "next_try_at": 0.0}
 
     # -- detection ------------------------------------------------------
     def deps_installed(self) -> bool:
@@ -378,6 +382,7 @@ class AgentInstaller:
             "log": list(self.log),
             "elapsed_s": int((time.time() - self.started_at))
                          if running and self.started_at else 0,
+            "auto": self.auto_status(),
         }
 
     # -- work -----------------------------------------------------------
@@ -395,6 +400,92 @@ class AgentInstaller:
                                             name="agent-installer")
             self._thread.start()
             return self.status()
+
+    # ---------------- automatic (boot) download ------------------------
+    # The user asked for the local agent to arrive WITHOUT pressing
+    # anything. The old boot download was removed because it raced
+    # provisioning and half-downloaded on slow links — that is solved
+    # here with: a delay after boot, the same flock the button uses,
+    # bounded retries with backoff, a persisted done-marker, and an
+    # honest per-attempt record that the UI can show.
+    AUTO_FILE = os.path.join("data", ".agent_auto.json")
+    AUTO_DELAYS_S = (90.0, 600.0, 1800.0)      # 1.5 min, 10 min, 30 min
+
+    def _auto_save(self) -> None:
+        try:
+            d = os.path.dirname(self.AUTO_FILE)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            with open(self.AUTO_FILE, "w") as fh:
+                json.dump(self.auto, fh)
+        except OSError:
+            pass
+
+    def auto_status(self) -> dict:
+        now = time.time()
+        running = (self._auto_thread is not None
+                   and self._auto_thread.is_alive())
+        return {
+            "state": ("running" if running else self.auto.get("state", "idle")),
+            "attempts": self.auto.get("attempts", 0),
+            "last_result": self.auto.get("last_result", ""),
+            "last_error": self.auto.get("last_error", ""),
+            "next_try_in_s": (max(0, round(self.auto.get("next_try_at", 0) - now))
+                              if self.auto.get("next_try_at") else None),
+            "installed": self.installed(),
+            "rule": ("downloads by itself after boot: llama.cpp runtime from "
+                     "PyPI, then the GGUF model; retries with backoff and "
+                     "reports exactly what failed"),
+        }
+
+    def start_auto(self) -> dict:
+        """Arm the automatic downloader (boot path; idempotent)."""
+        with self._lock:
+            if self._auto_thread is not None and self._auto_thread.is_alive():
+                return self.auto_status()
+            if self.installed():
+                self.auto.update(state="done", last_result="already installed")
+                self._auto_save()
+                return self.auto_status()
+            self.auto = {"state": "running", "attempts": 0,
+                         "last_result": "", "last_error": "", "next_try_at": 0.0}
+            self._auto_thread = threading.Thread(
+                target=self._auto_work, name="agent-autodownload", daemon=True)
+            self._auto_thread.start()
+            return self.auto_status()
+
+    def _auto_work(self) -> None:
+        for i, delay in enumerate(self.AUTO_DELAYS_S):
+            if self.installed():
+                break
+            self.auto["next_try_at"] = time.time() + delay
+            time.sleep(delay)
+            self.auto["next_try_at"] = 0.0
+            if self.installed():
+                break
+            self.auto["attempts"] = i + 1
+            try:
+                self.start()                    # button path, one fetcher
+                th = self._thread
+                if th is not None:
+                    th.join(timeout=45 * 60)
+            except Exception as exc:            # pragma: no cover - defensive
+                self.auto["last_error"] = repr(exc)[:300]
+            if self.installed():
+                self.auto["state"] = "done"
+                self.auto["last_result"] = "installed automatically"
+                self._auto_save()
+                return
+            self.auto["last_result"] = (f"attempt {i + 1} failed: "
+                                        + (self.error or "not installed"))
+            self.auto["last_error"] = (self.error or "")[:300]
+            self._say("auto-download %s" % self.auto["last_result"])
+            self._auto_save()
+        self.auto["state"] = ("done" if self.installed() else "failed")
+        if not self.installed():
+            self.auto["last_result"] = (self.auto.get("last_result", "")
+                                        + " — press DOWNLOAD LOCAL AGENT to retry now")
+        self._auto_save()
 
     def _say(self, line: str) -> None:
         line = str(line).rstrip()
@@ -476,27 +567,48 @@ class AgentInstaller:
             if self.deps_installed():
                 self._say("llama.cpp runtime already installed — skipping")
             else:
-                self._say("installing llama.cpp runtime "
-                          "(requirements-agents.txt) — a source build can "
-                          "take 10-20 min, that is normal")
-                # prebuilt CPU wheel first: a source build of
-                # llama-cpp-python takes 10-20 min and fails without
-                # a full toolchain — the wheel installs in ~1 min
+                # PREBUILT CPU WHEEL ONLY (audit §11): asking pip to
+                # resolve the whole requirements file let it fall back to
+                # the sdist and compile llama.cpp from source — the
+                # "Building wheel for llama-cpp-python … started" that ran
+                # for 20 minutes on the user's screen. `--only-binary=:all:`
+                # makes pip REFUSE to compile, so the abetlen CPU wheel
+                # index is the only possible source (≈3 s).
+                self._say("installing prebuilt llama.cpp CPU wheel "
+                          "(abetlen index, --only-binary: no source build) …")
                 rc = self._exec([sys_executable(), "-m", "pip", "install",
+                                 "--prefer-binary",
+                                 # refuse to COMPILE llama.cpp: the abetlen
+                                 # CPU index is then the only possible
+                                 # source, so this is a 3-second install
+                                 # instead of a 20-minute build
+                                 "--only-binary", "llama-cpp-python",
                                  "--extra-index-url",
                                  "https://abetlen.github.io/llama-cpp-python/whl/cpu",
                                  "-r", "requirements-agents.txt"])
                 if rc != 0:
+                    # the prebuilt-wheel host is its own dependency; PyPI is
+                    # the one index that is almost always reachable
+                    self._say("prebuilt wheel index unavailable — retrying "
+                              "from PyPI (a source build can take 10-20 min)")
+                    rc = self._exec([sys_executable(), "-m", "pip", "install",
+                                     "-r", "requirements-agents.txt"])
+                if rc != 0:
                     raise RuntimeError(
-                        "runtime install failed (pip exit %d) — check your "
-                        "connection and press download again" % rc)
+                        "runtime install failed (pip exit %d): neither the "
+                        "prebuilt llama.cpp wheel index (abetlen.github.io) "
+                        "nor PyPI served it — outbound HTTPS to those hosts "
+                        "is required" % rc)
             self.phase = "model"
             rc = self._exec([sys_executable(),
                              os.path.join("scripts", "download_models.py")])
             if rc != 0 or not self.model_present():
                 raise RuntimeError(
-                    "model download did not finish — the hub may be "
-                    "unreachable; press download again to resume")
+                    "model download did not finish: the GGUF file is not on "
+                    "disk. The model comes from huggingface.co (and its CDN) "
+                    "— if this host cannot reach it the download cannot "
+                    "complete, the app stays fully usable in Drosophila "
+                    "mode, and the automatic retry keeps trying")
             try:
                 d = os.path.dirname(self.DONE_FILE)
                 if d:
@@ -1175,3 +1287,142 @@ def _extract_text(slot: str, r: httpx.Response) -> str:
         return d["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError, TypeError):
         return json.dumps(d)[:400]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# guide §8 — boot-time local agent startup
+#
+# The local agent used to need a manual `ollama serve` + a manual wheel
+# install, so a fresh container showed "local agent unavailable" until a
+# human intervened. Boot now does it itself: probe the daemon, start it
+# detached if the binary exists, kick the PREBUILT wheel install in the
+# background, then refresh the status. Every step is best-effort and
+# non-blocking — boot never waits on any of it.
+# ══════════════════════════════════════════════════════════════════════
+OLLAMA_HOST = "127.0.0.1"
+OLLAMA_PORT = 11434
+
+_boot_lock = threading.Lock()
+_boot_started = False
+_boot_state: dict[str, Any] = {"stage": "idle", "detail": "", "at": 0.0,
+                               "ollama": None, "install": None}
+
+
+def probe_ollama(host: str = OLLAMA_HOST, port: int = OLLAMA_PORT,
+                 timeout: float = 1.5) -> dict:
+    """Cheap liveness probe for the local LLM daemon (no exceptions leak)."""
+    import time as _t
+    url = f"http://{host}:{port}/api/tags"
+    out: dict[str, Any] = {"url": url, "ok": False, "models": [],
+                           "detail": "", "ms": None}
+    t0 = _t.perf_counter()
+    try:
+        import httpx
+        r = httpx.get(url, timeout=timeout)
+        out["ms"] = round((_t.perf_counter() - t0) * 1000, 1)
+        out["ok"] = bool(r.ok)
+        if r.ok:
+            try:
+                out["models"] = [m.get("name") for m in
+                                 (r.json().get("models") or [])][:20]
+            except ValueError:
+                out["models"] = []
+            out["detail"] = f"{len(out['models'])} model(s) served"
+        else:
+            out["detail"] = f"HTTP {r.status_code}"
+    except Exception as exc:                    # refused == not running
+        out["ms"] = round((_t.perf_counter() - t0) * 1000, 1)
+        out["detail"] = type(exc).__name__
+    return out
+
+
+def ensure_ollama_running(timeout: float = 1.5) -> dict:
+    """Probe 127.0.0.1:11434/api/tags; start `ollama serve` detached if the
+    binary is present. Returns the probe result (never raises)."""
+    probe = probe_ollama(timeout=timeout)
+    if probe["ok"]:
+        probe["started"] = False
+        return probe
+    import shutil
+    import subprocess
+    binp = shutil.which("ollama") or shutil.which("/usr/local/bin/ollama")
+    if not binp:
+        probe["started"] = False
+        probe["detail"] = (probe.get("detail") or "") + " · no ollama binary"
+        return probe
+    try:
+        subprocess.Popen([binp, "serve"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL, start_new_session=True,
+                         close_fds=True)
+        probe["started"] = True
+        probe["detail"] = "ollama serve spawned (detached)"
+    except Exception as exc:
+        probe["started"] = False
+        probe["detail"] = f"spawn failed: {exc}"
+    return probe
+
+
+def _boot_worker(manager=None) -> None:
+    """Runs on a daemon thread. Order matters: daemon first, then the
+    model/wheel install (network), then one status refresh."""
+    import time as _t
+    _boot_state["stage"] = "probing ollama"
+    _boot_state["at"] = _t.time()
+    try:
+        probe = ensure_ollama_running()
+        _boot_state["ollama"] = probe
+        _boot_state["detail"] = probe.get("detail") or ""
+        if manager is not None and getattr(manager, "settings", {}).get(
+                "local_enabled", True):
+            _boot_state["stage"] = "checking local model install"
+            inst = getattr(manager, "installer", None)
+            if inst is not None:
+                st = inst.status()
+                _boot_state["install"] = {k: st.get(k) for k in
+                                          ("state", "installed",
+                                           "model_present", "error")}
+                # NEVER blocks boot: start() only spawns its own thread
+                if not st.get("installed") or not st.get("model_present"):
+                    try:
+                        inst.start()
+                    except Exception as exc:
+                        _boot_state["install"]["error"] = str(exc)
+        if manager is not None:
+            _boot_state["stage"] = "refreshing agent status"
+            try:
+                st = manager.status()
+                _boot_state["agents"] = {
+                    "local": (st.get("local") or {}).get("status")
+                    if isinstance(st.get("local"), dict) else st.get("local"),
+                }
+            except Exception as exc:
+                _boot_state["agents"] = {"error": str(exc)}
+    except Exception as exc:                    # never kill the thread silently
+        _boot_state["detail"] = f"boot worker error: {exc}"
+    finally:
+        _boot_state["stage"] = "done"
+        _boot_state["at"] = _t.time()
+
+
+def start_boot_worker(manager=None) -> dict:
+    """Idempotent: spawn the agent boot worker once per process."""
+    global _boot_started
+    with _boot_lock:
+        if _boot_started:
+            return {"started": False, "state": dict(_boot_state)}
+        _boot_started = True
+        _boot_state["stage"] = "starting"
+        t = threading.Thread(target=_boot_worker, args=(manager,),
+                             name="agent-boot", daemon=True)
+        t.start()
+    return {"started": True, "state": dict(_boot_state)}
+
+
+def boot_state() -> dict:
+    return dict(_boot_state)
+
+
+def get_status() -> dict:
+    """`agents.get_status()` — the boot worker's state without a manager."""
+    return boot_state()

@@ -129,7 +129,12 @@ class MetaCombiner:
         Zb = np.hstack([Z, np.ones((n, 1))])
         for _ in range(400):
             p = _sigmoid_vec(Zb @ theta)
-            grad = Zb.T @ (p - y) * (wts / wm) + lam * np.concatenate([[0.0], theta[1:]])
+            # NB: parenthesise the weighting INSIDE the matmul — `@` and `*`
+            # share precedence, so the old form became (7,)*(N,) and raised
+            # for every n != 7. The combiner could never fit, so it never
+            # picked, never took over and never appeared in the History tab.
+            grad = (Zb.T @ ((p - y) * wts) / wm
+                    + lam * np.concatenate([[0.0], theta[1:]]))
             theta -= lr * grad
         self.w, self.mu, self.sd = theta, mu, sd
         # evidence-ledger slope b on the weighted logit
@@ -216,6 +221,39 @@ class MetaCombiner:
             return True, (f"meta-combiner takeover: {len(self.pick_history[-40:])}-"
                           f"window strict-sign {rate:.0%} ≥ 53%")
         return False, f"meta record {rate:.0%} < 53% — recipe keeps the side"
+
+    def refit_pick_history(self, split: float = 0.6) -> int:
+        """Grade the combiner's OWN picks walk-forward over the replay rows.
+
+        Fit once on the older ``split`` of the settled windows and score the
+        pick on every later row, in time order.  Nothing in-sample enters
+        ``pick_history``; the live loop then keeps appending real picks.
+        Restores the full-data fit afterwards.
+        """
+        rows = list(self.rows)
+        n = len(rows)
+        if n < 40:
+            return 0
+        keep = (self.w, self.mu, self.sd, self.b_fit, self.calib_a,
+                self.coef_notes)
+        k = max(20, int(n * max(0.2, min(0.9, split))))
+        try:
+            self.rows = rows[:k]
+            self.fit()
+            picks: list[bool] = []
+            for row in rows[k:]:
+                pick = self.meta_pick(row.get("inputs") or {})
+                if pick:
+                    picks.append((pick > 0) == bool(row.get("up")))
+            self.rows = rows
+            self.fit()
+            self.pick_history = (self.pick_history + picks)[-200:]
+            return len(picks)
+        except Exception:
+            self.rows = rows
+            (self.w, self.mu, self.sd, self.b_fit, self.calib_a,
+             self.coef_notes) = keep
+            return 0
 
     def note_pick(self, inputs: dict, outcome_up: bool) -> None:
         pick = self.meta_pick(inputs)
@@ -355,3 +393,48 @@ def _mutual_info(z: np.ndarray, y: np.ndarray) -> float:
                 continue
             mi += p_joint * py * math.log2(py / p_y)
     return max(0.0, mi)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# guide §7.3 — 448-row meta grid
+# ══════════════════════════════════════════════════════════════════════
+META_ROWS_TARGET = 448
+
+
+def meta_payload(engine) -> dict:
+    """The settled meta grid: one row per (symbol, tf, window) for up to
+    448 windows, with the lane row counts behind them. Honest about a
+    short grid — `complete` is False and `missing` says how many rows the
+    seeder still owes, never a padded placeholder."""
+    lanes: list[dict] = []
+    total = 0
+    try:
+        ledger = engine.ledger
+        symbols = list(getattr(engine, "SYMBOLS", []) or
+                       ["BTC", "ETH", "SOL", "XRP"])
+        tfs = ("tf1", "tf2", "tf3", "tf4")
+        for symbol in symbols:
+            for tf in tfs:
+                rows = list((ledger.rows or {}).get(
+                    f"{symbol}:{tf}", ledger.rows.get(f"{symbol}|{tf}", [])))
+                n = len(rows)
+                if not n:
+                    continue
+                wins = sum(1 for r in rows if r.get("result") == "win")
+                total += n
+                lanes.append({
+                    "symbol": symbol, "tf": tf, "n": n,
+                    "hit_rate": round(wins / n, 4) if n else None,
+                    "seeded": sum(1 for r in rows if r.get("seeded")),
+                    "with_votes": sum(1 for r in rows if r.get("votes")),
+                })
+    except Exception as exc:
+        return {"error": repr(exc), "rows": 0, "target": META_ROWS_TARGET}
+    return {
+        "rows": min(total, META_ROWS_TARGET),
+        "rows_available": total,
+        "target": META_ROWS_TARGET,
+        "complete": total >= META_ROWS_TARGET,
+        "missing": max(0, META_ROWS_TARGET - total),
+        "lanes": lanes,
+    }

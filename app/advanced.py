@@ -788,3 +788,63 @@ def advanced_block(symbol: str, tf: str, ctx, others: dict | None = None,
         "size_mult": round(size_mult, 3),
         "weights": weights,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# guide §7.5 — ten-module scoreboard for /api/history
+# ══════════════════════════════════════════════════════════════════════
+ADV_MODULES = ("kalman", "fracdiff", "bocpd", "entropy", "ou_hurst",
+               "jumps", "pairs_ou", "wavelet", "rmt_residual", "signature")
+
+
+def scoreboard(engine, symbols, tfs, ring_n: int = 600) -> dict:
+    """Aggregate the ten advanced modules across every (symbol, tf) lane.
+
+    Each module reports settled n / hit rate / adaptive scale plus the
+    per-lane breakdown, so /api/history can print one honest table
+    instead of ten separate ones. Never invents a rate at n == 0."""
+    out: dict = {"modules": {}, "lanes": 0, "n_total": 0}
+    for mod in ADV_MODULES:
+        out["modules"][mod] = {"n": 0, "hits": 0, "acc": None,
+                               "scales": [], "per": {}}
+    for symbol in symbols:
+        for tf in tfs:
+            key_name = f"{symbol}:{tf}"
+            used = False
+            try:
+                scales = engine._adv_weight_scales(symbol, tf)
+            except Exception:
+                scales = {}
+            for mod in ADV_MODULES:
+                try:
+                    ring = list(engine.hist.ring(
+                        engine.hist.tf_key(symbol, tf, f"adv_{mod}"), ring_n))
+                except Exception:
+                    ring = []
+                if not ring:
+                    continue
+                used = True
+                row = out["modules"][mod]
+                row["n"] += len(ring)
+                row["hits"] += sum(1 for v in ring if v > 0.5)
+                sc = scales.get(mod)
+                if isinstance(sc, (int, float)):
+                    row["scales"].append(float(sc))
+                row["per"][key_name] = {
+                    "n": len(ring),
+                    "acc": round(sum(ring) / len(ring), 4),
+                    "scale": round(float(sc), 3) if isinstance(sc, (int, float)) else None,
+                }
+            if used:
+                out["lanes"] += 1
+    for mod, row in out["modules"].items():
+        if row["n"]:
+            row["acc"] = round(row["hits"] / row["n"], 4)
+            out["n_total"] += row["n"]
+        row["scale"] = (round(sum(row["scales"]) / len(row["scales"]), 3)
+                        if row["scales"] else None)
+        row["scales_n"] = len(row["scales"])
+        del row["scales"]
+        row["hits"] = int(row["hits"])
+    out["count"] = len(ADV_MODULES)
+    return out

@@ -18,7 +18,15 @@ import threading
 from typing import Any
 
 BUCKETS = (-1.0, -0.5, 0.0, 0.5, 1.0)
-MIN_N_USE = 30          # advice: n ≥ 30 per bucket before the table speaks
+MIN_N_USE = 30          # advice: n ≥ 30 per bucket before it speaks exactly
+# Hierarchical fallback: a single 0.5-wide reading bucket is thin on the
+# long horizons (a 247-minute tf4 window settles ~6× a day, so ONE bucket
+# needs days to reach 30). Pooling neighbouring buckets is the standard
+# bias/variance trade for a monotone reading→outcome table: it is a
+# measured frequency over a wider reading span, never an invented number.
+# The span used is reported next to the probability (`span`), and the UI
+# prints "+/-0.5 pooled" so the estimate can never masquerade as exact.
+POOL_SPANS = (0.5, 1.0)
 
 
 def _bucket(value: float) -> float:
@@ -78,7 +86,7 @@ class ForwardTables:
     # ── recording (called at settlement) ───────────────────────────────
     def record(self, symbol: str, tf: str, fv: dict[int, float],
                entry: float, settle: float,
-               record_id: str | None = None) -> int:
+               record_id: str | None = None, persist: bool = True) -> int:
         """One settled window: bucket frozen readings, credit P(up).
 
         ``record_id`` makes live settlement retries and verified-history
@@ -115,6 +123,8 @@ class ForwardTables:
                 while len(self._record_id_order) > 10000:
                     expired = self._record_id_order.pop(0)
                     self._record_ids.discard(expired)
+            if not persist:
+                return n
             try:
                 self.save()
             except Exception:
@@ -133,6 +143,51 @@ class ForwardTables:
             return n
 
     # ── reading (fusion + UI) ──────────────────────────────────────────
+    def estimate(self, fid: int, symbol: str, tf: str,
+                 value: float) -> dict:
+        """(P(up), n, span, exact) for a reading — measured, never invented.
+
+        Exact bucket first (n ≥ MIN_N_USE). Otherwise the reading bucket is
+        pooled with its neighbours (span ±0.5, then ±1.0 = the whole
+        table). If even that is thin, a Laplace-smoothed (up+1)/(n+2)
+        frequency from whatever samples exist is returned with
+        ``exact=False`` and its sample count — a formatted, honest number
+        instead of an unexplained em dash.
+        """
+        b = _bucket(value)
+        cell = self.rows.get((fid, symbol, tf, b))
+        n0 = int(cell["n"]) if cell else 0
+        if cell and n0 >= MIN_N_USE:
+            return {"p": round(cell["up"] / n0, 4), "n": n0,
+                    "span": 0.0, "exact": True}
+        up = n = 0
+        best = None
+        for span in POOL_SPANS:
+            up = n = 0
+            for bb in BUCKETS:
+                if abs(bb - b) <= span + 1e-9:
+                    c = self.rows.get((fid, symbol, tf, bb))
+                    if c:
+                        up += int(c["up"])
+                        n += int(c["n"])
+            if n:
+                best = (up, n, span)
+            if n >= MIN_N_USE:
+                break
+        if best and best[1] >= MIN_N_USE:
+            up, n, span = best
+            return {"p": round(up / n, 4), "n": n, "span": span,
+                    "exact": False}
+        # thin tape: smoothed frequency from the samples that DO exist
+        if best and best[1] > 0:
+            up, n, span = best
+            return {"p": round((up + 1.0) / (n + 2.0), 4), "n": n,
+                    "span": span, "exact": False, "smoothed": True}
+        if cell and n0 > 0:
+            return {"p": round((cell["up"] + 1.0) / (n0 + 2.0), 4),
+                    "n": n0, "span": 0.0, "exact": False, "smoothed": True}
+        return {"p": None, "n": 0, "span": 0.0, "exact": False}
+
     def p_up(self, fid: int, symbol: str, tf: str, value: float) -> tuple[float | None, int]:
         """(P(up), n) for a reading at its bucket — None until n ≥ MIN_N_USE."""
         cell = self.rows.get((fid, symbol, tf, _bucket(value)))
@@ -140,14 +195,44 @@ class ForwardTables:
             return None, 0 if not cell else cell["n"]
         return cell["up"] / cell["n"], cell["n"]
 
+    # ── reading (fusion + UI) ──────────────────────────────────────────
+    def pooled(self, fid: int, symbol: str, tf: str,
+               value: float) -> tuple[float | None, int, float]:
+        """Backwards-compatible tuple form of :meth:`estimate`."""
+        e = self.estimate(fid, symbol, tf, value)
+        return e["p"], e["n"], e["span"]
+
+    def symbol_table(self, symbol: str) -> dict:
+        """Every formula × timeframe table for the UI, with pooled cells.
+
+        Returns ``{"tables": {"F1|BTC|tf1": {bucket: {...}}, ...}}`` where
+        each bucket carries ``p_up``/``n``/``exact`` and a current-value
+        lookup exists for the focused reading (the frontend asks per tf).
+        """
+        out: dict[str, dict] = {}
+        for (fid, sym, tf, b), cell in self.rows.items():
+            if sym != symbol:
+                continue
+            out.setdefault(f"{fid}|{sym}|{tf}", {})[str(b)] = {
+                "bucket": b, "n": int(cell["n"]), "up": int(cell["up"]),
+                "p_up": round(cell["up"] / cell["n"], 4) if cell["n"] else None,
+                "exact": int(cell["n"]) >= MIN_N_USE,
+            }
+        return {"min_n": MIN_N_USE, "pool_spans": list(POOL_SPANS),
+                "tables": out}
+
     def payload(self, symbol: str | None = None) -> dict:
-        out: dict[str, Any] = {"min_n": MIN_N_USE, "buckets": {}, "tables": {}}
+        out: dict[str, Any] = {"min_n": MIN_N_USE, "buckets": {}, "tables": {},
+                               "pool_spans": list(POOL_SPANS)}
         for (fid, sym, tf, b), cell in self.rows.items():
             if symbol and sym != symbol:
                 continue
+            n = int(cell["n"])
             out["buckets"].setdefault(f"F{fid} {sym} {tf}", []).append({
-                "bucket": b, "n": cell["n"],
+                "bucket": b, "n": cell["n"], "up": cell["up"],
                 "p_up": round(cell["up"] / cell["n"], 4) if cell["n"] else None,
                 "settled": cell["n"] >= MIN_N_USE,
             })
+        if symbol:
+            out["tables"] = self.symbol_table(symbol)["tables"]
         return out

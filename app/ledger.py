@@ -131,8 +131,18 @@ class SettlementLedger:
                conf: float | None = None, record_id: str | None = None,
                first_touch: str | None = None,
                barriers_available: bool | None = None,
-               ambiguous: bool = False) -> dict:
-        """Record one settlement; ``record_id`` makes inserts idempotent."""
+               ambiguous: bool = False,
+               persist: bool = True,
+               votes: dict | None = None) -> dict:
+        """Record one settlement; ``record_id`` makes inserts idempotent.
+
+        ``persist=False`` is for bulk warm-history replay: rows are added
+        in memory and written once by the caller (``save()``). Without it
+        a 500-window replay performed 500 fsyncs and boot stalled.
+
+        ``votes`` carries the per-subject readings (F1–F35) with the row so
+        a hindsight regrade can grade every formula, not just the side.
+        """
         entry_value, settle_value = _positive(entry), _positive(settle_price)
         try:
             side_value = int(side)
@@ -183,6 +193,12 @@ class SettlementLedger:
         }
         if rid:
             row["record_id"] = rid
+        if isinstance(votes, dict) and votes:
+            # guide §7.2: per-subject readings ride with the row so a
+            # hindsight regrade can grade F1–F35, not just the side.
+            row["votes"] = {str(k)[:16]: round(float(v), 4)
+                            for k, v in votes.items()
+                            if isinstance(v, (int, float))}
         key = self._key(str(symbol), str(tf))
         with self._lock:
             old_rows = list(self.rows.get(key, []))
@@ -195,6 +211,14 @@ class SettlementLedger:
             bucket.append(row)
             if len(bucket) > 500:
                 del bucket[:-500]
+            if not persist:
+                self.settle_calls += 1
+                self.last_settle_ts = row["ts"]
+                self.last_settle = {"symbol": str(symbol), "tf": str(tf),
+                                    "result": result, "side": side_value,
+                                    "entry": row["entry"]}
+                self.totals[result] = self.totals.get(result, 0) + 1
+                return {**row, "_persisted": True, "_deferred": True}
             if not self.save():
                 self.rows[key] = old_rows
                 if not old_rows:
@@ -245,8 +269,22 @@ class SettlementLedger:
         wins_bps = [value for value in bps if value > 0]
         loss_bps = [-value for value in bps if value < 0]
         target_first = resolved.count("target")
+        # REGIME-SCOPED EXPECTANCY. The all-time mean describes the whole
+        # tape history — after a feed/model fix that history no longer
+        # describes the tape in front of us, and a single all-time number
+        # kept the gate shut forever ("always NO TRADE"). Report both: the
+        # recent window (last 60 settled) for the live gate, all-time for
+        # context, each with its own n.
+        recent = bps[-60:]
         return {
             "exp_bps": round(sum(bps) / len(bps), 2) if bps else None,
+            "exp_bps_recent": (round(sum(recent) / len(recent), 2)
+                               if recent else None),
+            "exp_n_recent": len(recent),
+            "exp_sd_recent": (round((sum((x - sum(recent) / len(recent)) ** 2
+                                        for x in recent) / len(recent)) ** 0.5, 2)
+                              if len(recent) > 1 else None),
+            "exp_n_all": len(bps),
             "payoff": (round((sum(wins_bps) / len(wins_bps)) /
                              (sum(loss_bps) / len(loss_bps)), 3)
                        if wins_bps and loss_bps else None),
@@ -292,3 +330,99 @@ class SettlementLedger:
                 "last_settle": self.last_settle,
                 "totals": dict(self.totals),
                 "rows_total": sum(len(values) for values in self.rows.values())}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# guide §7.2 — hindsight regrade
+#
+# Seeded rows were written before the grading rules were unified, so a
+# row could keep a stale `result`/`level_outcome` forever. A regrade
+# recomputes every row from its own arithmetic (side vs settle), tallies
+# all 41 subjects (F1–F35 + the six module lanes) and reports every
+# correction it made instead of silently rewriting history.
+# ══════════════════════════════════════════════════════════════════════
+MODULE_SUBJECTS = ("BRAIN", "EMOTION", "PHYSICS", "NEWS", "HEDGE", "TRACER")
+
+
+def _row_result(entry, settle, side) -> str:
+    e, s = _positive(entry), _positive(settle)
+    side = 1 if (side or 0) > 0 else (-1 if (side or 0) < 0 else 0)
+    if side == 0 or e is None or s is None:
+        return "skip"
+    move = s - e
+    if move == 0.0:
+        return "loss"
+    return "win" if (move > 0) == (side > 0) else "loss"
+
+
+def hindsight_regrade(self, min_conf: float | None = None) -> dict:
+    """Re-grade every settled row; returns per-subject tallies.
+
+    Subject rows are F1–F35 (from `row["votes"]` when the seeder stored
+    them) and the six module lanes (BRAIN/EMOTION/PHYSICS/NEWS/HEDGE/
+    TRACER). A subject with no stored vote reports n=0 and says why —
+    the panel must never print a fabricated 0.0 % win rate."""
+    out: dict = {"rows": 0, "regraded": 0, "changed": 0, "scanned": 0,
+                 "subjects": {}, "vintage": time.time()}
+    for fid in range(1, 36):
+        out["subjects"][f"F{fid}"] = {"n": 0, "hits": 0, "hit_rate": None,
+                                      "why": "no stored vote for this row set"}
+    for name in MODULE_SUBJECTS:
+        out["subjects"][name] = {"n": 0, "hits": 0, "hit_rate": None,
+                                 "why": "module lane not stored per row"}
+    with self._lock:
+        for key, rows in list(self.rows.items()):
+            for row in rows:
+                out["scanned"] += 1
+                new_result = _row_result(row.get("entry"), row.get("settle"),
+                                         row.get("side"))
+                if new_result in ("win", "loss"):
+                    out["rows"] += 1
+                if new_result != row.get("result"):
+                    row["result"] = new_result
+                    row["regraded_at"] = time.time()
+                    out["changed"] += 1
+                touch = row.get("first_touch")
+                if isinstance(touch, str) and touch in TOUCH_STATES:
+                    row["level_outcome"] = TOUCH_LABELS[touch]
+                if min_conf is not None:
+                    try:
+                        if float(row.get("conf") or 0.0) < float(min_conf):
+                            continue
+                    except (TypeError, ValueError):
+                        continue
+                out["regraded"] += 1
+                votes = row.get("votes")
+                if not isinstance(votes, dict):
+                    continue
+                for sid, val in votes.items():
+                    try:
+                        v = float(val)
+                    except (TypeError, ValueError):
+                        continue
+                    if not math.isfinite(v) or abs(v) < 1e-9:
+                        continue
+                    lane = out["subjects"].get(str(sid))
+                    if lane is None:
+                        lane = out["subjects"][str(sid)] = {
+                            "n": 0, "hits": 0, "hit_rate": None, "why": None}
+                    if lane.get("why"):
+                        lane["why"] = None
+                    lane["n"] += 1
+                    if (v > 0 and new_result == "win") or \
+                       (v < 0 and new_result == "loss"):
+                        lane["hits"] += 1
+    for lane in out["subjects"].values():
+        if lane["n"]:
+            lane["hit_rate"] = round(lane["hits"] / lane["n"], 4)
+    graded = [s for s in out["subjects"].values() if s["n"]]
+    out["subjects_graded"] = len(graded)
+    out["subjects_total"] = len(out["subjects"])
+    self.save()
+    return out
+
+
+SettlementLedger.hindsight_regrade = hindsight_regrade
+
+
+Ledger = SettlementLedger        # compatibility alias

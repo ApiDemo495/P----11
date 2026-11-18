@@ -6,11 +6,12 @@ from app.physics import PhysicsSystem, UFP_ALPHA_IDS
 def test_emotion_cold_start_learns_fast():
     """A fresh system must differentiate channels within ~50 updates,
     not stay frozen at uniform (the old 1.5% eta did exactly that).
-    Channels 1..3 agree with the realized move; 4..21 disagree."""
+    Channels 1..3 sit far from neutral AND point with the realized move;
+    4..21 sit far from neutral pointing AGAINST it."""
     e = EmotionSystem()
     w0 = list(e._weights("BTC", "tf1"))
-    emos = {i: (0.8 if i <= 3 else -0.8) for i in range(1, 22)}
-    dirs = {i: 1 for i in range(1, 22)}
+    emos = {i: (0.95 if i <= 3 else 0.05) for i in range(1, 22)}
+    dirs = {i: (1 if i <= 3 else -1) for i in range(1, 22)}
     for _ in range(50):
         e.reward_update("BTC", "tf1", emos, dirs, 0.0, move=50.0, scale=30.0)
     w1 = e._weights("BTC", "tf1")
@@ -21,8 +22,8 @@ def test_emotion_cold_start_learns_fast():
 
 def test_emotion_clamp_widened_and_accuracy_tracked():
     e = EmotionSystem()
-    emos = {i: (0.9 if i <= 3 else -0.9) for i in range(1, 22)}
-    dirs = {i: 1 for i in range(1, 22)}
+    emos = {i: (0.95 if i <= 3 else 0.05) for i in range(1, 22)}
+    dirs = {i: (1 if i <= 3 else -1) for i in range(1, 22)}
     for _ in range(300):
         e.reward_update("BTC", "tf1", emos, dirs, 0.0, move=100.0, scale=10.0)
     w = e._weights("BTC", "tf1")

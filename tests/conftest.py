@@ -44,6 +44,35 @@ import pytest
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _isolate_lock_file(tmp_path_factory):
+    """Keep manufactured locks out of data/locks.json.
+
+    Engines load persisted locks at start-up. Within one session a lock
+    written by an earlier test (old price, old levels) was inherited by the
+    next engine, whose fresh cycle then saw TP1 already satisfied — two
+    lock-protocol tests failed in the full run and passed in isolation.
+    """
+    path = tmp_path_factory.mktemp("locks") / "locks.json"
+    old = os.environ.get("PRED_LOCKS_PATH")
+    os.environ["PRED_LOCKS_PATH"] = str(path)
+    yield path
+    if old is None:
+        os.environ.pop("PRED_LOCKS_PATH", None)
+    else:
+        os.environ["PRED_LOCKS_PATH"] = old
+
+
+@pytest.fixture(autouse=True)
+def _fresh_locks(_isolate_lock_file):
+    """Every test starts with no inherited contract."""
+    try:
+        os.remove(_isolate_lock_file)
+    except OSError:
+        pass
+    yield
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _isolate_persisted_state():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     live = os.path.join(root, "data")
