@@ -252,9 +252,22 @@ class MarketFeed:
         self._tick_times.append(now)
         del self._tick_times[:-2000]     # depth@100ms alone is ~40 msg/s
 
+    COVERAGE_TTL_S = 2.0
+
     def history_coverage(self, now: float | None = None) -> dict[str, dict]:
-        """Measure active-family closed 1m candles; never infer missing bars."""
+        """Measure active-family closed 1m candles; never infer missing bars.
+
+        Memoised for 2 s: the scan walks every stored timestamp of every
+        asset, and the snapshot asks for it twice (feed block + chips) on
+        top of /api/health. The cache is invalidated by a new bar, so the
+        coverage numbers are never staler than the tape.
+        """
         now = time.time() if now is None else float(now)
+        _ck = (int(now // 60), len(self.states[SYMBOL_ORDER[0]].times)
+               if SYMBOL_ORDER else 0, self.mode)
+        _hit = getattr(self, "_cov_cache", None)
+        if _hit is not None and _hit[0] == _ck and now - _hit[1] < self.COVERAGE_TTL_S:
+            return _hit[2]
         current = int(now // 60) * 60
         cutoff = current - 1440 * 60
         family = _family(self.mode)
@@ -286,6 +299,7 @@ class MarketFeed:
                 "largest_gap_minutes": max(gaps, default=0) // 60,
                 **({} if ordered else {"why": "no active-family source candles"}),
             }
+        self._cov_cache = (_ck, now, out)
         return out
 
     def stats(self) -> dict:

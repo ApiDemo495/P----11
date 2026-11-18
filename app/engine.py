@@ -4094,7 +4094,7 @@ class PredictionEngine:
         except Exception:
             return None
 
-    BRANCH_TTL_S = 6.0
+    BRANCH_TTL_S = 8.0
 
     def branch_stats_cached(self, symbol: str, tf: str, d: dict,
                             price: float, now: float) -> dict | None:
@@ -4116,7 +4116,7 @@ class PredictionEngine:
         key = (symbol, tf)
         # per-window jitter: without it all 16 windows recompute in the same
         # snapshot (a 1.9 s spike); spread over the TTL the board stays < 0.4 s
-        ttl = self.BRANCH_TTL_S + (abs(hash(key)) % 9) * 0.7
+        ttl = self.BRANCH_TTL_S + (abs(hash(key)) % 7) * 0.9
         hit = self._branch_cache.get(key)
         if hit is not None:
             at, sig0, price0, out = hit
@@ -4233,7 +4233,12 @@ class PredictionEngine:
                 _cur_mom = (1 if _nb >= 6 and _cl[-1] > _cl[-6]
                             else -1 if _nb >= 6 else 0)
                 _maxi = _nb - _rem_min
-                _step = 1 if _maxi <= 400 else 2
+                # sample the historical starts: 1-in-1 for short windows,
+                # 1-in-4 for the 4-hour one (still thousands of starts, and
+                # `n` is printed next to every probability, so the reader
+                # always knows the sample size)
+                _step = (1 if _maxi <= 400 else
+                         2 if _maxi <= 2000 else 4)
                 for _i0 in range(0, _maxi, _step):
                     _p0 = _cl[_i0]
                     if _p0 <= 0:
