@@ -3954,7 +3954,17 @@ class PredictionEngine:
             cyc.sl_tighten = float(lock_row.get("contract_sl_tighten") or cyc.sl_tighten)
             cyc.issued = bool(lock_row.get("contract_issued", cyc.issued))
             if lock_row.get("contract_tier"):
-                cyc.tier = str(lock_row["contract_tier"])
+                # Restore the window's tier, but never let a row written by
+                # an older build (different bands / no floor provenance)
+                # contradict the freshly computed one: the board then shows
+                # "P 0.97 · watch-only" and looks rigged. A restored tier is
+                # accepted only when its own band agrees with this window's
+                # measured score/floor ratio.
+                _rt = str(lock_row["contract_tier"])
+                _rx = float(cyc.score_floor_ratio or 0.0)
+                _band = ("watch-only" if _rx <= 1.0 else "quarter" if _rx <= 1.5
+                         else "half" if _rx <= 2.5 else "full")
+                cyc.tier = _rt if (_rx <= 0 or _rt == _band) else _band
             if lock_row.get("contract_confidence") is not None:
                 cyc.confidence = float(lock_row["contract_confidence"])
             saved_targets = lock_row.get("contract_targets")

@@ -170,3 +170,13 @@ def test_tier_probability_and_floor_share_one_scale():
     f = eng._tier_for("BTC", "tf1", 0.08, strength=0.98)
     assert f["tier"] == "full"
     assert f["p_side"] > h["p_side"] > q["p_side"] > b["p_side"]
+
+
+def test_restored_tier_cannot_contradict_the_measured_band():
+    """A lock row written by an older build must not put "P 0.97" and
+    "watch-only" on the same card (that is what made the board look rigged
+    after a restart)."""
+    src = open("app/engine.py").read()
+    seg = src[src.index('if lock_row.get("contract_tier"):'):
+              src.index('if lock_row.get("contract_confidence")')]
+    assert "_band" in seg and "cyc.tier = _rt if" in seg
