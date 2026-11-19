@@ -142,6 +142,17 @@ async function api(path, opts) {
     const r = await fetch(path, { ...(opts || {}), signal: ctl.signal });
     if (!r.ok) throw new Error(`${path} → ${r.status}`);
     return await r.json();
+  } catch (e) {
+    // A timeout means the engine is BUSY, not absent. The engine's event loop
+    // legitimately stalls for minutes during a warm replay or a GRC pass, and
+    // the old code let those aborts fall through to the offline banner, which
+    // then told the user to "start it: bash run.sh" while it was running.
+    if (e && e.name === "AbortError") {
+      const err = new Error(`${path} → timed out after 10 s (engine busy)`);
+      err.busy = true;
+      throw err;
+    }
+    throw e;
   } finally { clearTimeout(to); }
 }
 
@@ -4400,9 +4411,20 @@ function bindGlobal() {
 /* ═══════════ resilience: surface errors + detect engine offline ═══════════ */
 let _errShown = 0, _fetchFails = 0;      // _fetchFails = unreachable only
 let _httpFails = 0;                      // one panel erroring != offline
+let _busyStreak = 0;                     // timeouts = busy, never "offline"
+let _bannerSince = 0;                    // when the banner first appeared
 function _netBanner(show, detail) {
   let b = $("#net-banner");
-  if (!show) { if (b) b.remove(); return; }
+  if (!show) {
+    // Don't retract instantly. A busy engine answers SOME requests and times
+    // out on others, so removing on the first success then re-adding made the
+    // bar strobe (the flicker in the screenshot). Keep it at least 6 s, and
+    // reset the counters so the next real outage still needs 3 misses.
+    if (b && Date.now() - _bannerSince < 6000) return;
+    if (b) b.remove();
+    _fetchFails = 0; _httpFails = 0; _busyStreak = 0;
+    return;
+  }
   if (!b) {
     b = document.createElement("div");
     b.id = "net-banner";
@@ -4410,8 +4432,20 @@ function _netBanner(show, detail) {
       "color:#f0385a;border-bottom:1px solid #f0385a;padding:8px 16px;font:600 12px monospace;" +
       "letter-spacing:1px;text-align:center";
     document.body.appendChild(b);
+    _bannerSince = Date.now();
+    // text and the dismiss control are separate nodes so a message update can
+    // never wipe the ✕
+    const msg = document.createElement("span");
+    msg.className = "net-msg";
+    const x = document.createElement("span");
+    x.textContent = " ✕";
+    x.style.cssText = "float:right;cursor:pointer;padding:0 4px";
+    x.title = "dismiss (the panel keeps retrying)";
+    x.addEventListener("click", () => { const el = $("#net-banner"); if (el) el.remove(); });
+    b.append(msg, x);
   }
-  b.textContent = detail || "ENGINE OFFLINE — retrying every 2s (start it: bash run.sh)";
+  const msgEl = b.querySelector(".net-msg");
+  if (msgEl) msgEl.textContent = detail || "ENGINE OFFLINE — retrying every 2s (start it: bash run.sh)";
 }
 let _lastOkAt = Date.now();
 const _origFetch = window.fetch;
@@ -4419,7 +4453,7 @@ window.fetch = async (...args) => {
   const isApi = String(args[0]).includes("/api/");
   try {
     const r = await _origFetch(...args);
-    if (r.ok) { _fetchFails = 0; _httpFails = 0; _netBanner(false); }
+    if (r.ok) { _fetchFails = 0; _httpFails = 0; _busyStreak = 0; _netBanner(false); }
     else if (String(args[0]).includes("/api/")) {
       _fetchFails = 0;                   // the engine answered
       if (++_httpFails >= 3)
@@ -4428,8 +4462,20 @@ window.fetch = async (...args) => {
     return r;
   } catch (e) {
     _httpFails = 0;
-    if (String(args[0]).includes("/api/") && ++_fetchFails >= 3)
-      _netBanner(true, "ENGINE UNREACHABLE — retrying (start it: bash run.sh)");
+    // `AbortError` = we gave up waiting; the socket was never refused. That is
+    // a busy engine (warm replay / GRC / model load), so say so and do NOT
+    // count it toward "unreachable" — otherwise a long analysis reads as a
+    // dead server and the banner tells the user to start what is running.
+    const busy = !!(e && e.name === "AbortError");
+    if (String(args[0]).includes("/api/")) {
+      if (busy) {
+        if (++_busyStreak >= 2)
+          _netBanner(true, "ENGINE BUSY — a long pass is running; panels refresh " +
+                           "when it finishes (standby, do not restart)");
+      } else if (++_fetchFails >= 3) {
+        _netBanner(true, "ENGINE UNREACHABLE — retrying (start it: bash run.sh)");
+      }
+    }
     throw e;
   }
 };

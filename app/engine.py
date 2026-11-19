@@ -2985,10 +2985,21 @@ class PredictionEngine:
                 final["recheck_advisory"] = recheck["verdict"]
             job["result"] = final
             job["status"] = "done"
+            # A FLAT call has no rungs by construction (`tps` stays empty
+            # because the preview block only builds levels for a signed
+            # direction), so `tps[0]` raised IndexError on every flat tape and
+            # threw away an analysis that had already completed — the user saw
+            # "analysis is not happening" while the engine had in fact
+            # finished and discarded the result. A summary line must never be
+            # able to destroy a result, so it degrades instead.
+            _tp1 = (f"TP1 {tps[0]['level']}" if tps else
+                    "TP1 — (no levels: flat call)")
+            _sl = (f"SL {final['sl']}" if final.get("sl") is not None
+                   else "SL —")
             await self._emit_stage(
                 job, "final", "done", t0, time.time(),
                 f"{final['signal']} · conf {final['confidence']:.3f} · "
-                f"TP1 {tps[0]['level']} · SL {final['sl']} · "
+                f"{_tp1} · {_sl} · "
                 f"total {final['elapsed_ms']:.0f} ms", final)
             await self.emit({"type": "analyse_done", "symbol": symbol,
                              "tf": tf, "result": final})

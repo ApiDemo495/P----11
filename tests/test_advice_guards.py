@@ -379,3 +379,76 @@ def test_vault_saves_real_state():
     eng.physics.save()
     eng.forward.save()
     eng.genesis.save()
+
+
+def test_flat_analysis_survives_having_no_levels():
+    """A FLAT call has no TP rungs; its summary must not destroy the result.
+
+    Live failure: `tps[0]['level']` in the *final stage summary string* raised
+    IndexError on every flat tape. The analysis had already completed and was
+    then thrown away by the `except`, so the user's board sat on "analysis is
+    not happening" while the engine was in fact finishing and discarding work.
+    The preview block only builds levels for a signed direction, so `tps == []`
+    is a legitimate outcome, not an error.
+    """
+    from tests.test_engine import make_engine, _boot, run
+    from conftest import run_sync
+
+    eng, _f, _e = make_engine()
+    run(_boot(eng))
+
+    async def _emit(m):
+        pass
+
+    eng.emit = _emit
+    # Force exactly the state that crashed: no direction, therefore no rungs.
+    # `res` is read from `last_result[(symbol, tf)]` first, so patching the
+    # return value alone is not enough — the dict the finale actually reads
+    # has to be flat too.
+    real_compute = eng.compute_asset
+
+    def _flat(symbol, **kw):
+        out = real_compute(symbol, **kw)
+        for tf, body in (out or {}).items():
+            if isinstance(body, dict):
+                body["direction"] = 0
+                body["confidence"] = 0.0
+                flat = dict(body)
+                eng.last_result[(symbol, tf)] = flat
+                getattr(eng, "display_systems", {}).__setitem__((symbol, tf), flat)
+        return out
+
+    eng.compute_asset = _flat
+    eng.last_result.clear()
+    # ...and no locked contract yet ("waiting for the first lock"), which is
+    # the state the user's board was in: with a lock the ladder comes from the
+    # cycle's own targets, so this only breaks before the first lock.
+    eng.cycles.clear()
+
+    async def go():
+        assert eng.start_analyse("ETH", "tf2")["ok"]
+        await eng._analyse_task
+
+    run_sync(go())
+    job = eng.analyse_job
+    assert job["status"] == "done", job.get("error")
+    assert "IndexError" not in (job.get("error") or "")
+    final = job["result"]
+    assert final["signal"] in ("BUY", "SELL", "FLAT")
+    # the stage line must degrade instead of raising. On a flat call it says
+    # so explicitly rather than printing a TP1 that does not exist.
+    line = next(s for s in job["stages"] if s["stage"] == "final")["summary"]
+    assert final["signal"] == "FLAT", final["signal"]
+    assert final["tps"] == [], "flat + no lock must have no rungs"
+    assert "no levels" in line, line
+
+
+def test_flat_call_summary_never_indexes_an_empty_ladder():
+    """Belt-and-braces on the exact expression that broke."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "app" / "engine.py").read_text()
+    i = src.index('await self._emit_stage(\n                job, "final"')
+    block = src[i:i + 900]
+    assert "tps[0]" not in block or "if tps else" in block, (
+        "the final stage summary may not index tps[0] unguarded — a flat "
+        "call has no levels and IndexError discards a finished analysis")

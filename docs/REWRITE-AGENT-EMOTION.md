@@ -201,3 +201,70 @@ Greed index says which components are missing rather than presenting a
 ### 5.4 Suite
 
 `667 passed, 1 skipped` on the merged tree.
+
+## 6. The two faults behind "what happened" (screenshot, 2026-11-19)
+
+The board showed `ENGINE UNREACHABLE — retrying (start it: bash run.sh)`,
+`NO CALL / FLAT · conf 0.000`, `waiting for the first lock…` and four TF cards
+reading `AI — not configured`. The server was **running the whole time**. Two
+independent bugs produced that picture, and both were only visible in
+`data/server.log` under load.
+
+### 6.1 `IndexError` discarded a finished analysis (the "analysis is not happening")
+
+```
+File "app/engine.py", line 2991, in _analyse_body
+    f"TP1 {tps[0]['level']} · SL {final['sl']} · "
+IndexError: list index out of range
+```
+
+`tps` is only filled by the preview block, and that block is guarded by
+`if direction != 0 and price > 0`. A FLAT call therefore has **no rungs** —
+legitimately. But the *final stage summary string* indexed `tps[0]`
+unconditionally, the `except` wrapped the whole finale, and so a result that
+had already been computed was replaced by `job["status"] = "error"`. The board
+said "analysis is not happening" while the engine was finishing and throwing
+its work away. The summary now degrades (`TP1 — (no levels: flat call)`,
+`SL —`) instead of raising: **a log line may never be able to destroy a
+result**. Reproduced in `test_flat_analysis_survives_having_no_levels`
+(flat + no locked cycle is the exact state in the screenshot; the test fails
+with the same `IndexError` on the old code).
+
+### 6.2 The clock watchdog was self-defeating (the frozen board)
+
+```
+WARNING clock: clock watchdog: restarting scheduler (alive=True silent=649.7s)
+WARNING clock: clock watchdog: restarting scheduler (alive=True silent=655.2s)   ← every 5 s, for ever
+```
+
+`watchdog()` measured silence from `last_fired` **only**. A restart created a
+new task but did not touch that timestamp, so the very next pass (the lag
+meter calls it every few seconds) declared the fresh task silent and cancelled
+it — up to 240 s before its next boundary could ever arrive. One missed GRC
+became a permanent outage, which is why "stale" panels never refreshed. The
+baseline is now `max(last_fired, started_at)` and the restart sets a fresh
+`started_at`, so the watchdog converges. `tests/test_clock_watchdog.py` pins
+both halves: a restart must be followed by `healthy` on the next pass, and a
+genuinely old clock must still be repaired.
+
+### 6.3 The banner lied about *why* (the red bar)
+
+`api()` aborts every request after **10 s** and the abort fell through to the
+offline counter, so a busy engine (warm replay, GRC pass, model load — all
+legitimately minutes long) displayed "ENGINE UNREACHABLE … start it", telling
+the user to start a process that was running. Now:
+
+* a timeout is reported as `ENGINE BUSY — a long pass is running … standby,
+  do not restart` and no longer counts toward "unreachable";
+* the banner is sticky for 6 s once shown (`_bannerSince`), because some
+  requests succeeded while others timed out and removing it on the first
+  success made it strobe;
+* it carries a ✕ so a `position:fixed` bar covering the header is dismissible.
+
+`AI — not configured` on the TF cards is unrelated to all of the above: no
+cloud key is set and no local model is loadable on this host, and the
+`ai_review` stage says exactly that (`no AI answered — deterministic pipeline
+only (no cloud key; local agent not loaded …)`).
+
+Verified under load through the real launch path (`bash run.sh`): four assets
+analysed, `0` analysis failures, `0` `IndexError`, `0` clock restarts.
