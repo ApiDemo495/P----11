@@ -31,54 +31,7 @@ Every channel is a stated statistic over the tape, each one carries its own
 neutral and its own citation, and every abstention is declared with a
 machine-readable cause instead of a middle-of-the-road number:
 
-======================  ====================================================
-id  construct           measurement
-======================  ====================================================
-1   valence             Russell (1980): asinh-compressed drift t-statistic
-                        of the timeframe window, mapped to [0,1]
-2   arousal             Russell (1980): realised short/long volatility
-                        ratio, log-compressed (activation, no side)
-3   dominance           Mehrabian & Russell (1974): run-length persistence
-                        of same-signed bars, independent of drift size
-4   positive affect     Watson, Clark & Tellegen (1988) PANAS: upside
-                        semi-deviation share × activation
-5   negative affect     PANAS: downside semi-deviation share × activation
-                        (never 1 − PA: both can rise together)
-6-11 basic emotions     Ekman (1992): Gaussian prototype distance in
-                        (valence, arousal, dominance)
-12  loss pressure       Kahneman & Tversky (1979)/Tversky & Kahneman (1992):
-                        drawdown from the 60-bar peak in σ units, λ = 2.25
-13  somatic marker      Damasio (1994): EWMA of this system's own hit rate
-                        on settled outcomes; abstains before evidence
-14  herding             Christie & Huang (1995) CSAD: peer cross-sectional
-                        dispersion against own volatility
-15  capitulation        Frijda (1986): negative affect × low control ×
-                        volume climax
-16  extrapolation       Barberis, Greenwood & Shleifer (2015): 5-bar drift
-                        over its own dispersion, asinh-compressed
-17  volatility stress   CBOE VIX concept: annualised realised-vol level
-18  momentum vs mean    alternative.me momentum/volume: log gap to MA30 in
-                        standard errors
-19  breadth             share of peers closing on the same side of the move
-                        (labelled as *breadth*, never as BTC dominance)
-20  news sentiment      the measured news pipe; abstains without headlines
-21  trend exhaustion    Frijda (1986): first-half vs second-half
-                        displacement decay (only meaningful after a run)
-======================  ====================================================
-
-Hard invariants (each one is pinned by a test)
-----------------------------------------------
-* every channel value is in [0,1] and every printed value is finite;
-* no channel may sit exactly at 1.0 or 0.0 unless its construct really is
-  saturated (the compression constants below are chosen so a 3σ move lands
-  near 0.95, not 0.9999);
-* ``cerc`` is exactly the weighted agreement sum of the *printed* channels;
-* the dominant channel is the largest deviation from **its own** neutral,
-  and it can never be a channel that abstained;
-* the Fear & Greed number is flagged ``partial`` whenever less than the full
-  published weight is measured, and the printed ``index`` is honest about it;
-* the same tape in produces the same affect out (no clock, no randomness).
-"""
+======================  ============================================="""
 from __future__ import annotations
 
 import math
@@ -87,6 +40,7 @@ import time
 from .config import HIST_EMOTION_LAG
 from .formulas._helpers import sign, std_pop
 from .models import FormulaContext
+from .formulas._helpers import sign, std_pop
 
 # ── learning rule constants (Section 10) ────────────────────────────────
 ETA = 0.015               # η_emotion floor
@@ -101,6 +55,99 @@ CERC_WEIGHT_ID = 22
 # ── literature constants ────────────────────────────────────────────────
 LOSS_LAMBDA = 2.25        # Tversky & Kahneman (1992) median λ
 EKMAN_SIGMA = 0.55        # prototype kernel width in (v,a,d) ∈ [-1,1]³
+FG_WEIGHTS = {"volatility": 0.25, "momentum_volume": 0.25,
+              "social": 0.15, "surveys": 0.15, "dominance": 0.10,
+              "trends": 0.10}                     # alternative.me weights
+# alternative.me's "dominance" is BTC *market-cap share*, which needs cap
+# data this app does not have; our breadth channel is a different statistic
+# and is therefore reported as its own reading, never substituted into the
+# dominance slot. Only these two components are actually measured.
+FG_MEASURED = ("volatility", "momentum_volume")
+FG_MISSING = {
+    "dominance": ("BTC market-cap share needs a cap feed this app does not "
+                  "have — our breadth channel is a different statistic and "
+                  "is reported separately, not substituted"),
+    "social": "no social-media firehose connected — not estimated",
+    "surveys": "no investor survey feed connected — not estimated",
+    "trends": "no search-trends feed connected — not estimated",
+}
+
+# Ekman (1992) prototypes in (valence, arousal, dominance) ∈ [-1,1]³.
+# Positions follow Russell (1980) octants (excitement 45°, distress 135°,
+# displeasure 180°, depression 225°) plus Mehrabian & Russell (1974) for the
+# dominance axis (anger dominates, fear submits).
+PROTOTYPES = {
+    "fear":      (-0.70, 0.80, -0.60),
+    "anger":     (-0.50, 0.70, 0.70),
+    "disgust":   (-0.60, 0.20, 0.40),
+    "sadness":   (-0.70, -0.50, -0.60),
+    "surprise":  (0.00, 0.90, 0.00),
+    "enjoyment": (0.80, 0.30, 0.50),
+}
+
+# id → (key, printed name, citation, neutral value)
+CHANNELS = {
+    1: ("valence", "Valence (pleasure)", "Russell 1980", 0.5),
+    2: ("arousal", "Arousal (activation)", "Russell 1980", 0.5),
+    3: ("dominance", "Dominance (control)", "Mehrabian & Russell 1974", 0.5),
+    4: ("pa", "Positive affect (PA)", "Watson, Clark & Tellegen 1988", 0.5),
+    5: ("na", "Negative affect (NA)", "Watson, Clark & Tellegen 1988", 0.5),
+    6: ("fear", "Fear", "Ekman 1992", 0.0),
+    7: ("anger", "Anger", "Ekman 1992", 0.0),
+    8: ("disgust", "Disgust", "Ekman 1992", 0.0),
+    9: ("sadness", "Sadness", "Ekman 1992", 0.0),
+    10: ("surprise", "Surprise", "Ekman 1992", 0.0),
+    11: ("enjoyment", "Enjoyment", "Ekman 1992", 0.0),
+    12: ("loss_pressure", "Loss-aversion pressure", "Kahneman & Tversky 1979",
+         0.5),
+    13: ("somatic", "Somatic marker (risk memory)", "Damasio 1994", 0.5),
+    14: ("herding", "Herding (CSAD)", "Christie & Huang 1995", 0.5),
+    15: ("capitulation", "Capitulation", "Frijda 1986 · F&G volatility", 0.5),
+    16: ("extrapolation", "Extrapolation / chase",
+         "Barberis, Greenwood & Shleifer 2015", 0.5),
+    17: ("vol_stress", "Volatility stress", "CBOE VIX concept · F&G", 0.5),
+    18: ("momentum", "Momentum vs mean", "alternative.me momentum/volume", 0.5),
+    19: ("breadth", "Market breadth", "alternative.me dominance", 0.5),
+    20: ("news", "News sentiment (external NLP)", "measured news pipe", 0.5),
+    21: ("exhaustion", "Trend exhaustion", "Frijda 1986 · action tendency",
+         0.5),
+}
+CHANNEL_KEYS = {i: CHANNELS[i][0] for i in EMO_IDS}
+
+MODEL = {
+    "name": "core-affect (Russell) + PAD + PANAS + Ekman prototypes + "
+            "prospect theory + fear&greed components",
+    "citations": [
+        "Russell, J. A. (1980). A circumplex model of affect. JPSP 39(6).",
+        "Watson, D., Clark, L. A., & Tellegen, A. (1988). PANAS. JPSP 54(6).",
+        "Mehrabian, A., & Russell, J. A. (1974). An Approach to "
+        "Environmental Psychology (PAD).",
+        "Ekman, P. (1992). An argument for basic emotions. Cognition & "
+        "Emotion 6(3-4).",
+        "Kahneman, D., & Tversky, A. (1979). Prospect theory. Econometrica "
+        "47(2); Tversky & Kahneman (1992) λ=2.25, J. Risk & Uncertainty 5.",
+        "Damasio, A. (1994). Descartes' Error; Bechara et al. (1994) "
+        "somatic-marker hypothesis, Cognition 50.",
+        "Christie, W., & Huang, R. (1995). Following the pied piper: herding "
+        "in equity returns. Financial Analysts Journal 51(3).",
+        "Barberis, N., Greenwood, R., & Shleifer, A. (2015). X-CAPM. "
+        "J. Financial Economics 115(1).",
+        "Frijda, N. (1986). The Emotions (action tendencies).",
+        "alternative.me Crypto Fear & Greed Index methodology (volatility "
+        "25 %, momentum/volume 25 %, social 15 %, surveys 15 %, dominance "
+        "10 %, trends 10 %).",
+    ],
+    # the UI measures every channel against ITS OWN neutral — Ekman basics
+    # sit at 0.0, the state channels at 0.5 — so the neutral ships with the
+    # name and the citation
+    "channels": {str(i): {"name": CHANNELS[i][1], "cite": CHANNELS[i][2],
+                          "key": CHANNELS[i][0], "neutral": CHANNELS[i][3]}
+                 for i in EMO_IDS},
+    "fear_greed_measured_weight": round(sum(FG_WEIGHTS[k]
+                                            for k in FG_MEASURED), 4),
+    "fear_greed_missing": dict(FG_MISSING),
+}
+
 
 #: alternative.me Crypto Fear & Greed published component weights.
 FG_WEIGHTS = {"volatility": 0.25, "momentum_volume": 0.25,
@@ -425,6 +472,8 @@ def action_tendency(*, fear: float, anger: float, sadness: float,
     ]
     weight = {"avoid": 1.0, "confront": 0.75, "withdraw": 0.9,
               "disengage": 0.6, "approach": 1.0}
+    for name, _, _, _ in rules:
+        pass
     scored = [(name, _clamp(v, 0.0, 1.0) * weight[name], direction, note)
               for name, v, direction, note in rules]
     name, urge, direction, note = max(scored, key=lambda t: t[1])
@@ -730,7 +779,7 @@ class EmotionSystem:
             mass += wi_ei
             if dirs[eid]:
                 # signed by the same deviation the weight is built from, so
-                # the ratio stays inside [−1, +1]
+                # the ratio stays inside [−1, +1] (it used to reach 1.11)
                 num += w[i] * dev * dirs[eid] * (
                     (1.0 - 0.5 * emos[21]) if eid == 21 else 1.0)
                 den += wi_ei
@@ -785,6 +834,7 @@ class EmotionSystem:
         }
 
         # ---- dominant channel (ranked by distance from ITS OWN neutral) --
+        import time as _time
         _prev = self._prev_emos.get(_key) or {}
 
         def _dev_of(i: int) -> float:
@@ -816,6 +866,7 @@ class EmotionSystem:
             # (so a 0.0002 wobble does not re-crown every pass), but the raw
             # deviation must still compare first — otherwise a channel with
             # dev 0.9998 could be crowned while another sat at exactly 1.0
+            # and the "runner-up" outranked the winner on the same card.
             key=lambda t: (round(t[0], 3), t[0], t[1], t[2]), reverse=True)
         _dev, _dlt, _wv, _dom_id = _ranked[0]
         _tied = sum(1 for t in _ranked

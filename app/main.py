@@ -700,7 +700,8 @@ def system_status() -> JSONResponse:
             _loc = ""
         row("agents", True,
             ("keyless mode — brain + formulas carry every vote"
-             if not nconn else f"{nconn} slot(s) connected") + _loc,
+             if not nconn else f"{nconn} slot(s) connected · "
+             f"deadline {ag.get('deadline_s', '—')}s") + _loc,
             "ok")
     except Exception as exc:
         row("agents", False, f"error: {exc}", "err")

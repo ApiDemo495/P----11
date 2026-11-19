@@ -593,7 +593,8 @@ function drawOwnChart() {
     }
   }
   const notes = [];
-  if (S.snap?.feed?.simulated) notes.push("SIM TAPE — simulated feed, not exchange bars");
+  if (S.snap?.feed?.simulated) notes.push("SIM TAPE — simulated feed, not exchange bars"
+    + (S.snap.feed.real_reason ? ` (${S.snap.feed.real_reason})` : ""));
   if (reasons.length)
     notes.push(`UNTRUSTED TAPE — ${reasons.join("; ")}; candles hidden`);
   if (desync > 0.002)
@@ -2009,6 +2010,16 @@ function renderRail() {
       || fly?.chip
       || (fly?.ready ? { kind: "ok", text: "FlyWire v783 · live" }
         : { kind: "absent", text: "brain — " + (fly?.reason || "no state yet") });
+    // A READY CONNECTOME WITH NO VOTE YET IS NOT OFFLINE. `brain.vote` is null
+    // until the first GRC pass produces one, and `systems[].brain` is only
+    // rebuilt at GRC — so on a freshly booted board every window reported
+    // "brain offline — vote withheld" while FlyWire was ready with 138k
+    // neurons (the screenshot's red chip over a healthy brain tab). If the
+    // component says ready, the chip says ready and explains the pending vote.
+    if (lb?.ready && (!bc || bc.kind !== "ok")) {
+      bc = { kind: "ok", text: `FlyWire ready · vote pending until the next GRC`
+             + (lb.pass_age_s != null ? ` (pass ${Math.round(lb.pass_age_s)}s ago)` : "") };
+    }
     const snapAge = S.snap?.ts ? (Date.now() / 1000 - S.snap.ts) : null;
     if (snapAge != null && snapAge > 20 && bc.kind !== "ok") {
       bc = { kind: "build", text: `brain — state stale ${Math.round(snapAge)}s (snapshot lagging)` };
@@ -4285,7 +4296,11 @@ function applySnapshot(snap) {
     const f = snap.feed;
     fchip.textContent = f.simulated ? "⚠ SIMULATED TAPE" : f.label;
     fchip.className = "feed-chip " + (f.simulated ? "sim" : f.stale ? "stale" : "live");
-    fchip.title = `source ${f.source} · last delivery ${f.last_delivery_age_s ?? "?"}s ago · ${f.updates} updates · ${f.switches} switches`;
+    // "simulated" alone reads as a setting. The chip says WHY the real feed is
+    // not in use, because the honest answer is usually "this host cannot reach
+    // the exchange" and the user deserves to see the attempt and its error.
+    fchip.title = `source ${f.source} · last delivery ${f.last_delivery_age_s ?? "?"}s ago · ${f.updates} updates · ${f.switches} switches`
+      + (f.real_reason ? `\n${f.real_reason}` : "");
   }
   // §10.3 status chips — every subsystem's honesty state, one glance
   const sc = $("#status-chips");

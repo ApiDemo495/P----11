@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 import subprocess
 import sys
 from pathlib import Path
@@ -149,3 +150,80 @@ def test_retry_route_is_wired_to_a_visible_button():
     js = APP_JS.read_text()
     assert 'api("/api/agents/local/retry"' in js
     assert 'id="ag-retry"' in js
+
+
+def test_a_ready_brain_with_no_vote_is_not_painted_offline():
+    """A ready connectome whose first GRC has not passed yet must stay green.
+
+    Live screenshot: red chip "brain offline — vote withheld" while the BRAIN
+    tab showed FlyWire ready with 138,639 neurons. `brain.vote` is null until
+    the first GRC produces one, and `systems[].brain` is only rebuilt at GRC,
+    so on a freshly booted board every window looked brain-dead.
+
+    The chip block is extracted from app.js and executed with the real engine
+    payload shape: ready=true, vote=null.
+    """
+    src = (ROOT / "static" / "app.js").read_text()
+    start = src.index("    const lb = S.snap?.brain || null;")
+    end = src.index('    led("#led-brain"', start)
+    body = src[start:end]
+
+    def run(snapshot: dict) -> str:
+        script = (PRELUDE
+                  + "const S = { snap: " + json.dumps(snapshot) + ", _brainOkAt: 0 };\n"
+                  + 'let chip = "";\n'
+                  + "const led = () => {};\n"
+                  + 'const $ = () => null;\n'
+                  + body + "\n"
+                  + "console.log(JSON.stringify(bc));")
+        return _node(script)
+
+    # the component says ready, but the chip it handed us says absent (a
+    # stale chip object / a window that has not been re-analysed): the board
+    # must believe the STATE, not the stale text
+    ready_stale_chip = {
+        "ts": time.time(),   # must be REAL: a future ts makes snapAge negative
+        "brain": {"state": "ready", "ready": True,
+                  "chip": {"kind": "absent",
+                           "text": "brain offline — vote withheld"},
+                  "vote": None, "pass_age_s": 3.0},
+        "systems": {"BTC|tf1": {"brain": {"flywire": None}}},
+    }
+    out = json.loads(run(ready_stale_chip))
+    assert out["kind"] == "ok", out
+    assert "offline" not in out["text"].lower(), out
+
+    # a ready component with NO chip at all must also stay green
+    ready_no_chip = {
+        "ts": time.time(),
+        "brain": {"state": "ready", "ready": True, "chip": None,
+                  "vote": None, "pass_age_s": 3.0},
+        "systems": {},
+    }
+    out = json.loads(run(ready_no_chip))
+    assert out["kind"] == "ok", out
+    assert "FlyWire" in out["text"], out
+
+    # ...and a genuinely absent brain must still say so
+    absent = {"ts": time.time(),
+              "brain": {"state": "absent", "ready": False,
+                        "chip": {"kind": "absent",
+                                 "text": "brain offline — vote withheld"},
+                        "vote": None, "pass_age_s": None},
+              "systems": {}}
+    out2 = json.loads(run(absent))
+    assert out2["kind"] != "ok", out2
+
+
+def test_feed_reports_why_the_tape_is_simulated():
+    """'SIMULATED' is a fact; WHY it is simulated is the honest part.
+
+    The user asked for real data. If the host cannot reach an exchange the app
+    still runs, but it must say that the real feed was tried and failed rather
+    than presenting the simulator as a design choice.
+    """
+    import app.feed as F
+    assert hasattr(F.MarketFeed, "prices")
+    src = (ROOT / "app" / "feed.py").read_text()
+    assert '"real_reason"' in src and '"real_attempts"' in src
+    assert "_real_error" in src, "the failure must be recorded, not swallowed"

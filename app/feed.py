@@ -224,6 +224,9 @@ class MarketFeed:
         self.rejected = 0
         self.quote_prints = 0            # volume<=0 prints (excluded from vol stats)
         self.last_real_delivery = 0.0    # last binance-path write (adopt/demote)
+        # why the tape is simulated — recorded, never guessed
+        self._real_error: str = ""
+        self._real_attempts: int = 0
         self._reconcile_task: asyncio.Task | None = None
         self._sim_tasks: list[asyncio.Task] = []
         self._next_revive = 0.0
@@ -345,6 +348,17 @@ class MarketFeed:
             "history_complete_24h": bool(history) and all(
                 row.get("continuous_24h") for row in history.values()),
             "stale": stale,
+            # WHY the tape is simulated. Without this the UI could only say
+            # "simulated", which reads as a design choice; every exchange host
+            # may simply be unreachable from the deployment (geo/TLS), and the
+            # user is entitled to see that the real feed was tried and failed.
+            "real_error": self._real_error,
+            "real_attempts": self._real_attempts,
+            "real_reason": (None if self.mode == "binance" else
+                            ("real feed connected" if not self._real_error else
+                             f"real feed unreachable after {self._real_attempts} "
+                             f"attempt(s): {self._real_error} — retrying every 30 s. "
+                             "Prices on screen are SIMULATED, not market prices")),
             "label": (f"SIMULATED TAPE" if self.mode != "binance"
                       else f"live · {self.source} · {tps:.1f} ticks/s"),
         }
@@ -459,8 +473,9 @@ class MarketFeed:
                         t.cancel()
                     self._sim_tasks.clear()
                     self._switch_tape("binance", "binance-rest")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._real_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+                    self._real_attempts += 1
                 finally:
                     self._probing = False
 
@@ -509,6 +524,8 @@ class MarketFeed:
             self._switch_tape("binance", "binance-rest")
             log.info("feed: real feed adopted over the simulator (D-2)")
         except Exception as exc:
+            self._real_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+            self._real_attempts += 1
             log.info("feed: real feed not available yet (%s) — "
                      "simulator keeps the tape; retrying in reconcile", exc)
         finally:
