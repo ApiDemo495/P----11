@@ -3002,9 +3002,20 @@ class PredictionEngine:
 
     async def _analyse_ai_review(self, job: dict, store: dict,
                                  tf: str) -> None:
-        """Stage 6: Gemini and the local qwen2.5-coder review the assembled
-        analysis for errors/mistakes and propose corrections. Keyless →
-        skipped with a printed note (agents are always optional)."""
+        """Stage 6: every configured agent reviews the assembled analysis.
+
+        This stage used to consult exactly two things — a Gemini key and an
+        installed ``llama_cpp`` — so on a host with neither it printed
+        "no AI configured" even when a working Ollama daemon was answering on
+        11434, and the whole Agents tab looked dead. It now goes through
+        ``AgentManager.review()``, which walks the full ladder (cloud keys →
+        local GGUF → Ollama) and returns a payload that always explains
+        itself, including which backend answered.
+
+        Review is advisory: it can flag errors and propose a correction, and
+        a correction at high confidence is printed in the result, but the
+        deterministic ladder underneath is never overwritten.
+        """
         t0 = time.time()
         symbol = job["symbol"]
         raws = store.get("raws", {}).get(tf, {})
@@ -3018,68 +3029,84 @@ class PredictionEngine:
             "hedge": store.get("hedge", {}).get(tf),
         }
         prompt = (
-            'You are reviewing an intraday market analysis BEFORE it is '
-            'shown to a trader. Find mistakes or contradictions in this '
-            'analysis (sign conflicts, stale/absurd numbers, risk that '
-            'does not match volatility) and give your own call. '
+            "You are reviewing an intraday market analysis BEFORE it is "
+            "shown to a trader. Find mistakes or contradictions in this "
+            "analysis (sign conflicts, stale/absurd numbers, risk that does "
+            "not match volatility) and give your own call. "
             'Reply ONLY with JSON: {"errors": ["..."], "fixes": ["..."], '
             '"direction": 1|-1|0, "confidence": 0.0..1.0, '
             '"reason": "one sentence"}. Data:\n'
             + json.dumps(payload, default=str)[:4000]
         )
+        try:
+            review = await self.agents.review(
+                symbol, tf, store,
+                result={"direction": int(
+                    (self.last_result.get((symbol, tf)) or {}).get("direction")
+                    or 0)})
+        except Exception as exc:                     # never fail the stage
+            log.exception("agent review failed")
+            review = {"available": False, "backend": "",
+                      "note": f"review stage error: {exc!r}"[:200],
+                      "reviews": {}, "correction": None}
+
+        raw_reviews = review.get("reviews") or {}
         reviews: dict[str, dict] = {}
-        # Gemini (real API call through the key ring)
-        key = (self.agents.settings.get("gemini_key") or "")
-        if key:
-            try:
-                res = await self.agents._call_provider("gemini", key, prompt)
-                if res.get("ok"):
-                    reviews["gemini"] = self._parse_ai_review(
-                        res.get("insight") or res.get("text") or "", res)
-                else:
-                    reviews["gemini"] = {"ok": False,
-                                         "error": str(res.get("reason"))}
-            except Exception as e:
-                reviews["gemini"] = {"ok": False, "error": repr(e)}
-        # local qwen2.5-coder (the engine's own reviewer)
-        if getattr(self.agents.local, "available", False):
-            try:
-                text = await asyncio.get_event_loop().run_in_executor(
-                    None, self.agents.local.query, prompt)
-                reviews["qwen2.5-coder"] = self._parse_ai_review(text or "", {})
-            except Exception as e:
-                reviews["qwen2.5-coder"] = {"ok": False, "error": repr(e)}
+        for name, rv in raw_reviews.items():
+            if rv.get("ok"):
+                fed = {"direction": rv.get("direction"),
+                       "confidence": rv.get("confidence"),
+                       "insight": rv.get("reason")}
+                parsed = self._parse_ai_review(rv.get("reason") or "", fed)
+                parsed["errors"] = list(rv.get("errors") or [])
+                parsed["backend"] = rv.get("backend") or name
+                reviews[name] = parsed
+            else:
+                reviews[name] = {"ok": False,
+                                 "error": str(rv.get("error") or "failed")}
+
         t1 = time.time()
-        if not reviews:
-            await self._emit_stage(
-                job, "ai_review", "skipped", t0, t1,
-                "no AI configured — deterministic pipeline only "
-                "(keyless operation, agents optional)", {})
-            job["ai"] = {"available": False,
-                         "note": "keyless — brain + formulas + physics only"}
+        if not review.get("available"):
+            note = str(review.get("note") or "no AI available")
+            await self._emit_stage(job, "ai_review", "skipped", t0, t1,
+                                   note, {"backend": "", "reviews": reviews})
+            job["ai"] = {"available": False, "backend": "",
+                         "note": note, "reviews": reviews,
+                         "correction": None}
             return
-        # an AI correction only counts at confidence ≥ 0.70 (printed, never
+
+        # an AI correction only counts at confidence >= 0.60 (printed, never
         # silent — the deterministic ladder stays visible underneath)
-        correction = None
-        for name, rv in reviews.items():
-            if rv.get("ok") and abs(int(rv.get("direction") or 0)) == 1                     and float(rv.get("confidence") or 0) >= 0.70:
-                correction = {"by": name,
-                              "direction": int(rv["direction"]),
-                              "confidence": float(rv["confidence"]),
-                              "reason": rv.get("reason", "")}
-                break
-        job["ai"] = {"available": True, "reviews": reviews,
-                     "correction": correction}
+        correction = review.get("correction")
+        if not correction:
+            for name, rv in reviews.items():
+                if (rv.get("ok") and abs(int(rv.get("direction") or 0)) == 1
+                        and float(rv.get("confidence") or 0) >= 0.60):
+                    correction = {
+                        "by": name,
+                        "direction": int(rv["direction"]),
+                        "confidence": float(rv["confidence"]),
+                        "reason": rv.get("reason", "")}
+                    break
+        job["ai"] = {"available": True,
+                     "backend": review.get("backend") or "",
+                     "note": review.get("note") or "",
+                     "reviews": reviews, "correction": correction}
         bits = []
         for name, rv in reviews.items():
             if rv.get("ok"):
                 n_err = len(rv.get("errors") or [])
-                bits.append(f"{name}: {n_err} issue(s), "
-                            f"{'CORRECTS to ' + ('BUY' if rv['direction'] > 0 else 'SELL') if rv is correction else 'concurs'}")
+                verdict = ("CORRECTS to " + ("BUY" if rv["direction"] > 0
+                                             else "SELL")
+                           if correction and correction.get("by") == name
+                           else "concurs")
+                bits.append(f"{name}: {n_err} issue(s), {verdict}")
             else:
                 bits.append(f"{name}: {rv.get('error', 'failed')}")
         await self._emit_stage(
-            job, "ai_review", "done", t0, t1, " · ".join(bits),
+            job, "ai_review", "done", t0, t1,
+            (" · ".join(bits) or "no review") +
+            f" [{review.get('backend') or 'agent'}]",
             job["ai"])
 
     @staticmethod

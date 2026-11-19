@@ -1914,12 +1914,20 @@ function onAnalyseDone(msg) {
   box.classList.remove("hidden");
   const dirCls = r.signal === "BUY" ? "buy" : r.signal === "SELL" ? "sell" : "flat";
   const ai = r.ai || {};
+  // The review object now always carries available/backend/note, so the
+  // panel can say WHICH brain answered and why it did not — "keyless" was
+  // printed even when a local agent was loaded but silent.
+  const aiWhere = ai.backend ? ` via ${esc(ai.backend)}` : "";
   let aiLine = ai.available
-    ? Object.entries(ai.reviews || {}).map(([name, rv]) =>
-        `${name}: ${rv.ok ? ((rv.errors || []).length ? (rv.errors || []).length + " issue(s) found — " + (rv.reason || "") : "no issues — " + (rv.reason || "concurs")) : "unavailable (" + (rv.error || "") + ")"}`).join(" · ")
-    : (ai.note || "keyless — deterministic pipeline only");
+    ? Object.entries(ai.reviews || {}).map(([name, rv]) => {
+        if (!rv || rv.ok === false) return `${name}: unavailable (${esc((rv || {}).error || "no reply")})`;
+        const issues = (rv.errors || []).length;
+        return `${name}${issues ? `: ${issues} issue(s) — ${esc(rv.reason || "")}` : ": concurs"}`;
+      }).join(" · ") || "a reviewer answered but returned no readable verdict"
+    : `${esc(ai.note || "no AI answered — deterministic pipeline only")}`;
+  if (ai.available) aiLine = `${aiLine}${aiWhere}`;
   if (ai.correction) {
-    aiLine += ` · ⚠ AI CORRECTION by ${ai.correction.by}: ${ai.correction.direction > 0 ? "BUY" : "SELL"} (${Math.round(ai.correction.confidence * 100)}%) — ${ai.correction.reason}`;
+    aiLine += ` · ⚠ AI CORRECTION by ${esc(ai.correction.by)}: ${ai.correction.direction > 0 ? "BUY" : "SELL"} (${Math.round((ai.correction.confidence || 0) * 100)}%) — ${esc(ai.correction.reason || "")}`;
   }
   const period = (r.calculation_period?.stages || []).map(c =>
     `${c.stage} ${Math.round(c.ms)}ms`).join(" → ");
@@ -2719,6 +2727,16 @@ function drawSparks(core) {
   });
 }
 
+/* Side-aware wording for the dominant channel. A state channel reading
+   0.04 is 92 % away from its 0.5 neutral on the LOW side — calling that
+   "the dominant emotion" without saying which side made the panel announce
+   the *absence* of a state (e.g. "Trend exhaustion" when exhaustion was 0). */
+function domSideTxt(dom) {
+  if (!dom || !dom.side) return "from";
+  if (dom.side === "low") return "below";
+  if (dom.side === "high") return "above";
+  return "at";
+}
 /* ═══════════ EMOTION ═══════════ */
 async function loadEmotion() {
   try {
@@ -2754,20 +2772,41 @@ async function loadEmotion() {
         const nm = (i) => names[String(i)]?.name || (typeof EMO !== "undefined" && EMO[i - 1]) || ("E" + i);
         const pe = em.primary_emotion || null;
         const fg = em.fear_greed || null;
+        // A composite index that only measures part of its own weighting must
+        // say so: printing 53 "Neutral" while 50% of the published inputs are
+        // missing is the same lie as reporting 0.50 with no input at all.
+        const fgCov = Math.round((fg?.coverage ?? fg?.measured_weight ?? 0) * 100);
+        // `unmeasured` is a name → reason map, not a list
+        const fgMiss = Object.keys(fg?.unmeasured || {}).join(", ");
+        const fgHtml = !fg ? "" :
+          `<div class="kv"><span>fear &amp; greed</span><b>${fmt(fg.index, 1)} · ${esc(fg.label)} ` +
+          (fg.partial
+            ? `<span class="acc-warn">(partial — ${fgCov}% of the published weighting has an input here` +
+              (fgMiss ? `; missing ${esc(fgMiss)}` : "") + `)</span>`
+            : `<span class="dim">(full composite)</span>`) +
+          (fg.components
+            ? ` <span class="dim">(vol ${fmt(fg.components.volatility, 0)} · momentum ${fmt(fg.components.momentum_volume, 0)})</span>`
+            : "") +
+          `</b></div>` +
+          (fg.published_index != null
+            ? `<div class="kv"><span>published F&amp;G</span><b>${fmt(fg.published_index, 1)}` +
+              (fg.index != null ? ` <span class="dim">(model is ${fmt(fg.index - fg.published_index, 1)} away)</span>` : "") +
+              `</b></div>`
+            : "");
         const ca = em.core_affect || null;
         const at = em.action_tendency || null;
         const pad = em.pad || null;
         dom.innerHTML = `
           <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
             <div style="font:700 26px/1 var(--mono);color:var(--gold)">${esc((pe?.name || nm(bi)).replace(/^./, c => c.toUpperCase()))}</div>
-            <div class="dim">${pe ? `${Math.round((pe.intensity || 0) * 100)}% prototype match (Ekman 1992) · runner-up ${esc((pe.runner_up || {}).name || "—")} ${Math.round((pe.runner_up?.intensity || 0) * 100)}%` : `channel ${esc(nm(bi))} · ${pct}% from neutral`} · held ${heldS}s${em.dominant?.tied ? ` · <span class="acc-warn">+${em.dominant.tied} channel${em.dominant.tied > 1 ? "s" : ""} tied at this extreme (saturated tape — no single winner)</span>` : ""}</div>
+            <div class="dim">${pe ? `${Math.round((pe.intensity || 0) * 100)}% prototype match (Ekman 1992) · runner-up ${esc((pe.runner_up || {}).name || "—")} ${Math.round((pe.runner_up?.intensity || 0) * 100)}%` : `channel ${esc(nm(bi))} · ${pct}% ${domSideTxt(em.dominant)} neutral`} · held ${heldS}s${em.dominant && em.dominant.directional === false ? ' · <span class="acc-warn">no channel carries a direction this window — this is amplitude, not a state</span>' : ""}${em.dominant?.tied ? ` · <span class="acc-warn">+${em.dominant.tied} channel${em.dominant.tied > 1 ? "s" : ""} tied at this extreme (saturated tape — no single winner)</span>` : ""}</div>
           </div>
           <div class="bar" style="margin-top:8px;max-width:420px"><i class="pos" style="width:${clamp(pe ? (pe.intensity || 0) * 100 : pct, 2, 100)}%"></i></div>
           <div class="kv-row" style="margin-top:8px">
             ${ca ? `<div class="kv"><span>valence (Russell 1980)</span><b>${(ca.valence >= 0 ? "+" : "") + fmt(ca.valence, 2)}</b></div>` : ""}
             ${ca ? `<div class="kv"><span>arousal</span><b>${fmt(ca.arousal, 2)}</b></div>` : ""}
             ${pad ? `<div class="kv"><span>dominance (PAD)</span><b>${fmt(pad.dominance, 2)}</b></div>` : ""}
-            ${fg ? `<div class="kv"><span>fear &amp; greed</span><b>${fmt(fg.index, 0)} · ${esc(fg.label)}${fg.components ? ` <span class="dim">(vol ${fmt(fg.components.volatility, 0)} · momentum ${fmt(fg.components.momentum_volume, 0)} · ${Math.round((fg.measured_weight || 0) * 100)}% of published weight measured)</span>` : ""}</b></div>` : ""}
+            ${fgHtml}
             ${at ? `<div class="kv"><span>action tendency (Frijda)</span><b>${esc(at.name)} · urge ${fmt(at.urge, 2)}</b></div>` : ""}
           </div>
           ${fg?.vs_affect ? `<div class="hint acc-warn">${esc(fg.vs_affect)}</div>` : ""}
@@ -3566,27 +3605,65 @@ async function loadAgents() {
         <button class="btn test-slot" data-slot="${["gemini", "backup1", "backup2", "backup3"][i]}" style="margin-top:10px">test</button>
       </div>`).join("");
     const lo = a.local || {};
-    const ins = lo.install || {};
+    // `a.installer` is top-level (it used to be null, so this panel had
+    // nothing to render); `lo.install` is the same object for older clients
+    const ins = a.installer || lo.install || {};
     const installing = ins.state === "installing";
-    const phaseTxt = { runtime: "installing llama.cpp runtime (may compile 10–20 min — normal)",
-                       model: "downloading model", load: "loading agent" }[ins.phase] || "working";
+    // Every phase names what is ACTUALLY happening. The old text promised
+    // "may compile 10–20 min — normal", which described the failure, not the
+    // fix: the ladder now tries a prebuilt wheel, an OPT-IN source build, and
+    // Ollama, and the model download is independent of all three.
+    const phaseTxt = {
+      runtime: "installing the runtime (prebuilt wheel → opt-in source build → Ollama)",
+      model: "downloading the model file",
+      load: "loading the agent",
+    }[ins.phase] || "working";
+    const backendTxt = ins.backend
+      ? `<span class="acc-up">${esc(ins.backend)}</span>`
+      : `<span class="dim">none yet</span>`;
+    const stepsHtml = (ins.steps || []).length
+      ? `<div class="hint" style="margin-top:6px">runtime ladder:</div>
+         <div class="logic" style="font-size:10px">${(ins.steps || []).map(st =>
+           `${st.ok ? "✓" : "✗"} <b>${esc(st.step)}</b>${st.reason ? " — " + esc(st.reason) : ""}`).join("<br/>")}</div>`
+      : "";
+    const ollamaHtml = ins.ollama
+      ? `<div class="kv"><span>Ollama :11434</span><b>${ins.ollama.ok
+            ? `up · ${esc((ins.ollama.models || []).join(", ") || "no model pulled")}`
+            : `down (${esc(ins.ollama.detail || "?")})`}</b></div>`
+      : "";
+    const compilerHtml = ins.compiler
+      ? `<div class="kv"><span>C/C++ compiler</span><b>${ins.compiler.ok
+            ? `present (${esc(ins.compiler.cxx || ins.compiler.cc || "cc")}) — source build needs PREDICT_AGENT_SOURCE_BUILD=1`
+            : "absent — a source build could never succeed"}</b></div>`
+      : "";
     $("#ag-local").innerHTML = `
       <div class="kv-row">
-        <div class="kv"><span>model</span><b>${lo.label || "—"}</b></div>
-        <div class="kv"><span>available</span><b>${lo.available ? "yes" : "no"}</b></div>
-        <div class="kv"><span>RAM tier</span><b>${lo.ram_gb ?? "?"} GB</b></div>
+        <div class="kv"><span>agent</span><b>${lo.available
+          ? `<span class="acc-up">${esc(lo.label || "ready")}</span>${lo.backend ? " · " + esc(lo.backend) : ""}`
+          : `<span class="acc-warn">not loaded</span>`}</b></div>
+        <div class="kv"><span>runtime</span><b>${backendTxt}</b></div>
+        <div class="kv"><span>RAM tier</span><b>${lo.ram_gb ?? "?"} GB · ${esc(ins.model_label || "—")}</b></div>
         <div class="kv"><span>last inference</span><b>${lo.last_ms ? lo.last_ms + " ms" : "—"}</b></div>
       </div>
-      ${ins.validation?.present ? `<div class="hint" style="margin-top:6px">✓ sha ${esc(ins.validation.sha || "?")} · ${esc(ins.validation.source || "")}</div>` : ""}
+      <div class="kv-row">
+        <div class="kv"><span>model file</span><b>${ins.model_present
+          ? `✓ ${esc((ins.validation || {}).sha || "present")}`
+          : `${(ins.bytes_on_disk || 0).toLocaleString()} B on disk (${esc(ins.model_size || "?")} expected)`}</b></div>
+        ${ollamaHtml}
+        ${compilerHtml}
+      </div>
+      ${stepsHtml}
       ${ins.installed
-        ? `<div class="hint" style="margin-top:8px">✓ local agent downloaded${lo.available ? " and loaded" : " — press test to load it"}</div>
-           <button class="btn test-slot" data-slot="local" style="margin-top:10px">test</button>`
+        ? `<div class="hint" style="margin-top:8px">✓ local agent ready${lo.available ? " and loaded" : " — press re-probe to load it"}</div>
+           <button class="btn test-slot" data-slot="local" style="margin-top:10px">test</button>
+           <button class="btn" id="ag-retry" style="margin-top:10px">re-probe runtime</button>`
         : installing
         ? `<div class="hint" style="margin-top:8px">⬇ ${phaseTxt}… ${ins.elapsed_s ? Math.floor(ins.elapsed_s / 60) + "m " + (ins.elapsed_s % 60) + "s" : ""} — the app keeps running; this panel refreshes itself</div>
            <div class="logic" style="max-height:110px;overflow:auto;font-size:10px">${(ins.log || []).slice(-6).map(esc).join("<br/>")}</div>
            <button class="btn" disabled style="margin-top:10px">downloading…</button>`
         : `<button class="btn" id="ag-download" style="margin-top:10px">⬇ DOWNLOAD LOCAL AGENT</button>
-           <div class="hint" style="margin-top:6px">One-time: llama.cpp runtime + ${ins.model_label || "preferred model"} (${ins.model_size || ""}). Preferred model: Qwen2.5-Coder-3B. Runs in the background; the app stays fully usable meanwhile.</div>
+           <button class="btn" id="ag-retry" style="margin-top:10px">re-probe runtime</button>
+           <div class="hint" style="margin-top:6px">The runtime is a ladder: a prebuilt wheel first, a source build only if you allow it, then Ollama if it is installed — nothing here can block the app. The model file (${esc(ins.model_label || "preferred")}, ${esc(ins.model_size || "")}) downloads independently of it, so a host with no compiler still banks the model.</div>
            ${(() => {
              const au = ins.auto || {};
              const next = au.next_try_in_s;
@@ -3596,8 +3673,8 @@ async function loadAgents() {
                return `<div class="hint" style="margin-top:6px">⚠ auto-download gave up after ${au.attempts || 0} attempt(s): ${esc(au.last_error || au.last_result || "unknown")} — press download to retry now (it also retries on the next boot)</div>`;
              return `<div class="hint" style="margin-top:6px">auto-download: ${esc(au.state || "idle")} — the engine fetches this by itself after boot; the button is only for "now"</div>`;
            })()}
-           ${ins.state === "failed" ? `<div class="hint">⚠ last attempt stopped: ${esc(ins.error || "unknown")} — press download to retry/resume</div>` : ""}
-           ${lo.error ? `<div class="hint">${lo.error}</div>` : ""}`}
+           ${ins.state === "failed" ? `<div class="hint">⚠ last attempt stopped: ${esc(ins.error || ins.why || "unknown")} — press download to retry/resume</div>` : ""}
+           ${lo.error ? `<div class="hint">${esc(lo.error)}</div>` : ""}`}
       `;
     const dlBtn = $("#ag-download");
     if (dlBtn) dlBtn.addEventListener("click", async () => {
@@ -3607,6 +3684,16 @@ async function loadAgents() {
         toast(r.install?.state === "done" ? "local agent already downloaded"
                                            : "local agent download started — watch this panel");
       } catch (e) { toast("download start failed: " + e.message, "err"); }
+      loadAgents();
+    });
+    const retryBtn = $("#ag-retry");
+    if (retryBtn) retryBtn.addEventListener("click", async () => {
+      retryBtn.disabled = true; retryBtn.textContent = "probing…";
+      try {
+        const r = await api("/api/agents/local/retry", { method: "POST" });
+        toast(r.ok ? `runtime found: ${r.backend || "local"}` : `still unavailable — ${r.error || "see the ladder below"}`,
+              r.ok ? "" : "warn");
+      } catch (e) { toast("re-probe failed: " + e.message, "err"); }
       loadAgents();
     });
     const autoRunning = (ins.auto || {}).state === "running";

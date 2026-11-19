@@ -682,17 +682,25 @@ def system_status() -> JSONResponse:
         # must be answerable without opening another tab
         try:
             _au = eng.agents.installer.auto_status()
-            _loc = (f" · local agent {_au['state']}"
+            _inst = ag.get("installer") or {}
+            _backend = ag.get("backend") or _inst.get("backend") or ""
+            # report the RUNTIME, not just the autoloader: "local agent
+            # running" while nothing can answer was the misleading part
+            _state = _inst.get("state") or _au.get("state")
+            _loc = (f" · local agent {_state}"
+                    + (f" via {_backend}" if _backend else "")
+                    + (f", phase {_inst.get('phase')}"
+                       if _inst.get("phase") else "")
                     + (f" (retry in {_au['next_try_in_s']}s)"
                        if _au.get("next_try_in_s") else "")
-                    + (f": {_au['last_error'][:80]}" if _au.get("last_error")
-                       and _au["state"] == "failed" else ""))
+                    + (f": {(_inst.get('error') or _au.get('last_error'))[:90]}"
+                       if (_inst.get("error") or _au.get("last_error"))
+                       and _state == "failed" else ""))
         except Exception:
             _loc = ""
         row("agents", True,
             ("keyless mode — brain + formulas carry every vote"
-             if not nconn else f"{nconn} slot(s) connected · "
-             f"deadline {ag.get('deadline_s', '—')}s") + _loc,
+             if not nconn else f"{nconn} slot(s) connected") + _loc,
             "ok")
     except Exception as exc:
         row("agents", False, f"error: {exc}", "err")
@@ -1558,12 +1566,37 @@ async def agents_local_install_status() -> JSONResponse:
 async def agents_local_install_start() -> JSONResponse:
     """Start (or report) the background local-agent download.
 
-    Deliberately NOT done at boot any more: the user presses the
-    button in the Agents tab, the download runs niced in the
-    background, and the app keeps working in Drosophila mode
-    until the local agent is ready."""
+    Runs on a daemon thread and reports a phase for every step (runtime →
+    model → load). The runtime ladder is prebuilt wheel → reachable source
+    build → Ollama, and the model download is independent of it, so a host
+    that cannot compile llama.cpp still ends up with a usable agent.
+    """
     return JSONResponse({"ok": True,
                          "install": engine.agents.installer.start()})
+
+
+@app.post("/api/agents/local/retry")
+async def agents_local_retry() -> JSONResponse:
+    """Probe the runtime again WITHOUT re-downloading.
+
+    Useful after `ollama serve` or a wheel has been installed outside the
+    app: it drops the cached load state and re-runs the ladder's detection
+    step only, which is seconds instead of a 2 GB download.
+    """
+    local = engine.agents.local
+    local.reset()
+    inst = engine.agents.installer
+    try:
+        import asyncio as _a
+        loop = _a.get_event_loop()
+        await loop.run_in_executor(None, local.try_load, True)
+    except Exception:
+        pass
+    return JSONResponse({"ok": local.available,
+                         "backend": local.backend,
+                         "label": local.label,
+                         "error": local.error,
+                         "install": inst.status()})
 
 
 @app.post("/api/agents/test/{slot}")

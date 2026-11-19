@@ -97,13 +97,31 @@ def test_dominant_is_named_and_graded_not_pinned():
 
 
 def test_dominant_ranks_on_deviation_from_its_own_neutral():
+    """Deviation is measured in each channel's OWN span, not in raw units.
+
+    The two channel families have different ranges: the Ekman prototypes are
+    0-based (0.0 neutral, can reach 1.0) while the affect/state channels are
+    0.5-based (0.5 neutral, can only move 0.5 either way). Comparing raw
+    ``|value − neutral|`` therefore lets a 0-based channel look twice as
+    "extreme" as a state channel sitting at its own bound. Normalising by
+    each span makes "fully extended" mean the same thing on both — which is
+    also what the EMOTION panel draws (see
+    tests/test_dashboard_emotion_fixes.py).
+    """
     from app.emotion import CHANNELS
     out = _run(_noisy(10, 0.0, 0.01))
-    devs = {i: abs(float(out["emotions"][i]) - CHANNELS[i][3])
-            for i in range(1, 22)}
+
+    def _dev(i: int) -> float:
+        neutral = CHANNELS[i][3]
+        span = (1.0 - neutral) if neutral == 0.0 else 0.5
+        return abs(float(out["emotions"][i]) - neutral) / span
+
+    devs = {i: _dev(i) for i in range(1, 22)}
     win = max(devs, key=lambda i: devs[i])
     assert out["dominant"]["id"] == win
     assert out["dominant"]["intensity"] == pytest.approx(devs[win], abs=2e-3)
+    # an abstained channel has no reading, so it can never be crowned
+    assert str(out["dominant"]["id"]) not in out["zero_reasons"]
 
 
 def test_fear_greed_only_claims_what_it_measures():
@@ -144,3 +162,44 @@ def test_missing_inputs_are_declared_not_faked():
     assert "13" in zr
     # herding needs a peer cross-section
     assert "14" in zr
+
+
+def test_the_absence_of_an_event_is_never_the_dominant_emotion():
+    """An event channel at its floor says "not happening", not "dominant".
+
+    Trend exhaustion (E21) has neutral 0.0, so a reading of 0.04 is a *large*
+    distance from neutral while meaning the exact opposite of exhaustion. The
+    pre-rewrite rule crowned it "Trend exhaustion 0.92" on a live tape. Only a
+    switched-on event channel may take the crown; state channels (neutral 0.5)
+    are meaningful on both sides and always may.
+    """
+    from app.emotion import CHANNELS, MOVE_BAND
+
+    out = _run(_noisy(220, 0.0, 0.004))   # quiet tape: no events fire
+    dom = out["dominant"]
+    assert dom["id"] != 21 or out["emotions"][21] > MOVE_BAND, (
+        "crowned an event channel that is switched off "
+        f"(E{dom['id']} = {out['emotions'][dom['id']]:.4f})")
+    # the crowned channel must at least be a state channel or a live event
+    assert CHANNELS[dom["id"]][3] != 0.0 or out["emotions"][dom["id"]] > MOVE_BAND
+    # and the payload must say which side of neutral the crown sits on, so the
+    # panel can never render a low reading as an extreme high one
+    assert dom["side"] in {"low", "high", "neutral"}
+    assert isinstance(dom["directional"], bool)
+
+
+def test_fear_greed_unmeasured_is_a_name_to_reason_map():
+    """The panel prints the missing components by name, so it must be a dict.
+
+    A list would render "d,o,m,i,n,a,n,c,e" in the UI and, worse, hide the
+    per-component reason that justifies calling the index *partial*.
+    """
+    out = _run(_noisy(120, 0.0, 0.01))
+    fg = out["fear_greed"]
+    assert set(fg) >= {"index", "label", "published_index", "partial",
+                       "coverage", "components", "measured_weight", "unmeasured"}
+    assert isinstance(fg["unmeasured"], dict), "unmeasured must be name → reason"
+    assert fg["partial"] is True
+    assert 0.0 <= fg["coverage"] <= 1.0
+    for name, reason in fg["unmeasured"].items():
+        assert isinstance(reason, str) and reason.strip(), name

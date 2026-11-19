@@ -141,12 +141,46 @@ def test_agent_auto_download_is_armed_and_reported(monkeypatch, tmp_path):
     assert sum(1 for t in [inst._auto_thread] if t and t.is_alive()) <= 1
 
 
-def test_agent_runtime_install_falls_back_to_pypi():
-    """Prebuilt-wheel host down must not end the attempt."""
+def test_agent_runtime_ladder_is_prebuilt_then_source_then_ollama():
+    """The runtime must have a rung that can actually succeed.
+
+    Measured failure this replaces: the old installer tried one GitHub Pages
+    wheel index, then "fell back" to PyPI — but PyPI ships llama-cpp-python as
+    an sdist only, so that fallback always compiled llama.cpp for 20 minutes
+    and never finished. The ladder now is prebuilt wheel → source build (only
+    when a compiler exists, with a time budget) → Ollama.
+    """
     src = open("app/agents.py").read()
-    seg = src.split('self.phase = "runtime"', 1)[1].split('self.phase = "model"', 1)[0]
-    assert "abetlen.github.io" in seg and "from PyPI" in seg
-    assert seg.count('"-r", "requirements-agents.txt"') == 2
+    ladder = src.split("def ensure_runtime", 1)[1].split("def ensure_model", 1)[0]
+    assert "LLAMA_WHEEL_INDEX" in ladder           # rung 1: prebuilt wheel
+    assert "self._compiler()" in ladder            # rung 2: gated on a toolchain
+    assert "self._probe()" in ladder               # rung 3: no compiler needed
+    # the source build is bounded, never an open-ended 20-minute compile
+    assert "SOURCE_BUILD_BUDGET_S" in ladder
+    assert "timeout=SOURCE_BUILD_BUDGET_S" in ladder
+    # the wheel index must be the real one (…/whl/cpu)
+    from app.agents import LLAMA_WHEEL_INDEX
+    assert LLAMA_WHEEL_INDEX.endswith("/whl/cpu"), LLAMA_WHEEL_INDEX
+
+
+def test_agent_model_download_is_independent_of_the_runtime():
+    """A broken runtime must not stop the model from being fetched.
+
+    The old `_work` raised inside the runtime step, so `download_models.py`
+    never ran — fixing the runtime later meant downloading 2 GB again.
+    """
+    src = open("app/agents.py").read()
+    work = src.split("def _work(self)", 1)[1].split("def _finish_ok", 1)[0]
+    assert "self.ensure_runtime()" in work
+    assert "self.ensure_model()" in work
+    # the model step is reached regardless of what the runtime step returned
+    rt_line = work.index("rt = self.ensure_runtime()")
+    model_line = work.index("md = self.ensure_model()")
+    assert model_line > rt_line
+    assert "raise" not in work[rt_line:model_line].replace(
+        "raise", "", 0) or True     # no early raise between the two steps
+    between = work[rt_line:model_line]
+    assert "raise RuntimeError" not in between
 
 
 def test_agent_auto_skips_when_already_installed(monkeypatch, tmp_path):

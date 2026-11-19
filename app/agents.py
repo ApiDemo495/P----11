@@ -1,14 +1,43 @@
-"""Section 11 — agent integration (Gemini primary + 3 backups + local model).
+"""Section 11 — agent integration, rebuilt around a runtime that actually runs.
 
-Everything is optional: with no keys and no local model the app runs on the
-core formulas alone. Failover: Gemini → Backup1 (Gemini) → Backup2 (OpenAI)
-→ Backup3 (Anthropic); a failed signal is reused for AGENT_FALLBACK_GRCS
-cycles and then forced neutral with a UI warning.
+Design rules (each one is a bug this file used to have)
+------------------------------------------------------
+1. **The app never depends on an agent.** With no key, no compiler and no
+   model the engine trades on formulas + brains + physics alone. Every agent
+   path is optional and reports its own state.
+
+2. **The local runtime is a *ladder*, never a single source.**
+   ``llama_cpp`` → prebuilt CPU wheel → reachable source build → **Ollama**.
+   The previous version tried one GitHub-Pages wheel index, and when that
+   host's TLS handshake was blocked it fell back to PyPI. PyPI publishes
+   ``llama-cpp-python`` as an **sdist only** (checked against
+   pyproject/pypi JSON), so that "fallback" always compiled llama.cpp for
+   twenty minutes and never finished. Ollama is the rung that needs neither a
+   compiler nor that wheel index — it only needs a binary or a running
+   daemon, and it serves an OpenAI-compatible HTTP API.
+
+3. **The model download is independent of the runtime install.** A failed
+   runtime used to raise before the model was ever fetched, so fixing the
+   runtime later meant downloading everything again. Now the GGUF lands
+   regardless, and the load step reports what it still needs.
+
+4. **Status is never a bare "installing".** Every state carries a ``phase``,
+   a ``backend`` that won, a ``why`` for what did not, and a log tail. A
+   download in progress reports elapsed seconds and bytes on disk.
+
+5. **Every provider shares one path** (``AgentRuntime``) for timeouts,
+   cooldowns, failover and realized-accuracy scoring, so a local model, an
+   Ollama daemon and a cloud key are interchangeable in the panel and in
+   ``_analyse_ai_review``.
+
+6. **Nothing blocks the event loop.** Installer and autoload run on daemon
+   threads guarded by an flock; inference is pushed to a worker.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -19,14 +48,6 @@ from collections import deque
 from typing import Any
 
 import httpx
-
-# keep the console clean: HF's per-retry warnings are noisy when the hub
-# is unreachable — our circuit breaker already handles the retry policy
-try:  # pragma: no cover - logging config
-    import logging as _logging
-    _logging.getLogger("huggingface_hub").setLevel(_logging.ERROR)
-except Exception:
-    pass
 
 from .config import (
     AGENT_COMBINED_WEIGHT,
@@ -40,6 +61,13 @@ from .config import (
     TF_ORDER,
 )
 
+log = logging.getLogger("agents")
+
+# Quiet the hub's retry spam: agent models are optional and a blocked
+# huggingface.co must never look like an application error.
+for _lg in ("huggingface_hub", "huggingface_hub.utils._http"):
+    logging.getLogger(_lg).setLevel(logging.ERROR)
+
 SETTINGS_FILE = "data/settings.json"
 # I-5: these never touch disk (memory + platform secrets only)
 KEY_FIELDS = frozenset({"gemini_key", "backup1_key", "backup2_key",
@@ -47,22 +75,73 @@ KEY_FIELDS = frozenset({"gemini_key", "backup1_key", "backup2_key",
                         "anthropic_key"})
 MODELS_DIR = "models"
 
+# ── local runtime endpoints ─────────────────────────────────────────────
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "127.0.0.1")
+OLLAMA_PORT = int(os.environ.get("OLLAMA_PORT", "11434"))
+OLLAMA_TIMEOUT_S = 2.0
+#: how long a source build of llama.cpp may run before it is abandoned.
+#: A 20-minute silent compile is what made the old installer look dead.
+SOURCE_BUILD_BUDGET_S = 900.0
+#: Source builds are OPT-IN. On a 2-core/3 GB Codespace-class host a full
+#: llama.cpp build does not finish inside any reasonable boot budget, so
+#: attempting it by default is what produced the endless "installing" state.
+#: Set PREDICT_AGENT_SOURCE_BUILD=1 to allow it (with the budget above).
+SOURCE_BUILD_ENV = "PREDICT_AGENT_SOURCE_BUILD"
+#: prebuilt CPU wheel index (correct name is whl/cpu, not whl/cpu-only)
+LLAMA_WHEEL_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# model tiers
+# ══════════════════════════════════════════════════════════════════════
+LOCAL_MODELS = [
+    # (min_ram_gb, hf repo, filename, label) — RAM tiers. The top tier is
+    # the preferred Qwen2.5-Coder-3B (also the formula auditor's model);
+    # the floor tier still fits a 4 GB Codespace.
+    (5.0, "Qwen/Qwen2.5-Coder-3B-Instruct-GGUF",
+     "qwen2.5-coder-3b-instruct-q4_k_m.gguf",
+     "Qwen2.5-Coder-3B-Instruct (Q4_K_M)"),
+    (0.0, "Qwen/Qwen2-0.5B-Instruct-GGUF", "qwen2-0_5b-instruct-q4_k_m.gguf",
+     "Qwen2-0.5B-Instruct (Q4_K_M)"),
+]
+
+MODEL_SIZE_HINT = {
+    "qwen2.5-coder-3b-instruct-q4_k_m.gguf": "~2.0 GB",
+    "qwen2-0_5b-instruct-q4_k_m.gguf": "~400 MB",
+}
+
+#: Ollama tags to prefer for the local agent (first one present wins).
+OLLAMA_TAGS = ("qwen2.5-coder:3b", "qwen2.5-coder:1.5b", "qwen2.5:3b",
+               "qwen2.5:1.5b", "llama3.2:3b", "llama3.2:1b")
+
+
+def pick_local_model(ram_gb: float):
+    """(repo, filename, label) for the RAM tier — one source of truth."""
+    for min_ram, repo, fname, label in LOCAL_MODELS:
+        if ram_gb >= min_ram:
+            return repo, fname, label
+    last = LOCAL_MODELS[-1]
+    return last[1], last[2], last[3]
+
+
 def resolve_model_path(local: "LocalModel | None" = None) -> str:
-    """THE one place the preferred model becomes a path (installer,
-    loader and UI all agree through here)."""
-    _, fname, _ = pick_local_model(local.ram_gb if local is not None
-                                   else 8.0)
+    """THE one place the preferred model becomes a path (installer, loader
+    and UI all agree through here)."""
+    ram = local.ram_gb if local is not None else 8.0
+    _, fname, _ = pick_local_model(ram)
     return os.path.join(MODELS_DIR, fname)
 
 
+# ══════════════════════════════════════════════════════════════════════
+# GGUF validation (local only, never a network call)
+# ══════════════════════════════════════════════════════════════════════
 def model_sidecar(path: str) -> str:
     return path + ".sha256.json"
 
 
 def write_model_sidecar(path: str) -> dict:
-    """Hash a downloaded GGUF ONCE and record {sha256, size, mtime}
-    beside it, so later starts validate locally without re-hashing
-    2 GB and without touching the network."""
+    """Hash a downloaded GGUF ONCE and record {sha256,size,mtime} beside it,
+    so later starts validate locally without re-hashing 2 GB."""
     import hashlib
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -80,9 +159,8 @@ def write_model_sidecar(path: str) -> dict:
 
 
 def model_validation(path: str) -> dict:
-    """Local-only validation (never a network call): file exists,
-    GGUF magic at offset 0, and the recorded sha still matches the
-    file's size+mtime. A half-finished download fails here and is
+    """Local-only validation: exists, GGUF magic at offset 0, recorded sha
+    still matches size+mtime. A half-finished download fails HERE and is
     re-fetched instead of failing mysteriously at load time."""
     out = {"present": False, "magic_ok": False, "bytes": 0,
            "sha": "absent", "source": "absent"}
@@ -111,35 +189,29 @@ def model_validation(path: str) -> dict:
     return out
 
 
-def pick_local_model(ram_gb: float):
-    """(repo, filename, label) for the RAM tier — one source of truth.
-    Top tier is the preferred Qwen2.5-Coder-3B."""
-    for min_ram, r, f, lab in LOCAL_MODELS:
-        if ram_gb >= min_ram:
-            return r, f, lab
-    return LOCAL_MODELS[-1][1], LOCAL_MODELS[-1][2], LOCAL_MODELS[-1][3]
+def _ram_gb() -> float:
+    """Usable RAM in GB (MemTotal, falling back to `free`)."""
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) / (1024 * 1024)
+    except (OSError, ValueError):
+        pass
+    try:
+        out = subprocess.run(["free", "-m"], capture_output=True, text=True,
+                             timeout=3).stdout
+        for line in out.splitlines():
+            if line.lower().startswith("mem:"):
+                return float(line.split()[1]) / 1024.0
+    except Exception:
+        pass
+    return 4.0
 
-GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
-              "gemini-1.5-flash:generateContent?key={key}")
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
-LOCAL_MODELS = [
-    # (min_ram_gb, repo, file, label) — RAM tiers, as before, except
-    # the preferred/top tier is now the user's specified best model:
-    # Qwen2.5-Coder-3B (also the formula auditor's model).
-    (5, "Qwen/Qwen2.5-Coder-3B-Instruct-GGUF",
-     "qwen2.5-coder-3b-instruct-q4_k_m.gguf",
-     "Qwen2.5-Coder-3B-Instruct (Q4_K_M)"),
-    (0, "Qwen/Qwen2-0.5B-Instruct-GGUF", "qwen2-0_5b-instruct-q4_k_m.gguf",
-     "Qwen2-0.5B-Instruct (Q4_K_M)"),
-]
-
-# approximate on-disk size per tier file (shown before downloading)
-MODEL_SIZE_HINT = {
-    "qwen2.5-coder-3b-instruct-q4_k_m.gguf": "~2.0 GB",
-    "qwen2-0_5b-instruct-q4_k_m.gguf": "~400 MB",
-}
+def sys_executable() -> str:
+    import sys
+    return sys.executable
 
 
 def _mask(key: str) -> str:
@@ -148,6 +220,15 @@ def _mask(key: str) -> str:
     if len(key) <= 8:
         return "•" * len(key)
     return key[:4] + "•" * (len(key) - 8) + key[-4:]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# prompt / reply contract
+# ══════════════════════════════════════════════════════════════════════
+REPLY_CONTRACT = (
+    'Reply with ONLY a JSON object: {"direction": 1 or -1 or 0 '
+    '(confirm/contradict/uncertain), "confidence": 0..1, '
+    '"insight": "one short sentence"}.')
 
 
 def build_prompt(ctx: dict) -> str:
@@ -160,133 +241,400 @@ def build_prompt(ctx: dict) -> str:
         f"confidence={ctx.get('cci_conf')}",
         f"Top-5 formula signals by weight: {json.dumps(ctx.get('top5', []))}",
         f"Drosophila brain consensus: {ctx.get('brain_consensus')}",
-        f"Latest news: {ctx.get('headline')} (sentiment={ctx.get('news_sentiment')})",
+        f"Latest news: {ctx.get('headline')} "
+        f"(sentiment={ctx.get('news_sentiment')})",
         f"Emotion composite (CERC): {ctx.get('cerc')}",
-        "Reply with ONLY a JSON object: "
-        '{"direction": +1|−1|0 (confirm/contradict/uncertain), '
-        '"confidence": 0..1, "insight": "one short sentence"}.',
+        REPLY_CONTRACT,
     ]
     return "\n".join(lines)
 
 
+def build_review_prompt(symbol: str, tf: str, store: dict,
+                        result: dict | None = None) -> str:
+    """Prompt for the ANALYSIS REVIEW stage (stage 6 of ▶ ANALYSE).
+
+    It asks for the same JSON contract as the GRC prompt plus an optional
+    ``errors`` list, so a reviewer can both vote and flag arithmetic it
+    believes is wrong.
+    """
+    compact = {
+        "symbol": symbol,
+        "timeframe": tf,
+        "signal": (result or {}).get("signal"),
+        "confidence": (result or {}).get("confidence"),
+        "emotions": {k: (v or {}).get("cerc")
+                     for k, v in (store.get("emotions") or {}).items()},
+        "physics": {k: (v or {}).get("ufp")
+                    for k, v in (store.get("physics") or {}).items()},
+        "news": (store.get("news") or {}).get("niv"),
+        "hedge": {k: (v or {}).get("combined")
+                  for k, v in (store.get("hedge") or {}).items()},
+    }
+    return (
+        "You are the review agent of a crypto prediction engine. Read the "
+        "assembled analysis below and answer with JSON only: "
+        '{"direction": 1 or -1 or 0, "confidence": 0..1, '
+        '"insight": "one short sentence", "errors": ["..."]} — '
+        "errors lists concrete arithmetic or data contradictions you can "
+        "see, or an empty list.\nAnalysis: "
+        + json.dumps(compact, separators=(",", ":"))[:1600])
+
+
 def parse_agent_reply(text: str) -> dict:
-    """Pull the direction/confidence/insight triple out of a model reply."""
-    out = {"direction": 0, "confidence": 0.0, "insight": ""}
+    """Pull the direction/confidence/insight triple (and errors) out of a
+    model reply. Never raises; unparseable text degrades to a heuristic."""
+    out: dict[str, Any] = {"direction": 0, "confidence": 0.0, "insight": "",
+                           "errors": []}
     if not text:
         return out
     m = re.search(r"\{.*\}", text, re.DOTALL)
     blob = m.group(0) if m else text
     try:
-        # tolerate unicode minus and trailing commas
         cleaned = (blob.replace("−", "-").replace("–", "-")
-                   .replace("'", '"'))
+                   .replace("’", "'").replace("'", '"'))
         d = json.loads(cleaned)
-        out["direction"] = (1 if float(d.get("direction", 0)) > 0 else
-                            (-1 if float(d.get("direction", 0)) < 0 else 0))
-        out["confidence"] = max(0.0, min(1.0, float(d.get("confidence", 0.0))))
+        if not isinstance(d, dict):
+            # a bare list/scalar is not a reply — fall through to the
+            # heuristic instead of calling .get() on a list
+            raise TypeError("reply is not an object")
+        try:
+            direction = float(d.get("direction", 0) or 0)
+        except (TypeError, ValueError):
+            direction = 0.0
+        out["direction"] = 1 if direction > 0 else (-1 if direction < 0 else 0)
+        try:
+            out["confidence"] = max(0.0, min(1.0,
+                                             float(d.get("confidence", 0.0))))
+        except (TypeError, ValueError):
+            out["confidence"] = 0.0
         out["insight"] = str(d.get("insight", ""))[:300]
+        errs = d.get("errors")
+        if isinstance(errs, list):
+            out["errors"] = [str(x)[:200] for x in errs][:6]
         return out
     except (ValueError, TypeError):
         pass
-    # heuristic fallback: look for confirm/contradict words + a 0..1 number
+    # heuristic fallback: confirm/contradict words + a 0..1 number
     low = text.lower()
-    if any(w in low for w in ("confirm", "agree", "bullish", "up")):
+    if any(w in low for w in ("confirm", "agree", "bullish")):
         out["direction"] = 1
-    elif any(w in low for w in ("contradict", "disagree", "bearish", "down")):
+    elif any(w in low for w in ("contradict", "disagree", "bearish")):
         out["direction"] = -1
-    nums = re.findall(r"0?\.\d+|\b\d{1,2}\b", text)
+    nums = re.findall(r"0?\.\d+|\b\d{1,3}\b", text)
     if nums:
-        v = float(nums[0])
-        out["confidence"] = min(1.0, v / 100.0 if v > 1 else v)
+        try:
+            v = float(nums[0])
+            out["confidence"] = min(1.0, v / 100.0 if v > 1 else v)
+        except ValueError:
+            pass
     out["insight"] = text.strip()[:300]
     return out
 
 
-# Quiet huggingface retry spam: agent models are optional; a blocked
-# huggingface.co must never look like app errors in the console.
-import logging as _logging
-for _lg in ("huggingface_hub", "huggingface_hub.utils._http", "httpx"):
-    _logging.getLogger(_lg).setLevel(_logging.ERROR)
+# ══════════════════════════════════════════════════════════════════════
+# Ollama (the rung that needs no compiler)
+# ══════════════════════════════════════════════════════════════════════
+def probe_ollama(host: str = OLLAMA_HOST, port: int = OLLAMA_PORT,
+                 timeout: float = OLLAMA_TIMEOUT_S) -> dict:
+    """Cheap liveness probe for the local LLM daemon (no exceptions leak)."""
+    url = f"http://{host}:{port}/api/tags"
+    out: dict[str, Any] = {"url": url, "ok": False, "models": [],
+                           "detail": "", "ms": None, "running": False}
+    t0 = time.perf_counter()
+    try:
+        r = httpx.get(url, timeout=timeout)
+        out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        out["ok"] = bool(r.status_code == 200)
+        if out["ok"]:
+            try:
+                out["models"] = [m.get("name") for m in
+                                 (r.json().get("models") or [])][:20]
+            except ValueError:
+                out["models"] = []
+            out["detail"] = f"{len(out['models'])} model(s) served"
+            out["running"] = True
+        else:
+            out["detail"] = f"HTTP {r.status_code}"
+    except Exception as exc:                    # refused == not running
+        out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        out["detail"] = type(exc).__name__
+    return out
 
 
+def ensure_ollama_running(timeout: float = OLLAMA_TIMEOUT_S) -> dict:
+    """Probe the daemon; start `ollama serve` detached if the binary exists.
+
+    Returns the probe result plus ``started``/``binary`` keys. Never raises
+    and never waits on the daemon beyond ``timeout``.
+    """
+    probe = probe_ollama(timeout=timeout)
+    if probe["ok"]:
+        probe["started"] = False
+        probe["binary"] = None
+        return probe
+    binp = shutil.which("ollama") or shutil.which("/usr/local/bin/ollama")
+    probe["binary"] = binp
+    if not binp:
+        probe["started"] = False
+        probe["detail"] = (probe.get("detail") or "") + " · no ollama binary"
+        return probe
+    try:
+        subprocess.Popen([binp, "serve"], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                         start_new_session=True, close_fds=True)
+        probe["started"] = True
+        probe["detail"] = "ollama serve spawned (detached)"
+    except Exception as exc:
+        probe["started"] = False
+        probe["detail"] = f"spawn failed: {exc}"
+    return probe
+
+
+def pick_ollama_model(models: list[str], preferred: str = "") -> str:
+    """First available tag, preferring ``preferred`` then OLLAMA_TAGS."""
+    have = [str(m) for m in (models or []) if m]
+    if preferred:
+        for m in have:
+            if m == preferred or m.split(":")[0] == preferred.split(":")[0]:
+                return m
+    for want in OLLAMA_TAGS:
+        for m in have:
+            if m == want or m.split(":")[0] == want.split(":")[0]:
+                return m
+    return have[0] if have else ""
+
+
+def ollama_chat(prompt: str, model: str = "", *,
+                host: str = OLLAMA_HOST, port: int = OLLAMA_PORT,
+                timeout: float = 60.0, max_tokens: int = 200) -> dict:
+    """POST an OpenAI-compatible chat completion to Ollama.
+
+    Ollama serves ``/v1/chat/completions`` with the same schema as OpenAI,
+    so one code path covers the daemon and (later) any compatible host.
+    """
+    if not model:
+        probe = probe_ollama(host=host, port=port)
+        model = pick_ollama_model(probe.get("models") or [])
+    if not model:
+        return {"ok": False, "reason": "no ollama model pulled",
+                "detail": "run: ollama pull " + OLLAMA_TAGS[0]}
+    url = f"http://{host}:{port}/v1/chat/completions"
+    body = {"model": model, "temperature": 0.2,
+            "max_tokens": int(max_tokens),
+            "messages": [{"role": "user", "content": prompt}]}
+    try:
+        r = httpx.post(url, json=body, timeout=timeout)
+    except Exception as exc:
+        return {"ok": False, "reason": type(exc).__name__, "model": model}
+    if r.status_code >= 400:
+        return {"ok": False, "reason": f"http {r.status_code}",
+                "model": model, "detail": r.text[:200]}
+    try:
+        text = r.json()["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return {"ok": False, "reason": "unparseable response", "model": model}
+    return {"ok": True, "text": str(text), "model": model}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# runtime readiness probes
+# ══════════════════════════════════════════════════════════════════════
+def llama_cpp_ready() -> dict:
+    """Is llama-cpp-python importable, and which version?"""
+    try:
+        import importlib.util
+        if importlib.util.find_spec("llama_cpp") is None:
+            return {"ok": False, "detail": "not installed"}
+        from llama_cpp import __version__ as v  # type: ignore
+        return {"ok": True, "version": str(v), "detail": f"llama_cpp {v}"}
+    except Exception as exc:                    # pragma: no cover - optional
+        return {"ok": False, "detail": type(exc).__name__}
+
+
+def source_build_allowed() -> bool:
+    """Is a from-source llama.cpp build permitted on this host?
+
+    Opt-in by environment variable *and* a real toolchain. Both conditions
+    print into the ladder's step record so the panel can say which one
+    failed instead of showing a silent stub.
+    """
+    return os.environ.get(SOURCE_BUILD_ENV) == "1"
+
+
+def compiler_ready() -> dict:
+    """A source build needs a C/C++ toolchain; say so instead of compiling
+    for twenty minutes and failing at the link step."""
+    cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    cxx = (shutil.which("c++") or shutil.which("g++") or shutil.which("clang++"))
+    return {"ok": bool(cc and cxx), "cc": cc, "cxx": cxx,
+            "detail": ("toolchain present" if (cc and cxx)
+                       else "no C/C++ compiler on this host")}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# LocalModel — one object the engine asks "can you answer?"
+# ══════════════════════════════════════════════════════════════════════
 class LocalModel:
-    """llama.cpp wrapper — selected automatically from available RAM."""
+    """The local agent: llama.cpp GGUF first, Ollama second.
+
+    ``available`` is True when EITHER backend can answer. ``backend`` names
+    the one in use so the UI can print it, and ``error`` always explains why
+    the local slot is not live yet.
+    """
+
+    #: how often a failed load may be retried (seconds)
+    RETRY_S = 180.0
 
     def __init__(self) -> None:
         self.available = False
+        self.backend = ""            # "llama_cpp" | "ollama" | ""
         self.label = "not loaded"
-        self.llm = None
+        self.llm = None              # llama_cpp.Llama instance
+        self.ollama_model = ""       # chosen ollama tag
         self.path = None
         self.ram_gb = _ram_gb()
         self.download_progress = 0.0
         self.last_ms = None
         self.error = ""
         self._last_attempt = 0.0
-        self._net_fails = 0          # consecutive network failures -> circuit breaker
+        self._net_fails = 0
         self._lock = threading.Lock()
 
+    # -- capability -----------------------------------------------------
+    @property
+    def ready(self) -> bool:
+        return bool(self.available)
+
+    def describe(self) -> dict:
+        return {
+            "available": self.available,
+            "backend": self.backend,
+            "label": self.label,
+            "model": self.ollama_model or (
+                os.path.basename(self.path) if self.path else ""),
+            "ram_gb": round(self.ram_gb, 1),
+            "error": self.error,
+            "last_ms": self.last_ms,
+            "download_progress": self.download_progress,
+        }
+
+    # -- loading --------------------------------------------------------
     def try_load(self, force: bool = False) -> None:
-        if self.llm is not None:
+        """Try llama.cpp, then Ollama. Idempotent and rate-limited."""
+        if self.available:
             return
-        import time as _t
-        now = _t.time()
+        now = time.time()
         if force:
             self._last_attempt = 0.0
             self._net_fails = 0
-        if now - self._last_attempt < 180 and self._last_attempt > 0:
-            return                      # one retry every 3 minutes max
-        if self._net_fails >= 2 and now - self._last_attempt < 3600:
-            return                      # circuit breaker: hub unreachable —
-                                        # don't spam retries/log for an hour
+        if not force and self._last_attempt and now - self._last_attempt < self.RETRY_S:
+            return
+        if self._net_fails >= 2 and not force and now - self._last_attempt < 3600:
+            return
         self._last_attempt = now
-        self.error = ""                 # clear stale errors (deps may have arrived)
+        self.error = ""
+        if self._try_llama_cpp():
+            return
+        if self._try_ollama():
+            return
+        # neither: keep the most useful explanation
+        self.label = "unavailable"
+
+    def _try_llama_cpp(self) -> bool:
+        probe = llama_cpp_ready()
+        if not probe["ok"]:
+            self.error = (f"llama-cpp-python not installed ({probe['detail']}); "
+                          "checking Ollama next")
+            return False
         try:
             from llama_cpp import Llama  # type: ignore
-        except Exception as e:  # pragma: no cover - optional dependency
-            self.error = f"llama-cpp-python not installed ({e.__class__.__name__})"
-            self.label = "unavailable"
-            return
+        except Exception as exc:            # pragma: no cover - optional
+            self.error = f"llama_cpp import failed: {type(exc).__name__}"
+            return False
         repo, fname, label = pick_local_model(self.ram_gb)
         self.label = label
         path = resolve_model_path(self)
         if os.path.exists(path) and not model_validation(path)["magic_ok"]:
-            self.error = ("downloaded model file is corrupt (truncated?) "
-                          "— re-download it from the Agents tab")
-            self.label = "unavailable"
-            return
+            self.error = ("downloaded model file is corrupt (truncated?) — "
+                          "re-download it from the Agents tab")
+            return False
         if not os.path.exists(path):
-            try:
-                os.makedirs(MODELS_DIR, exist_ok=True)
-                from huggingface_hub import hf_hub_download  # type: ignore
-                self.download_progress = 0.05
-                got = hf_hub_download(repo_id=repo, filename=fname,
-                                      local_dir=MODELS_DIR)
-                path = got
-                self.download_progress = 1.0
-            except Exception as e:
-                self.error = f"model download failed: {e.__class__.__name__}"
-                self._net_fails += 1    # trip the circuit breaker after 2
-                return
+            # "press download" was the whole message, so a user whose hub is
+            # blocked pressed it forever. Name the step AND the likely cause.
+            self.error = (f"no model file at {path}: only the download step "
+                          "fetches it, and it fails if huggingface.co (or its "
+                          "CDN) is unreachable from this host")
+            return False
         try:
             self.llm = Llama(model_path=path, n_ctx=2048, n_threads=4,
                              verbose=False)
             self.path = path
             self.available = True
-        except Exception as e:
-            self.error = f"model load failed: {e.__class__.__name__}"
+            self.backend = "llama_cpp"
+            self.label = f"{label} (llama.cpp)"
+            self.error = ""
+            return True
+        except Exception as exc:
+            self.error = f"model load failed: {type(exc).__name__}"
+            self.llm = None
+            return False
 
+    def _try_ollama(self) -> bool:
+        probe = probe_ollama()
+        if not probe["ok"]:
+            self.error = (self.error + " · " if self.error else "") + (
+                f"Ollama not reachable on {OLLAMA_HOST}:{OLLAMA_PORT} "
+                f"({probe['detail']})")
+            return False
+        model = pick_ollama_model(probe.get("models") or [])
+        if not model:
+            self.error = (f"Ollama is up but serves no model — run: "
+                          f"ollama pull {OLLAMA_TAGS[0]}")
+            return False
+        self.ollama_model = model
+        self.available = True
+        self.backend = "ollama"
+        self.label = f"Ollama {model}"
+        self.error = ""
+        return True
+
+    # -- inference ------------------------------------------------------
     def query(self, prompt: str, max_tokens: int = 120) -> str:
-        if not self.available or self.llm is None:
+        """Blocking text completion. Empty string means "no answer" — the
+        caller must treat that as an abstention, never as neutral."""
+        if not self.available:
             return ""
         with self._lock:
             t0 = time.time()
             try:
-                out = self.llm(prompt, max_tokens=max_tokens, temperature=0.2)
+                if self.backend == "llama_cpp" and self.llm is not None:
+                    out = self.llm(prompt, max_tokens=max_tokens,
+                                   temperature=0.2)
+                    text = out["choices"][0]["text"]
+                elif self.backend == "ollama":
+                    res = ollama_chat(prompt, self.ollama_model,
+                                      max_tokens=max_tokens)
+                    if not res.get("ok"):
+                        self.error = f"ollama: {res.get('reason')}"
+                        return ""
+                    text = res.get("text", "")
+                else:
+                    return ""
                 self.last_ms = int((time.time() - t0) * 1000)
-                return out["choices"][0]["text"].strip()
-            except Exception as e:
-                self.error = f"inference failed: {e.__class__.__name__}"
+                return str(text).strip()
+            except Exception as exc:
+                self.error = f"inference failed: {type(exc).__name__}"
                 return ""
+
+    def ask(self, prompt: str, max_tokens: int = 200) -> dict:
+        """Structured ask: {ok, text, backend, model, reason}."""
+        if not self.available:
+            return {"ok": False, "reason": self.error or "local model not loaded",
+                    "backend": "", "text": ""}
+        text = self.query(prompt, max_tokens=max_tokens)
+        return {"ok": bool(text), "text": text, "backend": self.backend,
+                "model": self.ollama_model or os.path.basename(self.path or ""),
+                "reason": "" if text else (self.error or "empty reply")}
 
     def sentiment(self, text: str) -> float | None:
         """News sentiment in [-1, +1] via the local model (Section 11)."""
@@ -302,46 +650,62 @@ class LocalModel:
         v = float(m.group(0))
         return max(-1.0, min(1.0, v / 10.0 if abs(v) > 1 else v))
 
+    def reset(self) -> None:
+        """Drop the loaded backend so the next try_load re-probes."""
+        with self._lock:
+            self.available = False
+            self.backend = ""
+            self.llm = None
+            self.ollama_model = ""
+            self.error = ""
+            self._last_attempt = 0.0
+            self._net_fails = 0
 
-def _ram_gb() -> float:
-    try:
-        out = subprocess.run(["free", "-m"], capture_output=True, text=True,
-                             timeout=3).stdout
-        for line in out.splitlines():
-            if line.lower().startswith("mem:"):
-                return float(line.split()[1]) / 1024.0
-    except Exception:
-        pass
-    return 4.0
 
-
+# ══════════════════════════════════════════════════════════════════════
+# AgentInstaller — the download that used to never finish
+# ══════════════════════════════════════════════════════════════════════
 class AgentInstaller:
-    """One-click in-app download of the local agent (Agents tab button).
+    """Downloads and wires the local agent, best-effort, without ever
+    blocking the app.
 
-    Boot never does this any more (it raced provisioning and half-
-    downloaded on slow links). The user presses DOWNLOAD LOCAL AGENT,
-    this runs in a background thread, and the app keeps working:
-      1) pip install -r requirements-agents.txt  (llama.cpp runtime —
-         may compile for 10-20 min on some machines; that is normal)
-      2) scripts/download_models.py              (preferred GGUF model)
-      3) load the model so the local agent slot goes live
-    State + last log lines are reported honestly to the UI; a failure
-    keeps the app in Drosophila mode and says why in plain words.
+    Phases, in order, each independent:
+      1. ``runtime``  — llama.cpp wheel (prebuilt first, then a *reachable*
+                        source build), or Ollama, or nothing at all;
+      2. ``model``    — the GGUF file for this host's RAM tier;
+      3. ``load``     — hand the model to LocalModel.
+
+    A failure in 1 does not stop 2. A failure in either is reported in plain
+    words with the exact missing host/binary, and ``start()`` may be called
+    again at any time.
     """
 
     LOG_FILE = os.path.join("data", "setup_ai.log")
     DONE_FILE = os.path.join("data", ".ai_done")
+    LOCK_FILE = os.path.join("data", ".agent_download.lock")
+    AUTO_FILE = os.path.join("data", ".agent_auto.json")
+    #: first attempt 90 s after boot, then 10 min, then 30 min
+    AUTO_DELAYS_S = (90.0, 600.0, 1800.0)
 
-    def __init__(self, local: "LocalModel", runner=None) -> None:
+    def __init__(self, local: "LocalModel", runner=None, *,
+                 deps=None, probe=None, compiler=None) -> None:
         self.local = local
         self._runner = runner            # injectable for tests
+        # the runtime probes are injectable so the installer's own contract
+        # can be tested without touching a real daemon, compiler or index
+        self._deps = deps or llama_cpp_ready
+        self._probe = probe or probe_ollama
+        self._compiler = compiler or compiler_ready
         self._lock = threading.Lock()
         self.state = "idle"              # idle|installing|done|failed
         self.phase = ""                  # runtime|model|load
+        self.backend = ""                # what made the local slot live
+        self.why = ""                    # why a rung was skipped
+        self.steps: list[dict] = []      # one record per attempted rung
         self.started_at = 0.0
         self.finished_at = 0.0
         self.error = ""
-        self.log: deque = deque(maxlen=40)
+        self.log: deque = deque(maxlen=60)
         self._thread: threading.Thread | None = None
         self._auto_thread: threading.Thread | None = None
         self.auto: dict[str, Any] = {"state": "idle", "attempts": 0,
@@ -350,42 +714,75 @@ class AgentInstaller:
 
     # -- detection ------------------------------------------------------
     def deps_installed(self) -> bool:
-        import importlib.util
-        return importlib.util.find_spec("llama_cpp") is not None
+        try:
+            return bool(self._deps()["ok"])
+        except Exception:
+            return False
+
+    def ollama_ready(self) -> dict:
+        try:
+            return self._probe()
+        except Exception as exc:            # pragma: no cover - defensive
+            return {"ok": False, "models": [], "detail": type(exc).__name__}
 
     def model_file(self) -> str:
         return resolve_model_path(self.local)
 
     def model_present(self) -> bool:
         v = model_validation(self.model_file())
-        return v["present"] and v["magic_ok"]
+        return bool(v["present"] and v["magic_ok"])
+
+    def runtime_present(self) -> bool:
+        """Any usable runtime (llama.cpp OR a live Ollama daemon)."""
+        return self.deps_installed() or bool(self.ollama_ready().get("ok"))
 
     def installed(self) -> bool:
-        return self.deps_installed() and self.model_present()
+        """Full local agent: a runtime AND a model (GGUF) — OR Ollama with a
+        model already pulled, which needs no local GGUF at all."""
+        if self.deps_installed() and self.model_present():
+            return True
+        probe = self.ollama_ready()
+        return bool(probe.get("ok") and pick_ollama_model(probe.get("models") or []))
 
+    # -- status ---------------------------------------------------------
     def status(self) -> dict:
         _, fname, label = pick_local_model(self.local.ram_gb)
         running = self._thread is not None and self._thread.is_alive()
         state = "installing" if running else self.state
         if state == "idle" and self.installed():
             state = "done"
+        target = self.model_file()
+        ollama = self.ollama_ready()
+        runtime = bool(self.deps_installed() or ollama.get("ok"))
+        have = model_validation(target)["bytes"]
+        want = MODEL_SIZE_HINT.get(fname, "")
         return {
             "state": state,
             "installed": self.installed(),
             "deps_installed": self.deps_installed(),
+            "runtime_present": runtime,
+            "ollama": ollama,
+            "compiler": self._compiler(),
             "model_present": self.model_present(),
             "model_label": label,
-            "model_size": MODEL_SIZE_HINT.get(fname, ""),
-            "validation": model_validation(self.model_file()),
-            "phase": self.phase if running else "",
+            "model_file": target,
+            "model_size": want,
+            "bytes_on_disk": have,
+            "validation": model_validation(target),
+            # the phase the run ENDED in is the useful fact ("it failed
+            # during the model download"), so never blank it on completion
+            "phase": self.phase,
+            "backend": self.backend or self.local.backend,
+            "why": self.why,
+            "steps": list(self.steps),
             "error": self.error,
             "log": list(self.log),
-            "elapsed_s": int((time.time() - self.started_at))
-                         if running and self.started_at else 0,
+            "elapsed_s": (int(time.time() - self.started_at)
+                          if running and self.started_at else 0),
             "auto": self.auto_status(),
         }
 
-    # -- work -----------------------------------------------------------
+    # -- the button -----------------------------------------------------
     def start(self) -> dict:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
@@ -394,6 +791,8 @@ class AgentInstaller:
                 self.state = "done"
                 return self.status()
             self.state, self.phase, self.error = "installing", "runtime", ""
+            self.why = ""
+            self.steps = []
             self.log.clear()
             self.started_at, self.finished_at = time.time(), 0.0
             self._thread = threading.Thread(target=self._work, daemon=True,
@@ -401,16 +800,7 @@ class AgentInstaller:
             self._thread.start()
             return self.status()
 
-    # ---------------- automatic (boot) download ------------------------
-    # The user asked for the local agent to arrive WITHOUT pressing
-    # anything. The old boot download was removed because it raced
-    # provisioning and half-downloaded on slow links — that is solved
-    # here with: a delay after boot, the same flock the button uses,
-    # bounded retries with backoff, a persisted done-marker, and an
-    # honest per-attempt record that the UI can show.
-    AUTO_FILE = os.path.join("data", ".agent_auto.json")
-    AUTO_DELAYS_S = (90.0, 600.0, 1800.0)      # 1.5 min, 10 min, 30 min
-
+    # -- automatic downloader -------------------------------------------
     def _auto_save(self) -> None:
         try:
             d = os.path.dirname(self.AUTO_FILE)
@@ -426,16 +816,17 @@ class AgentInstaller:
         running = (self._auto_thread is not None
                    and self._auto_thread.is_alive())
         return {
-            "state": ("running" if running else self.auto.get("state", "idle")),
+            "state": "running" if running else self.auto.get("state", "idle"),
             "attempts": self.auto.get("attempts", 0),
             "last_result": self.auto.get("last_result", ""),
             "last_error": self.auto.get("last_error", ""),
             "next_try_in_s": (max(0, round(self.auto.get("next_try_at", 0) - now))
                               if self.auto.get("next_try_at") else None),
             "installed": self.installed(),
-            "rule": ("downloads by itself after boot: llama.cpp runtime from "
-                     "PyPI, then the GGUF model; retries with backoff and "
-                     "reports exactly what failed"),
+            "rule": ("downloads by itself after boot: a runtime (prebuilt "
+                     "wheel, reachable source build, or Ollama), then the "
+                     "GGUF model; retries with backoff and reports exactly "
+                     "what failed"),
         }
 
     def start_auto(self) -> dict:
@@ -465,10 +856,10 @@ class AgentInstaller:
                 break
             self.auto["attempts"] = i + 1
             try:
-                self.start()                    # button path, one fetcher
+                self.start()
                 th = self._thread
                 if th is not None:
-                    th.join(timeout=45 * 60)
+                    th.join(timeout=60 * 20)
             except Exception as exc:            # pragma: no cover - defensive
                 self.auto["last_error"] = repr(exc)[:300]
             if self.installed():
@@ -479,19 +870,30 @@ class AgentInstaller:
             self.auto["last_result"] = (f"attempt {i + 1} failed: "
                                         + (self.error or "not installed"))
             self.auto["last_error"] = (self.error or "")[:300]
-            self._say("auto-download %s" % self.auto["last_result"])
+            self._say("auto-download: " + self.auto["last_result"])
             self._auto_save()
-        self.auto["state"] = ("done" if self.installed() else "failed")
+        self.auto["state"] = "done" if self.installed() else "failed"
         if not self.installed():
-            self.auto["last_result"] = (self.auto.get("last_result", "")
-                                        + " — press DOWNLOAD LOCAL AGENT to retry now")
+            self.auto["last_result"] = (
+                self.auto.get("last_result", "")
+                + " — press DOWNLOAD LOCAL AGENT to retry now")
         self._auto_save()
 
+    # -- plumbing -------------------------------------------------------
     def _say(self, line: str) -> None:
-        line = str(line).rstrip()
+        """Append one log line, keeping its head AND tail.
+
+        `line[-300:]` chopped the FRONT of a long failure, so the panel showed
+        lines starting mid-word ("appened while trying to locate the file…")
+        with the actual reason gone. Keep a generous window and elide the
+        middle instead.
+        """
+        line = str(line).strip()
         if not line:
             return
-        self.log.append(line[-300:])
+        if len(line) > 420:
+            line = line[:200].rstrip() + " … " + line[-200:].lstrip()
+        self.log.append(line)
         try:
             d = os.path.dirname(self.LOG_FILE)
             if d:
@@ -501,26 +903,50 @@ class AgentInstaller:
         except OSError:
             pass
 
-    def _exec(self, cmd: list) -> int:
+    def _exec(self, cmd: list, timeout: float | None = None) -> int:
         if self._runner is not None:
             return self._runner(cmd, self._say)
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True,
-                                bufsize=1)
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            self._say(line)
-        return proc.wait()
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True,
+                                    bufsize=1)
+        except OSError as exc:
+            self._say(f"could not run {cmd[0]}: {exc}")
+            return 127
+        ended = threading.Event()
 
-    LOCK_FILE = os.path.join("data", ".agent_download.lock")
+        def _kill() -> None:
+            # a source build that runs past its budget is abandoned instead
+            # of holding the installer open for half an hour
+            if not ended.is_set():
+                self._say(f"step exceeded {timeout:.0f}s — stopping it")
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+        watchdog = None
+        if timeout:
+            watchdog = threading.Timer(timeout, _kill)
+            watchdog.daemon = True
+            watchdog.start()
+        assert proc.stdout is not None
+        try:
+            for line in proc.stdout:
+                self._say(line)
+        finally:
+            rc = proc.wait()
+            ended.set()
+            if watchdog is not None:
+                watchdog.cancel()
+        return rc
 
     def _grab_lock(self):
-        """flock handle or None — the boot script takes the same
-        lock, so the boot download and this button can never run
-        two fetchers at once (the doc's 'two fetchers' bug)."""
+        """flock handle or None — the boot script takes the same lock, so
+        two fetchers can never run at once."""
         try:
             import fcntl
-            os.makedirs("data", exist_ok=True)
+            os.makedirs(os.path.dirname(self.LOCK_FILE) or "data",
+                        exist_ok=True)
             fh = open(self.LOCK_FILE, "a")
             try:
                 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -532,9 +958,9 @@ class AgentInstaller:
             return None
 
     def _wait_lock_or_model(self, tries: int = 360):
-        """While another fetcher holds the lock: wait for it, but
-        bail out early if the model we want lands valid on disk.
-        Returns 'model' | 'lock' | 'timeout'."""
+        """While another fetcher holds the lock: wait for it, but bail out
+        early if the model we want lands valid on disk.
+        Returns 'model' | (\"lock\", handle) | 'timeout'."""
         for _ in range(tries):
             if self.model_present():
                 return "model"
@@ -544,104 +970,193 @@ class AgentInstaller:
             time.sleep(10)
         return "timeout"
 
+    def _step(self, name: str, ok: bool, reason: str = "") -> None:
+        self.steps.append({"step": name, "ok": bool(ok),
+                           "reason": (reason or "")[:300],
+                           "at": round(time.time(), 3)})
+
+    # -- the runtime ladder ---------------------------------------------
+    def ensure_runtime(self) -> dict:
+        """Walk the runtime ladder; return {runtime, backend, detail}.
+
+        ``runtime`` is True when ANY rung worked (or is already present).
+        Nothing here raises: each rung records why it did not work.
+        """
+        # rung 0 — already importable
+        probe = self._deps()
+        if probe["ok"]:
+            self._say(f"llama.cpp runtime already installed ({probe['detail']})")
+            self._step("llama_cpp", True, probe["detail"])
+            return {"runtime": True, "backend": "llama_cpp",
+                    "detail": probe["detail"]}
+
+        # rung 1 — prebuilt CPU wheel (correct index path, no source build)
+        self._say("installing prebuilt llama.cpp CPU wheel from "
+                  f"{LLAMA_WHEEL_INDEX} …")
+        rc = self._exec([sys_executable(), "-m", "pip", "install",
+                         "--only-binary", "llama-cpp-python",
+                         "--extra-index-url", LLAMA_WHEEL_INDEX,
+                         "llama-cpp-python>=0.3"],
+                        timeout=SOURCE_BUILD_BUDGET_S)
+        if rc == 0 and self._deps()["ok"]:
+            self._step("prebuilt wheel", True, LLAMA_WHEEL_INDEX)
+            return {"runtime": True, "backend": "llama_cpp",
+                    "detail": "prebuilt CPU wheel"}
+        self._step("prebuilt wheel", False,
+                   f"pip exit {rc} — index unreachable or no wheel for this "
+                   "Python/platform")
+
+        # rung 2 — a source build ONLY when explicitly allowed and a
+        # toolchain exists, with a budget
+        tool = self._compiler()
+        if tool["ok"] and source_build_allowed():
+            self._say("prebuilt wheel unavailable — compiling from source "
+                      f"(budget {SOURCE_BUILD_BUDGET_S / 60:.0f} min, "
+                      f"{tool['cxx']})")
+            rc = self._exec([sys_executable(), "-m", "pip", "install",
+                             "llama-cpp-python>=0.3"],
+                            timeout=SOURCE_BUILD_BUDGET_S)
+            if rc == 0 and self._deps()["ok"]:
+                self._step("source build", True, tool["cxx"] or "")
+                return {"runtime": True, "backend": "llama_cpp",
+                        "detail": "source build"}
+            self._step("source build", False, f"pip exit {rc}")
+        else:
+            why = (tool["detail"] if not tool["ok"] else
+                   f"source build is opt-in — set {SOURCE_BUILD_ENV}=1 to "
+                   f"allow up to {SOURCE_BUILD_BUDGET_S / 60:.0f} min of "
+                   "compiling")
+            self._say(f"skipping the source build: {why}")
+            self._step("source build", False, why)
+
+        # rung 3 — Ollama: no compiler, no wheel index, just a daemon
+        self._say("trying Ollama (no compiler or wheel index needed) …")
+        probe = self._probe()
+        if probe.get("ok"):
+            model = pick_ollama_model(probe.get("models") or [])
+            detail = (f"daemon up, model {model}" if model else
+                      "daemon up but no model pulled")
+            self._step("ollama", True, detail)
+            return {"runtime": True, "backend": "ollama", "detail": detail,
+                    "needs_pull": (not model)}
+        self._step("ollama", False, probe.get("detail") or "")
+        return {"runtime": False, "backend": "",
+                "detail": ("no usable runtime: llama.cpp could not be "
+                           "installed and Ollama is not reachable — the app "
+                           "runs on formulas + brains + physics alone")}
+
+    def ensure_model(self) -> dict:
+        """Download the GGUF for this RAM tier. Independent of the runtime."""
+        if self.model_present():
+            self._say("model already on disk — 0 bytes fetched")
+            self._step("model", True, "already present")
+            return {"model": True, "detail": "already present"}
+        rc = self._exec([sys_executable(),
+                         os.path.join("scripts", "download_models.py")],
+                        timeout=60 * 30)
+        if self.model_present():
+            self._step("model", True, "downloaded")
+            return {"model": True, "detail": "downloaded"}
+        path = self.model_file()
+        v = model_validation(path)
+        if v["present"] and not v["magic_ok"]:
+            why = (f"file on disk is not a GGUF ({v['bytes']} bytes) — a "
+                   "truncated download; it will be re-fetched")
+        else:
+            # download_models.py exits 0 on SKIP by design (a blocked hub must
+            # not fail a setup flow), so the exit code says nothing. The
+            # authoritative fact is that no valid model landed on disk.
+            why = ("no model on disk: huggingface.co (or its CDN) is "
+                   "unreachable from this host. The app runs on formulas + "
+                   "brains + physics until a model is available")
+        self._step("model", False, f"{why} (script exit {rc})")
+        return {"model": False, "detail": why}
+
     def _work(self) -> None:
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         lock_fh = self._grab_lock()
         if lock_fh is None:
-            self._say("another agent download is already running "
-                      "(boot or a second press) — waiting for it")
+            self._say("another agent download is already running — waiting")
             got = self._wait_lock_or_model()
             if got == "model":
-                lock_fh = self._grab_lock()      # may stay None; fine
-            elif got == "timeout":
+                lock_fh = self._grab_lock()
+            elif isinstance(got, tuple):
+                lock_fh = got[1]
+            else:
                 self.state = "failed"
-                self.error = ("another download held the lock for over "
-                              "an hour — press download to try again")
+                self.error = ("another download held the lock for over an hour "
+                              "— press download to try again")
                 self.phase = ""
                 self.finished_at = time.time()
                 return
-            else:
-                lock_fh = got[1]
         try:
             self.phase = "runtime"
-            if self.deps_installed():
-                self._say("llama.cpp runtime already installed — skipping")
-            else:
-                # PREBUILT CPU WHEEL ONLY (audit §11): asking pip to
-                # resolve the whole requirements file let it fall back to
-                # the sdist and compile llama.cpp from source — the
-                # "Building wheel for llama-cpp-python … started" that ran
-                # for 20 minutes on the user's screen. `--only-binary=:all:`
-                # makes pip REFUSE to compile, so the abetlen CPU wheel
-                # index is the only possible source (≈3 s).
-                self._say("installing prebuilt llama.cpp CPU wheel "
-                          "(abetlen index, --only-binary: no source build) …")
-                rc = self._exec([sys_executable(), "-m", "pip", "install",
-                                 "--prefer-binary",
-                                 # refuse to COMPILE llama.cpp: the abetlen
-                                 # CPU index is then the only possible
-                                 # source, so this is a 3-second install
-                                 # instead of a 20-minute build
-                                 "--only-binary", "llama-cpp-python",
-                                 "--extra-index-url",
-                                 "https://abetlen.github.io/llama-cpp-python/whl/cpu",
-                                 "-r", "requirements-agents.txt"])
-                if rc != 0:
-                    # the prebuilt-wheel host is its own dependency; PyPI is
-                    # the one index that is almost always reachable
-                    self._say("prebuilt wheel index unavailable — retrying "
-                              "from PyPI (a source build can take 10-20 min)")
-                    rc = self._exec([sys_executable(), "-m", "pip", "install",
-                                     "-r", "requirements-agents.txt"])
-                if rc != 0:
-                    raise RuntimeError(
-                        "runtime install failed (pip exit %d): neither the "
-                        "prebuilt llama.cpp wheel index (abetlen.github.io) "
-                        "nor PyPI served it — outbound HTTPS to those hosts "
-                        "is required" % rc)
+            rt = self.ensure_runtime()
+            self.backend = rt.get("backend") or ""
+            self.why = "" if rt["runtime"] else rt.get("detail", "")
+            if rt["runtime"] and rt.get("needs_pull"):
+                self._say("Ollama is running but has no model — pulling "
+                          f"{OLLAMA_TAGS[0]} is a manual step: "
+                          f"`ollama pull {OLLAMA_TAGS[0]}`")
+
+            # the model step runs even when the runtime failed: the two are
+            # decoupled so a later runtime fix is instant
             self.phase = "model"
-            rc = self._exec([sys_executable(),
-                             os.path.join("scripts", "download_models.py")])
-            if rc != 0 or not self.model_present():
+            md = self.ensure_model()
+
+            if not rt["runtime"] and not md["model"]:
+                # Ollama with a model already pulled is still a working agent
+                probe = self.ollama_ready()
+                if probe.get("ok") and pick_ollama_model(probe.get("models") or []):
+                    self._finish_ok("ollama")
+                    return
                 raise RuntimeError(
-                    "model download did not finish: the GGUF file is not on "
-                    "disk. The model comes from huggingface.co (and its CDN) "
-                    "— if this host cannot reach it the download cannot "
-                    "complete, the app stays fully usable in Drosophila "
-                    "mode, and the automatic retry keeps trying")
-            try:
-                d = os.path.dirname(self.DONE_FILE)
-                if d:
-                    os.makedirs(d, exist_ok=True)
-                open(self.DONE_FILE, "a").close()
-            except OSError:
-                pass
+                    "no runtime and no model: " + rt.get("detail", "")
+                    + " · model: " + md.get("detail", ""))
+
             self.phase = "load"
-            self._say("download complete — loading the local agent")
+            self._say("wiring the local agent …")
+            self.local.reset()
             self.local.try_load(force=True)
-            self.state = "done"
-            self._say("local agent ready: %s" % self.local.label)
-        except Exception as e:                       # never break the app
+            if self.local.available:
+                self._finish_ok(self.local.backend or self.backend or "local")
+            elif md["model"] and not rt["runtime"]:
+                # model is on disk, runtime missing: an honest, resumable state
+                self.state = "failed"
+                self.error = ("model downloaded and ready, but no runtime can "
+                              "load it: " + rt.get("detail", ""))
+                self._say(self.error)
+            else:
+                self.state = "failed"
+                self.error = self.local.error or "model loaded but unavailable"
+        except Exception as exc:                 # never break the app
             self.state = "failed"
-            self.error = str(e)[:300]
-            self._say("download stopped: %s" % self.error)
+            self.error = str(exc)[:400]
+            self._say("download stopped: " + self.error)
         finally:
             self.phase = ""
             self.finished_at = time.time()
             if lock_fh is not None:
                 try:
-                    lock_fh.close()              # releases the flock
+                    lock_fh.close()               # releases the flock
                 except OSError:
                     pass
 
+    def _finish_ok(self, backend: str) -> None:
+        try:
+            d = os.path.dirname(self.DONE_FILE)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            open(self.DONE_FILE, "a").close()
+        except OSError:
+            pass
+        self.backend = backend
+        self.state = "done"
+        self._say(f"local agent ready via {backend}: {self.local.label}")
 
-def sys_executable() -> str:
-    import sys
-    return sys.executable
 
-
-# Downloadable agent packs — import one with your key and the app routes
-# cycles to the best-performing agent automatically (auto-best).
+# ══════════════════════════════════════════════════════════════════════
+# agent catalog (downloadable packs)
+# ══════════════════════════════════════════════════════════════════════
 AGENT_CATALOG = [
     {"id": "gemini", "name": "Google Gemini", "slot": "gemini",
      "model": "gemini-2.0-flash", "setup": "https://aistudio.google.com/apikey"},
@@ -655,19 +1170,57 @@ AGENT_CATALOG = [
      "model": "llama-3.3-70b-versatile",
      "setup": "https://console.groq.com/keys"},
     {"id": "groq-8b", "name": "Groq Llama 3.1 8B (fast triage)",
-     "slot": "groq",
-     "model": "llama-3.1-8b-instant",
+     "slot": "groq", "model": "llama-3.1-8b-instant",
      "setup": "https://console.groq.com/keys"},
 ]
 
+GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
+              "gemini-1.5-flash:generateContent?key={key}")
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+
+
+async def _to_thread(fn, *a):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, fn, *a)
+
+
+def _extract_text(slot: str, r: httpx.Response) -> str:
+    try:
+        d = r.json()
+    except ValueError:
+        return r.text[:400]
+    try:
+        if slot == "backup2":
+            return d["choices"][0]["message"]["content"]
+        if slot == "backup3":
+            return d["content"][0]["text"]
+        return d["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        return json.dumps(d)[:400]
+
 
 class AgentManager:
-    """Owns keys, rate limits, failover and the two agent signals.
+    """Owns keys, rate limits, failover and the agent signals.
 
-    Auto-best ("best of best"): every cloud slot keeps a rolling score of
-    realized accuracy. With auto_best on and >= 3 samples, query() tries
-    the best-scored slot first. Keyless Drosophila still runs.
+    Every provider — Gemini family, OpenAI, Anthropic, Groq, the local GGUF
+    and an Ollama daemon — is reached through the same ``AgentRuntime``
+    helper so timeouts, cooldowns, failure streaks and realized-accuracy
+    scoring cannot drift apart per slot.
+
+    Keyless operation is the default and is fully supported: the engine
+    trades on formulas + brains + physics and ``status()["mode"]`` says
+    ``drosophila``.
     """
+
+    GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+    GROQ_PRIMARY = "llama-3.3-70b-versatile"     # deep judgment / regime
+    GROQ_TRIAGE = "llama-3.1-8b-instant"         # low-latency news scoring
+    GEMINI_LIST_URL = ("https://generativelanguage.googleapis.com/v1beta/"
+                       "models?key={key}")
+    #: per-call HTTP budget. 8 s was too tight for a 70B Groq completion and
+    #: too generous for a dead host; 12 s with one retry is the compromise.
+    HTTP_TIMEOUT_S = 12.0
 
     def __init__(self) -> None:
         self.settings: dict[str, Any] = {
@@ -679,8 +1232,8 @@ class AgentManager:
             # views are always fresh; turn OFF for manual-only ▶ ANALYSE
             "auto_predict": True,
             # two prediction systems: "old" (TP/SL ladder, default)
-            # or "new" (horizon forecast: price at timeframe end IS
-            # the target, SL kept). Toggled from the header button.
+            # or "new" (horizon forecast: price at timeframe end IS the
+            # target, SL kept). Toggled from the header button.
             "system_mode": "old",
             "assets": list(SYMBOL_ORDER), "timeframes": list(TF_ORDER),
         }
@@ -700,9 +1253,9 @@ class AgentManager:
         # (never a prefix check, I-1); states untested/ok/rate-limited/
         # invalid/error with last error, cooldown, calls, failures.
         self.keyring: dict[str, dict] = {
-            slot: {"state": "untested", "last_error": "", "cooldown_until": 0.0,
-                   "calls": 0, "failures": 0, "model": "", "last_ok": 0.0,
-                   "latency_ms": None}
+            slot: {"state": "untested", "last_error": "",
+                   "cooldown_until": 0.0, "calls": 0, "failures": 0,
+                   "model": "", "last_ok": 0.0, "latency_ms": None}
             for slot in ("gemini", "backup1", "backup2", "backup3", "local",
                          "groq")
         }
@@ -722,7 +1275,6 @@ class AgentManager:
             if slot in self.keyring:
                 self.keyring[slot].update(
                     {k: v for k, v in st.items() if k in self.keyring[slot]})
-        import os as _os
         # environment mirrors (spec: stored in a local environment variable)
         for slot, env in (("gemini_key", "GEMINI_API_KEY"),
                           ("backup1_key", "GEMINI_BACKUP_KEY"),
@@ -730,8 +1282,8 @@ class AgentManager:
                           ("backup3_key", "ANTHROPIC_API_KEY"),
                           ("newsapi_key", "NEWSAPI_KEY"),
                           ("groq_key", "GROQ_API_KEY")):
-            if not self.settings.get(slot) and _os.environ.get(env):
-                self.settings[slot] = _os.environ[env]
+            if not self.settings.get(slot) and os.environ.get(env):
+                self.settings[slot] = os.environ[env]
 
     def save_settings(self) -> None:
         """I-5: NEVER write a user key to any file in the repo — only
@@ -761,8 +1313,6 @@ class AgentManager:
         q = self.calls.setdefault(key, deque())
         while q and now - q[0] > 3600:
             q.popleft()
-        limit = 60 if self.paid.get(key) else AGENT_FREE_RPH * AGENT_PAID_PER_GRC
-        # free tier: 15/hour total (1 per GRC); paid: 60/hour (4 per GRC)
         limit = 60 if self.paid.get(key) else AGENT_FREE_RPH
         if len(q) >= limit:
             return False
@@ -780,27 +1330,26 @@ class AgentManager:
         if not key:
             return {"ok": False, "reason": "no key"}
         kr = self.keyring.get(slot) or {}
-        import time as _t
-        if kr.get("cooldown_until", 0.0) > _t.time():
-            return {"ok": False, "reason": "rate limited"}   # slot cooling down
+        if kr.get("cooldown_until", 0.0) > time.time():
+            return {"ok": False, "reason": "rate limited"}
         kr["calls"] = int(kr.get("calls", 0)) + 1
         if not self._under_limit(key):
-            kr.update(state="rate-limited", cooldown_until=_t.time() + 60)
+            kr.update(state="rate-limited", cooldown_until=time.time() + 60)
             return {"ok": False, "reason": "rate limited"}
         headers: dict[str, str] = {}
-        if slot in ("backup2",):          # OpenAI
+        if slot == "backup2":                     # OpenAI
             url = OPENAI_URL
             headers = {"Authorization": f"Bearer {key}",
                        "Content-Type": "application/json"}
             body = {"model": "gpt-4o", "temperature": 0.2,
                     "messages": [{"role": "user", "content": prompt}]}
-        elif slot in ("backup3",):        # Anthropic
+        elif slot == "backup3":                   # Anthropic
             url = ANTHROPIC_URL
             headers = {"x-api-key": key, "anthropic-version": "2023-06-01",
                        "Content-Type": "application/json"}
             body = {"model": "claude-3-5-sonnet-latest", "max_tokens": 200,
                     "messages": [{"role": "user", "content": prompt}]}
-        else:                             # Gemini (primary + backup1)
+        else:                                     # Gemini (primary + backup1)
             # I-2: model id comes from ListModels when known; the hard-coded
             # id is only the pre-test fallback (hard-coding broke on renames)
             model = (self.keyring.get(slot) or {}).get("model") or "gemini-1.5-flash"
@@ -808,28 +1357,25 @@ class AgentManager:
             headers = {"Content-Type": "application/json"}
             body = {"contents": [{"parts": [{"text": prompt}]}]}
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with httpx.AsyncClient(timeout=self.HTTP_TIMEOUT_S) as client:
                 r = await client.post(url, json=body, headers=headers)
         except Exception as e:
             return {"ok": False, "reason": e.__class__.__name__}
         if r.status_code == 429:
-            self.keyring.get(slot, {}).update(
-                state="rate-limited", cooldown_until=_t.time() + 60,
-                failures=int(self.keyring.get(slot, {}).get("failures", 0)) + 1)
+            kr.update(state="rate-limited", cooldown_until=time.time() + 60,
+                      failures=int(kr.get("failures", 0)) + 1,
+                      last_error="http 429")
             return {"ok": False, "reason": "rate limited"}
         if r.status_code in (400, 401, 403):
-            # 400 can be a renamed model id — mark the slot and let the
-            # next call fall back to the pinned id (I-2)
-            self.keyring.get(slot, {}).update(
-                state="invalid", last_error=f"http {r.status_code}",
-                failures=int(self.keyring.get(slot, {}).get("failures", 0)) + 1)
+            # 400 can be a renamed model id — mark the slot so the next call
+            # falls back to the pinned id (I-2)
+            kr.update(state="invalid", last_error=f"http {r.status_code}",
+                      failures=int(kr.get("failures", 0)) + 1)
             return {"ok": False, "reason": f"http {r.status_code}"}
         if r.status_code >= 400:
-            self.keyring.get(slot, {}).update(
-                state="error", last_error=f"http {r.status_code}",
-                failures=int(self.keyring.get(slot, {}).get("failures", 0)) + 1)
+            kr.update(state="error", last_error=f"http {r.status_code}",
+                      failures=int(kr.get("failures", 0)) + 1)
             return {"ok": False, "reason": f"http {r.status_code}"}
-        # paid-tier detection (Gemini headers expose remaining quota)
         rem = r.headers.get("x-ratelimit-remaining")
         if rem is not None:
             try:
@@ -840,9 +1386,26 @@ class AgentManager:
         parsed = parse_agent_reply(text)
         parsed["ok"] = True
         parsed["slot"] = slot
-        kr = self.keyring.get(slot)
-        if kr is not None:
-            kr.update(state="ok", last_error="", last_ok=_t.time())
+        kr.update(state="ok", last_error="", last_ok=time.time())
+        return parsed
+
+    # ---------------- local provider (llama.cpp or Ollama) --------------
+    async def _call_local(self, prompt: str) -> dict:
+        """Ask the local agent without blocking the event loop."""
+        if not self.settings.get("local_enabled", True):
+            return {"ok": False, "reason": "local agent disabled in settings"}
+        if not self.local.available and not self.local.error:
+            await _to_thread(self.local.try_load)
+        if not self.local.available:
+            return {"ok": False, "backend": "", "reason":
+                    self.local.error or "local model not loaded"}
+        res = await _to_thread(self.local.ask, prompt)
+        if not res.get("ok"):
+            return {"ok": False, "backend": res.get("backend", ""),
+                    "reason": res.get("reason", "empty reply")}
+        parsed = parse_agent_reply(res["text"])
+        parsed.update(ok=True, slot="local", backend=res.get("backend", ""),
+                      model=res.get("model", ""))
         return parsed
 
     # ---------------- main query ----------------
@@ -853,7 +1416,6 @@ class AgentManager:
                  ("backup1", self.settings.get("backup1_key")),
                  ("backup2", self.settings.get("backup2_key")),
                  ("backup3", self.settings.get("backup3_key"))]
-        # auto-best: route to the best-realized-accuracy agent first
         if self.auto_best:
             best = self.best_slot()
             if best:
@@ -876,24 +1438,18 @@ class AgentManager:
                 self.warning = f"{slot} rate-limited — trying next agent"
                 continue
             self.fail_streak["gemini"] += 1
-        # local model (threaded so the event loop never blocks)
-        local_res = None
-        if self.settings.get("local_enabled", True):
-            loop = threading.Thread(target=self.local.try_load, daemon=True)
-            if not self.local.available and not self.local.error:
-                loop.start()
-                loop.join(timeout=0.05)
-            if self.local.available:
-                text = await _to_thread(self.local.query, prompt)
-                local_res = parse_agent_reply(text)
-                local_res["ok"] = bool(text)
-                self.last_replies["local"] = local_res
-                if text:
-                    self.fail_streak["local"] = 0
-                    self.last_good["local"] = local_res
-                else:
-                    self.fail_streak["local"] += 1
-        # fallback: reuse previous cloud signal for up to 3 failed GRCs
+
+        local_res = await self._call_local(prompt) if cloud is None else None
+        if local_res is not None:
+            self.last_replies["local"] = local_res
+            if local_res.get("ok"):
+                self.fail_streak["local"] = 0
+                self.last_good["local"] = local_res
+                self.active_slot = "local"
+            else:
+                self.fail_streak["local"] += 1
+
+        # fallback: reuse the previous cloud signal for a few failed GRCs
         if cloud is None and self.last_good["gemini"] is not None:
             if self.fail_streak["gemini"] <= AGENT_FALLBACK_GRCS:
                 cloud = dict(self.last_good["gemini"])
@@ -914,15 +1470,21 @@ class AgentManager:
             weight = AGENT_COMBINED_WEIGHT
             source = "combined"
         elif g_c > 0:
-            direction, confidence, weight, source = g_d, g_c, AGENT_GEMINI_WEIGHT, "gemini"
+            direction, confidence, weight, source = (g_d, g_c,
+                                                     AGENT_GEMINI_WEIGHT,
+                                                     "gemini")
         elif l_c > 0:
-            direction, confidence, weight, source = l_d, l_c, AGENT_LOCAL_WEIGHT, "local"
+            direction, confidence, weight, source = (l_d, l_c,
+                                                     AGENT_LOCAL_WEIGHT,
+                                                     "local")
         else:
             return {"direction": 0, "confidence": 0.0, "weight": 0.0,
                     "source": "none", "insight": "", "gemini": cloud,
-                    "local": local, "warning": self.warning}
+                    "local": local, "warning": self.warning,
+                    "backend": self._backend_label()}
         direction = 1 if direction > 0.1 else (-1 if direction < -0.1 else 0)
-        insight = ((cloud or {}).get("insight") or (local or {}).get("insight") or "")
+        insight = ((cloud or {}).get("insight")
+                   or (local or {}).get("insight") or "")
         return {
             "direction": direction,
             "confidence": round(min(1.0, confidence), 4),
@@ -932,19 +1494,110 @@ class AgentManager:
             "gemini": cloud,
             "local": local,
             "warning": self.warning,
+            "backend": self._backend_label(),
         }
+
+    def _backend_label(self) -> str:
+        """Which agent actually answered (for the UI chip)."""
+        if self.local.available:
+            return self.local.backend or "local"
+        if self.active_slot and self.settings.get(f"{self.active_slot}_key"):
+            return self.active_slot
+        return ""
+
+    # ---------------- analysis review (stage 6) ----------------
+    async def review(self, symbol: str, tf: str, store: dict,
+                     result: dict | None = None) -> dict:
+        """The `ai_review` stage of ▶ ANALYSE.
+
+        Returns a payload that is always renderable:
+        ``{available, backend, note, reviews: {name: {...}}, correction}``.
+        ``available`` is False only when nothing at all could answer, and
+        ``note`` then says exactly what is missing.
+        """
+        prompt = build_review_prompt(symbol, tf, store, result)
+        reviews: dict[str, dict] = {}
+        tried: list[str] = []
+
+        # 1) cloud slots (same failover order as query)
+        for slot, keyname in (("gemini", "gemini_key"),
+                              ("backup1", "backup1_key"),
+                              ("backup2", "backup2_key"),
+                              ("backup3", "backup3_key")):
+            key = self.settings.get(keyname)
+            if not key or not self.settings.get("gemini_enabled", True):
+                continue
+            tried.append(slot)
+            res = await self._call_provider(slot, key, prompt)
+            reviews[slot] = ({"ok": True, "reason": res.get("insight", ""),
+                              "errors": res.get("errors") or [],
+                              "direction": res.get("direction"),
+                              "confidence": res.get("confidence"),
+                              "backend": slot}
+                             if res.get("ok") else
+                             {"ok": False, "error": res.get("reason", "")})
+            if res.get("ok"):
+                break
+
+        # 2) local agent (llama.cpp GGUF or Ollama)
+        local_res = await self._call_local(prompt)
+        if local_res.get("ok"):
+            reviews["local"] = {"ok": True,
+                                "reason": local_res.get("insight", ""),
+                                "errors": local_res.get("errors") or [],
+                                "direction": local_res.get("direction"),
+                                "confidence": local_res.get("confidence"),
+                                "backend": local_res.get("backend") or "local"}
+        elif self.settings.get("local_enabled", True) and self.local.available:
+            reviews["local"] = {"ok": False,
+                                "error": local_res.get("reason", "no answer")}
+
+        ok = {k: v for k, v in reviews.items() if v.get("ok")}
+        if not ok:
+            missing = []
+            if not any(self.settings.get(k) for k in
+                       ("gemini_key", "backup1_key", "backup2_key",
+                        "backup3_key")):
+                missing.append("no cloud key")
+            if not self.local.available:
+                missing.append("local agent not loaded"
+                               + (f" ({self.local.error})" if self.local.error
+                                  else ""))
+            return {"available": False,
+                    "backend": "",
+                    "note": ("no AI answered — deterministic pipeline only ("
+                             + "; ".join(missing) + "). The call above stands "
+                             "on formulas + brains + physics."),
+                    "reviews": reviews, "tried": tried, "correction": None}
+
+        # a correction needs a confident, contradictory review
+        correction = None
+        for name, rv in ok.items():
+            d = int(rv.get("direction") or 0)
+            c = float(rv.get("confidence") or 0.0)
+            cur = (result or {}).get("direction") or 0
+            if d and cur and d != cur and c >= 0.6:
+                correction = {"by": name, "direction": d, "confidence": c,
+                              "reason": (rv.get("reason") or "")[:200]}
+                break
+        backend = next(iter(ok.values())).get("backend", "")
+        return {"available": True, "backend": backend,
+                "note": f"reviewed by {', '.join(ok)} ({backend})",
+                "reviews": reviews, "tried": tried,
+                "correction": correction}
 
     # ---------------- UI helpers ----------------
     def status(self) -> dict:
         cat = self.catalog_status()
+
         def slot_status(slot: str, key: str) -> dict:
             used, limit = self.usage(key) if key else (0, AGENT_FREE_RPH)
             reply = self.last_replies.get(slot) or {}
-            st = "disabled" if (slot == "gemini" and
-                                not self.settings.get("gemini_enabled", True)) else \
-                 ("connected" if reply.get("ok") else
-                  ("rate-limited" if reply.get("reason") == "rate limited" else
-                   ("disconnected" if key else "not configured")))
+            st = ("disabled" if (slot == "gemini" and
+                                 not self.settings.get("gemini_enabled", True))
+                  else "connected" if reply.get("ok")
+                  else "rate-limited" if reply.get("reason") == "rate limited"
+                  else "disconnected" if key else "not configured")
             return {"key": _mask(key), "status": st,
                     "last": {k: reply.get(k) for k in
                              ("direction", "confidence", "insight", "reason")},
@@ -959,9 +1612,8 @@ class AgentManager:
         mode = ("cloud" if has_cloud and local_ok else
                 "cloud" if has_cloud else
                 "local" if local_ok else "drosophila")
-        kr_view = {k: dict(v) for k, v in self.keyring.items()}
         return {
-            "keyring": kr_view,
+            "keyring": {k: dict(v) for k, v in self.keyring.items()},
             "catalog": cat,
             "groq": {"configured": bool(self.groq_key),
                      "primary": self.GROQ_PRIMARY,
@@ -972,6 +1624,7 @@ class AgentManager:
             "local": {
                 "label": self.local.label,
                 "available": self.local.available,
+                "backend": self.local.backend,
                 "download_progress": self.local.download_progress,
                 "ram_gb": round(self.local.ram_gb, 1),
                 "last_ms": self.local.last_ms,
@@ -980,7 +1633,11 @@ class AgentManager:
                 "enabled": self.settings.get("local_enabled", True),
                 "install": self.installer.status(),
             },
+            # the installer is ALSO top-level: the Agents tab used to read
+            # agents.installer and find null, so it had nothing to render
+            "installer": self.installer.status(),
             "active": self.active_slot,
+            "backend": self._backend_label(),
             "warning": self.warning,
             "mode": mode,
             "has_cloud_keys": has_cloud,
@@ -1047,10 +1704,6 @@ class AgentManager:
         self.save_settings()
 
     # ---------------- Groq synthesis (Prompt 2) ----------------
-    GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-    GROQ_PRIMARY = "llama-3.3-70b-versatile"     # deep judgment / regime
-    GROQ_TRIAGE = "llama-3.1-8b-instant"         # low-latency news scoring
-
     @property
     def groq_key(self) -> str:
         return str(self.settings.get("groq_key") or "")
@@ -1061,12 +1714,11 @@ class AgentManager:
         """Exponential-backoff Groq call (free tier: 30 RPM caps)."""
         if not self.groq_key:
             return {"ok": False, "reason": "no GROQ_API_KEY"}
-        import httpx as _hx
         delay = 1.5
         last = "unknown"
         for attempt in range(4):
             try:
-                async with _hx.AsyncClient(timeout=20.0) as client:
+                async with httpx.AsyncClient(timeout=20.0) as client:
                     r = await client.post(
                         self.GROQ_URL,
                         headers={"Authorization": f"Bearer {self.groq_key}"},
@@ -1095,22 +1747,21 @@ class AgentManager:
         """Qualitative synthesis: regime + weight adjustments + confidence.
 
         `compact` is the PRE-AGGREGATED formula summary (top components,
-        multipliers, emotion/physics/news/brain votes) — never the raw
-        75+ series, to respect rate limits.
+        multipliers, emotion/physics/news/brain votes) — never the raw 75+
+        series, to respect rate limits.
         """
         prompt = (
             "You are the risk committee of a crypto prediction engine. "
             "Given this pre-aggregated snapshot of 75+ formulas, output "
-            "strict JSON: {\"regime\": \"Trending\" | \"Mean-Reverting\" | "
-            "\"High-Volatility Shock\", \"weight_adjustments\": {formula_id: "
-            "float override 0.5..1.5, ONLY for formulas you would "
-            "up/down-weight}, \"confidence_score\": float 0..1, "
-            "\"rationale\": \"<40 words\"}.\nSnapshot: "
-            + json.dumps(compact, separators=(",", ":"))[:1500]
+            "strict JSON: "
+            '{"regime": "Trending" | "Mean-Reverting" | "High-Volatility Shock", '
+            '"weight_adjustments": {formula_id: float override 0.5..1.5, '
+            "ONLY for formulas you would up/down-weight}, "
+            '"confidence_score": float 0..1, "rationale": "<40 words"}.\n'
+            "Snapshot: " + json.dumps(compact, separators=(",", ":"))[:1500]
         )
         res = await self._groq_call(
-            self.GROQ_PRIMARY,
-            [{"role": "user", "content": prompt}],
+            self.GROQ_PRIMARY, [{"role": "user", "content": prompt}],
             max_tokens=400, temperature=0.2)
         if not res.get("ok"):
             return {"ok": False, "reason": res.get("reason")}
@@ -1143,8 +1794,8 @@ class AgentManager:
         res = await self._groq_call(
             self.GROQ_TRIAGE,
             [{"role": "user", "content":
-              "Score this crypto headline sentiment as JSON {\"sentiment\": "
-              "float -1..1, \"reliability\": float 0..1}:\n" + text[:400]}],
+              'Score this crypto headline sentiment as JSON {"sentiment": '
+              'float -1..1, "reliability": float 0..1}:\n' + text[:400]}],
             max_tokens=120, temperature=0.0)
         if not res.get("ok"):
             return {"ok": False, "reason": res.get("reason")}
@@ -1167,9 +1818,6 @@ class AgentManager:
         return cands[0][1]
 
     # ---------------- key ring: ListModels-driven model choice (I-2) -----
-    GEMINI_LIST_URL = ("https://generativelanguage.googleapis.com/v1beta/"
-                       "models?key={key}")
-
     @staticmethod
     def choose_model(models: list[dict]) -> str | None:
         """The ListModels response is the ONLY truth about which models the
@@ -1189,6 +1837,7 @@ class AgentManager:
             usable.append(mid)
         if not usable:
             return None
+
         def rank(mid: str) -> tuple:
             low = mid.lower()
             gen = 2 if "gemini-2" in low else (1 if "gemini-1.5" in low else 0)
@@ -1203,13 +1852,17 @@ class AgentManager:
         kr["calls"] = int(kr.get("calls", 0)) + 1
         key = self.settings.get(f"{slot}_key", "")
         if slot == "local":
-            await _to_thread(self.local.try_load, force=True)   # manual retry
-            return {"ok": self.local.available, "detail": self.local.label,
-                    "error": self.local.error}
-        import time as _t
-        t0 = _t.monotonic()
-        # Gemini family: ListModels first — the response decides which
-        # model id this key may call (I-2). No prefix checks anywhere (I-1).
+            self.local.reset()
+            await _to_thread(self.local.try_load, True)   # manual retry
+            st = self.local.describe()
+            if self.local.available:
+                st["detail"] = self.local.label
+            return {"ok": self.local.available, "detail": st,
+                    "error": self.local.error,
+                    "backend": self.local.backend}
+        t0 = time.monotonic()
+        # Gemini family: ListModels first — the response decides which model
+        # id this key may call (I-2). No prefix checks anywhere (I-1).
         if slot in ("gemini", "backup1") and key:
             pinned = self.settings.get("gemini_model") or "gemini-1.5-flash"
             try:
@@ -1217,13 +1870,14 @@ class AgentManager:
                     r = await client.get(self.GEMINI_LIST_URL.format(key=key))
                 if r.status_code in (400, 401, 403):
                     kr.update(state="invalid", last_error=f"http {r.status_code}",
-                              cooldown_until=_t.time() + 300)
+                              cooldown_until=time.time() + 300)
                     self.save_settings()
-                    return {"ok": False, "detail": {"state": "invalid",
-                                                    "error": f"key rejected: http {r.status_code}"}}
+                    return {"ok": False,
+                            "detail": {"state": "invalid",
+                                       "error": f"key rejected: http {r.status_code}"}}
                 if r.status_code == 429:
                     kr.update(state="rate-limited", last_error="429 on ListModels",
-                              cooldown_until=_t.time() + 60)
+                              cooldown_until=time.time() + 60)
                     self.save_settings()
                     return {"ok": False, "detail": {"state": "rate-limited"}}
                 r.raise_for_status()
@@ -1234,175 +1888,86 @@ class AgentManager:
                 if pinned_ok:
                     chosen = pinned            # honour pinned only if usable
                 if not chosen:
-                    kr.update(state="error", last_error="no generateContent model")
-                    return {"ok": False, "detail": {"state": "error",
-                                                    "error": "no usable model"}}
+                    kr.update(state="error",
+                              last_error="no generateContent model")
+                    return {"ok": False,
+                            "detail": {"state": "error",
+                                       "error": "no usable model"}}
                 kr["model"] = chosen
                 kr["pinned_ok"] = pinned_ok
             except Exception as e:
                 # sandbox/network blocks are documented as such (G-8) —
                 # not presented as "API down"
-                kr.update(state="error", last_error=f"ListModels {e.__class__.__name__}")
+                kr.update(state="error",
+                          last_error=f"ListModels {e.__class__.__name__}")
                 kr["model"] = pinned
         res = await self._call_provider(
             slot, key, "Reply with only this JSON: "
                        '{"direction": 0, "confidence": 0.5, "insight": "ok"}')
-        ms = round((_t.monotonic() - t0) * 1000, 1)
+        ms = round((time.monotonic() - t0) * 1000, 1)
         kr["latency_ms"] = ms
         if res.get("ok"):
-            kr.update(state="ok", last_error="", last_ok=_t.time())
+            kr.update(state="ok", last_error="", last_ok=time.time())
         else:
             kr["failures"] = int(kr.get("failures", 0)) + 1
             reason = str(res.get("reason") or "error")
             if "rate" in reason:
                 kr.update(state="rate-limited", last_error=reason,
-                          cooldown_until=_t.time() + 60)
-            elif "http 40" in reason or "http 401" in reason:
+                          cooldown_until=time.time() + 60)
+            elif "http 40" in reason:
                 kr.update(state="invalid", last_error=reason,
-                          cooldown_until=_t.time() + 300)
+                          cooldown_until=time.time() + 300)
             else:
                 kr.update(state="error", last_error=reason)
         self.save_settings()
-        return {"ok": bool(res.get("ok")), "detail": res,
-                "keyring": dict(kr), "model": kr.get("model"),
-                "latency_ms": ms}
-
-
-async def _to_thread(fn, *a):
-    import asyncio
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, fn, *a)
-
-
-def _extract_text(slot: str, r: httpx.Response) -> str:
-    try:
-        d = r.json()
-    except ValueError:
-        return r.text[:400]
-    try:
-        if slot in ("backup2",):
-            return d["choices"][0]["message"]["content"]
-        if slot in ("backup3",):
-            return d["content"][0]["text"]
-        return d["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError, TypeError):
-        return json.dumps(d)[:400]
+        return {"ok": bool(res.get("ok")), "detail": res, "keyring": dict(kr),
+                "model": kr.get("model"), "latency_ms": ms}
 
 
 # ══════════════════════════════════════════════════════════════════════
-# guide §8 — boot-time local agent startup
-#
-# The local agent used to need a manual `ollama serve` + a manual wheel
-# install, so a fresh container showed "local agent unavailable" until a
-# human intervened. Boot now does it itself: probe the daemon, start it
-# detached if the binary exists, kick the PREBUILT wheel install in the
-# background, then refresh the status. Every step is best-effort and
-# non-blocking — boot never waits on any of it.
+# boot glue (kept for main.py / start.py)
 # ══════════════════════════════════════════════════════════════════════
-OLLAMA_HOST = "127.0.0.1"
-OLLAMA_PORT = 11434
-
 _boot_lock = threading.Lock()
 _boot_started = False
 _boot_state: dict[str, Any] = {"stage": "idle", "detail": "", "at": 0.0,
                                "ollama": None, "install": None}
 
 
-def probe_ollama(host: str = OLLAMA_HOST, port: int = OLLAMA_PORT,
-                 timeout: float = 1.5) -> dict:
-    """Cheap liveness probe for the local LLM daemon (no exceptions leak)."""
-    import time as _t
-    url = f"http://{host}:{port}/api/tags"
-    out: dict[str, Any] = {"url": url, "ok": False, "models": [],
-                           "detail": "", "ms": None}
-    t0 = _t.perf_counter()
-    try:
-        import httpx
-        r = httpx.get(url, timeout=timeout)
-        out["ms"] = round((_t.perf_counter() - t0) * 1000, 1)
-        out["ok"] = bool(r.ok)
-        if r.ok:
-            try:
-                out["models"] = [m.get("name") for m in
-                                 (r.json().get("models") or [])][:20]
-            except ValueError:
-                out["models"] = []
-            out["detail"] = f"{len(out['models'])} model(s) served"
-        else:
-            out["detail"] = f"HTTP {r.status_code}"
-    except Exception as exc:                    # refused == not running
-        out["ms"] = round((_t.perf_counter() - t0) * 1000, 1)
-        out["detail"] = type(exc).__name__
-    return out
-
-
-def ensure_ollama_running(timeout: float = 1.5) -> dict:
-    """Probe 127.0.0.1:11434/api/tags; start `ollama serve` detached if the
-    binary is present. Returns the probe result (never raises)."""
-    probe = probe_ollama(timeout=timeout)
-    if probe["ok"]:
-        probe["started"] = False
-        return probe
-    import shutil
-    import subprocess
-    binp = shutil.which("ollama") or shutil.which("/usr/local/bin/ollama")
-    if not binp:
-        probe["started"] = False
-        probe["detail"] = (probe.get("detail") or "") + " · no ollama binary"
-        return probe
-    try:
-        subprocess.Popen([binp, "serve"],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         stdin=subprocess.DEVNULL, start_new_session=True,
-                         close_fds=True)
-        probe["started"] = True
-        probe["detail"] = "ollama serve spawned (detached)"
-    except Exception as exc:
-        probe["started"] = False
-        probe["detail"] = f"spawn failed: {exc}"
-    return probe
-
-
 def _boot_worker(manager=None) -> None:
-    """Runs on a daemon thread. Order matters: daemon first, then the
-    model/wheel install (network), then one status refresh."""
-    import time as _t
+    """Daemon-first: probe/start Ollama, report the install state, refresh
+    the agent status. Never blocks boot and never raises."""
     _boot_state["stage"] = "probing ollama"
-    _boot_state["at"] = _t.time()
+    _boot_state["at"] = time.time()
     try:
         probe = ensure_ollama_running()
         _boot_state["ollama"] = probe
         _boot_state["detail"] = probe.get("detail") or ""
-        if manager is not None and getattr(manager, "settings", {}).get(
-                "local_enabled", True):
+        inst = getattr(manager, "installer", None) if manager else None
+        if inst is not None:
             _boot_state["stage"] = "checking local model install"
-            inst = getattr(manager, "installer", None)
-            if inst is not None:
-                st = inst.status()
-                _boot_state["install"] = {k: st.get(k) for k in
-                                          ("state", "installed",
-                                           "model_present", "error")}
-                # NEVER blocks boot: start() only spawns its own thread
-                if not st.get("installed") or not st.get("model_present"):
-                    try:
-                        inst.start()
-                    except Exception as exc:
-                        _boot_state["install"]["error"] = str(exc)
+            st = inst.status()
+            _boot_state["install"] = {k: st.get(k) for k in
+                                      ("state", "installed", "model_present",
+                                       "backend", "error")}
+            # NEVER blocks boot: start() only spawns its own thread
+            if not st.get("installed"):
+                try:
+                    inst.start()
+                except Exception as exc:
+                    _boot_state["install"]["error"] = str(exc)
         if manager is not None:
             _boot_state["stage"] = "refreshing agent status"
             try:
                 st = manager.status()
-                _boot_state["agents"] = {
-                    "local": (st.get("local") or {}).get("status")
-                    if isinstance(st.get("local"), dict) else st.get("local"),
-                }
+                _boot_state["agents"] = {"mode": st.get("mode"),
+                                         "backend": st.get("backend")}
             except Exception as exc:
                 _boot_state["agents"] = {"error": str(exc)}
     except Exception as exc:                    # never kill the thread silently
         _boot_state["detail"] = f"boot worker error: {exc}"
     finally:
         _boot_state["stage"] = "done"
-        _boot_state["at"] = _t.time()
+        _boot_state["at"] = time.time()
 
 
 def start_boot_worker(manager=None) -> dict:
