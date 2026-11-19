@@ -268,3 +268,66 @@ only (no cloud key; local agent not loaded …)`).
 
 Verified under load through the real launch path (`bash run.sh`): four assets
 analysed, `0` analysis failures, `0` `IndexError`, `0` clock restarts.
+
+## 7. The missed branches (2026-11-19, user catch)
+
+The first consolidation took 7 branches and produced `d969c40`. It missed
+three, and the user was right to say so:
+
+| branch | relationship to my branch | content |
+|---|---|---|
+| `arena/023f99d5-p-11` | same base `e4241a0`, **10 commits bolder** | emotions rebuilt on published affect models; "all four brains answer their inputs"; tier/P(side) scale fixes; runtime liveness |
+| `arena/605bdcca-p-11` | merge child of the above | contained in `023f99d5` |
+| `arena/68bbb922-p-11` | separate programme, 182 commits, no merge base | chart/history/contract consistency |
+| `arena/f07a39b8-p-11` | separate programme, 196 commits, no merge base | derivatives sleeve / cost-gate programme |
+
+`023f99d5` is now merged (`d3d3196`), 57 conflict blocks resolved by judgement:
+
+* **`app/emotion.py`** — both branches rewrote this module *independently* and
+  **converged on the same mathematics**: an identical `net_emotion` num/den
+  sign fix (their "it used to reach 1.11"), and the identical
+  `log-gap/(σ·√n)` momentum statistic. Kept mine because it is a strict
+  superset: graded `tanh`/`asinh` gains where theirs still used `sigmoid(4x)`
+  (their own docstring names saturation as the defect being fixed), plus the
+  `MOVE_BAND` vote gate and the "the absence of a state is never dominant"
+  rule, both found by driving the live board.
+* **`app/agents.py`** — theirs still falls back to plain PyPI, which is
+  sdist-only for every `llama-cpp-python` release and therefore always a
+  20-minute compile. Kept the prebuilt-wheel → opt-in source → Ollama ladder.
+* **clock / banner / flat-call** — mine is newer; those three fixes came after
+  this branch was cut.
+
+`68bbb922` and `f07a39b8` have **no merge base** with my branch — they are
+separate work, and merging them blind would produce a tree nobody can verify.
+They are recorded here rather than silently dropped.
+
+### 7.1 Brain "offline" over a healthy connectome
+
+`brain.vote` is `null` until the first GRC produces one, and
+`systems[].brain` is only rebuilt at GRC, so a freshly booted board painted
+`brain offline — vote withheld` while FlyWire was ready with 138,639 neurons
+(exactly the screenshot: red chip, healthy BRAIN tab). The chip now believes
+`brain.ready`, not a stale chip object, and says "vote pending until the next
+GRC" instead of claiming an outage.
+
+### 7.2 "SIMULATED" used to be all the app would admit
+
+The real-feed failure was swallowed by `except Exception: pass`. `MarketFeed`
+now records `real_error` / `real_attempts` and publishes `real_reason`, so the
+chip tooltip and the dashboard note say *the real feed was tried, failed, and
+why* — and that the prices on screen are simulated. The simulator itself is
+unchanged; it is the correct fallback, it is just no longer silent.
+
+### 7.3 CONNECT BINANCE could not connect anything
+
+The header button only opened execution settings, and `PUT /api/settings`
+**silently dropped `feed_mode`** — so there was no path from "the chip says
+SIMULATED" to "the tape is real" other than restarting with
+`FEED_MODE=binance`. Now:
+
+* `POST /api/feeds/connect` → `MarketFeed.connect_real()`: probes the exchange,
+  requires a real print to land **before** claiming the tape is real, flushes
+  synthetic bars, and returns either the adopted source or the verbatim error;
+* the button calls it and reports which of the two happened;
+* `/api/settings` names ignored keys in an `ignored` list instead of dropping
+  them, so a "saved" change that does nothing is now visible.

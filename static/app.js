@@ -4515,12 +4515,33 @@ window.addEventListener("unhandledrejection", e => {
 // [binance-header-btn] discoverable exchange entry point in the header.
 (() => {
   const b = $("#btn-binance"); if (!b) return;
-  b.addEventListener("click", () => {
-    document.querySelector('.tab[data-t="settings"]')?.click();
-    setTimeout(() => $("#trade-enable")?.scrollIntoView({behavior:"smooth", block:"center"}), 80);
-    toast("Binance: paste keys → Enable → ARM. Nothing trades until a qualifying prediction is issued.", "ok");
+  // The MARKETS tape and Binance EXECUTION are two different things, and the
+  // old button only ever opened the execution settings — while the tape chip
+  // said "SIMULATED" with no way to do anything about it. Clicking now tries
+  // the real market feed first (measured, and it reports the error verbatim),
+  // and offers execution settings after.
+  b.addEventListener("click", async () => {
+    const was = b.textContent;
+    b.disabled = true; b.textContent = "⌛ CONNECTING REAL FEED…";
+    try {
+      const r = await api("/api/feeds/connect", { method: "POST" });
+      if (r.ok && r.mode === "binance") {
+        toast(`real tape adopted — ${r.detail || r.source || "exchange"}`, "ok");
+        refreshActiveView(true);
+      } else {
+        toast("real feed unavailable — " + (r.error || r.detail || "unknown") +
+              " · the simulator keeps the tape", "warn");
+      }
+      // execution settings stay reachable regardless
+      document.querySelector('.tab[data-t="settings"]')?.click();
+      setTimeout(() => $("#trade-enable")?.scrollIntoView({behavior:"smooth", block:"center"}), 250);
+    } catch (e) {
+      toast("connect real feed: " + e.message, "err");
+    } finally {
+      b.disabled = false; b.textContent = was; paint();
+    }
   });
-  const paint = async () => {
+  var paint = async () => {
     try { const t = await (await fetch("/api/trading/status")).json();
       const c = t.config || {};
       b.textContent = !c.enabled ? "⬢ CONNECT BINANCE"

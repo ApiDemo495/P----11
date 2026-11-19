@@ -1296,9 +1296,22 @@ async def settings_get() -> JSONResponse:
 
 @app.put("/api/settings")
 async def settings_put(body: dict) -> JSONResponse:
-    engine.agents.configure(**{k: v for k, v in body.items()
-                               if k in engine.agents.settings})
-    return JSONResponse({"ok": True, "settings": engine.agents.settings})
+    rejected = []
+    for k, v in body.items():
+        if k in engine.agents.settings:
+            engine.agents.configure(**{k: v})
+        elif k in ("feed_mode", "system_mode"):
+            # these are NOT agent settings; dropping them silently meant the
+            # UI could save a "change" that did nothing at all
+            rejected.append(k)
+        else:
+            rejected.append(k)
+    return JSONResponse({"ok": True, "settings": engine.agents.settings,
+                         "ignored": sorted(set(rejected)),
+                         "note": ("feed_mode is applied with "
+                                  "POST /api/feeds/connect; system_mode with "
+                                  "the SYSTEM button"
+                                  if rejected else "all keys applied")})
 
 
 @app.get("/api/trading/status")
@@ -1350,6 +1363,20 @@ async def agents_status() -> JSONResponse:
                           "hint": "auditor status unavailable"}
     return JSONResponse({"ok": True, "agents": ag,
                          "signal": engine.last_agent_signal or {}})
+
+
+@app.post("/api/feeds/connect")
+async def feeds_connect() -> JSONResponse:
+    """The CONNECT BINANCE button: try the real feed NOW and report the truth.
+
+    It used to be a settings link, and `PUT /api/settings` dropped `feed_mode`
+    entirely, so the header could not actually change the tape. This performs
+    the switch and returns the measured outcome — success (with the source
+    that delivered) or the real error, never a silent fallback.
+    """
+    out = await engine.feed.connect_real()
+    out["feed"] = engine.feed.stats()
+    return JSONResponse(out)
 
 
 @app.get("/api/feeds/diagnose")
