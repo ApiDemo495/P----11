@@ -1506,6 +1506,39 @@ class AgentManager:
         return ""
 
     # ---------------- analysis review (stage 6) ----------------
+    async def review_text(self, prompt: str, max_tokens: int = 320) -> dict:
+        """Free-form completion for NARRATION only (never a decision).
+
+        The cognition layer builds the thought trace; a model is allowed to
+        re-tell it. This exposes that one path without giving the model any
+        way to feed a number back into the engine: the caller validates the
+        text against the trace and discards it on mismatch.
+        """
+        if not self.settings.get("local_enabled", True):
+            return {"ok": False, "reason": "local agent disabled in settings",
+                    "backend": "", "text": ""}
+        if not self.local.available and not self.local.error:
+            await _to_thread(self.local.try_load)
+        if not self.local.available:
+            cloud = self.best_slot()
+            if cloud:
+                key = self.settings.get(f"{cloud}_key")
+                if key:
+                    res = await self._call_provider(cloud, key, prompt)
+                    if res.get("ok"):
+                        return {"ok": True, "text": res.get("insight", ""),
+                                "backend": cloud, "model": cloud}
+            return {"ok": False, "backend": "",
+                    "reason": (self.local.error or "no local model loaded")
+                    + "; no cloud slot answered"}
+        res = await _to_thread(self.local.ask, prompt, max_tokens)
+        if not res.get("ok"):
+            return {"ok": False, "backend": res.get("backend", ""),
+                    "reason": res.get("reason", "empty reply"), "text": ""}
+        return {"ok": True, "text": res.get("text", ""),
+                "backend": res.get("backend", ""),
+                "model": res.get("model", "")}
+
     async def review(self, symbol: str, tf: str, store: dict,
                      result: dict | None = None) -> dict:
         """The `ai_review` stage of ▶ ANALYSE.

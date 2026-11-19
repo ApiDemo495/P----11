@@ -436,6 +436,8 @@ class PredictionEngine:
         self.auditor = FormulaAuditor()
         from .ledger import SettlementLedger
         self.ledger = SettlementLedger()
+        self._thoughts: dict[str, list[dict]] = {}
+        self._load_thoughts()
         # honest confidence: isotonic map confidence → P(win), fed by the
         # ledger's own settled rows (app/calib.py)
         from .calib import calibrator
@@ -2983,6 +2985,13 @@ class PredictionEngine:
                 # advisory only: the call stands; the failed checks are
                 # printed so the arithmetic can be audited (doc §1)
                 final["recheck_advisory"] = recheck["verdict"]
+            # COGNITION: produce and record the thinking trace for the call
+            # that was just made (signature + metacognitive snapshot). Failure
+            # here must never cost the user their analysis.
+            try:
+                self._think_and_record(symbol, tf, final)
+            except Exception:
+                log.exception("cognition record failed for %s|%s", symbol, tf)
             job["result"] = final
             job["status"] = "done"
             # A FLAT call has no rungs by construction (`tps` stays empty
@@ -4695,6 +4704,142 @@ class PredictionEngine:
         start = math.floor(now / ws) * ws
         return float(start), float(start + ws)
 
+    # ══════════════════════════════════════════════════════════════
+    # COGNITION — the thinking process, and learning from its own record
+    # ══════════════════════════════════════════════════════════════
+    THOUGHT_FILE = os.path.join("data", "thoughts.json")
+    THOUGHT_KEEP = 400            # per (symbol, tf)
+
+    def _load_thoughts(self) -> None:
+        try:
+            with open(self.THOUGHT_FILE) as fh:
+                d = json.load(fh)
+            self._thoughts = {k: list(v)[-self.THOUGHT_KEEP:]
+                              for k, v in (d or {}).items()
+                              if isinstance(v, list)}
+        except (OSError, ValueError):
+            self._thoughts = {}
+
+    def _save_thoughts(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.THOUGHT_FILE), exist_ok=True)
+            tmp = self.THOUGHT_FILE + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(self._thoughts, fh)
+            os.replace(tmp, self.THOUGHT_FILE)
+        except OSError:
+            pass
+
+    def _graded_rows(self, symbol: str, tf: str) -> list[dict]:
+        """Settled ledger rows for this window — the evidence for competence."""
+        try:
+            return [r for r in (self.ledger.rows.get(f"{symbol}|{tf}") or [])
+                    if r.get("result") in ("win", "loss")]
+        except Exception:
+            return []
+
+    def thought_stats(self, ledger_only: bool = True) -> dict:
+        """Metacognition over the app's OWN thought record.
+
+        `ledger_only=True` measures competence on settled engine outcomes (the
+        app's real record). `ledger_only=False` measures it on graded thought
+        records, i.e. how often the app's stated confidence was borne out by
+        the settlement of the call it reasoned about. The second is what
+        makes this metacognition rather than just bookkeeping.
+        """
+        from .cognition import competence
+        rows = []
+        for key, items in (self._thoughts or {}).items():
+            sym, _, tf = key.partition("|")
+            for rec in items:
+                if rec.get("outcome") in ("win", "loss"):
+                    rows.append({"confidence": rec.get("confidence"),
+                                 "result": rec["outcome"]})
+        rows.sort(key=lambda r: float(r.get("confidence") or 0))
+        # The `conf` argument is what the app LAST claimed; without it the
+        # competence estimate can never report a dangling certainty, because
+        # it has nothing to compare the record against. Measured here, not
+        # guessed: the mean stated confidence over the graded traces.
+        claimed = ([float(r["confidence"]) for r in rows
+                    if r.get("confidence") is not None] or [None])
+        mean_claimed = (sum(claimed) / len(claimed)
+                        if claimed[0] is not None else None)
+        return competence(mean_claimed, rows)
+
+    def cognitive(self, symbol: str, tf: str) -> dict:
+        """THE THINKING TRACE for a window (pure read, no state change).
+
+        Every field is derived from the payload the engine already built, so
+        this can never disagree with the numbers on the cards.
+        """
+        from .cognition import think
+        res = (self.last_result.get((symbol, tf))
+               or self.display_systems.get((symbol, tf)) or {})
+        store = {
+            "emotions": {tf: (res.get("emotion") or
+                              (self.last_result.get((symbol, tf)) or {})
+                              .get("emotion") or {})},
+            "physics": {tf: res.get("physics") or {}},
+            "news": res.get("news_value") or {},
+            "hedge": {tf: res.get("hedge") or {}},
+            "feed": self.feed.stats(),
+        }
+        out = think(symbol=symbol, tf=tf, res=res, store=store,
+                    graded=self._graded_rows(symbol, tf),
+                    floor=float(CONFIDENCE_FLOOR),
+                    system_mode=str(self.agents.settings.get("system_mode", "old")))
+        out["thought_stats"] = self.thought_stats()
+        return out
+
+    def _think_and_record(self, symbol: str, tf: str, final: dict) -> None:
+        """Store the trace and its signature against the call it produced."""
+        try:
+            payload = self.cognitive(symbol, tf)
+        except Exception:
+            log.exception("cognition failed for %s|%s", symbol, tf)
+            return
+        key = f"{symbol}|{tf}"
+        rec = {"ts": time.time(),
+               "signature": payload.get("signature"),
+               "confidence": payload.get("steps", [{}])[0]
+                             .get("data", {}).get("confidence"),
+               "signal": final.get("signal"),
+               "abstain": bool((payload.get("abstain") or {}).get("abstain")),
+               "consistency": bool((payload.get("consistency") or {}).get("ok")),
+               "split": bool((payload.get("deliberation") or {}).get("split")),
+               "outcome": None}
+        self._thoughts.setdefault(key, []).append(rec)
+        self._thoughts[key] = self._thoughts[key][-self.THOUGHT_KEEP:]
+        self._save_thoughts()
+        final["thinking"] = {
+            "signature": payload.get("signature"),
+            "n_steps": payload.get("n_steps"),
+            "abstain": payload.get("abstain"),
+            "trust": (payload.get("competence") or {}).get("trust"),
+            "routes_agree": (payload.get("deliberation") or {}).get("routes_agree"),
+            "consistency": payload.get("consistency"),
+            "counterfactual": payload.get("counterfactual"),
+            "failing_assumptions": [a["claim"] for a in
+                                    payload.get("assumptions") or []
+                                    if a.get("holds") is False],
+        }
+
+    def _grade_last_thought(self, symbol: str, tf: str, won: bool) -> None:
+        """A settled window grades the thought that produced it.
+
+        This is the feedback loop: without it the app could output a
+        considered-looking trace for ever and never once learn whether its own
+        reasoning was any good.
+        """
+        key = f"{symbol}|{tf}"
+        items = self._thoughts.get(key) or []
+        for rec in reversed(items):
+            if rec.get("outcome") is None:
+                rec["outcome"] = "win" if won else "loss"
+                rec["graded_at"] = time.time()
+                self._save_thoughts()
+                return
+
     def explain_ctx(self, view: str, symbol: str, tf: str) -> dict:
         """Everything the tab explainer needs, built from live state.
         No computation of its own — it only READS the engine."""
@@ -5441,6 +5586,10 @@ class PredictionEngine:
                         if _row.get("result") in ("win", "loss")
                         else None)
                 self.rl.on_settle(issued=was_issued, won=_won, context=_ctx)
+                # METACOGNITION: grade the thought that produced this call, so
+                # the app learns whether its own reasoning was good
+                if _won is not None:
+                    self._grade_last_thought(symbol, tf, _won)
                 # Q-table: grade the mix this window actually traded
                 # under (decided windows only)
                 self.rl.q_on_settle(

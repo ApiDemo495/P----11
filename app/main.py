@@ -570,6 +570,68 @@ async def explain_tab(body: dict) -> JSONResponse:
     return JSONResponse(out)
 
 
+@app.get("/api/think")
+async def think_trace(symbol: str = "BTC", tf: str = "tf1",
+                      narrate: bool = False) -> JSONResponse:
+    """The app's thought process for a window: six steps, its assumptions, the
+    outcome it rejected, its falsifier, and what it thinks of its own
+    competence. `narrate=1` adds a language-model retelling - the model may
+    only re-tell the structured trace, and its output is checked against it.
+    """
+    if symbol not in SYMBOLS:
+        return JSONResponse({"ok": False, "error": "unknown symbol"},
+                            status_code=400)
+    out = engine.cognitive(symbol, tf)
+    if narrate:
+        out["narration"] = await _narrate(out)
+    return JSONResponse(out)
+
+
+async def _narrate(payload: dict) -> dict:
+    """Ask the local model to re-tell the trace; verify it did not invent."""
+    from .cognition import (deterministic_narration, guard_narration,
+                            narration_prompt)
+    fallback = deterministic_narration(payload)
+    try:
+        prompt = narration_prompt(payload)
+        res = await engine.agents.review_text(prompt, max_tokens=320)
+        text = (res.get("text") or "").strip() if res.get("ok") else ""
+        if not text:
+            return {"ok": True, "source": "deterministic", "text": fallback,
+                    "why": res.get("reason") or "no model answered",
+                    "guard": {"ok": True, "note": "no model text to check"}}
+        guard = guard_narration(text, payload)
+        if not guard["ok"]:
+            # an invented figure is not a stylistic problem: publish the trace
+            return {"ok": True, "source": "deterministic",
+                    "rejected_model_text": text[:600],
+                    "text": fallback, "guard": guard,
+                    "why": "the model's retelling disagreed with the trace"}
+        return {"ok": True, "source": res.get("backend") or "model",
+                "text": text, "guard": guard}
+    except Exception as exc:
+        return {"ok": True, "source": "deterministic", "text": fallback,
+                "why": f"narration failed: {type(exc).__name__}"}
+
+
+@app.get("/api/think/history")
+async def think_history(symbol: str = "BTC", tf: str = "tf1") -> JSONResponse:
+    """The thought ledger: every recorded trace and how it turned out."""
+    key = f"{symbol}|{tf}"
+    items = list((engine._thoughts or {}).get(key) or [])
+    graded = [r for r in items if r.get("outcome") in ("win", "loss")]
+    wins = sum(1 for r in graded if r["outcome"] == "win")
+    return JSONResponse({
+        "ok": True, "symbol": symbol, "tf": tf, "records": items[-40:],
+        "n": len(items), "graded": len(graded), "wins": wins,
+        "thought_stats": engine.thought_stats(),
+        "rule": ("every analysis records a signature and its confidence; a "
+                 "settled window grades the thought that produced it, which is "
+                 "what makes the competence estimate about reasoning rather "
+                 "than about bookkeeping"),
+    })
+
+
 @app.get("/api/explain/status")
 async def explain_status() -> JSONResponse:
     from . import explainer

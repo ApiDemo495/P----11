@@ -326,6 +326,53 @@
     </div>
   </section>
 
+  <!-- ═══ VIEW: MIND (cognition + metacognition) ═══ -->
+  <section class="view" id="view-mind">
+    <div class="tab-head"><div class="tab-title">MIND — the app thinking out loud
+      <span class="dim" id="mind-scope"></span></div></div>
+
+    <div class="panel">
+      <div class="panel-h">THOUGHT PROCESS — six steps, in order
+        <button class="btn" id="mind-refresh" style="float:right;padding:3px 12px">re-think</button>
+      </div>
+      <div id="mind-steps"><div class="dim pad">waiting for the first trace…</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h">METACOGNITION — what the app knows about its own knowing</div>
+      <div id="mind-meta" class="kv-row"><div class="dim">loading…</div></div>
+      <div id="mind-honesty" class="hint"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h">FALSIFIER — what would have changed the answer</div>
+      <div id="mind-cf" class="logic"><div class="dim">—</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h">WORKING MEMORY — what reached the decision, and what was withheld</div>
+      <div id="mind-wm"><div class="dim">loading…</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h">ASSUMPTIONS — every premise the call depends on</div>
+      <div id="mind-assume"><div class="dim">loading…</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h">THOUGHT LEDGER — every trace, and how it turned out
+        <button class="btn" id="mind-narrate" style="float:right;padding:3px 12px">narrate</button>
+      </div>
+      <div id="mind-history"><div class="dim">loading…</div></div>
+      <div id="mind-narration" class="logic hidden"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h">SELF-CHECK — does the trace contradict itself?</div>
+      <div id="mind-check" class="kv-row"><div class="dim">—</div></div>
+    </div>
+  </section>
+
   <!-- ═══ VIEW: AGENTS ═══ -->
   <section class="view" id="view-agents">
     <div class="tab-head"><div class="tab-title">AGENT CONTROL — all optional</div>
@@ -456,6 +503,7 @@
   <button class="tab-btn" data-view="news">N<span>news</span></button>
   <button class="tab-btn" data-view="brains">DB<span>brain</span></button>
   <button class="tab-btn" data-view="agents">AI<span>agents</span></button>
+  <button class="tab-btn" data-view="mind">Ψ<span>mind</span></button>
   <button class="tab-btn" data-view="history">HX<span>history</span></button>
   <button class="tab-btn" data-view="settings">⚙<span>settings</span></button>
 </nav>

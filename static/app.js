@@ -1595,6 +1595,7 @@ function refreshActiveView(force) {
   // (news refresh button wired below)
   else if (S.view === "brains") loadBrains();
   else if (S.view === "agents") loadAgents();
+  else if (S.view === "mind") loadMind(true);
   else if (S.view === "history") loadHistory();
   else if (S.view === "settings") loadSettings();
 }
@@ -3751,6 +3752,137 @@ async function loadAgents() {
   } catch (e) { toast("agents: " + e.message, "err"); }
 }
 
+
+/* ═══════════ MIND — cognition + metacognition ═══════════ */
+/* The thinking trace is produced by app/cognition.py. This view only draws
+   what the server reasoned; it never composes a step of its own, because a
+   UI that invents a reason is worse than one that shows none. */
+let _mindLast = null;
+async function loadMind(force) {
+  if (!force && _mindLast && Date.now() - _mindLast < 20000) return;
+  _mindLast = Date.now();
+  const sc = $("#mind-scope");
+  if (sc) sc.textContent = `${S.symbol} · ${S.focusTf.toUpperCase()}`;
+  try {
+    const t = await api(`/api/think?symbol=${S.symbol}&tf=${S.focusTf}`);
+    renderMind(t);
+  } catch (e) {
+    const box = $("#mind-steps");
+    if (box) box.innerHTML = `<div class="dim pad">trace unavailable: ${esc(e.message)}</div>`;
+  }
+  try { renderMindHistory(await api(`/api/think/history?symbol=${S.symbol}&tf=${S.focusTf}`)); }
+  catch (e) { /* ledger is optional */ }
+}
+
+const MIND_STATUS = { done: "acc-up", partial: "dim", warn: "acc-warn",
+                      conflict: "acc-warn" };
+
+function renderMind(t) {
+  // ── the six steps, verbatim from the server
+  const box = $("#mind-steps");
+  if (box) {
+    box.innerHTML = (t.steps || []).map((s, i) => `
+      <div class="pad" style="border-left:2px solid var(--${s.status === "warn" || s.status === "conflict" ? "gold" : "line"});margin:6px 0;padding-left:10px">
+        <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
+          <b class="dim" style="font-family:var(--mono);font-size:10px">${i + 1}. ${esc(s.step.toUpperCase())}</b>
+          <b>${esc(s.title)}</b>
+          <span class="${MIND_STATUS[s.status] || "dim"}" style="font-family:var(--mono);font-size:9px">${esc(s.status)}</span>
+        </div>
+        <div class="logic" style="font-size:11.5px">${esc(s.detail)}</div>
+        ${(s.cites || []).length ? `<div class="hint" style="font-size:9px">source: ${s.cites.map(esc).join(" · ")}</div>` : ""}
+      </div>`).join("")
+      || `<div class="dim pad">the server returned no steps</div>`;
+  }
+
+  // ── metacognition: what it thinks of itself, and whether that is earned
+  const c = t.competence || {};
+  const ab = t.abstain || {};
+  const meta = $("#mind-meta");
+  if (meta) {
+    const trustCls = c.trust === "calibrated" ? "acc-up"
+      : c.trust === "overconfident" ? "acc-dn"
+      : c.trust === "underconfident" ? "acc-warn" : "dim";
+    meta.innerHTML = `
+      <div class="kv"><span>trust in itself</span><b class="${trustCls}">${esc(c.trust || "unknown")}</b></div>
+      <div class="kv"><span>graded outcomes</span><b>${c.n ?? 0}${c.state ? ` · ${esc(c.state)}` : ""}</b></div>
+      <div class="kv"><span>hit-rate</span><b>${c.hit_rate != null ? (c.hit_rate * 100).toFixed(0) + "%" : "—"}
+        ${c.wilson_lo != null ? `<span class="dim" style="font-size:9px">95% floor ${(c.wilson_lo * 100).toFixed(0)}%</span>` : ""}</b></div>
+      <div class="kv"><span>Brier</span><b>${c.brier != null
+        ? `${fmt(c.brier, 3)} <span class="dim" style="font-size:9px">rel ${fmt(c.brier_parts?.reliability, 3)} · res ${fmt(c.brier_parts?.resolution, 3)}</span>`
+        : `<span class="dim">${esc(c.brier_parts?.why || "not enough settled calls")}</span>`}</b></div>
+      <div class="kv"><span>verdict</span><b class="${ab.abstain ? "acc-warn" : "dim"}">${ab.abstain ? "ABSTAINING" : "proceeding"}</b></div>`;
+  }
+  const hon = $("#mind-honesty");
+  if (hon) hon.textContent = c.how_sure || "";
+  if (hon && ab.reason) hon.textContent += (hon.textContent ? " · " : "") + ab.reason;
+
+  const cf = $("#mind-cf");
+  if (cf) cf.textContent = t.counterfactual || "—";
+
+  // ── working memory: present vs withheld, each with its reason
+  const wm = t.working_memory || {};
+  const wmBox = $("#mind-wm");
+  if (wmBox) {
+    const pill = (x, ok) => `<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:9px;font-size:10px;border:1px solid var(--line);color:var(--${ok ? "green" : "gold"})">${esc(x.label)}</span>`;
+    wmBox.innerHTML = `
+      <div class="dim" style="font-size:11px">${esc(wm.summary || "")}</div>
+      <div style="margin-top:6px">${(wm.present || []).map(p => pill(p, true)).join("") || '<span class="dim">nothing reached the reasoning</span>'}</div>
+      ${(wm.withheld || []).length ? `<div class="panel-h" style="margin-top:8px">WITHHELD — not silence, a stated abstention</div>
+        ${wm.withheld.map(w => `<div class="pad" style="font-size:11px"><b class="acc-warn">${esc(w.label)}</b> <span class="dim">— ${esc(w.why || "")}</span></div>`).join("")}` : ""}`;
+  }
+
+  // ── assumptions: a premise is a claim, so it gets a verdict
+  const asBox = $("#mind-assume");
+  if (asBox) {
+    const rows = (t.assumptions || []).map(a => {
+      const tag = a.holds === null ? `<span class="dim">unverifiable</span>`
+        : a.holds ? `<span class="acc-up">holds</span>`
+                  : `<span class="acc-dn">DOES NOT HOLD</span>`;
+      return `<div class="pad" style="font-size:11px;border-left:2px solid var(--${a.holds === false ? "red" : "line"});padding-left:8px;margin:4px 0">
+        <div>${tag} — <b>${esc(a.claim)}</b></div>
+        <div class="dim" style="font-size:10px">${esc(a.evidence || "")}</div></div>`;
+    }).join("");
+    asBox.innerHTML = rows || `<div class="dim">no assumptions reported</div>`;
+  }
+
+  // ── self-check
+  const chk = $("#mind-check");
+  if (chk && t.consistency) {
+    chk.innerHTML = t.consistency.ok
+      ? `<div class="kv"><span>internal consistency</span><b class="acc-up">holds</b></div>
+         <div class="kv"><span>checked</span><b class="dim">${(t.consistency.checked || []).join(" · ")}</b></div>`
+      : `<div class="kv"><span>internal consistency</span><b class="acc-dn">CONTRADICTION</b></div>`
+        + (t.consistency.problems || []).map(p => `<div class="hint acc-dn">${esc(p)}</div>`).join("");
+  }
+}
+
+function renderMindHistory(h) {
+  const box = $("#mind-history");
+  if (!box) return;
+  const recs = (h.records || []).slice().reverse();
+  const st = h.thought_stats || {};
+  box.innerHTML = `
+    <div class="kv-row">
+      <div class="kv"><span>traces recorded</span><b>${h.n ?? 0}</b></div>
+      <div class="kv"><span>graded by settlement</span><b>${h.graded ?? 0}${h.graded ? ` · ${h.wins} won` : ""}</b></div>
+      <div class="kv"><span>reasoning hit-rate</span><b>${st.hit_rate != null ? (st.hit_rate * 100).toFixed(0) + "%" : "—"}</b></div>
+      <div class="kv"><span>trust</span><b class="dim">${esc(st.trust || "unknown")}</b></div>
+    </div>
+    <div style="font-size:10px;font-family:var(--mono);margin-top:6px">
+      ${recs.map(r => `<div style="display:flex;gap:8px;flex-wrap:wrap;color:var(--dim)">
+        <span>${new Date(r.ts * 1000).toISOString().slice(5, 16).replace("T", " ")}</span>
+        <span>${esc(r.signal || "—")}</span>
+        <span>conf ${fmt(r.confidence, 3)}</span>
+        <span>${esc(r.signature || "")}</span>
+        <span class="${r.outcome === "win" ? "acc-up" : r.outcome === "loss" ? "acc-dn" : "dim"}">${r.outcome || "open"}</span>
+        ${r.abstain ? `<span class="acc-warn">abstained</span>` : ""}
+        ${r.split ? `<span class="acc-warn">routes split</span>` : ""}
+        ${r.consistency === false ? `<span class="acc-dn">trace contradicted itself</span>` : ""}
+      </div>`).join("") || '<span class="dim">no traces recorded yet — run ▶ ANALYSE</span>'}
+    </div>
+    <div class="hint" style="margin-top:6px">${esc(h.rule || "")}</div>`;
+}
+
 /* ═══════════ HISTORY ═══════════ */
 async function loadHistory() {
   try {
@@ -4402,6 +4534,23 @@ function bindGlobal() {
   $("#nw-refresh")?.addEventListener("click", loadNews);
   $("#nw-drill")?.addEventListener("click", drillEmergency);
   $("#hs-reload")?.addEventListener("click", loadHistory);
+  $("#mind-refresh")?.addEventListener("click", () => loadMind(true));
+  $("#mind-narrate")?.addEventListener("click", async (e) => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = "narrating…";
+    const box = $("#mind-narration");
+    try {
+      const n = await api(`/api/think?symbol=${S.symbol}&tf=${S.focusTf}&narrate=1`);
+      const r = n.narration || {};
+      if (box) {
+        box.classList.remove("hidden");
+        box.innerHTML = `<div class="hint">narration source: <b>${esc(r.source || "?")}</b>`
+          + (r.why ? ` — ${esc(r.why)}` : "")
+          + (r.guard && r.guard.ok === false ? ` · <span class="acc-dn">model text REJECTED: ${esc((r.guard.stray_numbers || []).join(", "))}</span>` : "")
+          + `</div><div style="white-space:pre-wrap;font-size:11.5px">${esc(r.text || "—")}</div>`;
+      }
+    } catch (err) { toast("narrate: " + err.message, "err"); }
+    b.disabled = false; b.textContent = "narrate";
+  });
   $("#ag-reload")?.addEventListener("click", loadAgents);
   $("#ag-save")?.addEventListener("click", async () => {
     const body = {
