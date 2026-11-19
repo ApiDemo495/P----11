@@ -2011,6 +2011,21 @@ function renderRail() {
       || fly?.chip
       || (fly?.ready ? { kind: "ok", text: "FlyWire v783 · live" }
         : { kind: "absent", text: "brain — " + (fly?.reason || "no state yet") });
+    // "state": the component's own machine. A chip that only knows
+    // ok/build/absent cannot tell "loading" from "broken", which is exactly
+    // how a downloading connectome ended up painted as "brain offline —
+    // vote withheld (RECONNECT)". An unready brain whose state is not a
+    // failure is BLUE (working), never red.
+    const bstate = lb?.state || fly?.state || null;
+    if (bc.kind !== "ok" && (bstate === "building" ||
+        (bstate && bstate !== "ready" && bstate !== "absent"))) {
+      bc = { kind: "build",
+             text: lb?.chip?.text || fly?.chip?.text ||
+                   ("brain — loading (" + bstate + ")") };
+    }
+    if (bstate === "building" && lb?.chip) {
+      bc = { kind: "build", text: lb.chip.text, stalled: !!lb.chip.stalled };
+    }
     // A READY CONNECTOME WITH NO VOTE YET IS NOT OFFLINE. `brain.vote` is null
     // until the first GRC pass produces one, and `systems[].brain` is only
     // rebuilt at GRC — so on a freshly booted board every window reported
@@ -2036,8 +2051,11 @@ function renderRail() {
     const bchip = $("#brain-chip");
     if (bchip) {
       bchip.textContent = "🧠 " + bc.text;
+      // a build that has gone silent is not "working": gold = progressing,
+      // orange = the supervisor is retrying, red = a real, reported failure
       const cc = bc.kind === "ok" ? "var(--green)"
-        : bc.kind === "build" ? "var(--gold)" : "var(--red)";
+        : bc.kind === "build" ? (bc.stalled ? "var(--orange)" : "var(--gold)")
+        : "var(--red)";
       bchip.style.color = cc;
       bchip.style.borderColor = cc;
       bchip.classList.add("live");
@@ -4162,7 +4180,15 @@ async function loadSettings() {
 
 function syncSystemBtn() {
   const b = $("#btn-system");
-  if (b) b.textContent = `SYSTEM: ${(S.systemMode || "old").toUpperCase()}`;
+  if (!b) return;
+  const m = (S.systemMode || "old").toUpperCase();
+  // "SYSTEM: OLD" read as "this build is out of date" (the version watch
+  // reloads on a new commit, so there was nothing to update). It is a MODEL
+  // selector, so the label says which one is selected and the tooltip says
+  // what tapping does instead of leaving the ambiguity to the reader.
+  b.textContent = `MODEL: ${m}`;
+  b.title = `prediction model in use: ${m} — tap to switch to ` +
+            (m === "OLD" ? "NEW" : "OLD");
 }
 /* ═══════════ boot overlay + timers ═══════════ */
 let bootDeadline = 0;
@@ -4611,6 +4637,29 @@ function _netBanner(show, detail) {
   const msgEl = b.querySelector(".net-msg");
   if (msgEl) msgEl.textContent = detail || "ENGINE OFFLINE — retrying every 2s (start it: bash run.sh)";
 }
+let _busyProbeAt = 0;
+async function _confirmBusy() {
+  const now = Date.now();
+  if (now - _busyProbeAt < 3000) return;   // one probe per burst
+  _busyProbeAt = now;
+  try {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 4000);
+    const r = await _origFetch("/api/health", { signal: ctl.signal });
+    clearTimeout(to);
+    if (r.ok) {
+      // loop is answering: this is a slow panel, not a stuck engine
+      const h = await r.json().catch(() => null);
+      if (h && h.loop_lag_s != null && h.loop_lag_s > 2) {
+        _netBanner(true, `ENGINE BUSY — loop lag ${h.loop_lag_s.toFixed(1)}s ` +
+                         "(measured); panels refresh when it clears (do not restart)");
+      } else {
+        _busyStreak = 0;
+        _netBanner(false);            // no banner theatre: nothing is wrong
+      }
+    }
+  } catch (e) { /* health blocked too -> the next poll decides */ }
+}
 let _lastOkAt = Date.now();
 const _origFetch = window.fetch;
 window.fetch = async (...args) => {
@@ -4633,9 +4682,13 @@ window.fetch = async (...args) => {
     const busy = !!(e && e.name === "AbortError");
     if (String(args[0]).includes("/api/")) {
       if (busy) {
-        if (++_busyStreak >= 2)
-          _netBanner(true, "ENGINE BUSY — a long pass is running; panels refresh " +
-                           "when it finishes (standby, do not restart)");
+        // ONE slow endpoint is not a busy engine. The banner used to fire on
+        // any two aborted calls, so a single expensive panel (or a snapshot
+        // rebuild) announced "ENGINE BUSY" over a perfectly responsive app.
+        // Confirm with the cheapest request there is: if /api/health answers,
+        // the event loop is alive and the honest report is "a panel is slow",
+        // not "the engine is stuck".
+        if (++_busyStreak >= 2) _confirmBusy();
       } else if (++_fetchFails >= 3) {
         _netBanner(true, "ENGINE UNREACHABLE — retrying (start it: bash run.sh)");
       }

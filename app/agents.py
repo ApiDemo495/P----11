@@ -334,15 +334,27 @@ def parse_agent_reply(text: str) -> dict:
 # ══════════════════════════════════════════════════════════════════════
 # Ollama (the rung that needs no compiler)
 # ══════════════════════════════════════════════════════════════════════
-def probe_ollama(host: str = OLLAMA_HOST, port: int = OLLAMA_PORT,
-                 timeout: float = OLLAMA_TIMEOUT_S) -> dict:
-    """Cheap liveness probe for the local LLM daemon (no exceptions leak)."""
+# One client, built once. Constructing ``httpx.get`` per probe forced a fresh
+# ``ssl.create_default_context()`` each time — ``load_verify_locations`` walked
+# the whole CA bundle (~24 ms) on EVERY probe. ``status()`` probes 16 times and
+# ``build_snapshot()`` calls ``status()`` twice, so one snapshot build spent
+# 1.15 s doing nothing but re-reading certificates. That CPU sat on the same
+# box as the GRC pass and /api/health, which is what produced the "ENGINE BUSY"
+# banner and the false offline chip. The client is shared; the probe is cached.
+_HTTP_LOCAL = httpx.Client(timeout=OLLAMA_TIMEOUT_S, trust_env=False,
+                           limits=httpx.Limits(max_keepalive_connections=2,
+                                               max_connections=4))
+_PROBE_CACHE: dict[str, Any] = {}
+_PROBE_TTL_S = 5.0
+
+
+def _probe_uncached(host: str, port: int, timeout: float) -> dict:
     url = f"http://{host}:{port}/api/tags"
     out: dict[str, Any] = {"url": url, "ok": False, "models": [],
                            "detail": "", "ms": None, "running": False}
     t0 = time.perf_counter()
     try:
-        r = httpx.get(url, timeout=timeout)
+        r = _HTTP_LOCAL.get(url, timeout=timeout)
         out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
         out["ok"] = bool(r.status_code == 200)
         if out["ok"]:
@@ -359,6 +371,36 @@ def probe_ollama(host: str = OLLAMA_HOST, port: int = OLLAMA_PORT,
         out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
         out["detail"] = type(exc).__name__
     return out
+
+
+def probe_ollama(host: str = OLLAMA_HOST, port: int = OLLAMA_PORT,
+                 timeout: float = OLLAMA_TIMEOUT_S,
+                 max_age: float = _PROBE_TTL_S) -> dict:
+    """Liveness probe for the local LLM daemon, memoised for ``max_age`` s.
+
+    The engine asks "is Ollama up?" from several places per build. Without
+    the memo each ask opened a socket to a port that is almost never bound,
+    so the answer cost a TLS/connection attempt every time. Pass
+    ``max_age=0`` to force a real probe (the installer and the Settings
+    "reconnect" button do exactly that).
+    """
+    key = f"{host}:{port}"
+    if max_age > 0:
+        hit = _PROBE_CACHE.get(key)
+        if hit and time.time() - hit[0] < max_age:
+            out = dict(hit[1])
+            out["cached"] = True
+            out["age_s"] = round(time.time() - hit[0], 1)
+            return out
+    out = _probe_uncached(host, port, timeout)
+    out["cached"] = False
+    _PROBE_CACHE[key] = (time.time(), dict(out))
+    return out
+
+
+def invalidate_probe() -> None:
+    """Drop the memo — call after starting/stopping the daemon."""
+    _PROBE_CACHE.clear()
 
 
 def ensure_ollama_running(timeout: float = OLLAMA_TIMEOUT_S) -> dict:

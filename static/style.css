@@ -13,6 +13,9 @@
   --dim: #cbd5e1;         /* MINIMUM muted tone allowed anywhere */
   --dim-soft: #9aa8c0;    /* optional 4th level, still ≥ 7:1 on --bg */
   --gold: #c9a227;
+  /* stalled-but-retrying: distinct from gold (progressing) and red
+     (a reported failure) so the brain chip cannot lie either way */
+  --orange: #f08a24;
   --cyan: #00d4f0;
   --green: #22c98a;
   --red: #f0385a;

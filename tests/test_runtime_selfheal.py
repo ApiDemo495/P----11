@@ -219,5 +219,9 @@ def test_health_reports_scheduler_and_loop_state():
     assert '"clock": clock.status()' in src
     assert '"busy": bool(' in src
     assert "SNAPSHOT_TTL_S" in src
-    # the snapshot route must be a plain def -> Starlette threadpool
-    assert '@app.get("/api/snapshot")\ndef snapshot()' in src
+    # the snapshot route must NOT build on the event loop. It used to be a
+    # plain def (Starlette's shared request pool); that pool is now reserved
+    # for requests, so the build happens on the engine's own bounded pool.
+    assert '@app.get("/api/snapshot")\nasync def snapshot()' in src
+    assert "await run_pass(_snapshot_payload)" in src
+    assert "def _snapshot_payload()" in src

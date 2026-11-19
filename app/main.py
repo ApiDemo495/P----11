@@ -59,6 +59,9 @@ manager = ConnectionManager()
 feed = MarketFeed()
 
 
+from . import loadgov  # noqa: E402  (bulk-work throttle, see loadgov.py)
+from .engine import run_pass  # noqa: E402  (dedicated heavy-pass pool)
+
 async def engine_emit(msg: dict[str, Any]) -> None:
     await manager.broadcast(msg)
 
@@ -119,6 +122,27 @@ _loop_lag = {"s": 0.0}
 _selfheal_gate = {"at": 0.0}
 
 
+_STALL_N = {"n": 0}
+
+
+def _dump_stacks(reason: str) -> None:
+    """Write every thread's stack to the log when the loop goes silent.
+
+    A lag number alone says "something is slow"; this says WHERE. Rate
+    limited, and it never raises into the meter.
+    """
+    try:
+        import faulthandler
+        import sys as _sys
+        if _STALL_N["n"] > 20:
+            return
+        _STALL_N["n"] += 1
+        log.warning("event loop blocked (%s) — thread stacks follow", reason)
+        faulthandler.dump_traceback(file=_sys.stderr, all_threads=True)
+    except Exception:
+        pass
+
+
 async def _lag_meter() -> None:
     """Event-loop lag: if sync work ever blocks the loop again, this
     number (in /api/health) says so instead of a silent 502."""
@@ -127,6 +151,10 @@ async def _lag_meter() -> None:
         t0 = time.time()
         await _a.sleep(1.0)
         _loop_lag["s"] = round(max(0.0, time.time() - t0 - 1.0), 2)
+        # tell the bulk workers how starved the loop is; they yield more
+        loadgov.note_lag(_loop_lag["s"])
+        if _loop_lag["s"] >= 1.5:
+            _dump_stacks(f"lag {_loop_lag['s']}s")
         # SELF-HEAL every 5 s: a scheduler that died or went silent is
         # restarted here, and the brain is re-armed off the event loop.
         # Neither ever needs a manual restart again.
@@ -198,7 +226,19 @@ def _spawn_history_seed() -> None:
     import time as _time
 
     def work():
-        _time.sleep(8)                      # let the app settle first
+        # Wait for the FIRST LOCK before replaying. The replay is minutes of
+        # CPU and used to start 8 s after boot — exactly when the initial
+        # analysis pass runs — so the two fought for the same core and the
+        # board sat on "ENGINE BUSY" during the one moment the user is
+        # looking at it. Ring-based panels stay empty for a few seconds
+        # longer; the lock is never delayed. Capped so a board that cannot
+        # lock still gets its history.
+        _deadline = _time.time() + 120.0
+        while _time.time() < _deadline:
+            if getattr(engine, "locked", False) or engine.phase == "live":
+                break
+            _time.sleep(0.5)
+        _time.sleep(3)                      # let the first frames settle
         if _os.environ.get("PYTEST_CURRENT_TEST"):
             engine.seed_info = {"state": "skipped-test"}
             return
@@ -404,6 +444,20 @@ async def health() -> dict:
                                  if getattr(fw, "last_pass_at", 0) else None),
                   "load_ms": getattr(fw, "load_ms", None)},
         "snapshot_ms": _snap_cache["ms"],
+        # full wall time of the last GRC pass (the clock's handler_ms only
+        # sees the coroutine, and the CPU now lives on worker threads)
+        "grc_ms": getattr(engine, "grc_ms", None),
+        # per-stage cost of the last GRC: the banner is only ever as honest as
+        # this breakdown is visible
+        "grc_profile": getattr(engine, "grc_profile", {}),
+        # visible proof that a stuck readiness dry-run backs off instead of
+        # re-burning the CPU every GRC
+        "readiness": {"flags": dict(engine.readiness),
+                      "dry_run_tries": getattr(engine, "_readiness_tries", 0),
+                      "next_dry_run_in_s": round(
+                          max(0.0, getattr(engine, "_readiness_next_at", 0.0)
+                              - _t.time()), 1),
+                      "last_error": getattr(engine, "_readiness_error", "")},
         "warmup": getattr(engine, "seed_info", {}),
         "heal": _heal["last"],
         "phase": engine.phase,
@@ -478,36 +532,106 @@ def _json_safe(payload):
     return out
 
 
-_snap_cache: dict[str, Any] = {"at": 0.0, "body": None, "bytes": b"", "ms": 0.0}
+_snap_cache: dict[str, Any] = {"at": 0.0, "body": None, "bytes": b"",
+                               "ms": 0.0, "building": False}
 _snap_lock = threading.Lock()
-SNAPSHOT_TTL_S = 0.75
+# One build in flight, shared. When /api/snapshot and the GRC broadcast ask
+# for a snapshot at the same moment, the second caller WAITS for the first
+# result instead of starting a duplicate build (a 2.8 s build run twice is
+# what starved /api/health into a 1.6 s round-trip).
+_snap_flight: dict[str, Any] = {"owner": None, "done": None, "body": None,
+                                "raw": b"", "ms": 0.0}
+# The snapshot is rebuilt on EVERY GRC (4 min) and a few seconds after it, so
+# the TTL only has to survive a burst of panel polls — not to be a refresh
+# interval. It used to be 0.75 s against a 1.4 s build, i.e. every single REST
+# poll started a rebuild under the lock, and every request queued behind it.
+# That treadmill is the "ENGINE BUSY" stall: /api/health and the websocket
+# waited on it. 3 s (still well under the 4-min contract) plus single-flight
+# means a burst of polls costs ONE build.
+SNAPSHOT_TTL_S = 3.0
 
 
 def _snapshot_payload() -> dict:
-    """Build (or reuse <0.75 s young) the snapshot.
+    """Build (or reuse a ``SNAPSHOT_TTL_S``-young) snapshot, single-flight.
 
     Snapshot assembly is pure CPU (levels, charts, subsystems). Running it
     inline on the event loop stalled every other request — including /ws
     ticks and /api/health — for tens of seconds under load, and the UI
     banner then said "ENGINE OFFLINE" while the process was healthy. The
-    route is now a plain `def` (FastAPI runs it in its threadpool) and the
-    result is memoised for 0.75 s with single-flight.
+    route is a plain `def` (FastAPI runs it in its threadpool); the result
+    is memoised and concurrent callers SHARE one in-flight build.
     """
+    now = time.time()
+    if (_snap_cache["body"] is not None
+            and now - _snap_cache["at"] < SNAPSHOT_TTL_S):
+        return _snap_cache["body"]
+    # Single-flight: the first caller builds, later callers SHARE that build.
+    # Before this they each started their own, so a GRC broadcast plus a panel
+    # poll meant two full builds (and, with the old 0.75 s TTL, a chain of
+    # them) competing with /api/health for the same core.
     with _snap_lock:
-        now = time.time()
-        if _snap_cache["body"] is not None and now - _snap_cache["at"] < SNAPSHOT_TTL_S:
-            return _snap_cache["body"]
+        if (_snap_flight["owner"] is not None
+                and _snap_flight["owner"] != threading.get_ident()):
+            done = _snap_flight["done"]
+            _snap_lock.release()
+            try:
+                done.wait(timeout=10.0)
+            finally:
+                _snap_lock.acquire()
+            if _snap_flight["raw"]:
+                return _snap_flight["body"]
+        owner = threading.get_ident()
+        _snap_flight.update(owner=owner, done=threading.Event(),
+                            body=None, raw=b"", ms=0.0)
+        _snap_cache["building"] = True
+    body = None
+    raw = b""
+    ms = 0.0
+    try:
         t0 = time.perf_counter()
         body = _json_safe(engine.build_snapshot())
         raw = json.dumps(body, separators=(",", ":")).encode()
-        _snap_cache.update(at=time.time(), body=body, bytes=raw,
-                           ms=round((time.perf_counter() - t0) * 1000, 1))
-        return body
+        ms = round((time.perf_counter() - t0) * 1000, 1)
+    finally:
+        with _snap_lock:
+            _snap_cache["building"] = False
+            if _snap_flight["owner"] == threading.get_ident():
+                ev = _snap_flight["done"]
+                _snap_flight.update(owner=None, body=body, raw=raw, ms=ms,
+                                    done=None)
+                if ev is not None:
+                    ev.set()
+    with _snap_lock:
+        _snap_cache.update(at=time.time(), body=body, bytes=raw, ms=ms)
+    return body
+
+
+def prime_snapshot_cache(snap: dict) -> None:
+    """Adopt a snapshot the engine just built for a broadcast.
+
+    Called from ``engine._broadcast_full``. The GRC payload and the REST
+    payload are the same object graph, so encoding it once here means the
+    next panel poll is a memcpy instead of a second CPU build.
+    """
+    try:
+        body = _json_safe(snap)
+        raw = json.dumps(body, separators=(",", ":")).encode()
+    except Exception:
+        return
+    with _snap_lock:
+        # `ms` stays whatever the last REAL build cost — priming is an encode,
+        # not a build. Writing it here made /api/health report a fake 0.0 ms
+        # build time, i.e. a measurement that lied about itself.
+        _snap_cache.update(at=time.time(), body=body, bytes=raw)
 
 
 @app.get("/api/snapshot")
-def snapshot() -> Response:          # sync -> threadpool (never blocks /ws)
-    _snapshot_payload()
+async def snapshot() -> Response:    # async + dedicated pool, see run_pass
+    # A sync route runs in Starlette's shared request pool; a multi-second
+    # snapshot build there starved every other request (measured: 3.1 s
+    # /api/health round-trips during a GRC). The engine's own bounded pool
+    # keeps request handling independent of analytics.
+    await run_pass(_snapshot_payload)
     with _snap_lock:
         raw = _snap_cache["bytes"]
     # pre-serialised: ~1 MB of JSON used to be re-encoded per request
@@ -1165,7 +1289,9 @@ async def override(symbol: str, tf: str) -> JSONResponse:
 # ---------------------------------------------------------------------------
 @app.get("/api/learning")
 async def learning_state() -> JSONResponse:
-    snap = engine.last_snapshot or engine.build_snapshot()
+    # never build a snapshot on the loop for one sub-block: the last
+    # broadcast is authoritative, and an empty dict is honest on a cold boot
+    snap = engine.last_snapshot or {}
     return JSONResponse({"ok": True, "learning": snap.get("learning", {}),
                          "shares": engine.learning.subsystem_shares,
                          "state_file": "data/auto_learning_state.json"})
@@ -1733,7 +1859,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
     q = manager.connect()
     try:
         # initial state on connect
-        await ws.send_json(engine.last_snapshot or engine.build_snapshot())
+        # off the loop: building the snapshot is CPU, not I/O
+        await ws.send_json(engine.last_snapshot
+                           or await run_pass(engine.build_snapshot))
         if engine.phase == "analysis":
             await ws.send_json({
                 "type": "phase",
