@@ -281,10 +281,16 @@ class MetaCombiner:
             zs_mean[src] = float(z.mean())
             # mutual information source-bucket × outcome (0.5-width bins)
             mi[src] = _mutual_info(z, y)
-        # correlation shrinkage
-        C = np.corrcoef(X.T)
-        rho_bar = float((C.sum() - np.trace(C)) / (C.shape[0] ** 2 - C.shape[0]))
+        # Constant channels have undefined correlation. numpy.corrcoef on
+        # them produces NaNs (and can make the entire snapshot unserialisable).
+        # Treat unavailable pairs as zero for the shrinkage calculation, and
+        # disclose which channels had no measurable variance.
         k = len(SOURCES)
+        varying = np.std(X, axis=0) > 1e-12
+        C = np.zeros((k, k), dtype=float)
+        if int(varying.sum()) >= 2:
+            C[np.ix_(varying, varying)] = np.corrcoef(X[:, varying].T)
+        rho_bar = float((C.sum() - np.trace(C)) / (k * (k - 1)))
         k_eff = k / (1.0 + (k - 1.0) * max(0.0, min(0.999, rho_bar)))
         # L = Σ e_i · sqrt(k_eff / k), e_i = a_i · z_i (mean standardised)
         # use the CURRENT typical reading: e_i from slopes × standardised
@@ -292,6 +298,7 @@ class MetaCombiner:
         # aggregate over the last window's inputs (caller passes them)
         return {"ready": True, "n": n, "slopes": {k2: round(v, 4) for k2, v in slopes.items()},
                 "rho_bar": round(rho_bar, 3), "k_eff": round(k_eff, 2),
+                "correlation_unavailable": [src for src, ok in zip(SOURCES, varying) if not ok],
                 "mi_bits": {k2: round(v, 4) for k2, v in mi.items()},
                 "b": round(self.b_fit, 3), "calib_a": round(self.calib_a, 3)}
 

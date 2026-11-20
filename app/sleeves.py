@@ -89,26 +89,30 @@ def resample_bars(times: list, closes: list, bucket: int) -> tuple[list, list]:
     dropped, because a half-formed bar would let the live sleeve react to
     a bar the research grid never had.
     """
-    if not times:
+    if not times or len(times) != len(closes) or bucket <= 0 or bucket % 60:
         return [], []
     out_t: list = []
     out_c: list = []
     cur = None
-    last_c = 0.0
+    rows: list = []
+    previous = None
     for t, c in zip(times, closes):
+        # The input contract is a strictly ordered UTC one-minute tape.
+        # A duplicate or backwards timestamp makes the series unreliable.
+        if not math.isfinite(t) or t % 60 or (previous is not None and t <= previous):
+            return [], []
+        previous = t
         slot = t - (t % bucket)
-        if cur is None:
-            cur = slot
-        elif slot != cur:
-            out_t.append(cur)
-            out_c.append(last_c)
-            cur = slot
-        last_c = c
-    # drop the final bucket — it may still be filling
-    if len(out_t) and cur is not None:
-        done = True
-        if done:
-            pass
+        if cur is not None and slot != cur:
+            expected = list(range(int(cur), int(cur + bucket), 60))
+            if ([r[0] for r in rows] == expected and
+                    all(math.isfinite(r[1]) and r[1] > 0 for r in rows)):
+                out_t.append(cur)
+                out_c.append(rows[-1][1])
+            rows = []
+        cur = slot
+        rows.append((t, c))
+    # Always exclude the last bucket; it may still be forming.
     return out_t, out_c
 
 
@@ -121,12 +125,15 @@ def compute_impulse_z(
 ) -> float | None:
     """Certified trigger value on the research bar grid, or None if warming up."""
     bt, bc = resample_bars(times, closes, bucket)
-    # the last returned bar is still forming -> drop it
-    if len(bt) > 1:
-        bt = bt[:-1]
-        bc = bc[:-1]
-    if len(bc) < std_window + impulse_hours + 2:
+    # resample_bars already excludes the forming bucket. Do not discard a
+    # second, completed bar: that shifts the certified trigger by 15 minutes.
+    required = max(std_window, impulse_hours * max(1, 3600 // bucket)) + 1
+    if len(bc) < required:
         return None
+    recent = bt[-required:]
+    if (bt[-1] + bucket != times[-1] - times[-1] % bucket or
+            any(b - a != bucket for a, b in zip(recent, recent[1:]))):
+        return None  # missing minutes/buckets cannot become a multi-bar return
     rets = [0.0] * len(bc)
     for i in range(1, len(bc)):
         prev = bc[i - 1]
@@ -185,6 +192,14 @@ def impulse_z_for(
     try:
         st = feed.state(lead)
     except Exception:
+        return None, "warming_up"
+    # A certified live signal must not be inferred from simulated, unknown,
+    # or mixed-provenance candles during feed handover.
+    from .feed import _family
+    sources = getattr(st, "sources", [])
+    if (getattr(feed, "mode", None) != "binance" or
+            len(sources) != len(st.times) or
+            any(_family(source) != "binance" for source in sources)):
         return None, "warming_up"
     z = compute_impulse_z(st.times, st.closes, bucket=bucket,
                           impulse_hours=impulse_hours, std_window=std_window)
@@ -247,12 +262,13 @@ def evaluate_sleeves(
                 have = len(feed.state(lead).closes)
             except Exception:
                 have = 0
-            signals.append(SleeveSignal(
-                state="warming_up", z=None,
-                note=f"needs ~{need}h of {SLEEVE_BAR_SECONDS // 60}m bars on the "
-                     f"{lead} lead (have {have} 1m bars)",
-                **base,
-            ))
+            if getattr(feed, "mode", None) != "binance":
+                note = "live signal unavailable: feed is not Binance; simulated tape is excluded"
+            else:
+                note = (f"needs ~{need}h of continuous, Binance-sourced "
+                        f"{SLEEVE_BAR_SECONDS // 60}m bars on the {lead} lead "
+                        f"(have {have} 1m bars); gaps or mixed sources are excluded")
+            signals.append(SleeveSignal(state="warming_up", z=None, note=note, **base))
             continue
         signals.append(SleeveSignal(
             state=state, z=z,

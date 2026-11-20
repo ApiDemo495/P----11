@@ -162,7 +162,8 @@ def sleeve_gate(name: str, friction_bps: float = 8.0) -> dict:
     t = abs(float(s["boot_t"]))
     pf = float(s.get("profit_factor", 0.0))
     # the acceptance bar the brief set: net > 0, |t| > 2, PF > 1.25
-    qualifies = bool(net > 0 and t >= 2.0 and pf > 1.25)
+    qualifies = bool(s["status"] != "rejected" and net > 0 and
+                     t >= 2.0 and pf > 1.25)
     if s["status"] == "rejected" or net <= 0:
         state = "blocked"
     elif qualifies:

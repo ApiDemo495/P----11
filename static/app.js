@@ -1275,17 +1275,20 @@ function renderBook() {
   // ---- observe vs enforced: the single most important honesty label ----
   const enforced = book.monitors_enforced !== false;
   if (modeEl) {
-    modeEl.innerHTML = enforced
-      ? `<b class="acc-warn">ENFORCED</b>`
+    modeEl.innerHTML = book.execution_status === "paused"
+      ? `<b class="acc-warn">PAPER EXECUTION PAUSED</b>`
+      : enforced ? `<b class="acc-warn">ENFORCED</b>`
       : `<b class="acc-up">OBSERVE</b>`;
-    modeEl.title = enforced
+    modeEl.title = book.execution_status === "paused" ? (book.execution_reason || "Paper execution is paused")
+      : enforced
       ? "circuit breakers act: a decaying sleeve is de-risked to half size, then halted on sustained contradiction"
       : "circuit breakers observe only: full research contract, monitors recorded but not acted on";
   }
   if (meta) {
-    meta.textContent = `· gross ${pct(book.gross_exposure)}`
+    meta.textContent = (book.execution_status === "paused" ? `${book.execution_reason} ` : "")
+      + `· gross ${pct(book.gross_exposure)}`
       + ` / max ${pct(book.limits?.max_gross || 1)}`
-      + ` · ${book.closed_trades || 0} closed fills`
+      + ` · ${book.closed_trades || 0} recorded fills`
       + (book.avg_slippage_bps != null ? ` · slip ${Number(book.avg_slippage_bps).toFixed(1)} bp` : "");
   }
 

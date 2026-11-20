@@ -16,7 +16,12 @@
 
 # Crypto Prediction 4
 
-Production-grade real-time cryptocurrency prediction web application targeting
+> **Paper execution is paused:** the previous live-paper adapter could use
+> simulated prices and mislabel a close as a next-bar opening fill. Existing
+> results are retained but unverified. See the [integration audit](docs/INTEGRATION_AUDIT.md)
+> for the merge decisions, safeguards and remaining work.
+
+Real-time cryptocurrency research application targeting
 **BTC, PAXG, ETH and BNB**. Built for GitHub Codespaces (4-core) as a
 single-process web service with a live streaming dashboard.
 

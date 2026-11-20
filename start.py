@@ -236,11 +236,18 @@ def ensure_env() -> str:
                "--retries", "2", "--timeout", "30",
                "-r", "requirements.txt"], 900)
     if rc != 0:
-        log(f"WARN: pip exited {rc} — attempting engine start anyway")
+        log(f"WARN: pip exited {rc} — attempting engine start anyway; "
+            "provisioning will retry on the next launch")
+        # Never stamp a failed install as fresh. Otherwise a transient pip
+        # failure can leave every subsequent Codespace start permanently broken.
+        try:
+            os.unlink(STAMP)
+        except FileNotFoundError:
+            pass
     else:
         log("core requirements installed ✓")
-    with open(STAMP, "w") as fh:
-        fh.write(f"{want} {int(time.time())}\n")
+        with open(STAMP, "w") as fh:
+            fh.write(f"{want} {int(time.time())}\n")
     return py
 
 
