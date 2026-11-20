@@ -227,6 +227,7 @@ class ForwardTables:
         for (fid, sym, tf, b), cell in self.rows.items():
             if symbol and sym != symbol:
                 continue
+            n = int(cell["n"])
             out["buckets"].setdefault(f"F{fid} {sym} {tf}", []).append({
                 "bucket": b, "n": cell["n"], "up": cell["up"],
                 "p_up": round(cell["up"] / cell["n"], 4) if cell["n"] else None,

@@ -9,8 +9,16 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_branch_payload_carries_empirical_fan():
+    """audit §4.2: the cone must carry its basis and its measured drift —
+    the payload used to publish quantiles with no statement of which
+    subset produced them, so a bullish window could show a median path
+    sloping into the SL with nothing to explain it."""
     src = (ROOT / "app" / "engine.py").read_text()
-    assert '"fan": _fan' in src and "_q(_rets[_f], 0.05)" in src
+    assert '"fan": _fan' in src
+    assert "_q(_vals, 0.05)" in src           # quantiles of the chosen subset
+    assert '"fan_drift": _fan_drift' in src   # with / against / flat
+    assert "setup-matched (momentum+vol)" in src
+    assert "direction-matched (momentum)" in src
     assert '"fan": [{"f": f,' in src          # labelled fallback cone
 
 

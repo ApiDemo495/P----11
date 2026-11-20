@@ -224,6 +224,9 @@ class MarketFeed:
         self.rejected = 0
         self.quote_prints = 0            # volume<=0 prints (excluded from vol stats)
         self.last_real_delivery = 0.0    # last binance-path write (adopt/demote)
+        # why the tape is simulated — recorded, never guessed
+        self._real_error: str = ""
+        self._real_attempts: int = 0
         self._reconcile_task: asyncio.Task | None = None
         self._sim_tasks: list[asyncio.Task] = []
         self._next_revive = 0.0
@@ -345,6 +348,17 @@ class MarketFeed:
             "history_complete_24h": bool(history) and all(
                 row.get("continuous_24h") for row in history.values()),
             "stale": stale,
+            # WHY the tape is simulated. Without this the UI could only say
+            # "simulated", which reads as a design choice; every exchange host
+            # may simply be unreachable from the deployment (geo/TLS), and the
+            # user is entitled to see that the real feed was tried and failed.
+            "real_error": self._real_error,
+            "real_attempts": self._real_attempts,
+            "real_reason": (None if self.mode == "binance" else
+                            ("real feed connected" if not self._real_error else
+                             f"real feed unreachable after {self._real_attempts} "
+                             f"attempt(s): {self._real_error} — retrying every 30 s. "
+                             "Prices on screen are SIMULATED, not market prices")),
             "label": (f"SIMULATED TAPE" if self.mode != "binance"
                       else f"live · {self.source} · {tps:.1f} ticks/s"),
         }
@@ -459,8 +473,9 @@ class MarketFeed:
                         t.cancel()
                     self._sim_tasks.clear()
                     self._switch_tape("binance", "binance-rest")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._real_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+                    self._real_attempts += 1
                 finally:
                     self._probing = False
 
@@ -509,8 +524,59 @@ class MarketFeed:
             self._switch_tape("binance", "binance-rest")
             log.info("feed: real feed adopted over the simulator (D-2)")
         except Exception as exc:
+            self._real_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+            self._real_attempts += 1
             log.info("feed: real feed not available yet (%s) — "
                      "simulator keeps the tape; retrying in reconcile", exc)
+        finally:
+            self._probing = False
+
+    async def connect_real(self) -> dict:
+        """Try to adopt the real exchange feed ON DEMAND, and say what happened.
+
+        The header's "CONNECT BINANCE" promised a connection but
+        `PUT /api/settings` silently dropped `feed_mode`, so nothing could
+        actually change from the UI — the only honest options were "wait for
+        auto-adopt" or restart with FEED_MODE=binance. This tries it now,
+        verifies a real print landed, and reports the error verbatim so a
+        blocked host is distinguishable from a working one instead of both
+        looking like "simulated".
+        """
+        if self.mode == "binance":
+            return {"ok": True, "mode": self.mode, "source": self.source,
+                    "already": True, "detail": "real feed already active"}
+        if self._probing:
+            return {"ok": False, "mode": self.mode,
+                    "detail": "a real-feed attempt is already in flight"}
+        self._probing = True
+        try:
+            await self._start_binance()
+            self.last_real_delivery = time.time()
+            # a real print must land before we claim the tape is real
+            deadline = time.time() + 15.0
+            while time.time() < deadline:
+                if any(st.last_tick for st in self.states.values()):
+                    break
+                await asyncio.sleep(0.5)
+            for t in list(self._sim_tasks):
+                t.cancel()
+            self._sim_tasks.clear()
+            self._switch_tape("binance", "binance-rest")
+            self._real_error = ""
+            self._real_attempts = 0
+            log.info("feed: real feed connected on request")
+            return {"ok": True, "mode": self.mode, "source": self.source,
+                    "detail": (f"real tape adopted · {self.source} · "
+                               f"{len(self.states)} assets")}
+        except Exception as exc:
+            self._real_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+            self._real_attempts += 1
+            log.info("feed: on-demand real feed failed (%s)", exc)
+            return {"ok": False, "mode": self.mode,
+                    "error": self._real_error,
+                    "detail": ("the exchange is unreachable from this host — "
+                               "the simulator keeps the tape and the app stays "
+                               "fully usable")}
         finally:
             self._probing = False
 

@@ -58,7 +58,9 @@ def test_regime_measures_trend_efficiency():
 def test_branch_stats_is_empirical_with_n():
     src = (ROOT / "app" / "engine.py").read_text()
     i = src.index("def branch_stats")
-    seg = src[i:i + 19000]
+    # Merge: branch_stats grew (empirical fan + drift telemetry), pushing
+    # the fallback pin 582 chars past the old 19000-char window.
+    seg = src[i:i + 22000]
     assert "empirical-first-touch" in seg and '"n": _n' in seg
     assert "STOP first" in seg                      # conservative both-hit
     assert "driftless-fallback (thin tape)" in seg  # honest fallback only

@@ -51,3 +51,31 @@ majority of folds positive, correlation-adjusted |t| >= 2.0, and a
 positive locked holdout (last 35 % of each asset's tape, never used for
 selection). Fills are `next_bar` open, exits at bar close, friction
 charged on every trade.
+
+## Alpha lab + derivatives scan (direction research, falsifications)
+
+`backtest/alpha_lab.py` is the direction-accuracy rig (causal features,
+triple-barrier labels, purged walk-forward, isotonic calibration):
+
+```
+python -m backtest.alpha_lab              # classic before/after -> results/ALPHA_LAB.md
+python -m backtest.alpha_lab --mode deep  # sub-hour ensemble, TF1-TF4 -> results/ALPHA_LAB_DEEP.md
+```
+
+`backtest/derivs_scan.py` is the sequential-settlement harness
+(single-position book, fixed parameters, convex exits) plus the
+fill-model bias probe (coin flip on a random walk: +14.76 bp under
+wick fills, -2.10 bp under `next_bar`):
+
+```
+python -m backtest.derivs_scan            # everything -> results/DERIVS_SCAN.md
+python -m backtest.derivs_scan --only events -v   # event sleeves, per-fold EVs + CI
+python -m backtest.derivs_scan --only bias        # random-walk fill-model guard
+python -m backtest.derivs_scan --write    # refresh results/DERIVS_SCAN.md
+```
+
+Caveat: the scan's two once-positive event sleeves are **retracted**
+(`docs/ALPHA_RESEARCH.md` §0, flagged in the report itself) — the
+harness and its falsifications stand, the positives do not. Cost
+verdicts from these measurements come from `app/cost_gate.py`; the
+certified book stays in `app/edge_gate.py` + `results/EDGE_SCAN.md`.

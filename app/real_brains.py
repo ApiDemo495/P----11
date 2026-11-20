@@ -77,10 +77,34 @@ class RealCircuit:
             self.states[key] = st
         return st
 
+    def two_hop(self) -> sparse.csr_matrix:
+        """W_2hop = row-normalised A² (guide §6.1).
+
+        The recurrence used to re-apply the 1-hop matrix twice, which is
+        NOT a 2-hop traversal — paths of length 2 were never formed. The
+        squared operator is built lazily, row-normalised the same way as
+        A, and cached; if the induced subgraph is dense enough that A²
+        explodes past the budget the 1-hop matrix is returned instead
+        (documented, never silent)."""
+        m = getattr(self, "_w2", None)
+        if m is not None:
+            return m
+        A2 = (self.A @ self.A).tocsr()
+        if A2.nnz > 6_000_000:
+            m = self.A
+        else:
+            rows = np.asarray(np.abs(A2).sum(axis=1)).ravel()
+            scale = np.where(rows > 1.0, 1.0 / np.maximum(rows, 1e-9), 1.0)
+            m = (sparse.diags(scale) @ A2).tocsr()
+        self._w2 = m
+        self.w2_edges = int(m.nnz)
+        return m
+
     def sweep(self, x: np.ndarray, inp: np.ndarray,
               steps: int = 2) -> np.ndarray:
-        for _ in range(max(1, steps)):
-            x = np.tanh(self.A @ x + inp)
+        for i in range(max(1, steps)):
+            W = self.A if i == 0 else self.two_hop()
+            x = np.tanh(W @ x + inp)
         return x
 
     def respond(self, x: np.ndarray, inp: np.ndarray,
@@ -413,7 +437,13 @@ class RealBrains:
         return out
 
     def summary(self) -> dict:
+        # §6.1: the census figure is DERIVED from the live connectome
+        # (sum of per-circuit nnz) and cached — never a hardcoded
+        # 15,091,983 that drifts away from the graph it describes.
+        total_syn = int(sum(c.edges for c in self.circuits.values()))
+        self.total_synapses = total_syn
         return {"backend": "flywire-v783-real",
+                "total_synapses": total_syn,
                 "built_ms": self.built_ms,
                 "circuits": {k: {"neurons": c.n, "synapses": c.edges,
                                  "role": c.role}

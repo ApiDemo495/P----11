@@ -59,6 +59,26 @@ def f35_lnp(ctx) -> float:
     >0 = shorts being liquidated upward (buy-side forced flow),
     <0 = longs flushed downward."""
     v = getattr(ctx, "liq_flow", None)
-    if v is None or abs(v) < 1e-9:
+    if v is not None and abs(v) >= 1e-9:
+        return max(-1.0, min(1.0, float(v)))
+    # PROXY (guide §3.2): with no @forceOrder prints at all, F35 was a
+    # structural 0.00 on every spot-only feed. A stopped-out position is a
+    # volume SPIKE on the bar that just closed, signed by that bar — so a
+    # spike of >= 2σ over the trailing 20 bars is read as forced flow,
+    # tapered by its own magnitude. Nothing else fires.
+    P = list(getattr(ctx, "P", []) or [])
+    V = list(getattr(ctx, "V", []) or [])
+    if len(P) < 22 or len(V) < 22:
         return 0.0
-    return max(-1.0, min(1.0, float(v)))
+    win = V[-21:-1]
+    if len(win) < 8:
+        return 0.0
+    mu = sum(win) / len(win)
+    sd = (sum((x - mu) ** 2 for x in win) / len(win)) ** 0.5
+    if sd <= 1e-12:
+        return 0.0
+    z = (V[-1] - mu) / sd
+    if z < 2.0:
+        return 0.0                        # event gate: no spike, no reading
+    direction = 1.0 if P[-1] >= P[-2] else -1.0
+    return max(-1.0, min(1.0, direction * min(1.0, (z - 2.0) / 3.0) * 0.75))

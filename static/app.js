@@ -142,6 +142,17 @@ async function api(path, opts) {
     const r = await fetch(path, { ...(opts || {}), signal: ctl.signal });
     if (!r.ok) throw new Error(`${path} → ${r.status}`);
     return await r.json();
+  } catch (e) {
+    // A timeout means the engine is BUSY, not absent. The engine's event loop
+    // legitimately stalls for minutes during a warm replay or a GRC pass, and
+    // the old code let those aborts fall through to the offline banner, which
+    // then told the user to "start it: bash run.sh" while it was running.
+    if (e && e.name === "AbortError") {
+      const err = new Error(`${path} → timed out after 10 s (engine busy)`);
+      err.busy = true;
+      throw err;
+    }
+    throw e;
   } finally { clearTimeout(to); }
 }
 
@@ -441,16 +452,24 @@ function resetOwnChartForSymbol(symbol) {
   inst.forecastLabel.title = inst.forecastLabel.textContent;
   inst.stale.textContent = `loading ${symbol} candles…`;
 }
-function levelAutoscaleProvider(values) {
+/* TP/SL price lines must never flatten the candles. The old provider
+   widened the axis to contain EVERY level, so a stop 1.9 % away squashed
+   a 0.05 % intrabar range into one flat horizontal squiggle (audit §3.3).
+   The candle range keeps at least 75 % of the visible height: a level may
+   expand the axis by at most `maxExpand` (25 %) of the candle span, and a
+   level beyond that is clipped off-scale (LWC keeps its axis tag). */
+function levelAutoscaleProvider(values, maxExpand = 0.25) {
   return original => {
     const base = original?.();
     if (!base?.priceRange) return base;
     const finite = (values || []).filter(Number.isFinite);
     if (!finite.length) return base;
-    return { ...base, priceRange: {
-      minValue: Math.min(base.priceRange.minValue, ...finite),
-      maxValue: Math.max(base.priceRange.maxValue, ...finite),
-    }};
+    const lo0 = base.priceRange.minValue, hi0 = base.priceRange.maxValue;
+    const span = Math.max(1e-9, hi0 - lo0);
+    const pad = span * Math.max(0, maxExpand);
+    const lo = Math.min(lo0, Math.max(Math.min(...finite), lo0 - pad));
+    const hi = Math.max(hi0, Math.min(Math.max(...finite), hi0 + pad));
+    return { ...base, priceRange: { minValue: lo, maxValue: hi } };
   };
 }
 function ownMake(el) {
@@ -574,7 +593,8 @@ function drawOwnChart() {
     }
   }
   const notes = [];
-  if (S.snap?.feed?.simulated) notes.push("SIM TAPE — simulated feed, not exchange bars");
+  if (S.snap?.feed?.simulated) notes.push("SIM TAPE — simulated feed, not exchange bars"
+    + (S.snap.feed.real_reason ? ` (${S.snap.feed.real_reason})` : ""));
   if (reasons.length)
     notes.push(`UNTRUSTED TAPE — ${reasons.join("; ")}; candles hidden`);
   if (desync > 0.002)
@@ -906,14 +926,27 @@ function renderBranches() {
       "bands appear once the window has a direction and a seeded stop";
     return;
   }
-  const _pct = p => p > 0 && p < 0.01 ? "<1%" : `${Math.round(p * 100)}%`;
+  const _pct = p => !Number.isFinite(p) ? "—" : p > 0 && p < 0.01 ? "<1%" : `${Math.round(p * 100)}%`;
+  // Round a single first-touch distribution consistently across cards and bar.
+  const probs = [b.p_target, b.p_between, b.p_stop];
+  let percentages = null;
+  if (probs.every(p => Number.isFinite(p) && p >= 0)) {
+    const total = probs.reduce((a, v) => a + v, 0);
+    if (total > 0) {
+      const raw = probs.map(p => p * 100 / total), rounded = raw.map(Math.floor);
+      const order = raw.map((v, i) => [v - rounded[i], i]).sort((a, b) => b[0] - a[0]);
+      for (let n = 100 - rounded.reduce((a, v) => a + v, 0), i = 0; i < n; i++) rounded[order[i][1]]++;
+      percentages = rounded;
+    }
+  }
+  const outcomePct = i => percentages ? `${percentages[i]}%` : "—";
   stats.innerHTML = `
-    <div class="kv"><span>P(target before stop)</span><b class="acc-up">${_pct(b.p_target_cal ?? b.p_target)}${b.cal_delta ? ` <span class="dim" style="font-size:9px">cal (raw ${_pct(b.p_target_raw ?? b.p_target)})</span>` : ""}</b></div>
+    <div class="kv"><span>P(target before stop)</span><b class="acc-up">${outcomePct(0)}${b.cal_delta ? ` <span class="dim" style="font-size:9px">calibrated separately ${_pct(b.p_target_cal)}</span>` : ""}</b></div>
     <div class="kv"><span>calibration (graded forecasts)</span><b>${S.snap?.prob_audit?.n ? `Δ ${S.snap.prob_audit.calibration_delta > 0 ? "+" : ""}${Math.round((S.snap.prob_audit.calibration_delta || 0) * 100)} pts · Brier raw ${S.snap.prob_audit.brier ?? "—"}${S.snap.prob_audit.brier_cal != null ? ` vs cal ${S.snap.prob_audit.brier_cal}` : ""} · n=${S.snap.prob_audit.n}` : "collecting — active after 30 graded windows"}</b></div>
-    <div class="kv"><span>P(stop first)</span><b class="acc-dn">${_pct(b.p_stop)}</b></div>
+    <div class="kv"><span>P(stop first)</span><b class="acc-dn">${outcomePct(2)}</b></div>
     <div class="kv"><span>P(target | similar setups)</span><b class="acc-up">${b.p_target_cond != null ? `${_pct(b.p_target_cond)} <span class="dim" style="font-size:9px">n=${b.n_cond} · EV ${b.ev_bps_cond > 0 ? "+" : ""}${fmt(b.ev_bps_cond, 1)} bp</span>` : `<span class="dim">collecting (n=${b.n_cond || 0}/30 matched)</span>`}</b></div>
-    <div class="kv"><span>fan basis</span><b>${esc(b.fan_basis || "all windows")}</b></div>
-    <div class="kv"><span>P(close between)</span><b>${_pct(b.p_between)}</b></div>
+    <div class="kv"><span>fan basis</span><b>${esc(b.fan_basis || "all windows")}${b.drift_bps != null ? ` · q50 ${b.drift_bps >= 0 ? "+" : ""}${fmt(b.drift_bps, 1)} bp <span class="${b.fan_drift === "against" ? "acc-dn" : b.fan_drift === "with" ? "acc-up" : "dim"}">(${esc(b.fan_drift || "—")})</span>` : ""}</b></div>
+    <div class="kv"><span>P(neither barrier touched)</span><b>${outcomePct(1)}</b></div>
     <div class="kv"><span>P(close down)</span><b>${Math.round(b.p_close_down * 100)}%</b></div>
     <div class="kv"><span>σ (remaining)</span><b>${px(b.sigma)}</b></div>
     <div class="kv"><span>expectancy (barrier pair)</span><b class="${(b.ev_bps ?? 0) >= 0 ? "acc-up" : "acc-dn"}">${b.ev_bps != null ? `${b.ev_bps >= 0 ? "+" : ""}${fmt(b.ev_bps, 1)} bp` : "—"}</b></div>
@@ -927,8 +960,12 @@ function renderBranches() {
   // ---- probability bar: the answer in one glance ----
   const bar = $("#branch-bar");
   if (bar) {
-    const pt = Math.round((b.p_target_cond ?? b.p_target) * 100),
-          ps = Math.round(b.p_stop * 100), pb = Math.max(0, 100 - pt - ps);
+    // ONE measured triple per bar (audit §4.1): the same largest-remainder
+    // rounding the cards use, so bar and cards always agree and sum to
+    // exactly 100. (The old bar mixed CONDITIONAL P(target) with
+    // UNCONDITIONAL P(stop) and printed 11 + 76 + 19 = 106 %.)
+    if (!percentages) { bar.innerHTML = ""; return; }
+    const [pt, pb, ps] = percentages;
     const seg = (v, color, label) => v > 0 ? `<div style="flex:${v};background:${color};color:#0b0b14;font:700 10px ui-monospace,monospace;text-align:center;padding:4px 0;white-space:nowrap;overflow:hidden">${label} ${v}%</div>` : "";
     bar.innerHTML = `<div style="display:flex;border-radius:6px;overflow:hidden;gap:1px">
       ${seg(pt, "#26a69a", "TARGET FIRST")}${seg(pb, "#3a3f55", "NEITHER")}${seg(ps, "#ef5350", "STOP FIRST")}</div>
@@ -1166,6 +1203,52 @@ function renderDashboardMode() {
   renderHero();
 }
 
+function _pWinRow(res) {
+  // Honest confidence: the isotonic map fitted on settled ledger rows.
+  // Until it has enough samples the row says so instead of printing the
+  // raw score twice under a different name.
+  const pc = res?.p_correct;
+  const cs = res?.calib_iso || {};
+  const cal = pc != null
+    ? `<b>${fx(pc, 3)} <span class="dim" style="font-size:9px">P(win) · ${esc(cs.source || "map")} n=${cs.n ?? 0}${cs.slope != null ? ` · slope ${fx(cs.slope, 2)}` : ""}</span></b>`
+    : `<b class="dim">needs 40 settled · ${esc(cs.source || "insufficient")} n=${cs.n ?? 0}</b>`;
+  const sp = res?.spillover || {};
+  const spTxt = sp.available
+    ? `<b class="${Number(sp.score) > 0 ? "acc-up" : Number(sp.score) < 0 ? "acc-dn" : "dim"}">${fx(sp.score, 2)}
+        <span class="dim" style="font-size:9px">spillover · ${Math.round((sp.coverage || 0) * 100)}% inputs
+        ${sp.xasset ? `· BTC6h ${(sp.xasset.ret * 100).toFixed(2)}%` : ""}</span></b>`
+    : `<b class="dim">spillover — (thin tape)</b>`;
+  const hz = res?.horizon || {};
+  const hzRow = hz.state
+    ? `<div class="kv"><span>horizon</span><b class="${hz.state === "tradable" ? "" : hz.state === "marginal" ? "acc-warn" : "acc-dn"}">${esc(hz.state)}
+        <span class="dim" style="font-size:9px">σ ${hz.sigma_bps ?? "—"}bp vs ${hz.required_bps ?? "—"}bp needed · ${esc(hz.note || "")}</span></b></div>`
+    : "";
+  const eg = res?.edge || {};
+  // cost gate: the ONLY tradeability claim the UI makes. Gross expectancy
+  // is read from the out-of-fold registry (never the live fit), so a lane
+  // that cannot pay its own fees says so instead of printing a nice score.
+  const edgeRow = eg.state
+    ? `<div class="kv"><span>cost gate</span><b class="${eg.state === "open" ? "" : eg.state === "thin" ? "acc-warn" : "acc-dn"}">${esc(eg.state)}
+        <span class="dim" style="font-size:9px">OOF gross ${fx(eg.gross_bp, 1)}bp vs ${fx(eg.friction_bps, 1)}bp cost · net ${fx(eg.expected_net_bp, 1)}bp${eg.state === "blocked" ? ` · needs ${fx(eg.required_gross_bp, 1)}bp` : ""} · ${esc(eg.state === "blocked" ? "fee not covered" : eg.source || "")}</span></b></div>`
+    : "";
+  const sv = (res?.sleeves || []).filter(x => x && x.state !== "blocked");
+  // event sleeves carry their own verdict; "unproven" is shown as such
+  const sleeveRow = sv.length
+    ? sv.slice(0, 2).map(x => `<div class="kv"><span>sleeve · ${esc(x.name || "")}</span><b class="${x.state === "open" ? "" : "acc-warn"}">${esc(x.state)}
+        <span class="dim" style="font-size:9px">${fx(x.gross_bp, 1)}bp gross vs ${fx(x.fee_bp, 1)}bp cost · net ${fx(x.expected_net_bp, 1)}bp · PF ${fx(x.profit_factor, 2)} · n ${x.n ?? "—"} · boot t ${fx(x.boot_t, 2)} · folds ${esc(x.folds || "—")}</span></b></div>`).join("")
+    : "";
+  const mi = res?.micro || {};
+  const micRow = (mi && Object.keys(mi).length)
+    ? `<div class="kv"><span>microstructure</span><b class="dim" style="font-size:9px">OFI ${fx(mi.ofi, 2)} · persist ${fx(mi.ofi_persist, 2)} · VPIN ${fx(mi.vpin, 2)} · size skew ${fx(mi.size_skew, 2)} · Hawkes ${fx(mi.hawkes, 2)} · friction ${fx(mi.friction_bps, 1)}bp</b></div>`
+    : "";
+  const vb = res?.vol_barriers || {};
+  const vbRow = (vb.tp_bps != null)
+    ? `<div class="kv"><span>vol barriers</span><b class="${vb.ok ? "" : "acc-warn"}">TP ${fx(vb.tp_bps, 1)}bp · SL ${fx(vb.sl_bps, 1)}bp
+        <span class="dim" style="font-size:9px">${esc(vb.reason || "")}</span></b></div>` : "";
+  return `<div class="kv"><span>P(win)</span>${cal}</div>
+    <div class="kv"><span>cross-asset</span>${spTxt}</div>${hzRow}${edgeRow}${sleeveRow}${micRow}${vbRow}`;
+}
+
 function renderBook() {
   const block = S.snap?.sleeves || {};
   const book = block.portfolio;
@@ -1280,6 +1363,16 @@ function renderHero() {
   const res = S.snap?.systems?.[`${S.symbol}|${tf}`] || {};
   const m = TF_META[tf];
   const dir = cyc?.direction ?? res.direction ?? 0;
+  // Backend now always publishes a card (provisional when no cycle is
+  // locked yet); these fallbacks keep the hero honest even mid-boot.
+  const issued = cyc?.issued ?? res.issued ?? false;
+  // ISSUED means "cleared the issue floor" — the analysis and the card now
+  // read the same gate, so the hero can never advertise a call the recheck
+  // rejects.
+  const gateOk = cyc?.gate_ok ?? res.gate_ok ?? issued;
+  const prov = !!cyc?.provisional;
+  const heroEntry = cyc?.entry ?? res.entry ?? res.lock?.price ?? null;
+  const heroSl = cyc?.sl ?? res.sl ?? null;
   const weak = String(res?.ladder?.source || "").includes("inside noise floor")
     || Number(res?.confidence ?? 0) < 0.05;
   const ttl = $("#hero-title");
@@ -1296,19 +1389,24 @@ function renderHero() {
   if (stats) {
     stats.innerHTML = `
       <div class="kv"><span>call</span><b class="${dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat"}">${dir > 0 ? "▲ BULL" : dir < 0 ? "▼ BEAR" : "● FLAT"}${weak && dir ? "*" : ""}</b></div>
-      <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} ${cyc?.issued ? "· ISSUED" : "· below floor"}</b></div>
+      <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} ${gateOk ? (prov ? "· PREVIEW" : "· ISSUED") : "· below floor"}${res.issue_note ? ` <span class="dim" style="font-size:9px">${esc(res.issue_note)}</span>` : ""}</b></div>
+      ${_pWinRow(res)}
       <div class="kv"><span>strength (voter agreement)</span><b>${fx(cyc?.strength ?? res.strength ?? 0, 2)}</b></div>
       <div class="kv"><span>measured win-rate (this conf)</span><b>${cyc?.winrate != null ? `${Math.round(cyc.winrate * 100)}% · n=${cyc.winrate_n}` : `collecting · n=${cyc?.winrate_n ?? 0}`}</b></div>
       ${cyc?.forecast?.price ? `<div class="kv"><span>${cyc.forecast.mode === "new" ? "🎯 FORECAST (target)" : "forecast if NEW"} ${cyc.forecast.minutes}m</span><b>${px(cyc.forecast.price)} (${cyc.forecast.move_bps} bp)</b></div>` : ""}
       <div class="kv"><span>cci adj</span><b>${fx(res.cci_adjusted ?? 0, 4)}</b></div>
       <div class="kv"><span>countdown</span><b>${cyc?.countdown_s != null ? `${Math.floor(cyc.countdown_s / 60)}m ${cyc.countdown_s % 60}s` : "—"}</b></div>
-      <div class="kv"><span>entry (locked contract)</span><b>${cyc?.entry ? px(cyc.entry) : (res.lock?.price ? px(res.lock.price) : "—")}</b></div>
+      <div class="kv"><span>${prov ? "entry (preview)" : "entry (locked contract)"}</span><b>${heroEntry ? px(heroEntry) : "—"}</b></div>
       <div class="kv"><span>price now</span><b>${a.price ? px(a.price) : "—"}</b></div>
-      <div class="kv"><span>stop loss</span><b class="acc-dn">${cyc?.sl ? px(cyc.sl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:9px">prov</span>' : ""}</b></div>
+      <div class="kv"><span>stop loss</span><b class="acc-dn">${heroSl ? px(heroSl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:9px">prov</span>' : ""}</b></div>
       <div class="kv"><span>TP:SL ratio</span><b>${cyc?.ratio ? Number(cyc.ratio).toFixed(2) + ":1" : "—"}</b></div>`;
   }
   // TP ladder — the TF's own horizon ALWAYS first (user rule)
-  const tg = cyc?.targets || [];
+  // provisional card / missing cycles: fall back to the measured preview
+  // rungs the analysis already published, so the ladder is never empty
+  const tg = (cyc?.targets && cyc.targets.length) ? cyc.targets
+    : ((res.tps || []).map(t => ({ k: t.k, minutes: t.minutes,
+        level: t.level, status: "preview" })));
   const order = tg.map((_, i) => i);
   if (tg.length >= 4) order.unshift(order.pop());   // [3,0,1,2]
   const strip = $("#subtf-strip");
@@ -1317,11 +1415,19 @@ function renderHero() {
       const t = tg[i];
       if (!t) return "";
       const isTf = i === tg.length - 1;
-      const st = t.status === "hit" ? "HIT ✓" : t.status === "locked" ? "LOCK 🔒" : "open";
-      const cls = t.status === "hit" ? "acc-up" : t.status === "locked" ? "acc-warn" : "dim";
+      // FROZEN RUNG FALLBACK (audit §1.2): the canonical contract carries
+      // the price of every rung from the moment the window locks, so a
+      // not-yet-tracked TP2/TP3 shows its frozen level instead of "— OPEN".
+      const _canon = cyc?.canonical || {};
+      const _lvl = (t.level != null) ? t.level : (_canon[`tp${i + 1}`] ?? null);
+      const _frozen = t.level == null && _lvl != null;
+      const st = t.status === "hit" ? "HIT ✓"
+        : t.status === "locked" ? "LOCK 🔒"
+        : _frozen ? "FROZEN ❄" : "open";
+      const cls = t.status === "hit" ? "acc-up" : (t.status === "locked" || _frozen) ? "acc-warn" : "dim";
       const _entry = cyc?.entry || res.lock?.price || a.price || 0;
-      const _rel = (t.level && _entry) ? ` <span class="dim">${((t.level / _entry - 1) * 100).toFixed(2)}% from entry</span>` : "";
-      return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${t.level ? px(t.level) : "—"} <span class="dim">${st}</span>${_rel}</b></div>`;
+      const _rel = (_lvl && _entry) ? ` <span class="dim">${((_lvl / _entry - 1) * 100).toFixed(2)}% from entry</span>` : "";
+      return `<div class="kv"><span>${isTf ? `TF ${t.minutes}m — this window` : `TP${i + 1} · ${t.minutes}m sub-frame`}</span><b class="${cls}">${_lvl ? px(_lvl) : "—"} <span class="dim">${st}</span>${_rel}</b></div>`;
     }).join("") || `<div class="dim pad">waiting for the first lock…</div>`;
   }
   // CERTIFIED SLEEVE + PAPER BOOK — evidence, not a claim. The registry only
@@ -1373,9 +1479,27 @@ function renderHero() {
   }
   // Frozen contract pair is explicit; measured TP rungs remain separate.
   const lines = [];
-  if (Number.isFinite(cyc?.entry)) lines.push({ price: cyc.entry, color: "#c9d1d9", title: "ENTRY", contract: true });
-  if (Number.isFinite(cyc?.tp)) lines.push({ price: cyc.tp, color: "#26a69a", title: "TP", contract: true });
-  if (Number.isFinite(cyc?.sl)) lines.push({ price: cyc.sl, color: "#f0385a", title: "SL", contract: true });
+  const _canonL = cyc?.canonical || {};
+  const _contract = cyc?.level_contract || {};
+  // TP FALLBACK (report: "tp lines not showing in own chart"): `cyc.tp`
+  // is null whenever the levels gate publishes the TP through the level
+  // contract instead, so the chart lost its only contract anchor above
+  // the price. Read the same three places the ladder panel reads.
+  const _tpMain = [cyc?.tp, _contract.tp, _canonL.tp4, _canonL.tp3]
+    .map(Number).find(v => Number.isFinite(v) && v > 0) ?? null;
+  const _entryL = [cyc?.entry, _contract.entry, res.lock?.price, a.price]
+    .map(Number).find(v => Number.isFinite(v) && v > 0) ?? null;
+  const _slL = [cyc?.sl, _contract.sl].map(Number)
+    .find(v => Number.isFinite(v) && v > 0) ?? null;
+  if (_entryL) lines.push({ price: _entryL, color: "#c9d1d9", title: "ENTRY", contract: true });
+  if (_tpMain) lines.push({ price: _tpMain, color: "#26a69a", title: "TP", contract: true });
+  if (_slL) lines.push({ price: _slL, color: "#f0385a", title: "SL", contract: true });
+  // the intermediate rungs stay annotations (they must not squash candles)
+  [1, 2, 3].forEach(k => {
+    const lv = Number((cyc?.targets?.[k - 1]?.level) ?? _canonL[`tp${k}`]);
+    if (Number.isFinite(lv) && lv > 0 && (!_tpMain || Math.abs(lv - _tpMain) > 1e-9))
+      lines.push({ price: lv, color: "rgba(38,166,154,.70)", title: `TP${k}`, dash: true });
+  });
   const mgi = res.micro;
   if (mgi?.available) {
     // only clusters within ±2% of price: a far cluster used to widen
@@ -1389,15 +1513,21 @@ function renderHero() {
       lines.push({ price: mgi.nearest_dn.price, color: "#a855f7",
                    title: `LIQ↓ ${Math.round(mgi.nearest_dn.bps)}bp`, dash: true });
   }
+  const _canon = cyc?.canonical || {};
   order.forEach(i => {
     const t = tg[i];
-    if (!t || !t.level) return;
+    if (!t) return;
+    // frozen rung from the canonical contract when the target itself has
+    // no level yet (pending TP2/TP3) — one ladder, drawn everywhere
+    const lvl = (t.level != null) ? t.level : (_canon[`tp${i + 1}`] ?? null);
+    if (lvl == null) return;
     const isTf = i === tg.length - 1;
+    const frozen = t.level == null;
     lines.push({
-      price: t.level,
-      color: t.status === "hit" ? "#22c98a" : t.status === "locked" ? "#c9a227" : "#00d4f0",
-      title: isTf ? `TF${t.minutes}m` : `TP${i + 1}${t.status === "hit" ? " ✓" : t.status === "locked" ? " 🔒" : ""}`,
-      dash: t.status !== "locked",
+      price: lvl,
+      color: t.status === "hit" ? "#22c98a" : (t.status === "locked" || frozen) ? "#c9a227" : "#00d4f0",
+      title: isTf ? `TF${t.minutes}m` : `TP${i + 1}${t.status === "hit" ? " ✓" : (t.status === "locked" || frozen) ? " 🔒" : ""}`,
+      dash: t.status !== "locked" && !frozen,
     });
   });
   S.charts.hero?.setLines(S.showLines === false ? [] : lines);
@@ -1465,6 +1595,7 @@ function refreshActiveView(force) {
   // (news refresh button wired below)
   else if (S.view === "brains") loadBrains();
   else if (S.view === "agents") loadAgents();
+  else if (S.view === "mind") loadMind(true);
   else if (S.view === "history") loadHistory();
   else if (S.view === "settings") loadSettings();
 }
@@ -1580,12 +1711,18 @@ function renderQuads(opts = {}) {
     if (qd) {
       qd.className = "q-dir " + (dir > 0 ? "up" : dir < 0 ? "down" : "flat");
       qd.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "▲ BULLISH"}
-        <span class="iss">${cyc?.tier ? `${cyc.tier} · P ${fmt(cyc.p_side, 2)} · s ${fmt(res?.raw_score, 3)} (floor ${fmt(res?.noise_floor_s, 3)})` : "ISSUED · targets active"}</span>`;
+        <span class="iss">${cyc?.provisional
+          ? "PREVIEW · no lock yet"
+          : cyc?.tier
+            ? `${cyc.tier} · P ${fmt(cyc.p_side, 2)} · s ${fmt(res?.raw_score, 3)} (floor ${fmt(res?.noise_floor_s, 3)})`
+            : (res?.gate_ok ? "ISSUED · targets active" : "below issue floor")}</span>`;
     }
     $("#qf-" + tf).textContent = res ? `CCI ${fmt(res.cci_adjusted, 4)} · conf ${fmt(res.confidence, 3)}` : "";
     const ag = res?.agent;
-    $("#qa-" + tf).textContent = ag && ag.source !== "none"
-      ? `AI ${ag.direction > 0 ? "+" : ag.direction < 0 ? "−" : "0"} (${ag.source})` : "AI —";
+    const _agMode = S.snap?.agents?.mode || S.snap?.agents?.active_slot || "";
+    $("#qa-" + tf).textContent = ag && ag.source && ag.source !== "none"
+      ? `AI ${ag.direction > 0 ? "+" : ag.direction < 0 ? "−" : "0"} (${ag.source})`
+      : (_agMode ? `AI ${_agMode} · no reply` : "AI — not configured");
     const tp = $("#qt-" + tf);
     if (tp) {
       const _qtg = cyc?.targets || [];
@@ -1790,19 +1927,27 @@ function onAnalyseDone(msg) {
   box.classList.remove("hidden");
   const dirCls = r.signal === "BUY" ? "buy" : r.signal === "SELL" ? "sell" : "flat";
   const ai = r.ai || {};
+  // The review object now always carries available/backend/note, so the
+  // panel can say WHICH brain answered and why it did not — "keyless" was
+  // printed even when a local agent was loaded but silent.
+  const aiWhere = ai.backend ? ` via ${esc(ai.backend)}` : "";
   let aiLine = ai.available
-    ? Object.entries(ai.reviews || {}).map(([name, rv]) =>
-        `${name}: ${rv.ok ? ((rv.errors || []).length ? (rv.errors || []).length + " issue(s) found — " + (rv.reason || "") : "no issues — " + (rv.reason || "concurs")) : "unavailable (" + (rv.error || "") + ")"}`).join(" · ")
-    : (ai.note || "keyless — deterministic pipeline only");
+    ? Object.entries(ai.reviews || {}).map(([name, rv]) => {
+        if (!rv || rv.ok === false) return `${name}: unavailable (${esc((rv || {}).error || "no reply")})`;
+        const issues = (rv.errors || []).length;
+        return `${name}${issues ? `: ${issues} issue(s) — ${esc(rv.reason || "")}` : ": concurs"}`;
+      }).join(" · ") || "a reviewer answered but returned no readable verdict"
+    : `${esc(ai.note || "no AI answered — deterministic pipeline only")}`;
+  if (ai.available) aiLine = `${aiLine}${aiWhere}`;
   if (ai.correction) {
-    aiLine += ` · ⚠ AI CORRECTION by ${ai.correction.by}: ${ai.correction.direction > 0 ? "BUY" : "SELL"} (${Math.round(ai.correction.confidence * 100)}%) — ${ai.correction.reason}`;
+    aiLine += ` · ⚠ AI CORRECTION by ${esc(ai.correction.by)}: ${ai.correction.direction > 0 ? "BUY" : "SELL"} (${Math.round((ai.correction.confidence || 0) * 100)}%) — ${esc(ai.correction.reason || "")}`;
   }
   const period = (r.calculation_period?.stages || []).map(c =>
     `${c.stage} ${Math.round(c.ms)}ms`).join(" → ");
   box.innerHTML = `<div class="an-box">
     <div class="an-signal ${dirCls}">
       <div class="big">${r.signal}</div>
-      <div class="conf">confidence ${fx(r.confidence, 3)}${r.issued ? " · ISSUED" : " · below floor"}</div>
+      <div class="conf">confidence ${fx(r.confidence, 3)}${(r.gate_ok ?? r.issued) ? " · ISSUED" : " · below floor"}${r.issue_note ? ` · ${esc(r.issue_note)}` : ""}</div>
       <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? Number(r.ratio).toFixed(2) + ":1" : "—"} · ${esc(r.levels_source || "preview only")}</div>
       <div class="conf">${r.contract_state === "locked" ? `LOCKED CONTRACT ${esc((r.contract_id || "").slice(0, 16))}` : "PREVIEW ONLY — NO LOCKED CONTRACT"} · ${r.execution_eligible ? "EXECUTION ELIGIBLE" : (r.recheck?.passed ? "PAPER ONLY — signal produced, orders not routed (tape: " + esc((r.tape_mode || (S.snap?.feed?.source) || "sim")) + ")" : "NOT EXECUTION-ELIGIBLE")}</div>
     </div>
@@ -1820,6 +1965,8 @@ function onAnalyseDone(msg) {
           ${r.recheck.hard_failed && r.recheck.hard_failed.length ? ` · data blockers: ${esc(r.recheck.hard_failed.join(", "))}` : " · data checks passed"}
           ${(r.recheck.failed || []).length ? ` · soft flags: ${esc((r.recheck.failed || []).join(", "))}` : ""}</div>` : ""}
         ${(r.recheck.checks || []).map(c => `<div class="kv"><span>${c.ok ? "✓" : "✗"} ${esc(c.name)} ${c.hard ? "<i>(hard)</i>" : c.weight ? `<i>w ${fmt(c.weight, 2)}</i>` : ""}</span><b class="${c.ok ? "" : "acc-dn"}">${esc(c.detail)}</b></div>`).join("")}
+        ${r.recheck.voters ? `<div class="kv"><span>voter signs</span><b>${Object.entries(r.recheck.voters).map(([k, v]) =>
+          `<span class="${v > 0 ? "acc-up" : v < 0 ? "acc-dn" : "dim"}">${esc(k)} ${v > 0 ? "+1" : v < 0 ? "−1" : "0"}</span>`).join(" · ")}</b></div>` : ""}
         ${r.prediction ? `<div class="hint">${r.prediction.kind === "locked-contract" ? "locked contract" : "preview only"}: ${r.prediction.direction > 0 ? "BUY" : r.prediction.direction < 0 ? "SELL" : "FLAT"} · entry ${px(r.prediction.entry)} · TP ${px(r.prediction.tp)} · SL ${px(r.prediction.sl)} · TP:SL ${r.prediction.ratio != null ? Number(r.prediction.ratio).toFixed(2) + ":1" : "—"} · ${r.prediction.execution_eligible ? "execution eligible" : "paper only — signal stands, no order is routed on this tape"}</div>` : `<div class="hint">raw analysis read was ${esc(r.raw_signal || "—")} — not produced as a prediction (see failed checks above).</div>`}
       </div>` : ""}
       <div class="an-period">calculation period: ${esc(period)} · total ${r.elapsed_ms} ms</div>
@@ -1864,6 +2011,31 @@ function renderRail() {
       || fly?.chip
       || (fly?.ready ? { kind: "ok", text: "FlyWire v783 · live" }
         : { kind: "absent", text: "brain — " + (fly?.reason || "no state yet") });
+    // "state": the component's own machine. A chip that only knows
+    // ok/build/absent cannot tell "loading" from "broken", which is exactly
+    // how a downloading connectome ended up painted as "brain offline —
+    // vote withheld (RECONNECT)". An unready brain whose state is not a
+    // failure is BLUE (working), never red.
+    const bstate = lb?.state || fly?.state || null;
+    if (bc.kind !== "ok" && (bstate === "building" ||
+        (bstate && bstate !== "ready" && bstate !== "absent"))) {
+      bc = { kind: "build",
+             text: lb?.chip?.text || fly?.chip?.text ||
+                   ("brain — loading (" + bstate + ")") };
+    }
+    if (bstate === "building" && lb?.chip) {
+      bc = { kind: "build", text: lb.chip.text, stalled: !!lb.chip.stalled };
+    }
+    // A READY CONNECTOME WITH NO VOTE YET IS NOT OFFLINE. `brain.vote` is null
+    // until the first GRC pass produces one, and `systems[].brain` is only
+    // rebuilt at GRC — so on a freshly booted board every window reported
+    // "brain offline — vote withheld" while FlyWire was ready with 138k
+    // neurons (the screenshot's red chip over a healthy brain tab). If the
+    // component says ready, the chip says ready and explains the pending vote.
+    if (lb?.ready && (!bc || bc.kind !== "ok")) {
+      bc = { kind: "ok", text: `FlyWire ready · vote pending until the next GRC`
+             + (lb.pass_age_s != null ? ` (pass ${Math.round(lb.pass_age_s)}s ago)` : "") };
+    }
     const snapAge = S.snap?.ts ? (Date.now() / 1000 - S.snap.ts) : null;
     if (snapAge != null && snapAge > 20 && bc.kind !== "ok") {
       bc = { kind: "build", text: `brain — state stale ${Math.round(snapAge)}s (snapshot lagging)` };
@@ -1879,8 +2051,11 @@ function renderRail() {
     const bchip = $("#brain-chip");
     if (bchip) {
       bchip.textContent = "🧠 " + bc.text;
+      // a build that has gone silent is not "working": gold = progressing,
+      // orange = the supervisor is retrying, red = a real, reported failure
       const cc = bc.kind === "ok" ? "var(--green)"
-        : bc.kind === "build" ? "var(--gold)" : "var(--red)";
+        : bc.kind === "build" ? (bc.stalled ? "var(--orange)" : "var(--gold)")
+        : "var(--red)";
       bchip.style.color = cc;
       bchip.style.borderColor = cc;
       bchip.classList.add("live");
@@ -2258,6 +2433,12 @@ async function loadCandles() {
     // covers that without synthesising history. TP/lock overlays stay
     // per-TF below.
     const md = await api(`/api/candles?symbol=${symbol}&tf=tf1&n=1000`);
+    // guide §1: the SERVER publishes tf_charts[asset][tf] with one step and
+    // one lookback per timeframe. Cards bind to that series when it is
+    // available and fall back to local aggregation only if it is not, so
+    // two cards of the same TF can no longer disagree.
+    const tfc = await api(`/api/tf-charts?symbol=${symbol}`)
+      .catch(() => null);
     // Ignore an older response after a symbol switch or a newer refetch;
     // otherwise BTC bars can be written into another asset's chart state.
     if (seq !== S._candleLoadSeq || symbol !== S.symbol ||
@@ -2304,11 +2485,25 @@ async function loadCandles() {
       return [...out.values()];
     };
     await Promise.all(TF.map(async tf => {
-      const bars = agg(md.bars || [], QINT[tf] || 1);
-      const mapped = _cut(bars, tf).map(x =>
-        ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
+      const srv = (tfc && tfc.ok && tfc.charts) ? tfc.charts[tf] : null;
+      // a short server series (or a failed /api/tf-charts) must never
+      // blank the card: fall back to local aggregation instead
+      const useSrv = !!(srv && Array.isArray(srv.candles)
+                        && srv.candles.length >= 20);
+      const bars = useSrv ? srv.candles : agg(md.bars || [], QINT[tf] || 1);
+      const mapped = useSrv
+        ? srv.candles.map(x => ({ time: x.t, open: x.o, high: x.h,
+                                  low: x.l, close: x.c, v: x.v || 0,
+                                  ...(x.live ? { live: true } : {}) }))
+        : _cut(bars, tf).map(x =>
+            ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
       S.tfBars[tf] = mapped;
-      S.tfBarsRevision[tf] = historyRevision;
+      // each TF keeps its OWN revision and epoch — a tf4 card must not
+      // re-render because tf1 got a new minute
+      S.tfBarsRevision[tf] = useSrv ? String(srv.revision || historyRevision)
+                                    : historyRevision;
+      S.tfEpoch ||= {};
+      if (useSrv) S.tfEpoch[tf] = srv.candles[0].t;
       const c = S.charts[tf]; if (!c) return;
       if (!mapped.length) {
         c.setData([]);
@@ -2451,6 +2646,11 @@ async function loadFormulas() {
       const fwEl = $("#fl-forward");
       if (fwEl) {
         const rows = Object.keys(core).sort((a, b) => a - b).map(fid => {
+          // Every cell shows a real number (audit §6.1): Laplace-smoothed
+          // bucket posterior when this reading's bucket has samples, else
+          // the pooled per-(formula, asset, tf) posterior. A "°" marks a
+          // thin sample (n < 30) — the number is shown, never implied to
+          // be settled.
           const tds = ["tf1", "tf2", "tf3", "tf4"].map(tf => {
             const est = fwdEstimate(fwd.buckets?.[`F${fid} ${S.symbol} ${tf}`] || [],
                                     Math.max(-1, Math.min(1, core[fid])));
@@ -2568,6 +2768,16 @@ function drawSparks(core) {
   });
 }
 
+/* Side-aware wording for the dominant channel. A state channel reading
+   0.04 is 92 % away from its 0.5 neutral on the LOW side — calling that
+   "the dominant emotion" without saying which side made the panel announce
+   the *absence* of a state (e.g. "Trend exhaustion" when exhaustion was 0). */
+function domSideTxt(dom) {
+  if (!dom || !dom.side) return "from";
+  if (dom.side === "low") return "below";
+  if (dom.side === "high") return "above";
+  return "at";
+}
 /* ═══════════ EMOTION ═══════════ */
 async function loadEmotion() {
   try {
@@ -2603,20 +2813,41 @@ async function loadEmotion() {
         const nm = (i) => names[String(i)]?.name || (typeof EMO !== "undefined" && EMO[i - 1]) || ("E" + i);
         const pe = em.primary_emotion || null;
         const fg = em.fear_greed || null;
+        // A composite index that only measures part of its own weighting must
+        // say so: printing 53 "Neutral" while 50% of the published inputs are
+        // missing is the same lie as reporting 0.50 with no input at all.
+        const fgCov = Math.round((fg?.coverage ?? fg?.measured_weight ?? 0) * 100);
+        // `unmeasured` is a name → reason map, not a list
+        const fgMiss = Object.keys(fg?.unmeasured || {}).join(", ");
+        const fgHtml = !fg ? "" :
+          `<div class="kv"><span>fear &amp; greed</span><b>${fmt(fg.index, 1)} · ${esc(fg.label)} ` +
+          (fg.partial
+            ? `<span class="acc-warn">(partial — ${fgCov}% of the published weighting has an input here` +
+              (fgMiss ? `; missing ${esc(fgMiss)}` : "") + `)</span>`
+            : `<span class="dim">(full composite)</span>`) +
+          (fg.components
+            ? ` <span class="dim">(vol ${fmt(fg.components.volatility, 0)} · momentum ${fmt(fg.components.momentum_volume, 0)})</span>`
+            : "") +
+          `</b></div>` +
+          (fg.published_index != null
+            ? `<div class="kv"><span>published F&amp;G</span><b>${fmt(fg.published_index, 1)}` +
+              (fg.index != null ? ` <span class="dim">(model is ${fmt(fg.index - fg.published_index, 1)} away)</span>` : "") +
+              `</b></div>`
+            : "");
         const ca = em.core_affect || null;
         const at = em.action_tendency || null;
         const pad = em.pad || null;
         dom.innerHTML = `
           <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
             <div style="font:700 26px/1 var(--mono);color:var(--gold)">${esc((pe?.name || nm(bi)).replace(/^./, c => c.toUpperCase()))}</div>
-            <div class="dim">${pe ? `${Math.round((pe.intensity || 0) * 100)}% prototype match (Ekman 1992) · runner-up ${esc((pe.runner_up || {}).name || "—")} ${Math.round((pe.runner_up?.intensity || 0) * 100)}%` : `channel ${esc(nm(bi))} · ${pct}% from neutral`} · held ${heldS}s${em.dominant?.tied ? ` · <span class="acc-warn">+${em.dominant.tied} channel${em.dominant.tied > 1 ? "s" : ""} tied at this extreme (saturated tape — no single winner)</span>` : ""}</div>
+            <div class="dim">${pe ? `${Math.round((pe.intensity || 0) * 100)}% prototype match (Ekman 1992) · runner-up ${esc((pe.runner_up || {}).name || "—")} ${Math.round((pe.runner_up?.intensity || 0) * 100)}%` : `channel ${esc(nm(bi))} · ${pct}% ${domSideTxt(em.dominant)} neutral`} · held ${heldS}s${em.dominant && em.dominant.directional === false ? ' · <span class="acc-warn">no channel carries a direction this window — this is amplitude, not a state</span>' : ""}${em.dominant?.tied ? ` · <span class="acc-warn">+${em.dominant.tied} channel${em.dominant.tied > 1 ? "s" : ""} tied at this extreme (saturated tape — no single winner)</span>` : ""}</div>
           </div>
           <div class="bar" style="margin-top:8px;max-width:420px"><i class="pos" style="width:${clamp(pe ? (pe.intensity || 0) * 100 : pct, 2, 100)}%"></i></div>
           <div class="kv-row" style="margin-top:8px">
             ${ca ? `<div class="kv"><span>valence (Russell 1980)</span><b>${(ca.valence >= 0 ? "+" : "") + fmt(ca.valence, 2)}</b></div>` : ""}
             ${ca ? `<div class="kv"><span>arousal</span><b>${fmt(ca.arousal, 2)}</b></div>` : ""}
             ${pad ? `<div class="kv"><span>dominance (PAD)</span><b>${fmt(pad.dominance, 2)}</b></div>` : ""}
-            ${fg ? `<div class="kv"><span>fear &amp; greed</span><b>${fmt(fg.index, 0)} · ${esc(fg.label)}${fg.components ? ` <span class="dim">(vol ${fmt(fg.components.volatility, 0)} · momentum ${fmt(fg.components.momentum_volume, 0)} · ${Math.round((fg.measured_weight || 0) * 100)}% of published weight measured)</span>` : ""}</b></div>` : ""}
+            ${fgHtml}
             ${at ? `<div class="kv"><span>action tendency (Frijda)</span><b>${esc(at.name)} · urge ${fmt(at.urge, 2)}</b></div>` : ""}
           </div>
           ${fg?.vs_affect ? `<div class="hint acc-warn">${esc(fg.vs_affect)}</div>` : ""}
@@ -2797,8 +3028,15 @@ async function loadNews() {
         `${x.backoff_level ? " L" + x.backoff_level : ""}` +
         `${x.dropped_429 ? " · 429×" + x.dropped_429 : ""}</b></div>`).join("");
       const ex = st.filtered_examples || [];
+      // §5.1 drop accounting: last window / cumulative / the reasons behind
+      // them. "0 dropped" while the ingest gate binned half the wire was
+      // the deceptive version of this line.
+      const reasons = Object.entries(st.dropped_reasons || {})
+        .map(([k, v]) => `${v}× ${k}`).slice(0, 3).join(" · ");
       $("#nw-dropped").textContent =
-        `${st.filtered || 0} dropped for no crypto relevance` +
+        `dropped ${st.last_dropped_count || 0} since last poll · ` +
+        `${st.total_dropped_count || 0} total` +
+        (reasons ? " — " + reasons : "") +
         (ex.length ? " — e.g. " + ex.map(h => `"${h}"`).join("; ") : "");
       const em = st.emergency_history || [];
       $("#nw-emerg").innerHTML = em.length
@@ -2828,15 +3066,37 @@ async function loadNews() {
           `${fmt(h.impact, 3)} <span class="dim">niv ${fmt(h.niv, 3)} smd ${fmt(h.smd, 3)}</span></b></div>`;
       }).join("");
       const h1 = hz.tf1;
-      if (h1 && h1.niv !== undefined) pushNiv(h1.niv);
+      const liveNiv = (d.live || {}).niv_live;
+      // SEED the 90 s trace from the server's ring: the chart used to start
+      // from a single sample, which renders as a dead flat line.
+      const ring = (d.live || {}).ring;
+      if (Array.isArray(ring) && ring.length > 1) {
+        NIV_HIST.length = 0;
+        ring.slice(-60).forEach(([t, v]) => {
+          const ts = Number(t) * (Number(t) < 1e12 ? 1000 : 1);
+          if (Number.isFinite(ts) && Number.isFinite(Number(v)))
+            NIV_HIST.push({ t: ts, v: Number(v) });
+        });
+        drawNiv();
+      }
+      if (liveNiv !== undefined) pushNiv(liveNiv);
+      else if (h1 && h1.niv !== undefined) pushNiv(h1.niv);
     } catch (e) { /* status optional */ }
     $("#nw-scope").textContent = `${S.symbol} · ${d.source || ""} · ${d.count ?? (d.items || []).length} items`;
     const cats = d.categories || {};
+    // §5.1 the AGGREGATE row is the horizon-weighted mean of the four TF
+    // impacts, so it can never contradict the rows directly above it.
+    const aggImp = d.aggregate_impact ?? d.aggregate ?? 0;
     $("#nw-agg").innerHTML = TF.map(tf => {
       const imp = (d.impacts || {})[tf];
       return `<div class="kv"><span>${tf.toUpperCase()} impact</span><b>${fmt(imp, 4)}</b></div>`;
-    }).join("") + `<div class="kv"><span>aggregate</span><b>${fmt(d.aggregate, 4)}</b></div>
-      <div class="kv"><span>polarity</span><b>${fmt(d.polarity, 3)}</b></div>`;
+    }).join("") +
+      `<div class="kv"><span>aggregate <span class="dim">h-weighted</span></span>` +
+      `<b style="color:${aggImp >= 0 ? "var(--green)" : "var(--red)"}">${fmt(aggImp, 4)}</b></div>
+      <div class="kv"><span>polarity</span><b>${fmt(d.polarity, 3)}</b></div>
+      <div class="kv"><span>NIV live <span class="dim">decayed</span></span>` +
+      `<b>${fmt((d.live || {}).niv_live ?? d.niv, 4)}` +
+      ` <span class="dim">base ${fmt((d.live || {}).niv_base ?? d.niv, 4)}</span></b></div>`;
     const tb = $("#nw-table tbody"); tb.innerHTML = "";
     (d.items || []).forEach(it => {
       const cat = cats[it.category] || {};
@@ -2887,7 +3147,8 @@ function onNewsTicker(msg) {
         `<b style="color:${(h.impact || 0) >= 0 ? "var(--green)" : "var(--red)"}">` +
         `${fmt(h.impact, 3)} <span class="dim">niv ${fmt(h.niv, 3)} smd ${fmt(h.smd, 3)}</span></b></div>`;
     }).join("");
-    if (hz.tf1 && hz.tf1.niv !== undefined) pushNiv(hz.tf1.niv);
+    if (a.niv_live !== undefined) pushNiv(a.niv_live);
+    else if (hz.tf1 && hz.tf1.niv !== undefined) pushNiv(hz.tf1.niv);
     if (a.emergency) toast("⚡ auto emergency re-lock fired", "err");
     $("#nw-coverage").textContent = a.coverage || $("#nw-coverage").textContent;
   }
@@ -2916,13 +3177,23 @@ function drawNiv() {
   x.beginPath(); x.moveTo(0, h / 2); x.lineTo(w, h / 2); x.stroke();
   if (NIV_HIST.length < 2) return;
   const vs = NIV_HIST.map(p => p.v);
-  const mx = Math.max(0.05, ...vs.map(Math.abs));
+  // TRUE range: a fixed 0.05 ceiling flattened a ±0.003 NIV into a
+  // straight line. Scale to the data, with a 2 bp floor against noise.
+  const lo = Math.min(...vs), hi = Math.max(...vs);
+  const mid = (hi + lo) / 2;
+  const span = Math.max(0.002, hi - lo);
+  const yOf = v => h / 2 - ((v - mid) / span) * (h * 0.42);
   x.strokeStyle = "#4fd1c5"; x.lineWidth = 1.5; x.beginPath();
   NIV_HIST.forEach((p, i) => {
     const px = (i / (NIV_HIST.length - 1)) * w;
-    const py = h / 2 - (p.v / mx) * (h / 2 - 4);
+    const py = yOf(p.v);
     i ? x.lineTo(px, py) : x.moveTo(px, py);
   });
+  // label the scale so a flat-looking trace is never ambiguous
+  x.fillStyle = "rgba(147,160,184,.85)";
+  x.font = "9px monospace";
+  x.fillText(`+${hi.toFixed(4)}`, 4, 9);
+  x.fillText(`${lo.toFixed(4)}`, 4, h - 3);
   x.stroke();
 }
 
@@ -3051,9 +3322,17 @@ async function loadBrains() {
           const ki = keep.map(c => bclasses.indexOf(c)).filter(x => x >= 0);
           const matrix = (an.block?.matrix || []).filter((_, r) => ki.includes(r))
             .map(row => ki.map(ci => row[ci]));
+          // NUMERIC, NEVER A PLACEHOLDER (report: "cell class still ---"):
+          // a real measured 0 prints 0.00, a missing cell says n/a — the
+          // table can no longer look half-empty when it is fully computed.
           const cellv = v2 => {
-            const a2 = v2 > 0 ? (Math.log1p(v2) / Math.log1p(mmax)) * 0.7 : 0;
-            return `<td style="background:rgba(0,212,240,${a2.toFixed(3)});text-align:right;font-family:var(--mono);font-size:10px" title="${v2}">${v2 > 0 ? (v2 < 0.01 ? v2.toExponential(1) : v2.toFixed(2)) : "·"}</td>`;
+            const num = Number(v2);
+            const ok = Number.isFinite(num);
+            const a2 = ok && num > 0 ? (Math.log1p(num) / Math.log1p(mmax)) * 0.7 : 0;
+            const txt = !ok ? "n/a"
+              : num === 0 ? "0.00"
+              : Math.abs(num) < 0.01 ? num.toExponential(1) : num.toFixed(2);
+            return `<td style="background:rgba(0,212,240,${a2.toFixed(3)});text-align:right;font-family:var(--mono);font-size:10px" title="${ok ? num : "n/a"}">${txt}</td>`;
           };
           const ntc = Object.entries(an.nt_census || an.mbon_nt || {})
             .filter(([k]) => k && k !== "?").slice(0, 6);
@@ -3147,7 +3426,11 @@ async function loadBrains() {
           const cellv = v2 => {
             const al2 = v2 !== 0 ? Math.min(0.85, (Math.log1p(Math.abs(v2)) / Math.log1p(mmax)) * 0.85) : 0;
             const bg = v2 >= 0 ? `rgba(34,201,138,${al2.toFixed(3)})` : `rgba(240,56,90,${al2.toFixed(3)})`;
-            return `<td style="background:${bg};text-align:right;font-family:var(--mono);font-size:9.5px" title="${v2}">${v2 !== 0 ? (Math.abs(v2) < 0.01 ? v2.toExponential(1) : v2.toFixed(3)) : "·"}</td>`;
+            const num = Number(v2);
+            const txt = !Number.isFinite(num) ? "n/a"
+              : num === 0 ? "0.000"
+              : Math.abs(num) < 0.01 ? num.toExponential(1) : num.toFixed(3);
+            return `<td style="background:${bg};text-align:right;font-family:var(--mono);font-size:9.5px" title="${Number.isFinite(num) ? num : "n/a"}">${txt}</td>`;
           };
           cmEl.innerHTML = `<div style="overflow-x:auto"><table class="blk-matrix">
             <tr><th>channel</th>${kx.map(ci => `<th title="${esc(cm.classes[ci])}">${esc(cm.classes[ci]).slice(0, 8)}</th>`).join("")}</tr>
@@ -3363,27 +3646,65 @@ async function loadAgents() {
         <button class="btn test-slot" data-slot="${["gemini", "backup1", "backup2", "backup3"][i]}" style="margin-top:10px">test</button>
       </div>`).join("");
     const lo = a.local || {};
-    const ins = lo.install || {};
+    // `a.installer` is top-level (it used to be null, so this panel had
+    // nothing to render); `lo.install` is the same object for older clients
+    const ins = a.installer || lo.install || {};
     const installing = ins.state === "installing";
-    const phaseTxt = { runtime: "installing llama.cpp runtime (may compile 10–20 min — normal)",
-                       model: "downloading model", load: "loading agent" }[ins.phase] || "working";
+    // Every phase names what is ACTUALLY happening. The old text promised
+    // "may compile 10–20 min — normal", which described the failure, not the
+    // fix: the ladder now tries a prebuilt wheel, an OPT-IN source build, and
+    // Ollama, and the model download is independent of all three.
+    const phaseTxt = {
+      runtime: "installing the runtime (prebuilt wheel → opt-in source build → Ollama)",
+      model: "downloading the model file",
+      load: "loading the agent",
+    }[ins.phase] || "working";
+    const backendTxt = ins.backend
+      ? `<span class="acc-up">${esc(ins.backend)}</span>`
+      : `<span class="dim">none yet</span>`;
+    const stepsHtml = (ins.steps || []).length
+      ? `<div class="hint" style="margin-top:6px">runtime ladder:</div>
+         <div class="logic" style="font-size:10px">${(ins.steps || []).map(st =>
+           `${st.ok ? "✓" : "✗"} <b>${esc(st.step)}</b>${st.reason ? " — " + esc(st.reason) : ""}`).join("<br/>")}</div>`
+      : "";
+    const ollamaHtml = ins.ollama
+      ? `<div class="kv"><span>Ollama :11434</span><b>${ins.ollama.ok
+            ? `up · ${esc((ins.ollama.models || []).join(", ") || "no model pulled")}`
+            : `down (${esc(ins.ollama.detail || "?")})`}</b></div>`
+      : "";
+    const compilerHtml = ins.compiler
+      ? `<div class="kv"><span>C/C++ compiler</span><b>${ins.compiler.ok
+            ? `present (${esc(ins.compiler.cxx || ins.compiler.cc || "cc")}) — source build needs PREDICT_AGENT_SOURCE_BUILD=1`
+            : "absent — a source build could never succeed"}</b></div>`
+      : "";
     $("#ag-local").innerHTML = `
       <div class="kv-row">
-        <div class="kv"><span>model</span><b>${lo.label || "—"}</b></div>
-        <div class="kv"><span>available</span><b>${lo.available ? "yes" : "no"}</b></div>
-        <div class="kv"><span>RAM tier</span><b>${lo.ram_gb ?? "?"} GB</b></div>
+        <div class="kv"><span>agent</span><b>${lo.available
+          ? `<span class="acc-up">${esc(lo.label || "ready")}</span>${lo.backend ? " · " + esc(lo.backend) : ""}`
+          : `<span class="acc-warn">not loaded</span>`}</b></div>
+        <div class="kv"><span>runtime</span><b>${backendTxt}</b></div>
+        <div class="kv"><span>RAM tier</span><b>${lo.ram_gb ?? "?"} GB · ${esc(ins.model_label || "—")}</b></div>
         <div class="kv"><span>last inference</span><b>${lo.last_ms ? lo.last_ms + " ms" : "—"}</b></div>
       </div>
-      ${ins.validation?.present ? `<div class="hint" style="margin-top:6px">✓ sha ${esc(ins.validation.sha || "?")} · ${esc(ins.validation.source || "")}</div>` : ""}
+      <div class="kv-row">
+        <div class="kv"><span>model file</span><b>${ins.model_present
+          ? `✓ ${esc((ins.validation || {}).sha || "present")}`
+          : `${(ins.bytes_on_disk || 0).toLocaleString()} B on disk (${esc(ins.model_size || "?")} expected)`}</b></div>
+        ${ollamaHtml}
+        ${compilerHtml}
+      </div>
+      ${stepsHtml}
       ${ins.installed
-        ? `<div class="hint" style="margin-top:8px">✓ local agent downloaded${lo.available ? " and loaded" : " — press test to load it"}</div>
-           <button class="btn test-slot" data-slot="local" style="margin-top:10px">test</button>`
+        ? `<div class="hint" style="margin-top:8px">✓ local agent ready${lo.available ? " and loaded" : " — press re-probe to load it"}</div>
+           <button class="btn test-slot" data-slot="local" style="margin-top:10px">test</button>
+           <button class="btn" id="ag-retry" style="margin-top:10px">re-probe runtime</button>`
         : installing
         ? `<div class="hint" style="margin-top:8px">⬇ ${phaseTxt}… ${ins.elapsed_s ? Math.floor(ins.elapsed_s / 60) + "m " + (ins.elapsed_s % 60) + "s" : ""} — the app keeps running; this panel refreshes itself</div>
            <div class="logic" style="max-height:110px;overflow:auto;font-size:10px">${(ins.log || []).slice(-6).map(esc).join("<br/>")}</div>
            <button class="btn" disabled style="margin-top:10px">downloading…</button>`
         : `<button class="btn" id="ag-download" style="margin-top:10px">⬇ DOWNLOAD LOCAL AGENT</button>
-           <div class="hint" style="margin-top:6px">One-time: llama.cpp runtime + ${ins.model_label || "preferred model"} (${ins.model_size || ""}). Preferred model: Qwen2.5-Coder-3B. Runs in the background; the app stays fully usable meanwhile.</div>
+           <button class="btn" id="ag-retry" style="margin-top:10px">re-probe runtime</button>
+           <div class="hint" style="margin-top:6px">The runtime is a ladder: a prebuilt wheel first, a source build only if you allow it, then Ollama if it is installed — nothing here can block the app. The model file (${esc(ins.model_label || "preferred")}, ${esc(ins.model_size || "")}) downloads independently of it, so a host with no compiler still banks the model.</div>
            ${(() => {
              const au = ins.auto || {};
              const next = au.next_try_in_s;
@@ -3393,8 +3714,8 @@ async function loadAgents() {
                return `<div class="hint" style="margin-top:6px">⚠ auto-download gave up after ${au.attempts || 0} attempt(s): ${esc(au.last_error || au.last_result || "unknown")} — press download to retry now (it also retries on the next boot)</div>`;
              return `<div class="hint" style="margin-top:6px">auto-download: ${esc(au.state || "idle")} — the engine fetches this by itself after boot; the button is only for "now"</div>`;
            })()}
-           ${ins.state === "failed" ? `<div class="hint">⚠ last attempt stopped: ${esc(ins.error || "unknown")} — press download to retry/resume</div>` : ""}
-           ${lo.error ? `<div class="hint">${lo.error}</div>` : ""}`}
+           ${ins.state === "failed" ? `<div class="hint">⚠ last attempt stopped: ${esc(ins.error || ins.why || "unknown")} — press download to retry/resume</div>` : ""}
+           ${lo.error ? `<div class="hint">${esc(lo.error)}</div>` : ""}`}
       `;
     const dlBtn = $("#ag-download");
     if (dlBtn) dlBtn.addEventListener("click", async () => {
@@ -3404,6 +3725,16 @@ async function loadAgents() {
         toast(r.install?.state === "done" ? "local agent already downloaded"
                                            : "local agent download started — watch this panel");
       } catch (e) { toast("download start failed: " + e.message, "err"); }
+      loadAgents();
+    });
+    const retryBtn = $("#ag-retry");
+    if (retryBtn) retryBtn.addEventListener("click", async () => {
+      retryBtn.disabled = true; retryBtn.textContent = "probing…";
+      try {
+        const r = await api("/api/agents/local/retry", { method: "POST" });
+        toast(r.ok ? `runtime found: ${r.backend || "local"}` : `still unavailable — ${r.error || "see the ladder below"}`,
+              r.ok ? "" : "warn");
+      } catch (e) { toast("re-probe failed: " + e.message, "err"); }
       loadAgents();
     });
     const autoRunning = (ins.auto || {}).state === "running";
@@ -3437,6 +3768,137 @@ async function loadAgents() {
       b.textContent = "test"; loadAgents();
     }));
   } catch (e) { toast("agents: " + e.message, "err"); }
+}
+
+
+/* ═══════════ MIND — cognition + metacognition ═══════════ */
+/* The thinking trace is produced by app/cognition.py. This view only draws
+   what the server reasoned; it never composes a step of its own, because a
+   UI that invents a reason is worse than one that shows none. */
+let _mindLast = null;
+async function loadMind(force) {
+  if (!force && _mindLast && Date.now() - _mindLast < 20000) return;
+  _mindLast = Date.now();
+  const sc = $("#mind-scope");
+  if (sc) sc.textContent = `${S.symbol} · ${S.focusTf.toUpperCase()}`;
+  try {
+    const t = await api(`/api/think?symbol=${S.symbol}&tf=${S.focusTf}`);
+    renderMind(t);
+  } catch (e) {
+    const box = $("#mind-steps");
+    if (box) box.innerHTML = `<div class="dim pad">trace unavailable: ${esc(e.message)}</div>`;
+  }
+  try { renderMindHistory(await api(`/api/think/history?symbol=${S.symbol}&tf=${S.focusTf}`)); }
+  catch (e) { /* ledger is optional */ }
+}
+
+const MIND_STATUS = { done: "acc-up", partial: "dim", warn: "acc-warn",
+                      conflict: "acc-warn" };
+
+function renderMind(t) {
+  // ── the six steps, verbatim from the server
+  const box = $("#mind-steps");
+  if (box) {
+    box.innerHTML = (t.steps || []).map((s, i) => `
+      <div class="pad" style="border-left:2px solid var(--${s.status === "warn" || s.status === "conflict" ? "gold" : "line"});margin:6px 0;padding-left:10px">
+        <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
+          <b class="dim" style="font-family:var(--mono);font-size:10px">${i + 1}. ${esc(s.step.toUpperCase())}</b>
+          <b>${esc(s.title)}</b>
+          <span class="${MIND_STATUS[s.status] || "dim"}" style="font-family:var(--mono);font-size:9px">${esc(s.status)}</span>
+        </div>
+        <div class="logic" style="font-size:11.5px">${esc(s.detail)}</div>
+        ${(s.cites || []).length ? `<div class="hint" style="font-size:9px">source: ${s.cites.map(esc).join(" · ")}</div>` : ""}
+      </div>`).join("")
+      || `<div class="dim pad">the server returned no steps</div>`;
+  }
+
+  // ── metacognition: what it thinks of itself, and whether that is earned
+  const c = t.competence || {};
+  const ab = t.abstain || {};
+  const meta = $("#mind-meta");
+  if (meta) {
+    const trustCls = c.trust === "calibrated" ? "acc-up"
+      : c.trust === "overconfident" ? "acc-dn"
+      : c.trust === "underconfident" ? "acc-warn" : "dim";
+    meta.innerHTML = `
+      <div class="kv"><span>trust in itself</span><b class="${trustCls}">${esc(c.trust || "unknown")}</b></div>
+      <div class="kv"><span>graded outcomes</span><b>${c.n ?? 0}${c.state ? ` · ${esc(c.state)}` : ""}</b></div>
+      <div class="kv"><span>hit-rate</span><b>${c.hit_rate != null ? (c.hit_rate * 100).toFixed(0) + "%" : "—"}
+        ${c.wilson_lo != null ? `<span class="dim" style="font-size:9px">95% floor ${(c.wilson_lo * 100).toFixed(0)}%</span>` : ""}</b></div>
+      <div class="kv"><span>Brier</span><b>${c.brier != null
+        ? `${fmt(c.brier, 3)} <span class="dim" style="font-size:9px">rel ${fmt(c.brier_parts?.reliability, 3)} · res ${fmt(c.brier_parts?.resolution, 3)}</span>`
+        : `<span class="dim">${esc(c.brier_parts?.why || "not enough settled calls")}</span>`}</b></div>
+      <div class="kv"><span>verdict</span><b class="${ab.abstain ? "acc-warn" : "dim"}">${ab.abstain ? "ABSTAINING" : "proceeding"}</b></div>`;
+  }
+  const hon = $("#mind-honesty");
+  if (hon) hon.textContent = c.how_sure || "";
+  if (hon && ab.reason) hon.textContent += (hon.textContent ? " · " : "") + ab.reason;
+
+  const cf = $("#mind-cf");
+  if (cf) cf.textContent = t.counterfactual || "—";
+
+  // ── working memory: present vs withheld, each with its reason
+  const wm = t.working_memory || {};
+  const wmBox = $("#mind-wm");
+  if (wmBox) {
+    const pill = (x, ok) => `<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:9px;font-size:10px;border:1px solid var(--line);color:var(--${ok ? "green" : "gold"})">${esc(x.label)}</span>`;
+    wmBox.innerHTML = `
+      <div class="dim" style="font-size:11px">${esc(wm.summary || "")}</div>
+      <div style="margin-top:6px">${(wm.present || []).map(p => pill(p, true)).join("") || '<span class="dim">nothing reached the reasoning</span>'}</div>
+      ${(wm.withheld || []).length ? `<div class="panel-h" style="margin-top:8px">WITHHELD — not silence, a stated abstention</div>
+        ${wm.withheld.map(w => `<div class="pad" style="font-size:11px"><b class="acc-warn">${esc(w.label)}</b> <span class="dim">— ${esc(w.why || "")}</span></div>`).join("")}` : ""}`;
+  }
+
+  // ── assumptions: a premise is a claim, so it gets a verdict
+  const asBox = $("#mind-assume");
+  if (asBox) {
+    const rows = (t.assumptions || []).map(a => {
+      const tag = a.holds === null ? `<span class="dim">unverifiable</span>`
+        : a.holds ? `<span class="acc-up">holds</span>`
+                  : `<span class="acc-dn">DOES NOT HOLD</span>`;
+      return `<div class="pad" style="font-size:11px;border-left:2px solid var(--${a.holds === false ? "red" : "line"});padding-left:8px;margin:4px 0">
+        <div>${tag} — <b>${esc(a.claim)}</b></div>
+        <div class="dim" style="font-size:10px">${esc(a.evidence || "")}</div></div>`;
+    }).join("");
+    asBox.innerHTML = rows || `<div class="dim">no assumptions reported</div>`;
+  }
+
+  // ── self-check
+  const chk = $("#mind-check");
+  if (chk && t.consistency) {
+    chk.innerHTML = t.consistency.ok
+      ? `<div class="kv"><span>internal consistency</span><b class="acc-up">holds</b></div>
+         <div class="kv"><span>checked</span><b class="dim">${(t.consistency.checked || []).join(" · ")}</b></div>`
+      : `<div class="kv"><span>internal consistency</span><b class="acc-dn">CONTRADICTION</b></div>`
+        + (t.consistency.problems || []).map(p => `<div class="hint acc-dn">${esc(p)}</div>`).join("");
+  }
+}
+
+function renderMindHistory(h) {
+  const box = $("#mind-history");
+  if (!box) return;
+  const recs = (h.records || []).slice().reverse();
+  const st = h.thought_stats || {};
+  box.innerHTML = `
+    <div class="kv-row">
+      <div class="kv"><span>traces recorded</span><b>${h.n ?? 0}</b></div>
+      <div class="kv"><span>graded by settlement</span><b>${h.graded ?? 0}${h.graded ? ` · ${h.wins} won` : ""}</b></div>
+      <div class="kv"><span>reasoning hit-rate</span><b>${st.hit_rate != null ? (st.hit_rate * 100).toFixed(0) + "%" : "—"}</b></div>
+      <div class="kv"><span>trust</span><b class="dim">${esc(st.trust || "unknown")}</b></div>
+    </div>
+    <div style="font-size:10px;font-family:var(--mono);margin-top:6px">
+      ${recs.map(r => `<div style="display:flex;gap:8px;flex-wrap:wrap;color:var(--dim)">
+        <span>${new Date(r.ts * 1000).toISOString().slice(5, 16).replace("T", " ")}</span>
+        <span>${esc(r.signal || "—")}</span>
+        <span>conf ${fmt(r.confidence, 3)}</span>
+        <span>${esc(r.signature || "")}</span>
+        <span class="${r.outcome === "win" ? "acc-up" : r.outcome === "loss" ? "acc-dn" : "dim"}">${r.outcome || "open"}</span>
+        ${r.abstain ? `<span class="acc-warn">abstained</span>` : ""}
+        ${r.split ? `<span class="acc-warn">routes split</span>` : ""}
+        ${r.consistency === false ? `<span class="acc-dn">trace contradicted itself</span>` : ""}
+      </div>`).join("") || '<span class="dim">no traces recorded yet — run ▶ ANALYSE</span>'}
+    </div>
+    <div class="hint" style="margin-top:6px">${esc(h.rule || "")}</div>`;
 }
 
 /* ═══════════ HISTORY ═══════════ */
@@ -3718,7 +4180,15 @@ async function loadSettings() {
 
 function syncSystemBtn() {
   const b = $("#btn-system");
-  if (b) b.textContent = `SYSTEM: ${(S.systemMode || "old").toUpperCase()}`;
+  if (!b) return;
+  const m = (S.systemMode || "old").toUpperCase();
+  // "SYSTEM: OLD" read as "this build is out of date" (the version watch
+  // reloads on a new commit, so there was nothing to update). It is a MODEL
+  // selector, so the label says which one is selected and the tooltip says
+  // what tapping does instead of leaving the ambiguity to the reader.
+  b.textContent = `MODEL: ${m}`;
+  b.title = `prediction model in use: ${m} — tap to switch to ` +
+            (m === "OLD" ? "NEW" : "OLD");
 }
 /* ═══════════ boot overlay + timers ═══════════ */
 let bootDeadline = 0;
@@ -3797,16 +4267,26 @@ setInterval(() => {
   // 2b) candle series refresh (~30 s): the realised line's backfill
   // must stay current or the charts drift from the tape again
   if (_tickN % 30 === 0) loadCandles().catch(() => {});
-  // connection honesty on the chip while the socket is silent
-  if (S.lastMsgAt && Date.now() - S.lastMsgAt > 15000) {
-    const fc = $("#feed-chip");
-    if (fc && !fc.dataset.stale) {
-      fc.dataset.stale = "1";
-      fc.textContent = "⚠ connection stale — retrying";
-      fc.className = "feed-chip stale";
+  // connection honesty on the chip while the socket is silent.
+  // A dead websocket with a healthy REST poll is NORMAL behind the
+  // Codespaces/mobile proxy — say "polling", don't accuse the engine.
+  const _fc = $("#feed-chip");
+  const _wsLive = ws && ws.readyState === 1;
+  const _httpFresh = S.lastHttpAt && Date.now() - S.lastHttpAt < 10000;
+  const _msgFresh = S.lastMsgAt && Date.now() - S.lastMsgAt < 15000;
+  if (_fc) {
+    if (!_wsLive && !_msgFresh && !_httpFresh) {
+      if (!_fc.dataset.stale) {
+        _fc.dataset.stale = "1";
+        _fc.textContent = "⚠ connection stale — retrying";
+        _fc.className = "feed-chip stale";
+      }
+    } else if (_fc.dataset.stale || !_fc.dataset.mode) {
+      delete _fc.dataset.stale;
+      _fc.dataset.mode = _wsLive ? "live" : "polling";
+      _fc.textContent = _wsLive ? "live" : "polling · ws off";
+      _fc.className = "feed-chip" + (_wsLive ? "" : " poll");
     }
-  } else if ($("#feed-chip")?.dataset.stale) {
-    delete $("#feed-chip").dataset.stale;
   }
   // 3) §10.4 silent-socket guard (inside THE one interval, H-2): a socket
   // with no message for 15s is closed — onclose reconnects immediately
@@ -3953,6 +4433,7 @@ function applySnapshot(snap) {
   renderBoot(snap);   // overlay FIRST
   renderAlert(snap);
   try { renderQuads(); renderWhy(); renderRail(); } catch (e) { console.error("render", e); }
+  S.lastHttpAt = Date.now();   // REST proof of life (banner + feed chip)
   try { renderBranches(); } catch (e) { console.error("branches", e); }
   try { drawMainChart(); } catch (e) { console.error("main chart", e); }
   try { const p2 = S.prices?.[S.symbol];
@@ -3973,7 +4454,11 @@ function applySnapshot(snap) {
     const f = snap.feed;
     fchip.textContent = f.simulated ? "⚠ SIMULATED TAPE" : f.label;
     fchip.className = "feed-chip " + (f.simulated ? "sim" : f.stale ? "stale" : "live");
-    fchip.title = `source ${f.source} · last delivery ${f.last_delivery_age_s ?? "?"}s ago · ${f.updates} updates · ${f.switches} switches`;
+    // "simulated" alone reads as a setting. The chip says WHY the real feed is
+    // not in use, because the honest answer is usually "this host cannot reach
+    // the exchange" and the user deserves to see the attempt and its error.
+    fchip.title = `source ${f.source} · last delivery ${f.last_delivery_age_s ?? "?"}s ago · ${f.updates} updates · ${f.switches} switches`
+      + (f.real_reason ? `\n${f.real_reason}` : "");
   }
   // §10.3 status chips — every subsystem's honesty state, one glance
   const sc = $("#status-chips");
@@ -4075,6 +4560,23 @@ function bindGlobal() {
   $("#nw-refresh")?.addEventListener("click", loadNews);
   $("#nw-drill")?.addEventListener("click", drillEmergency);
   $("#hs-reload")?.addEventListener("click", loadHistory);
+  $("#mind-refresh")?.addEventListener("click", () => loadMind(true));
+  $("#mind-narrate")?.addEventListener("click", async (e) => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = "narrating…";
+    const box = $("#mind-narration");
+    try {
+      const n = await api(`/api/think?symbol=${S.symbol}&tf=${S.focusTf}&narrate=1`);
+      const r = n.narration || {};
+      if (box) {
+        box.classList.remove("hidden");
+        box.innerHTML = `<div class="hint">narration source: <b>${esc(r.source || "?")}</b>`
+          + (r.why ? ` — ${esc(r.why)}` : "")
+          + (r.guard && r.guard.ok === false ? ` · <span class="acc-dn">model text REJECTED: ${esc((r.guard.stray_numbers || []).join(", "))}</span>` : "")
+          + `</div><div style="white-space:pre-wrap;font-size:11.5px">${esc(r.text || "—")}</div>`;
+      }
+    } catch (err) { toast("narrate: " + err.message, "err"); }
+    b.disabled = false; b.textContent = "narrate";
+  });
   $("#ag-reload")?.addEventListener("click", loadAgents);
   $("#ag-save")?.addEventListener("click", async () => {
     const body = {
@@ -4099,9 +4601,20 @@ function bindGlobal() {
 /* ═══════════ resilience: surface errors + detect engine offline ═══════════ */
 let _errShown = 0, _fetchFails = 0;      // _fetchFails = unreachable only
 let _httpFails = 0;                      // one panel erroring != offline
+let _busyStreak = 0;                     // timeouts = busy, never "offline"
+let _bannerSince = 0;                    // when the banner first appeared
 function _netBanner(show, detail) {
   let b = $("#net-banner");
-  if (!show) { if (b) b.remove(); return; }
+  if (!show) {
+    // Don't retract instantly. A busy engine answers SOME requests and times
+    // out on others, so removing on the first success then re-adding made the
+    // bar strobe (the flicker in the screenshot). Keep it at least 6 s, and
+    // reset the counters so the next real outage still needs 3 misses.
+    if (b && Date.now() - _bannerSince < 6000) return;
+    if (b) b.remove();
+    _fetchFails = 0; _httpFails = 0; _busyStreak = 0;
+    return;
+  }
   if (!b) {
     b = document.createElement("div");
     b.id = "net-banner";
@@ -4109,14 +4622,51 @@ function _netBanner(show, detail) {
       "color:#f0385a;border-bottom:1px solid #f0385a;padding:8px 16px;font:600 12px monospace;" +
       "letter-spacing:1px;text-align:center";
     document.body.appendChild(b);
+    _bannerSince = Date.now();
+    // text and the dismiss control are separate nodes so a message update can
+    // never wipe the ✕
+    const msg = document.createElement("span");
+    msg.className = "net-msg";
+    const x = document.createElement("span");
+    x.textContent = " ✕";
+    x.style.cssText = "float:right;cursor:pointer;padding:0 4px";
+    x.title = "dismiss (the panel keeps retrying)";
+    x.addEventListener("click", () => { const el = $("#net-banner"); if (el) el.remove(); });
+    b.append(msg, x);
   }
-  b.textContent = detail || "ENGINE OFFLINE — retrying every 2s (start it: bash run.sh)";
+  const msgEl = b.querySelector(".net-msg");
+  if (msgEl) msgEl.textContent = detail || "ENGINE OFFLINE — retrying every 2s (start it: bash run.sh)";
 }
+let _busyProbeAt = 0;
+async function _confirmBusy() {
+  const now = Date.now();
+  if (now - _busyProbeAt < 3000) return;   // one probe per burst
+  _busyProbeAt = now;
+  try {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 4000);
+    const r = await _origFetch("/api/health", { signal: ctl.signal });
+    clearTimeout(to);
+    if (r.ok) {
+      // loop is answering: this is a slow panel, not a stuck engine
+      const h = await r.json().catch(() => null);
+      if (h && h.loop_lag_s != null && h.loop_lag_s > 2) {
+        _netBanner(true, `ENGINE BUSY — loop lag ${h.loop_lag_s.toFixed(1)}s ` +
+                         "(measured); panels refresh when it clears (do not restart)");
+      } else {
+        _busyStreak = 0;
+        _netBanner(false);            // no banner theatre: nothing is wrong
+      }
+    }
+  } catch (e) { /* health blocked too -> the next poll decides */ }
+}
+let _lastOkAt = Date.now();
 const _origFetch = window.fetch;
 window.fetch = async (...args) => {
+  const isApi = String(args[0]).includes("/api/");
   try {
     const r = await _origFetch(...args);
-    if (r.ok) { _fetchFails = 0; _httpFails = 0; _netBanner(false); }
+    if (r.ok) { _fetchFails = 0; _httpFails = 0; _busyStreak = 0; _netBanner(false); }
     else if (String(args[0]).includes("/api/")) {
       _fetchFails = 0;                   // the engine answered
       if (++_httpFails >= 3)
@@ -4125,11 +4675,29 @@ window.fetch = async (...args) => {
     return r;
   } catch (e) {
     _httpFails = 0;
-    if (String(args[0]).includes("/api/") && ++_fetchFails >= 3)
-      _netBanner(true, "ENGINE UNREACHABLE — retrying (start it: bash run.sh)");
+    // `AbortError` = we gave up waiting; the socket was never refused. That is
+    // a busy engine (warm replay / GRC / model load), so say so and do NOT
+    // count it toward "unreachable" — otherwise a long analysis reads as a
+    // dead server and the banner tells the user to start what is running.
+    const busy = !!(e && e.name === "AbortError");
+    if (String(args[0]).includes("/api/")) {
+      if (busy) {
+        // ONE slow endpoint is not a busy engine. The banner used to fire on
+        // any two aborted calls, so a single expensive panel (or a snapshot
+        // rebuild) announced "ENGINE BUSY" over a perfectly responsive app.
+        // Confirm with the cheapest request there is: if /api/health answers,
+        // the event loop is alive and the honest report is "a panel is slow",
+        // not "the engine is stuck".
+        if (++_busyStreak >= 2) _confirmBusy();
+      } else if (++_fetchFails >= 3) {
+        _netBanner(true, "ENGINE UNREACHABLE — retrying (start it: bash run.sh)");
+      }
+    }
     throw e;
   }
 };
+// (no extra timer: the 2 s REST poll already clears the banner on success —
+// the app keeps exactly ONE setInterval, per the H-2 contract)
 window.addEventListener("error", e => {
   if (_errShown++ < 3) toast("JS: " + (e.message || "error"), "err");
 });
@@ -4149,12 +4717,33 @@ window.addEventListener("unhandledrejection", e => {
 // [binance-header-btn] discoverable exchange entry point in the header.
 (() => {
   const b = $("#btn-binance"); if (!b) return;
-  b.addEventListener("click", () => {
-    document.querySelector('.tab[data-t="settings"]')?.click();
-    setTimeout(() => $("#trade-enable")?.scrollIntoView({behavior:"smooth", block:"center"}), 80);
-    toast("Binance: paste keys → Enable → ARM. Nothing trades until a qualifying prediction is issued.", "ok");
+  // The MARKETS tape and Binance EXECUTION are two different things, and the
+  // old button only ever opened the execution settings — while the tape chip
+  // said "SIMULATED" with no way to do anything about it. Clicking now tries
+  // the real market feed first (measured, and it reports the error verbatim),
+  // and offers execution settings after.
+  b.addEventListener("click", async () => {
+    const was = b.textContent;
+    b.disabled = true; b.textContent = "⌛ CONNECTING REAL FEED…";
+    try {
+      const r = await api("/api/feeds/connect", { method: "POST" });
+      if (r.ok && r.mode === "binance") {
+        toast(`real tape adopted — ${r.detail || r.source || "exchange"}`, "ok");
+        refreshActiveView(true);
+      } else {
+        toast("real feed unavailable — " + (r.error || r.detail || "unknown") +
+              " · the simulator keeps the tape", "warn");
+      }
+      // execution settings stay reachable regardless
+      document.querySelector('.tab[data-t="settings"]')?.click();
+      setTimeout(() => $("#trade-enable")?.scrollIntoView({behavior:"smooth", block:"center"}), 250);
+    } catch (e) {
+      toast("connect real feed: " + e.message, "err");
+    } finally {
+      b.disabled = false; b.textContent = was; paint();
+    }
   });
-  const paint = async () => {
+  var paint = async () => {
     try { const t = await (await fetch("/api/trading/status")).json();
       const c = t.config || {};
       b.textContent = !c.enabled ? "⬢ CONNECT BINANCE"

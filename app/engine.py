@@ -28,8 +28,9 @@ import numpy as np
 from collections import deque
 from typing import Any, Awaitable, Callable
 
+from . import loadgov as _gov
 from .bgn import BgnSynchronizer
-from .cci import CCIEngine, finalize_confidence
+from .cci import CCIEngine, calibrate_confidence, finalize_confidence
 from .clock import grc_id, next_grc_ts, seconds_to_next_grc
 from .config import (
     ASSET_PROFILES,
@@ -79,8 +80,15 @@ from . import genesis as genesis_mod
 # regime routing only). 97-101 are the brain/emotion/physics/news/hedge
 # subsystem inputs to the CCI; 20 is DRHE the regime gauge.
 NON_VOTING_IDS = frozenset({20, 97, 98, 99, 100, 101})
-EMERGENCY_RELOCK_COOLDOWN_S = 60.0
-EMERGENCY_RELOCK_MIN_MOVE_ATR = 0.5
+EMERGENCY_RELOCK_COOLDOWN_S = 900.0
+EMERGENCY_RELOCK_MIN_MOVE_ATR = 3.0
+#: WINDOW FREEZE (audit §1.3). A locked contract is immutable for the
+#: duration of its window. The old gate (≥0.5 ATR, 60 s cooldown) fired
+#: every 10–30 s — the UI's own ">1/HOUR = BUG (N=8)" banner was right.
+#: Only a structural invalidation (>3 ATR away from the locked entry AND
+#: at least 15 minutes since the lock) may re-anchor the contract.
+RELOCK_MIN_MOVE_ATR = 3.0
+RELOCK_MIN_AGE_S = 15 * 60.0
 
 
 def _mean(xs):
@@ -205,9 +213,13 @@ def _recheck_prediction(*, direction: int, conf: float, floor: float,
 
     conf_credit = (min(1.0, max(0.0, conf) / floor) if floor > 0 else 0.0)
     above_floor = direction != 0 and conf > floor
-    add("confidence above floor", above_floor,
-        f"conf {conf:.3f} vs floor {floor:.3f}"
-        + ("" if above_floor else f" — gap {floor - conf:.3f}"),
+    # A failed confidence check must NAME the numbers, not just the check:
+    # "confidence above floor" alone sent users hunting for which number
+    # missed (68bbb922 regression pin).
+    _conf_detail = (f"conf {conf:.3f} vs floor {floor:.3f}" if above_floor
+                    else f"confidence below floor ({conf:.3f} ≤ {floor:.3f})"
+                         f" — gap {floor - conf:.3f}")
+    add("confidence above floor", above_floor, _conf_detail,
         0.30, credit=conf_credit if direction != 0 else 0.0)
     reachable = direction != 0 and conf >= RECHECK_CONF_REACH * floor
     add("conviction within reach of the floor", reachable,
@@ -318,6 +330,29 @@ def _lock_emotion_text(dom) -> str:
     return str(dom or "")
 
 
+# ── heavy-pass executor ────────────────────────────────────────────────
+# A SEPARATE, small pool for the CPU-bound passes (GRC, analyse, readiness
+# dry-run, snapshot build). The first attempt used asyncio.to_thread, which
+# runs on the SAME default executor FastAPI uses for every sync route — so
+# "off the loop" work simply moved the stall into the request pool: with the
+# analytics queue saturated, /api/health and /api/snapshot queued behind it
+# (measured: 3.1 s round-trip, lag 6.6 s on a 2-core box). Bounded to the
+# core count so jobs cannot pile up either.
+import concurrent.futures as _fut
+import functools as _ft
+
+_PASS_WORKERS = max(2, min(4, (os.cpu_count() or 2)))
+_pass_pool = _fut.ThreadPoolExecutor(max_workers=_PASS_WORKERS,
+                                    thread_name_prefix="engine-pass")
+
+
+async def run_pass(fn, /, *args, **kwargs):
+    """Run a CPU-bound pass on the engine's own pool (never the loop)."""
+    loop = asyncio.get_running_loop()
+    call = _ft.partial(fn, *args, **kwargs)
+    return await loop.run_in_executor(_pass_pool, call)
+
+
 class PredictionEngine:
     def __init__(
         self,
@@ -425,6 +460,12 @@ class PredictionEngine:
         self.auditor = FormulaAuditor()
         from .ledger import SettlementLedger
         self.ledger = SettlementLedger()
+        self._thoughts: dict[str, list[dict]] = {}
+        self._load_thoughts()
+        # honest confidence: isotonic map confidence → P(win), fed by the
+        # ledger's own settled rows (app/calib.py)
+        from .calib import calibrator
+        self.calib = calibrator()
         # optional Binance execution (disabled unless the user enables
         # + arms it in Settings — see app/trading.py safety doctrine)
         from .trading import Trader
@@ -447,6 +488,14 @@ class PredictionEngine:
 
         self._tasks: list[asyncio.Task] = []
         self._busy = asyncio.Lock()
+        # readiness dry-run bookkeeping (see _update_readiness): attempt count,
+        # next allowed attempt, and the last measured failure
+        self._readiness_tries = 0
+        self._readiness_next_at = 0.0
+        self._readiness_error = ""
+        self.grc_started_at = 0.0
+        self.grc_ms: float | None = None
+        self.grc_profile: dict[str, float] = {}
         # Probability-Branches replay cache: the empirical first-touch scan
         # is O(history x window) and was 32% of every snapshot build (the
         # single biggest reason /api/snapshot took ~2 s). Keyed on the
@@ -772,6 +821,36 @@ class PredictionEngine:
             "news_value": market.get("news_value", 0.0),
             **self.brains.performance_inputs(),
         }
+
+    def _spillover_for(self, symbol: str, tf: str, ctx) -> dict:
+        """Cross-asset spillover + thesis-signed reversal for one lane.
+
+        Inputs are the lane's own context (per-TF closes/highs/lows/volume)
+        plus the LEADER's 1-minute tape, so the six-hour cross-asset term
+        is measured in wall-clock hours regardless of the lane's bar size.
+        Degrades to `available=False` rather than guessing.
+        """
+        try:
+            from .spillover import score as _sp_score
+            from .config import TIMEFRAMES
+            bar_min = float((TIMEFRAMES.get(tf) or {}).get("minutes") or 22)
+            closes = list(getattr(ctx, "P", None) or [])
+            highs = list(getattr(ctx, "H", None) or [])
+            lows = list(getattr(ctx, "L", None) or [])
+            vols = list(getattr(ctx, "V", None) or [])
+            taker = list(getattr(ctx, "TB", None) or [])
+            market = None
+            if symbol != "BTC":
+                try:
+                    market = list(self.feed.state("BTC").closes or [])
+                except Exception:
+                    market = None
+            return _sp_score(closes, highs, lows, vols, taker,
+                             market_closes=market, market="BTC",
+                             bar_minutes=bar_min, market_bar_minutes=1.0)
+        except Exception as e:  # never let telemetry break a decision
+            return {"available": False, "score": 0.0, "direction": 0,
+                    "coverage": 0.0, "parts": {}, "error": str(e)[:120]}
 
     def _apply_brain4(self, symbol: str, tf: str) -> None:
         """B4 Auto-Learning Controller: omega *= (1 + 0.01 * adj[fid]).
@@ -1234,13 +1313,41 @@ class PredictionEngine:
             if len(_pool) < 8:
                 _pool = list(_hist)
                 _rank_val = _base_conf
+            # Percentile of this score inside its own history — kept as a
+            # DIAGNOSTIC only. It used to be the displayed confidence,
+            # which meant ANALYSING printed a rank (0.285) while the
+            # CONFIDENCE CHAIN printed the raw product (0.0002): two
+            # formulas, two numbers, same window. (audit §2.3)
             if len(_pool) >= 8:
                 _pct = sum(1 for v in _pool if v <= _rank_val) / len(_pool)
-                fin["confidence"] = round(_pct, 4)
                 fin["conf_percentile"] = round(_pct, 4)
             else:
                 fin["conf_percentile"] = None
             fin["conf_hist_n"] = len(_pool)
+            # ── CALIBRATED CONFIDENCE (audit §2.1/§2.2) ──────────────
+            # ONE number, computed once, displayed everywhere. Base is an
+            # SNR→tanh mapping of |CCI_adj| over its measured noise floor;
+            # every modulator is bounded, so six dampers can no longer
+            # multiply a real setup into 0.0002 and jam RECHECK at
+            # NO TRADE forever.
+            _cal = calibrate_confidence(
+                pack,
+                experience_quality=br["experience"],
+                p_dominant=br["p_dominant"],
+                state_aligned=aligned,
+                rtp=em["rtp"],
+                pcv=pcv,
+                wfcp=phys["wfcp"],
+                drpt=phys["drpt"],
+                gspi=phys["gspi"],
+            )
+            fin["confidence"] = _cal["confidence"]
+            fin["confidence_base_snr"] = _cal["base_confidence"]
+            fin["confidence_modulator"] = _cal["modulator"]
+            fin["confidence_chain"] = _cal["steps"]
+            fin["snr"] = _cal["snr"]
+            fin["noise_floor"] = _cal["noise_floor"]
+            fin["issued"] = _cal["issued"]
             fin["strength"] = pack.get("strength", 0.0)
             _wr, _wrn = self._measured_winrate(
                 symbol, tf, float(fin["confidence"]))
@@ -1311,8 +1418,12 @@ class PredictionEngine:
             # on top of a slightly lower stated prior). Carried in the
             # payload so every panel can show which bar applied.
             _prof = asset_profile(symbol)
-            fin["asset_floor"] = round(
-                CONFIDENCE_FLOOR * _prof["floor_mult"], 4)
+            # The asset may nudge the design floor, not replace it: an
+            # uncapped 1.20 multiplier put ETH's bar at 0.42 while the
+            # calibrated confidence distribution lives in 0.15–0.45, so
+            # nothing could ever issue (the "always NO TRADE" report).
+            _fm = min(1.10, max(0.90, float(_prof.get("floor_mult") or 1.0)))
+            fin["asset_floor"] = round(CONFIDENCE_FLOOR * _fm, 4)
             fin["asset_nature"] = _prof["nature"]
             if float(fin["confidence"]) <= fin["asset_floor"]:
                 fin["issued"] = False
@@ -1328,9 +1439,51 @@ class PredictionEngine:
                            fin["confidence"],
                            list(self.feed.state(symbol).closes or []))
             fin["behavior"] = _beh
+            # ── CROSS-ASSET SPILLOVER + THESIS-SIGNED REVERSAL ────────
+            # Measured, not assumed: on nine months of real Binance bars
+            # the momentum tilt scored IC −0.036 and 48.0% sign accuracy
+            # out-of-fold; the same readings taken contrarian — plus the
+            # leader's last six hours — scored +0.033 and 51.4%
+            # (backtest/results/ALPHA_LAB.md). The block is blended into
+            # the fused score BEFORE the side is derived so the card, the
+            # chart and the contract cannot disagree about it.
+            try:
+                _sp = self._spillover_for(symbol, tf, ctxs[tf])
+            except Exception:
+                _sp = {"available": False, "score": 0.0, "direction": 0,
+                       "coverage": 0.0, "parts": {}}
+            fin["spillover"] = _sp
+            _sp_w = 0.25 * float(_sp.get("coverage") or 0.0)
+            if _sp.get("available") and _sp_w > 0:
+                _beh = dict(_beh)
+                _beh["score"] = ((1.0 - _sp_w) * float(_beh["score"])
+                                 + _sp_w * float(_sp["score"]))
+                _beh["spillover_weight"] = round(_sp_w, 3)
+                fin["behavior"] = _beh
             _gate = 0.02 * float(_prof.get("noise_mult") or 1.0)
             _dir_final = (1 if _beh["score"] > 0 else -1) \
                 if abs(_beh["score"]) >= _gate else 0
+            # LOCK HYSTERESIS (the "analysis and chart are not in sync"
+            # report): the fused score is routinely 0.03 against a 0.02
+            # floor, so its SIGN flips on noise. The window's locked side
+            # is drawn on the chart, priced by the contract and graded in
+            # the ledger — the analysis must not silently call the opposite
+            # of it a minute later. Hold the locked side unless the fresh
+            # score is decisively opposite (1.5x the noise gate).
+            _cyc_live = self.cycles.get((symbol, tf))
+            _locked_dir = int(getattr(_cyc_live, "direction", 0) or 0) \
+                if _cyc_live is not None else 0
+            fin["locked_direction"] = _locked_dir
+            fin["fresh_direction"] = _dir_final
+            if _locked_dir and _dir_final and _dir_final != _locked_dir \
+                    and abs(float(_beh["score"])) < 1.5 * _gate:
+                _dir_final = _locked_dir
+                fin["direction_hold"] = (
+                    "fresh score opposes the lock but only by "
+                    f"{abs(float(_beh['score'])):.4f} < {1.5 * _gate:.4f} "
+                    "— locked side held for this window")
+            fin["direction_conflict"] = bool(
+                _locked_dir and _dir_final and _dir_final != _locked_dir)
             fin["confidence"] = _beh["confidence"]
             # docs11-doublecheck §3: EVERY window gets a side. The old
             # chain (RL bandit -> asset floor -> noise gate) fused three
@@ -1363,6 +1516,21 @@ class PredictionEngine:
                                   and fin["confidence"] > fin["asset_floor"]
                                   and _chase_z <= 1.0)
             fin["issued"] = True
+            # DISPLAY GATE: `issued` stays True by contract (every window
+            # gets a side), but no panel may PRINT "ISSUED" for a side that
+            # never cleared the floor — that is exactly how the card said
+            # ISSUED at 0.176 while ANALYSE simultaneously said NO TRADE.
+            try:
+                fin["gate_ok"] = bool(_dir_final != 0 and
+                                      float(fin["confidence"])
+                                      > float(fin["asset_floor"]))
+            except (TypeError, ValueError):
+                fin["gate_ok"] = False
+            fin["issue_note"] = (
+                f"cleared the {float(fin['asset_floor']):.3f} floor"
+                if fin["gate_ok"] else
+                f"below floor ({float(fin.get('confidence') or 0):.3f} "
+                f"<= {float(fin['asset_floor']):.3f})")
             # ADVANCED MATHEMATICS LAYER (user-approved items 3-7, 9,
             # 11-16, 20-21): additional voters blended into the fused
             # score (nothing existing is removed or muted), soft
@@ -1381,6 +1549,117 @@ class PredictionEngine:
                                    strength=pack.get("strength"))
             fin.update(_tier)
             fin["raw_score"] = round(float(_beh["score"]), 5)
+            # ── volatility-scaled barriers (app/barriers.py) ──────────
+            # Geometry, not just direction: a target thinner than 3x the
+            # round-trip friction cannot be traded. Published so a
+            # watch-only window can say why.
+            # (Merge fix: the f07a line read a bare `atr` that was never
+            # bound in this scope, so every block below died with a
+            # NameError into its except-leg and the telemetry was always
+            # None. Bind the lane ATR once, honestly.)
+            try:
+                _atr_lane = float(self._atr(ctxs[tf]) or 0.0)
+            except Exception:
+                _atr_lane = 0.0
+            try:
+                from .barriers import vol_scaled as _vol_barriers
+                _px = float(price or 0.0)
+                _atr = _atr_lane
+                _sig_bps = (_atr / _px * 1e4) if (_px > 0 and _atr > 0) else None
+                fin["vol_barriers"] = _vol_barriers(
+                    _sig_bps, tf=tf,
+                    friction_bps=18.0 if symbol == "PAXG" else 12.0)
+            except Exception:
+                fin["vol_barriers"] = None
+            # ── MICROSTRUCTURE + HORIZON VIABILITY (deep overhaul) ────
+            # OFI / VPIN / Kyle λ / size skew / Hawkes from the lane's own
+            # bars, plus the honest question the deep walk-forward raised:
+            # does this horizon's σ clear 3x the round trip at all?
+            try:
+                from .micro_alpha import features as _micro_feats
+                from .horizon import classify as _lane_state
+                from types import SimpleNamespace as _SNS
+                _mb = ctxs[tf]
+                # micro_alpha reads lowercase bar fields (c/o/h/l/v, ...);
+                # the live context carries P/V/O/H/L. Adapt honestly: cash
+                # series pass through, quote volume is close×volume, and
+                # taker/trade-count fields stay absent (those readings
+                # report None instead of inventing flow).
+                _mP = list(getattr(_mb, "P", []) or [])
+                _mV = list(getattr(_mb, "V", []) or [])
+                _mO = list(getattr(_mb, "O", []) or []) or list(_mP)
+                _mH = list(getattr(_mb, "H", []) or []) or list(_mP)
+                _mL = list(getattr(_mb, "L", []) or []) or list(_mP)
+                _madapt = _SNS(o=_mO, h=_mH, l=_mL, c=_mP, v=_mV,
+                               quote_v=[p * v for p, v in zip(_mP, _mV)])
+                _mic = _micro_feats(_madapt, len(_mP) - 1)
+                fin["micro"] = {k: (None if (v != v) else round(float(v), 4))
+                                for k, v in _mic.items()}
+                _sig_bps = ((_atr_lane / float(price or 1.0) * 1e4)
+                            if price else None)
+                _fr = _mic.get("friction_bps")
+                fin["horizon"] = _lane_state(
+                    _sig_bps, _fr if isinstance(_fr, float) else None)
+                # ── COST GATE: does the *measured* edge clear friction? ──
+                # The horizon check asks whether σ is wide enough to be
+                # worth trading at all; this asks whether the out-of-fold
+                # gross expectancy on record actually pays the round trip.
+                # Directional cards may still print, but a blocked lane is
+                # never presented as tradable telemetry.
+                from .cost_gate import bucket as _edge_bucket, gate as _edge_gate
+                # (Merge fix: the f07a map keyed "TF1".. while lanes are
+                # "tf1".. so every lane read 60.0. Use the real window.)
+                _hz_min = float((TIMEFRAMES.get(tf) or {}).get("minutes")
+                                or 22.0)
+                _fric = (_fr if isinstance(_fr, float)
+                         else (18.0 if symbol == "PAXG" else 12.0))
+                fin["edge"] = _edge_gate(symbol, _edge_bucket(_hz_min), _fric)
+                # ── EVENT SLEEVES (multi-year derivatives programme) ──
+                # Measured out-of-fold sleeves that trade this asset, with
+                # their verdict. `unproven` is a first-class state: positive
+                # net expectancy whose bootstrap t is still inside the noise.
+                # (Merge: the two fourth-pass positives were retracted per
+                # ALPHA_RESEARCH §0 and gate as `blocked`, so the UI — which
+                # filters `blocked` — no longer shows them as evidence.
+                # Certified sleeves come from app/edge_gate.py instead.)
+                from .cost_gate import gates_for as _gates_for
+                _sv = _gates_for(symbol)
+                fin["sleeves"] = _sv or None
+            except Exception as _e:
+                fin["micro"] = None
+                fin["horizon"] = {"state": "unknown",
+                                  "note": f"micro unavailable: {str(_e)[:80]}"}
+                fin["edge"] = {"state": "unknown",
+                               "note": f"edge gate unavailable: {str(_e)[:80]}"}
+                fin["sleeves"] = None
+            # RE-JUDGE THE GATE on the FINAL confidence: the advanced layer
+            # multiplies confidence by its soft gate AFTER the first check,
+            # so the card could print 0.349 "ISSUED" while RECHECK compared
+            # 0.349 to a 0.350 floor and failed the same check. One number,
+            # one verdict.
+            try:
+                fin["gate_ok"] = bool(_dir_final != 0 and
+                                      float(fin["confidence"])
+                                      > float(fin["asset_floor"]))
+                fin["issue_note"] = (
+                    f"cleared the {float(fin['asset_floor']):.3f} floor"
+                    if fin["gate_ok"] else
+                    f"below floor ({float(fin['confidence']):.3f} "
+                    f"<= {float(fin['asset_floor']):.3f})")
+            except (TypeError, ValueError, KeyError):
+                fin["gate_ok"] = False
+            # ── HONEST CONFIDENCE (app/calib.py) ─────────────────────
+            # The card prints a score magnitude; this is the measured
+            # probability that the call wins, from the isotonic map fitted
+            # on settled ledger rows. Reported as None until the lane (or
+            # the pooled map) has MIN_SAMPLES, never faked with a formula.
+            try:
+                _cv = self.calib.apply(symbol, tf, fin.get("confidence"))
+                fin["p_correct"] = _cv.get("p")
+                fin["calib_iso"] = _cv
+            except Exception:
+                fin["p_correct"] = None
+                fin["calib_iso"] = {"source": "error", "p": None, "n": 0}
             pack = dict(pack)
             pack["direction"] = _dir_final
             pack["cci_adjusted_raw"] = pack["cci_adjusted"]
@@ -1535,6 +1814,15 @@ class PredictionEngine:
                 "base_confidence": pack["confidence"],
                 "direction": pack["direction"],
                 "issued": fin["issued"],
+                "gate_ok": fin.get("gate_ok"),
+                "p_correct": fin.get("p_correct"),
+                "calib_iso": fin.get("calib_iso"),
+                "spillover": fin.get("spillover"),
+                "vol_barriers": fin.get("vol_barriers"),
+                "micro": fin.get("micro"),
+                "horizon": fin.get("horizon"),
+                "edge": fin.get("edge"),
+                "sleeves": fin.get("sleeves"),
                 "exec_ok": fin.get("exec_ok"),
                 "mom_chase_z": fin.get("mom_chase_z"),
                 "tier": fin.get("tier"),
@@ -2387,12 +2675,24 @@ class PredictionEngine:
             # 1 ── formulas: every value, every timeframe, timed ----------
             t0 = time.time()
             raws, per_tf_ms = {}, {}
-            for t in TF_ORDER:
-                ctx = self.build_ctx(symbol, t)
-                anoms: list = []
-                f0 = time.perf_counter()
-                raws[t] = compute_all(ctx, record=False, anomalies=anoms)
-                per_tf_ms[t] = round((time.perf_counter() - f0) * 1000, 1)
+            # EVERY heavy stage of this job runs on a worker thread. The job
+            # is auto-triggered every 45 s and is ~10-20 s of pure-CPU
+            # analytics; inline in this async def it owned the event loop,
+            # so /api/health, the websocket and the snapshot build all
+            # stalled behind it. That is the "ENGINE BUSY" banner — measured
+            # at clock.handler_ms ~10400 — not a slow network.
+            def _stage_formulas():
+                out, ms = {}, {}
+                for t in TF_ORDER:
+                    _gov.cooperate()
+                    ctx = self.build_ctx(symbol, t)
+                    anoms: list = []
+                    f0 = time.perf_counter()
+                    out[t] = compute_all(ctx, record=False, anomalies=anoms)
+                    ms[t] = round((time.perf_counter() - f0) * 1000, 1)
+                return out, ms
+
+            raws, per_tf_ms = await run_pass(_stage_formulas)
             store["raws"] = raws
             nz = sum(1 for t in TF_ORDER for v in raws[t].values()
                      if abs(v) > 1e-9)
@@ -2409,27 +2709,32 @@ class PredictionEngine:
             t0 = time.time()
             market = self._build_market(symbol)
             news_agg = self.news.aggregate(symbol)
-            em_out = {}
-            for t in TF_ORDER:
-                ctx = self.build_ctx(symbol, t)
-                atr = self._atr(ctx)
-                thing2 = self._thing2(symbol, t, ctx, atr, market)
-                affinity = {fid: abs(v) for fid, v in raws[t].items()
-                            if abs(v) > 0.7}
-                br = self.brains.evaluate(symbol, t, market, affinity,
-                                          thing2, advance=False,
-                                          raws=raws[t])
-                em = self.emotions.compute(ctx, market, br, news_agg, None)
-                from .emotion import CHANNELS as _ECH
-                _pe = (em.get("primary_emotion") or {})
-                dom = _pe.get("name") or _ECH[
-                    max(em["emotions"], key=em["emotions"].get)][1]
-                em_out[t] = {"cerc": round(em["cerc"], 4),
-                             "top_emotion": str(dom),
-                             "fear_greed": (em.get("fear_greed") or {}).get("index"),
-                             "valence": (em.get("core_affect") or {}).get("valence"),
-                             "brain_state": br["dominant"],
-                             "polarity": br["polarity"]}
+            def _stage_emotions():
+                out = {}
+                for t in TF_ORDER:
+                    _gov.cooperate()
+                    ctx = self.build_ctx(symbol, t)
+                    atr = self._atr(ctx)
+                    thing2 = self._thing2(symbol, t, ctx, atr, market)
+                    affinity = {fid: abs(v) for fid, v in raws[t].items()
+                                if abs(v) > 0.7}
+                    br = self.brains.evaluate(symbol, t, market, affinity,
+                                              thing2, advance=False,
+                                              raws=raws[t])
+                    em = self.emotions.compute(ctx, market, br, news_agg, None)
+                    from .emotion import CHANNELS as _ECH
+                    _pe = (em.get("primary_emotion") or {})
+                    dom = _pe.get("name") or _ECH[
+                        max(em["emotions"], key=em["emotions"].get)][1]
+                    out[t] = {"cerc": round(em["cerc"], 4),
+                              "top_emotion": str(dom),
+                              "fear_greed": (em.get("fear_greed") or {}).get("index"),
+                              "valence": (em.get("core_affect") or {}).get("valence"),
+                              "brain_state": br["dominant"],
+                              "polarity": br["polarity"]}
+                return out
+
+            em_out = await run_pass(_stage_emotions)
             store["emotions"] = em_out
             e1 = em_out[tf]
             await self._emit_stage(
@@ -2442,32 +2747,37 @@ class PredictionEngine:
             long_closes = {sym: list(self.feed.state(sym).closes)
                            for sym in SYMBOL_ORDER}
             news_minutes = self.news.arrival_minutes_last(600)
-            phys_out = {}
-            for t in TF_ORDER:
-                ctx = self.build_ctx(symbol, t)
-                w = self.cci.get_weights(symbol, t)
-                comp_core = {fid: raws[t].get(fid, 0.0)
-                             for fid in FORMULA_FUNCTIONS}
-                wsum = sum(w.get(fid, 0.0) for fid in comp_core) or 1.0
-                cci_ref = sum(w.get(fid, 0.0) * v
-                              for fid, v in comp_core.items()) / wsum
+            def _stage_physics():
+                out = {}
+                for t in TF_ORDER:
+                    _gov.cooperate()
+                    ctx = self.build_ctx(symbol, t)
+                    w = self.cci.get_weights(symbol, t)
+                    comp_core = {fid: raws[t].get(fid, 0.0)
+                                 for fid in FORMULA_FUNCTIONS}
+                    wsum = sum(w.get(fid, 0.0) for fid in comp_core) or 1.0
+                    cci_ref = sum(w.get(fid, 0.0) * v
+                                  for fid, v in comp_core.items()) / wsum
 
-                def _recompute(c):
-                    return compute_all(c, record=False)
-                ph = self.physics.evaluate(
-                    symbol, t, ctx, atr=self._atr(ctx), raws=raws[t],
-                    cci_ref=cci_ref, long_closes=long_closes,
-                    news_minutes=news_minutes, weights=w,
-                    recompute=_recompute, hist=self.hist, record=False)
-                mech = ph.get("mechanisms") or []
-                phys_out[t] = {
-                    "ufp": round(ph["ufp"]["value"], 4),
-                    "wfcp": round(ph["wfcp"], 4),
-                    "drpt": round(ph["drpt"], 4),
-                    "gspi": round(ph["gspi"], 4),
-                    "mech_active": sum(1 for m in mech if m["active"]),
-                    "mech_total": len(mech),
-                }
+                    def _recompute(c):
+                        return compute_all(c, record=False)
+                    ph = self.physics.evaluate(
+                        symbol, t, ctx, atr=self._atr(ctx), raws=raws[t],
+                        cci_ref=cci_ref, long_closes=long_closes,
+                        news_minutes=news_minutes, weights=w,
+                        recompute=_recompute, hist=self.hist, record=False)
+                    mech = ph.get("mechanisms") or []
+                    out[t] = {
+                        "ufp": round(ph["ufp"]["value"], 4),
+                        "wfcp": round(ph["wfcp"], 4),
+                        "drpt": round(ph["drpt"], 4),
+                        "gspi": round(ph["gspi"], 4),
+                        "mech_active": sum(1 for m in mech if m["active"]),
+                        "mech_total": len(mech),
+                    }
+                return out
+
+            phys_out = await run_pass(_stage_physics)
             store["physics"] = phys_out
             pe = phys_out[tf]
             await self._emit_stage(
@@ -2477,8 +2787,8 @@ class PredictionEngine:
                 phys_out)
             # 4 ── news ----------------------------------------------------
             t0 = time.time()
-            self.news.refresh()
-            agg = self.news.aggregate(symbol)
+            await run_pass(self.news.refresh)
+            agg = await run_pass(self.news.aggregate, symbol)
             news_out = {"value": agg["value"], "niv": agg["niv"],
                         "count": agg["count"],
                         "dropped": agg.get("relevance_dropped", 0),
@@ -2493,20 +2803,24 @@ class PredictionEngine:
                 news_out)
             # 5 ── hedge / dark-pool ---------------------------------------
             t0 = time.time()
-            hedge_out = {}
-            for t in TF_ORDER:
-                ctx = self.build_ctx(symbol, t)
-                ifr = hedgefund.institutional_flow(ctx)
-                dpad = hedgefund.dark_pool_flow(ctx)
-                smdi = hedgefund.smart_money_divergence(
-                    ifr["value"], store["emotions"][t]["polarity"])
-                hedge_out[t] = {
-                    "ifr": round(ifr["value"], 4),
-                    "dpad": round(dpad["value"], 4),
-                    "smdi": round(smdi, 4),
-                    "combined": round(hedgefund.combined_signal(
-                        ifr["value"], dpad["value"], smdi), 4),
-                }
+            def _stage_hedge():
+                out = {}
+                for t in TF_ORDER:
+                    ctx = self.build_ctx(symbol, t)
+                    ifr = hedgefund.institutional_flow(ctx)
+                    dpad = hedgefund.dark_pool_flow(ctx)
+                    smdi = hedgefund.smart_money_divergence(
+                        ifr["value"], store["emotions"][t]["polarity"])
+                    out[t] = {
+                        "ifr": round(ifr["value"], 4),
+                        "dpad": round(dpad["value"], 4),
+                        "smdi": round(smdi, 4),
+                        "combined": round(hedgefund.combined_signal(
+                            ifr["value"], dpad["value"], smdi), 4),
+                    }
+                return out
+
+            hedge_out = await run_pass(_stage_hedge)
             store["hedge"] = hedge_out
             he = hedge_out[tf]
             await self._emit_stage(
@@ -2518,8 +2832,15 @@ class PredictionEngine:
             await self._analyse_ai_review(job, store, tf)
             # 7 ── final: authoritative fusion + box ------------------------
             t0 = time.time()
-            res_pack = self.compute_asset(symbol, record=False, display=True)
-            res = res_pack.get(tf) or {}
+            res_pack = await run_pass(
+                self.compute_asset, symbol, record=False, display=True)
+            # SAME-NUMBER RULE: the FINAL stage must analyse exactly what the
+            # card publishes. Recomputing produced a second, different
+            # answer (card 0.176 BULL vs analysis 0.055 FLAT), so the
+            # engine shouted NO TRADE at a signal it had just issued.
+            res = ((self.last_result.get((symbol, tf)))
+                   or getattr(self, "display_systems", {}).get((symbol, tf))
+                   or res_pack.get(tf) or {})
             price = self.feed.prices().get(symbol, 0.0)
             atr = float(res.get("atr") or self._atr(self.build_ctx(symbol, tf)))
             direction = int(res.get("direction") or 0)
@@ -2550,16 +2871,29 @@ class PredictionEngine:
                 entry_used = price
                 tps, sl, ratio_used = [], None, None
                 if direction != 0 and price > 0:
+                    # EVERY horizon gets its own measured rung (25/50/75/100 %
+                    # of the TF window). The old preview built ONE rung at the
+                    # horizon, so all four TF cards showed an identical
+                    # TP/SL/entry ladder — the user's "should be different"
+                    # complaint. Each horizon has its own ATR-scaled distance,
+                    # and each TF has its own horizons.
                     from .moves_risk import risk_block as _rb
-                    _blk = _rb(price, direction, minutes[-1],
+                    for _m in dict.fromkeys(minutes):
+                        try:
+                            _blk = _rb(price, direction, int(_m),
                                        min(1.0, conf), [], [], [], atr=atr)
-                    _fin = _lv_freeze(price, direction, _blk) \
-                        if _blk else None
-                    if _fin:
-                        tps = [{"k": 1, "minutes": minutes[-1],
-                                "level": round(float(_fin["tp"]), 6)}]
-                        sl = float(_fin["sl"])
-                        ratio_used = _fin.get("ratio")
+                        except Exception:
+                            _blk = None
+                        _fin = _lv_freeze(price, direction, _blk) \
+                            if _blk else None
+                        if not _fin:
+                            continue
+                        tps.append({"k": len(tps) + 1, "minutes": int(_m),
+                                    "level": round(float(_fin["tp"]), 6)})
+                        # the contract SL is the widest (horizon) rung's
+                        if sl is None or int(_m) >= int(minutes[-1]):
+                            sl = float(_fin["sl"])
+                            ratio_used = _fin.get("ratio")
                 levels_source = "preview only — measured levels, no lock, not executable"
             _t_re = time.time()
             # 6.5 ── RECHECK: every data source, every subsystem, then
@@ -2581,6 +2915,11 @@ class PredictionEngine:
                           .get("combined", 0) > 0 else
                           -1 if (store.get("hedge") or {}).get(tf, {})
                           .get("combined", 0) < 0 else 0),
+                # cross-asset spillover / thesis-signed reversal voter:
+                # measured IC +0.033 out-of-fold vs −0.036 for the old
+                # momentum tilt (backtest/results/ALPHA_LAB.md)
+                "spillover": int(((res.get("spillover") or {})
+                                  .get("direction")) or 0),
             }
             _st = self.feed.state(symbol)
             _age = (round(time.time() - float(_st.last_tick), 1)
@@ -2627,6 +2966,18 @@ class PredictionEngine:
                 "direction": direction,
                 "confidence": round(conf, 4),
                 "issued": bool(res.get("issued")),
+                "gate_ok": bool(res.get("gate_ok")),
+                "issue_note": res.get("issue_note"),
+                # STRENGTH (guide §2/§6): the hero printed 0.00 because the
+                # systems payload never carried voter agreement at all. It
+                # is the share of directional voters that agree with the
+                # fused call, in [0,1]; 0 only when nobody voted.
+                "strength": round(
+                    (sum(1 for v in _voters.values() if v == direction)
+                     / max(1, sum(1 for v in _voters.values() if v != 0)))
+                    if direction and any(_voters.values()) else 0.0, 4),
+                "voters": _voters,
+                "provisional": not bool(_lv),
                 "price": price,
                 "entry": round(entry_used, 6),
                 "atr": round(atr, 6),
@@ -2693,12 +3044,30 @@ class PredictionEngine:
                 # advisory only: the call stands; the failed checks are
                 # printed so the arithmetic can be audited (doc §1)
                 final["recheck_advisory"] = recheck["verdict"]
+            # COGNITION: produce and record the thinking trace for the call
+            # that was just made (signature + metacognitive snapshot). Failure
+            # here must never cost the user their analysis.
+            try:
+                self._think_and_record(symbol, tf, final)
+            except Exception:
+                log.exception("cognition record failed for %s|%s", symbol, tf)
             job["result"] = final
             job["status"] = "done"
+            # A FLAT call has no rungs by construction (`tps` stays empty
+            # because the preview block only builds levels for a signed
+            # direction), so `tps[0]` raised IndexError on every flat tape and
+            # threw away an analysis that had already completed — the user saw
+            # "analysis is not happening" while the engine had in fact
+            # finished and discarded the result. A summary line must never be
+            # able to destroy a result, so it degrades instead.
+            _tp1 = (f"TP1 {tps[0]['level']}" if tps else
+                    "TP1 — (no levels: flat call)")
+            _sl = (f"SL {final['sl']}" if final.get("sl") is not None
+                   else "SL —")
             await self._emit_stage(
                 job, "final", "done", t0, time.time(),
                 f"{final['signal']} · conf {final['confidence']:.3f} · "
-                f"TP1 {tps[0]['level']} · SL {final['sl']} · "
+                f"{_tp1} · {_sl} · "
                 f"total {final['elapsed_ms']:.0f} ms", final)
             await self.emit({"type": "analyse_done", "symbol": symbol,
                              "tf": tf, "result": final})
@@ -2712,9 +3081,20 @@ class PredictionEngine:
 
     async def _analyse_ai_review(self, job: dict, store: dict,
                                  tf: str) -> None:
-        """Stage 6: Gemini and the local qwen2.5-coder review the assembled
-        analysis for errors/mistakes and propose corrections. Keyless →
-        skipped with a printed note (agents are always optional)."""
+        """Stage 6: every configured agent reviews the assembled analysis.
+
+        This stage used to consult exactly two things — a Gemini key and an
+        installed ``llama_cpp`` — so on a host with neither it printed
+        "no AI configured" even when a working Ollama daemon was answering on
+        11434, and the whole Agents tab looked dead. It now goes through
+        ``AgentManager.review()``, which walks the full ladder (cloud keys →
+        local GGUF → Ollama) and returns a payload that always explains
+        itself, including which backend answered.
+
+        Review is advisory: it can flag errors and propose a correction, and
+        a correction at high confidence is printed in the result, but the
+        deterministic ladder underneath is never overwritten.
+        """
         t0 = time.time()
         symbol = job["symbol"]
         raws = store.get("raws", {}).get(tf, {})
@@ -2728,68 +3108,84 @@ class PredictionEngine:
             "hedge": store.get("hedge", {}).get(tf),
         }
         prompt = (
-            'You are reviewing an intraday market analysis BEFORE it is '
-            'shown to a trader. Find mistakes or contradictions in this '
-            'analysis (sign conflicts, stale/absurd numbers, risk that '
-            'does not match volatility) and give your own call. '
+            "You are reviewing an intraday market analysis BEFORE it is "
+            "shown to a trader. Find mistakes or contradictions in this "
+            "analysis (sign conflicts, stale/absurd numbers, risk that does "
+            "not match volatility) and give your own call. "
             'Reply ONLY with JSON: {"errors": ["..."], "fixes": ["..."], '
             '"direction": 1|-1|0, "confidence": 0.0..1.0, '
             '"reason": "one sentence"}. Data:\n'
             + json.dumps(payload, default=str)[:4000]
         )
+        try:
+            review = await self.agents.review(
+                symbol, tf, store,
+                result={"direction": int(
+                    (self.last_result.get((symbol, tf)) or {}).get("direction")
+                    or 0)})
+        except Exception as exc:                     # never fail the stage
+            log.exception("agent review failed")
+            review = {"available": False, "backend": "",
+                      "note": f"review stage error: {exc!r}"[:200],
+                      "reviews": {}, "correction": None}
+
+        raw_reviews = review.get("reviews") or {}
         reviews: dict[str, dict] = {}
-        # Gemini (real API call through the key ring)
-        key = (self.agents.settings.get("gemini_key") or "")
-        if key:
-            try:
-                res = await self.agents._call_provider("gemini", key, prompt)
-                if res.get("ok"):
-                    reviews["gemini"] = self._parse_ai_review(
-                        res.get("insight") or res.get("text") or "", res)
-                else:
-                    reviews["gemini"] = {"ok": False,
-                                         "error": str(res.get("reason"))}
-            except Exception as e:
-                reviews["gemini"] = {"ok": False, "error": repr(e)}
-        # local qwen2.5-coder (the engine's own reviewer)
-        if getattr(self.agents.local, "available", False):
-            try:
-                text = await asyncio.get_event_loop().run_in_executor(
-                    None, self.agents.local.query, prompt)
-                reviews["qwen2.5-coder"] = self._parse_ai_review(text or "", {})
-            except Exception as e:
-                reviews["qwen2.5-coder"] = {"ok": False, "error": repr(e)}
+        for name, rv in raw_reviews.items():
+            if rv.get("ok"):
+                fed = {"direction": rv.get("direction"),
+                       "confidence": rv.get("confidence"),
+                       "insight": rv.get("reason")}
+                parsed = self._parse_ai_review(rv.get("reason") or "", fed)
+                parsed["errors"] = list(rv.get("errors") or [])
+                parsed["backend"] = rv.get("backend") or name
+                reviews[name] = parsed
+            else:
+                reviews[name] = {"ok": False,
+                                 "error": str(rv.get("error") or "failed")}
+
         t1 = time.time()
-        if not reviews:
-            await self._emit_stage(
-                job, "ai_review", "skipped", t0, t1,
-                "no AI configured — deterministic pipeline only "
-                "(keyless operation, agents optional)", {})
-            job["ai"] = {"available": False,
-                         "note": "keyless — brain + formulas + physics only"}
+        if not review.get("available"):
+            note = str(review.get("note") or "no AI available")
+            await self._emit_stage(job, "ai_review", "skipped", t0, t1,
+                                   note, {"backend": "", "reviews": reviews})
+            job["ai"] = {"available": False, "backend": "",
+                         "note": note, "reviews": reviews,
+                         "correction": None}
             return
-        # an AI correction only counts at confidence ≥ 0.70 (printed, never
+
+        # an AI correction only counts at confidence >= 0.60 (printed, never
         # silent — the deterministic ladder stays visible underneath)
-        correction = None
-        for name, rv in reviews.items():
-            if rv.get("ok") and abs(int(rv.get("direction") or 0)) == 1                     and float(rv.get("confidence") or 0) >= 0.70:
-                correction = {"by": name,
-                              "direction": int(rv["direction"]),
-                              "confidence": float(rv["confidence"]),
-                              "reason": rv.get("reason", "")}
-                break
-        job["ai"] = {"available": True, "reviews": reviews,
-                     "correction": correction}
+        correction = review.get("correction")
+        if not correction:
+            for name, rv in reviews.items():
+                if (rv.get("ok") and abs(int(rv.get("direction") or 0)) == 1
+                        and float(rv.get("confidence") or 0) >= 0.60):
+                    correction = {
+                        "by": name,
+                        "direction": int(rv["direction"]),
+                        "confidence": float(rv["confidence"]),
+                        "reason": rv.get("reason", "")}
+                    break
+        job["ai"] = {"available": True,
+                     "backend": review.get("backend") or "",
+                     "note": review.get("note") or "",
+                     "reviews": reviews, "correction": correction}
         bits = []
         for name, rv in reviews.items():
             if rv.get("ok"):
                 n_err = len(rv.get("errors") or [])
-                bits.append(f"{name}: {n_err} issue(s), "
-                            f"{'CORRECTS to ' + ('BUY' if rv['direction'] > 0 else 'SELL') if rv is correction else 'concurs'}")
+                verdict = ("CORRECTS to " + ("BUY" if rv["direction"] > 0
+                                             else "SELL")
+                           if correction and correction.get("by") == name
+                           else "concurs")
+                bits.append(f"{name}: {n_err} issue(s), {verdict}")
             else:
                 bits.append(f"{name}: {rv.get('error', 'failed')}")
         await self._emit_stage(
-            job, "ai_review", "done", t0, t1, " · ".join(bits),
+            job, "ai_review", "done", t0, t1,
+            (" · ".join(bits) or "no review") +
+            f" [{review.get('backend') or 'agent'}]",
             job["ai"])
 
     @staticmethod
@@ -3369,12 +3765,17 @@ class PredictionEngine:
 
     def emergency_relock(self, symbol: str, tf: str = "tf1",
                          reason: str = "", *, automatic: bool = False) -> dict:
-        """Re-anchor an existing lock after an emergency.
+        """Re-anchor an existing lock after a structural invalidation.
 
-        Automatic news triggers additionally require an active lock and a
-        ≥0.5 ATR move from its entry; manual drills retain their explicit
-        behavior. All paths share a 60 s cooldown, six-per-hour N-8 cap,
-        and 30 s new-lock halt.
+        WINDOW FREEZE (audit §1.3): an active lock is immutable until
+        **both** (a) the move from its entry exceeds ``RELOCK_MIN_MOVE_ATR``
+        (3.0 ATR) and (b) ``RELOCK_MIN_AGE_S`` (15 min) have elapsed since
+        the lock. On top of the freeze, every re-anchor of an active lock
+        observes a 15-minute lock-age cooldown, and automatic triggers
+        additionally require a measurable ATR and a move STRICTLY greater
+        than 3 ATR. Manual drills with no open entry (audit-row only) keep
+        their explicit behaviour. All paths share the six-per-hour N-8 cap
+        and the 30 s new-lock halt.
         """
         now = time.time()
         hour = [r for r in self.news.emergency_history
@@ -3405,25 +3806,76 @@ class PredictionEngine:
             # never overwrite a REAL entry with0 (it would force a skip)
             return {"ok": False,
                     "error": "no price yet — emergency re-lock refused"}
-        if automatic:
-            if lock is None:
-                return {"ok": False, "skipped": True,
-                        "error": "automatic emergency requires an active lock"}
-            if price <= 0 or _old_entry <= 0:
-                return {"ok": False, "skipped": True,
-                        "error": "automatic emergency needs a valid entry and price"}
+        # ── WINDOW FREEZE (audit §1.3) ──────────────────────────────────
+        # Any re-anchor of an ACTIVE lock must clear both bars: a genuine
+        # structural invalidation (>3 ATR away from the locked entry) AND
+        # 15 minutes of window elapsed. Without this the news trigger
+        # re-locked every 10–30 s, moving the entry while the ladder
+        # stayed behind — four entries, four ladders, one window.
+        if lock is not None and _old_entry > 0 and price > 0:
             try:
-                _atr_gate = float(self._atr(self.build_ctx(symbol, tf)))
+                _atr_freeze = float(self._atr(self.build_ctx(symbol, tf)))
             except Exception:
-                _atr_gate = 0.0
-            if not math.isfinite(_atr_gate) or _atr_gate <= 0.0:
-                return {"ok": False, "skipped": True,
-                        "error": "automatic emergency gated: ATR unavailable"}
-            _move_atr = abs(price - _old_entry) / _atr_gate
-            if _move_atr < EMERGENCY_RELOCK_MIN_MOVE_ATR:
-                return {"ok": False, "skipped": True,
+                _atr_freeze = 0.0
+            try:
+                _locked_ts = float(lock.get("locked_at") or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                _locked_ts = 0.0
+            _age_s = (now - _locked_ts) if _locked_ts > 0 else 0.0
+            _atr_known = math.isfinite(_atr_freeze) and _atr_freeze > 0
+            _move_atr = (abs(price - _old_entry) / _atr_freeze
+                         if _atr_known else 0.0)
+            if _atr_known and _move_atr < RELOCK_MIN_MOVE_ATR:
+                return {"ok": False, "frozen": True, "skipped": True,
                         "move_atr": round(_move_atr, 3),
-                        "required_move_atr": EMERGENCY_RELOCK_MIN_MOVE_ATR,
+                        "required_move_atr": RELOCK_MIN_MOVE_ATR,
+                        "error": f"window frozen — move {_move_atr:.2f} ATR "
+                                 f"< {RELOCK_MIN_MOVE_ATR:.1f} ATR structural gate"}
+            if _age_s < RELOCK_MIN_AGE_S:
+                return {"ok": False, "frozen": True, "skipped": True,
+                        # the age bar IS a cooldown: surfaced as one so
+                        # callers (and the 68bbb922 pin) can read it as such
+                        "cooldown": True,
+                        "cooldown_s": round(RELOCK_MIN_AGE_S - _age_s, 1),
+                        "move_atr": round(_move_atr, 3),
+                        "age_s": round(_age_s, 1),
+                        "required_age_s": RELOCK_MIN_AGE_S,
+                        "error": f"window frozen — {int(_age_s)}s of "
+                                 f"{int(RELOCK_MIN_AGE_S)}s elapsed; a locked "
+                                 "contract is immutable for its window"}
+        if automatic and lock is None:
+            return {"ok": False, "skipped": True,
+                    "error": "automatic emergency requires an active lock"}
+        if lock is not None:
+            try:
+                locked_at = float(lock.get("locked_at") or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                locked_at = 0.0
+            if not math.isfinite(locked_at) or locked_at <= 0:
+                return {"ok": False, "skipped": True,
+                        "error": "emergency gated: lock time unavailable"}
+            remaining = EMERGENCY_RELOCK_COOLDOWN_S - (now - locked_at)
+            if remaining > 0:
+                return {"ok": False, "cooldown": True,
+                        "cooldown_s": round(remaining, 1),
+                        "error": "emergency gated: lock younger than 15 minutes"}
+            if automatic:
+                if price <= 0 or _old_entry <= 0:
+                    return {"ok": False, "skipped": True,
+                            "error": ("automatic emergency needs a valid "
+                                      "entry and price")}
+                try:
+                    _atr_gate = float(self._atr(self.build_ctx(symbol, tf)))
+                except Exception:
+                    _atr_gate = 0.0
+                if not math.isfinite(_atr_gate) or _atr_gate <= 0.0:
+                    return {"ok": False, "skipped": True,
+                            "error": "automatic emergency gated: ATR unavailable"}
+                _move_atr = abs(price - _old_entry) / _atr_gate
+                if _move_atr <= EMERGENCY_RELOCK_MIN_MOVE_ATR:
+                    return {"ok": False, "skipped": True,
+                            "move_atr": round(_move_atr, 3),
+                            "required_move_atr": EMERGENCY_RELOCK_MIN_MOVE_ATR,
                         "error": "automatic emergency gated: move below ATR threshold"}
         halt = getattr(self, "_halt_until", None)
         if halt is None:
@@ -4311,6 +4763,142 @@ class PredictionEngine:
         start = math.floor(now / ws) * ws
         return float(start), float(start + ws)
 
+    # ══════════════════════════════════════════════════════════════
+    # COGNITION — the thinking process, and learning from its own record
+    # ══════════════════════════════════════════════════════════════
+    THOUGHT_FILE = os.path.join("data", "thoughts.json")
+    THOUGHT_KEEP = 400            # per (symbol, tf)
+
+    def _load_thoughts(self) -> None:
+        try:
+            with open(self.THOUGHT_FILE) as fh:
+                d = json.load(fh)
+            self._thoughts = {k: list(v)[-self.THOUGHT_KEEP:]
+                              for k, v in (d or {}).items()
+                              if isinstance(v, list)}
+        except (OSError, ValueError):
+            self._thoughts = {}
+
+    def _save_thoughts(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.THOUGHT_FILE), exist_ok=True)
+            tmp = self.THOUGHT_FILE + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(self._thoughts, fh)
+            os.replace(tmp, self.THOUGHT_FILE)
+        except OSError:
+            pass
+
+    def _graded_rows(self, symbol: str, tf: str) -> list[dict]:
+        """Settled ledger rows for this window — the evidence for competence."""
+        try:
+            return [r for r in (self.ledger.rows.get(f"{symbol}|{tf}") or [])
+                    if r.get("result") in ("win", "loss")]
+        except Exception:
+            return []
+
+    def thought_stats(self, ledger_only: bool = True) -> dict:
+        """Metacognition over the app's OWN thought record.
+
+        `ledger_only=True` measures competence on settled engine outcomes (the
+        app's real record). `ledger_only=False` measures it on graded thought
+        records, i.e. how often the app's stated confidence was borne out by
+        the settlement of the call it reasoned about. The second is what
+        makes this metacognition rather than just bookkeeping.
+        """
+        from .cognition import competence
+        rows = []
+        for key, items in (self._thoughts or {}).items():
+            sym, _, tf = key.partition("|")
+            for rec in items:
+                if rec.get("outcome") in ("win", "loss"):
+                    rows.append({"confidence": rec.get("confidence"),
+                                 "result": rec["outcome"]})
+        rows.sort(key=lambda r: float(r.get("confidence") or 0))
+        # The `conf` argument is what the app LAST claimed; without it the
+        # competence estimate can never report a dangling certainty, because
+        # it has nothing to compare the record against. Measured here, not
+        # guessed: the mean stated confidence over the graded traces.
+        claimed = ([float(r["confidence"]) for r in rows
+                    if r.get("confidence") is not None] or [None])
+        mean_claimed = (sum(claimed) / len(claimed)
+                        if claimed[0] is not None else None)
+        return competence(mean_claimed, rows)
+
+    def cognitive(self, symbol: str, tf: str) -> dict:
+        """THE THINKING TRACE for a window (pure read, no state change).
+
+        Every field is derived from the payload the engine already built, so
+        this can never disagree with the numbers on the cards.
+        """
+        from .cognition import think
+        res = (self.last_result.get((symbol, tf))
+               or self.display_systems.get((symbol, tf)) or {})
+        store = {
+            "emotions": {tf: (res.get("emotion") or
+                              (self.last_result.get((symbol, tf)) or {})
+                              .get("emotion") or {})},
+            "physics": {tf: res.get("physics") or {}},
+            "news": res.get("news_value") or {},
+            "hedge": {tf: res.get("hedge") or {}},
+            "feed": self.feed.stats(),
+        }
+        out = think(symbol=symbol, tf=tf, res=res, store=store,
+                    graded=self._graded_rows(symbol, tf),
+                    floor=float(CONFIDENCE_FLOOR),
+                    system_mode=str(self.agents.settings.get("system_mode", "old")))
+        out["thought_stats"] = self.thought_stats()
+        return out
+
+    def _think_and_record(self, symbol: str, tf: str, final: dict) -> None:
+        """Store the trace and its signature against the call it produced."""
+        try:
+            payload = self.cognitive(symbol, tf)
+        except Exception:
+            log.exception("cognition failed for %s|%s", symbol, tf)
+            return
+        key = f"{symbol}|{tf}"
+        rec = {"ts": time.time(),
+               "signature": payload.get("signature"),
+               "confidence": payload.get("steps", [{}])[0]
+                             .get("data", {}).get("confidence"),
+               "signal": final.get("signal"),
+               "abstain": bool((payload.get("abstain") or {}).get("abstain")),
+               "consistency": bool((payload.get("consistency") or {}).get("ok")),
+               "split": bool((payload.get("deliberation") or {}).get("split")),
+               "outcome": None}
+        self._thoughts.setdefault(key, []).append(rec)
+        self._thoughts[key] = self._thoughts[key][-self.THOUGHT_KEEP:]
+        self._save_thoughts()
+        final["thinking"] = {
+            "signature": payload.get("signature"),
+            "n_steps": payload.get("n_steps"),
+            "abstain": payload.get("abstain"),
+            "trust": (payload.get("competence") or {}).get("trust"),
+            "routes_agree": (payload.get("deliberation") or {}).get("routes_agree"),
+            "consistency": payload.get("consistency"),
+            "counterfactual": payload.get("counterfactual"),
+            "failing_assumptions": [a["claim"] for a in
+                                    payload.get("assumptions") or []
+                                    if a.get("holds") is False],
+        }
+
+    def _grade_last_thought(self, symbol: str, tf: str, won: bool) -> None:
+        """A settled window grades the thought that produced it.
+
+        This is the feedback loop: without it the app could output a
+        considered-looking trace for ever and never once learn whether its own
+        reasoning was any good.
+        """
+        key = f"{symbol}|{tf}"
+        items = self._thoughts.get(key) or []
+        for rec in reversed(items):
+            if rec.get("outcome") is None:
+                rec["outcome"] = "win" if won else "loss"
+                rec["graded_at"] = time.time()
+                self._save_thoughts()
+                return
+
     def explain_ctx(self, view: str, symbol: str, tf: str) -> dict:
         """Everything the tab explainer needs, built from live state.
         No computation of its own — it only READS the engine."""
@@ -4534,6 +5122,12 @@ class PredictionEngine:
                 # `_vol_at` rebuilt the same window for every start —
                 # O(n^2) and a third of the snapshot build)
                 _vol_idx: list = [None] * _nb
+                # direction-matched returns: windows whose own 5-bar
+                # momentum agreed with TODAY'S side. The fan is drawn from
+                # this subset when it is thick enough, so a bullish window
+                # carries the drift of bullish windows instead of the
+                # unconditional median (which sloped into the SL).
+                _rets_d = {0.25: [], 0.5: [], 0.75: [], 1.0: []}
                 for _vi in range(10, _nb):
                     _vr = [(_cl[_vj] - _cl[_vj - 1]) / _cl[_vj - 1]
                            for _vj in range(_vi - 9, _vi + 1)
@@ -4599,6 +5193,10 @@ class PredictionEngine:
                         for _f, _lst in _rets_c.items():
                             _k = _i0 + max(1, int(round(_rem_min * _f)))
                             _lst.append(_cl[_k] / _p0 - 1.0)
+                    if _mom_i == dirn:
+                        for _f, _lst in _rets_d.items():
+                            _k = _i0 + max(1, int(round(_rem_min * _f)))
+                            _lst.append(_cl[_k] / _p0 - 1.0)
                     if _cl[_i0 + _rem_min] > _p0:
                         _up += 1
                     for _f, _lst in _rets.items():
@@ -4617,21 +5215,43 @@ class PredictionEngine:
                     _mu = sum(_end) / len(_end)
                     _sig = (sum((x - _mu) ** 2 for x in _end)
                             / len(_end)) ** 0.5
-                    # empirical cone by time fraction — the fan the
-                    # charts draw (quantiles of the measured return
-                    # distribution at each elapsed fraction, not a
-                    # Gaussian sqrt-time cone)
+                    # ── DRIFT-ALIGNED FAN (audit §4.2) ────────────────
+                    # Draw the cone from the most specific honest subset:
+                    # setup-matched (momentum+vol) > direction-matched
+                    # (momentum) > all windows. The old code always drew
+                    # the unconditional quantiles, so a BULLISH window's
+                    # q50 could slope straight into the SL. The subset and
+                    # its n are printed, and if the median still points
+                    # against the call the payload says so ("against")
+                    # instead of implying support that is not in the tape.
+                    if _nc >= 50 and len(_rets_c[1.0]) >= 50:
+                        _fan_src = _rets_c
+                        _fan_basis = f"setup-matched (momentum+vol) n={_nc}"
+                    elif len(_rets_d[1.0]) >= 30:
+                        _fan_src = _rets_d
+                        _fan_basis = (f"direction-matched (momentum) "
+                                      f"n={len(_rets_d[1.0])}")
+                    else:
+                        _fan_src = _rets
+                        _fan_basis = f"all windows n={_n}"
                     _fan = [{"f": 0.0, "q05": round(price, 6),
                              "q25": round(price, 6), "q50": round(price, 6),
                              "q75": round(price, 6), "q95": round(price, 6)}]
                     for _f in (0.25, 0.5, 0.75, 1.0):
+                        _vals = _fan_src.get(_f) or _rets[_f]
                         _fan.append({
                             "f": _f,
-                            "q05": round(price * (1 + _q(_rets[_f], 0.05)), 6),
-                            "q25": round(price * (1 + _q(_rets[_f], 0.25)), 6),
-                            "q50": round(price * (1 + _q(_rets[_f], 0.50)), 6),
-                            "q75": round(price * (1 + _q(_rets[_f], 0.75)), 6),
-                            "q95": round(price * (1 + _q(_rets[_f], 0.95)), 6)})
+                            "q05": round(price * (1 + _q(_vals, 0.05)), 6),
+                            "q25": round(price * (1 + _q(_vals, 0.25)), 6),
+                            "q50": round(price * (1 + _q(_vals, 0.50)), 6),
+                            "q75": round(price * (1 + _q(_vals, 0.75)), 6),
+                            "q95": round(price * (1 + _q(_vals, 0.95)), 6)})
+                    _drift_bps = (round((_fan[-1]["q50"] / price - 1.0) * 1e4, 1)
+                                  if price else 0.0)
+                    _fan_drift = ("flat" if abs(_drift_bps) < 1.0
+                                  else "with" if (_drift_bps > 0) == (dirn > 0)
+                                  else "against")
+
                     def _wilson(k, n):
                         if not n:
                             return [0.0, 0.0]
@@ -4642,27 +5262,17 @@ class PredictionEngine:
                                      + z * z / (4 * n * n)) ** 0.5) / den
                         return [round(max(0.0, cen - half), 4),
                                 round(min(1.0, cen + half), 4)]
-                    if _nc >= 50 and len(_rets_c[1.0]) >= 50:
-                        _fan = [{"f": 0.0, "q05": round(price, 6),
-                                 "q25": round(price, 6),
-                                 "q50": round(price, 6),
-                                 "q75": round(price, 6),
-                                 "q95": round(price, 6)}]
-                        for _f in (0.25, 0.5, 0.75, 1.0):
-                            _fan.append({
-                                "f": _f,
-                                "q05": round(price * (1 + _q(_rets_c[_f], 0.05)), 6),
-                                "q25": round(price * (1 + _q(_rets_c[_f], 0.25)), 6),
-                                "q50": round(price * (1 + _q(_rets_c[_f], 0.50)), 6),
-                                "q75": round(price * (1 + _q(_rets_c[_f], 0.75)), 6),
-                                "q95": round(price * (1 + _q(_rets_c[_f], 0.95)), 6)})
-                        _fan_basis = f"setup-matched (momentum+vol) n={_nc}"
-                    else:
-                        _fan_basis = f"all windows n={_n}"
+                    # (the fan itself is built once, above, from the
+                    # most specific honest subset — no second rebuild)
                     out = {
                         "approx": True,
                         "method": "empirical-first-touch",
                         "fan_basis": _fan_basis,
+                        # does the median path point the way the call
+                        # does? "with" / "against" / "flat" — measured,
+                        # never assumed (audit §4.2)
+                        "fan_drift": _fan_drift,
+                        "drift_bps": _drift_bps,
                         "n": _n, "ambig": _amb,
                         # Wilson 95% intervals: a probability without
                         # its uncertainty is a claim; with n it is a
@@ -4970,6 +5580,18 @@ class PredictionEngine:
                 _barriers = bool(_row.get("barriers_available", _barriers))
                 _ambiguous = bool(_row.get("ambiguous", _ambiguous))
             prev.pop("pending_settlement", None)
+            # feed the isotonic calibrator a (confidence, outcome) sample —
+            # only settled, non-seeded rows, never the live window
+            try:
+                if (not _row.get("seeded")) and _row.get("result") in ("win", "loss"):
+                    self.calib.observe(symbol, tf, _row.get("conf"),
+                                       _row.get("result") == "win")
+                    _clk = getattr(self, "_calib_saved_at", 0.0)
+                    if time.time() - _clk > 120:
+                        self._calib_saved_at = time.time()
+                        self.calib.save()
+            except Exception:
+                pass
             # adaptive conformal state: learn this window's realised
             # |return| so the next band is honest (Gibbs-Candes ACI)
             try:
@@ -5023,6 +5645,10 @@ class PredictionEngine:
                         if _row.get("result") in ("win", "loss")
                         else None)
                 self.rl.on_settle(issued=was_issued, won=_won, context=_ctx)
+                # METACOGNITION: grade the thought that produced this call, so
+                # the app learns whether its own reasoning was good
+                if _won is not None:
+                    self._grade_last_thought(symbol, tf, _won)
                 # Q-table: grade the mix this window actually traded
                 # under (decided windows only)
                 self.rl.q_on_settle(
@@ -5146,6 +5772,104 @@ class PredictionEngine:
         self._maybe_review_hindsight(symbol, tf, now)   # cadence-gated §8.3
         self._save_locks()
 
+    # ── guide §1: per-timeframe mini-chart series ─────────────────────
+    def _provisional_cycle_dict(self, symbol: str, tf: str, now: float,
+                                price: float) -> dict | None:
+        """Read-only preview card for a TF that has no locked cycle yet.
+
+        Everything here is labelled `provisional` — the UI prints PREVIEW
+        and never treats these levels as a contract."""
+        res = (self.last_result.get((symbol, tf))
+               or self.display_systems.get((symbol, tf)) or {})
+        if not res:
+            return None
+        direction = int(res.get("direction") or 0)
+        conf = float(res.get("confidence") or 0.0)
+        mins = list(TIMEFRAMES[tf]["targets"])
+        tps = res.get("tps") or []
+        lv_by_k = {int(t.get("k") or i + 1): t.get("level")
+                   for i, t in enumerate(tps) if isinstance(t, dict)}
+        targets = [{"k": i + 1, "minutes": m, "level": lv_by_k.get(i + 1),
+                    "status": "preview" if lv_by_k.get(i + 1) else "open",
+                    "direction": direction, "locked_at": None,
+                    "hit_ts": None, "locked_cci": None}
+                   for i, m in enumerate(mins)]
+        end = next_grc_ts(now)
+        return {
+            "provisional": True,
+            "symbol": symbol, "tf": tf, "W": int(TIMEFRAMES[tf]["minutes"]),
+            "direction": direction, "confidence": round(conf, 4),
+            "strength": float(res.get("strength") or 0.0),
+            "issued": bool(res.get("issued")),
+            "tier": res.get("tier") or "watch-only",
+            "p_side": res.get("p_side"),
+            "entry": (res.get("entry")
+                      or (res.get("lock") or {}).get("price")
+                      or (price or None)),
+            "tp": (targets[-1]["level"] if targets else None),
+            "sl": res.get("sl"),
+            "sl_provisional": True,
+            "ratio": res.get("ratio"),
+            "targets": targets,
+            "countdown_s": (max(0, int(end - now)) if end else None),
+            "cycle_start": None, "cycle_end": end,
+            "risk": {"note": (res.get("levels_source")
+                              or "preview only — no locked contract yet"),
+                     "provisional": True},
+            "canonical": None, "level_contract": None, "contract_id": None,
+            "contract_state": "preview", "levels_ok": True,
+            "winrate": None, "winrate_n": 0,
+            "execution_eligible": False, "issued_at": None,
+            "levels_source": res.get("levels_source"),
+        }
+
+    def _bars_1m(self, symbol: str) -> list[dict]:
+        st = self.feed.state(symbol)
+        n = min(len(st.times), 1200)
+        start = len(st.times) - n
+        return [{"t": st.times[i], "o": st.opens[i], "h": st.highs[i],
+                 "l": st.lows[i], "c": st.closes[i], "v": st.volumes[i]}
+                for i in range(start, len(st.times))]
+
+    def tf_charts(self, symbol: str, bars_1m: list[dict] | None = None) -> dict:
+        """tf_charts[asset][tf] = build_tf_candles(tape, tf).
+
+        One resampling rule server-side (step + lookback per TF), so every
+        card that draws a TF draws the SAME series, and each TF keeps its
+        own epoch (epoch_start_tf) instead of inheriting tf1's clock."""
+        from .chartlink import build_tf_candles, TF_CHART_SPEC
+        if bars_1m is None:
+            bars_1m = self._bars_1m(symbol)
+        cache = getattr(self, "_tf_chart_cache", None)
+        if cache is None:
+            cache = self._tf_chart_cache = {}
+        sig = (len(bars_1m),
+               int(bars_1m[-1]["t"]) if bars_1m else 0,
+               round(float(bars_1m[-1].get("c") or 0), 8) if bars_1m else 0.0)
+        prev = cache.get(symbol)
+        if prev and prev[0] == sig:
+            return prev[1]
+        epochs = getattr(self, "epoch_start_tf", None)
+        if epochs is None:
+            epochs = self.epoch_start_tf = {}
+        out: dict = {}
+        for tf in TF_CHART_SPEC:
+            spec = TF_CHART_SPEC[tf]
+            step = max(1, int(spec["step"]))
+            W = int(TIMEFRAMES.get(tf, {}).get("minutes", 22) or 22)
+            # four completed windows + the current one; the guide's
+            # 60/50/48/48 lookbacks are the MINI-chart minimum, and using
+            # them for the main chart truncated it to a sliver (the chart
+            # looked like it "vanished" after switching TF/asset).
+            need = 4 * int(math.ceil(W / step)) + 8
+            series = build_tf_candles(bars_1m, tf,
+                                     lookback=max(int(spec["lookback"]), need))
+            out[tf] = series
+            if series["candles"]:
+                epochs.setdefault(symbol, {})[tf] = int(series["candles"][0]["t"])
+        cache[symbol] = (sig, out)
+        return out
+
     def fresh_cycle(
         self,
         symbol: str,
@@ -5225,36 +5949,32 @@ class PredictionEngine:
                               + f" · asset profile ×{_prof['sl_mult']} SL"
                                 f" TP = 2x unit ({symbol} nature)")
         _horizon_block = _blocks[_mins[-1]]     # horizon TP ALWAYS calculated FIRST
-        for k, minutes in enumerate(_mins, start=1):
-            if k == len(_mins):
-                targets.append(
-                    TargetState(
-                        k=k,
-                        minutes=minutes,
-                        level=_horizon_block["tp"],
-                        status="locked",
-                        direction=_dir,
-                        locked_at=now,
-                        locked_cci=res["cci_adjusted"],
-                    )
-                )
-            elif k == 1:
-                targets.append(
-                    TargetState(
-                        k=k,
-                        minutes=minutes,
-                        level=_blocks[minutes]["tp"],
-                        status="locked",
-                        direction=_dir,
-                        locked_at=now,
-                        locked_cci=res["cci_adjusted"],
-                    )
-                )
+        # CANONICAL LADDER (audit §1.2): TP1 is a monotone fraction of the
+        # entry → TF-TP span, built in ONE place (app/contracts.py). It used
+        # to be the separate 5-minute measured block, which printed $4
+        # above the entry while the ANALYSING panel's "Rung 1" printed
+        # +86 bps — two formulas, two ladders, one window.
+        # TP2/TP3 keep the sequential-lock status (a target is only
+        # *tracked* once the one before it is hit) but their frozen price
+        # is published on the canonical contract, so no panel ever prints
+        # "— OPEN" for a level the lock already knows.
+        from .contracts import build_ladder as _build_ladder
+        _rungs = _build_ladder(_price0, _dir, _horizon_block["tp"],
+                               list(_mins))
+        _rung1 = (_rungs[0]["level"] if _rungs
+                  else _blocks[_mins[0]]["tp"])
+        targets: list[TargetState] = []
+        for _k, _minutes in enumerate(_mins, start=1):
+            if _k == len(_mins):
+                _level, _status = _horizon_block["tp"], "locked"
+            elif _k == 1:
+                _level, _status = _rung1, "locked"
             else:
-                # Tp2/Tp3 are NOT calculated until the previous target is hit
-                targets.append(
-                    TargetState(k=k, minutes=minutes, level=None, status="pending")
-                )
+                _level, _status = None, "pending"
+            targets.append(TargetState(
+                k=_k, minutes=_minutes, level=_level, status=_status,
+                direction=_dir, locked_at=now,
+                locked_cci=res.get("cci_adjusted")))
         # window anchored to the LOCK (user: a timeframe is the time
         # FROM the prediction — 'after 22 minutes, what price?').
         # The epoch grid previously made the real duration anything
@@ -5330,6 +6050,33 @@ class PredictionEngine:
             cyc.risk["tp_dist"] = cyc.tp_dist
             cyc.risk["tp_bps"] = cyc.tp_dist / _price0 * 1e4
             cyc.risk["rr"] = cyc.risk["ratio"] = cyc.ratio
+
+        # ── ONE CANONICAL CONTRACT PER (ASSET, TF, CYCLE) ───────────────
+        # Frozen here, read by every panel: entry, TF-horizon TP, TP1..TP3
+        # rungs, SL, ATR, both confidences, digest. The ladder invariant
+        # (ENTRY < TP1 < TP2 < TP3 < TF-TP for a BUY, mirrored for a SELL)
+        # is enforced by app/contracts.py and re-verified on read.
+        from .contracts import build_contract as _build_contract
+        _eff_dir = int(cyc.direction or _dir or 1)
+        _eff_dir = 1 if _eff_dir >= 0 else -1
+        _eff_tp = float(cyc.tp or _horizon_block.get("tp") or 0.0)
+        _eff_sl = float(cyc.sl or _horizon_block.get("sl") or 0.0)
+        cyc.canonical = _build_contract(
+            symbol=symbol, timeframe=tf, direction=_eff_dir,
+            entry=_price0, horizon_tp=_eff_tp, sl=_eff_sl,
+            minutes=list(_mins), atr=float(res.get("atr") or 0.0),
+            base_confidence=float(res.get("confidence_base_snr")
+                                  or res.get("confidence") or 0.0),
+            final_confidence=float(res.get("confidence") or 0.0),
+            cci_adjusted=float(res.get("cci_adjusted") or 0.0),
+            cycle_id=cyc.cycle_id, locked_at=now,
+            source="measured-moves+canonical-ladder",
+        )
+        # NOTE: cyc.targets keeps its sequential hit-tracking order (a
+        # pending target carries no level so the touch detector ignores
+        # it). The FROZEN price of every rung lives on cyc.canonical, and
+        # the UI falls back to it — that is what removes the "— OPEN"
+        # cells without letting an untracked rung fire a hit.
         self.cycles[(symbol, tf)] = cyc
         self._apply_risk(symbol, tf, cyc, res)
         if cyc.sl is None and _price0 > 0:
@@ -5391,7 +6138,9 @@ class PredictionEngine:
         last_beat = 0.0
         while not self._stop.is_set() and self.phase == "analysis":
             now = time.time()
-            self._update_readiness()
+            # this loop ticks at 4 Hz; the dry-run inside readiness is a full
+            # pipeline pass whenever it is due, so it must not run on the loop
+            await run_pass(self._update_readiness)
             ready = all(self.readiness.values())
             # computable = everything except full-history bars, with
             # at least MIN_BARS_COMPUTE bars present. Locking then
@@ -5435,14 +6184,34 @@ class PredictionEngine:
         self.readiness["news"] = self.news.ready
         self.readiness["physics"] = self.physics.ready
         if enough_any and not self.readiness["formulas"]:
-            # dry-run the entire pipeline so all subsystems report readiness
+            # Dry-run the whole pipeline ONCE to let every subsystem report
+            # readiness. It must not repeat every GRC: this dry-run costs the
+            # same as a full pass (seconds of CPU × 6 assets), and the old
+            # code re-ran it on EVERY GRC until physics warmed up — ~10 s of
+            # blocking work every 4 minutes, i.e. the "ENGINE BUSY" banner
+            # coming back over and over. Attempts now back off exponentially
+            # (1st GRC, then ×2 up to 10 min) and the number of attempts plus
+            # the last error are reported, so a stuck dry-run is visible in
+            # /api/health rather than silently burning the box.
             try:
-                for symbol in SYMBOL_ORDER:
-                    self.compute_asset(symbol, record=False, display=False)
-                self.readiness["formulas"] = True
-                self.readiness["weights"] = True
-            except Exception:
-                log.exception("analysis dry-run failed")
+                attempt = int(self._readiness_tries) + 1
+            except AttributeError:
+                attempt = 1
+            now = time.time()
+            due = getattr(self, "_readiness_next_at", 0.0) or 0.0
+            if now >= due:
+                self._readiness_tries = attempt
+                try:
+                    for symbol in SYMBOL_ORDER:
+                        self.compute_asset(symbol, record=False, display=False)
+                    self.readiness["formulas"] = True
+                    self.readiness["weights"] = True
+                    self._readiness_error = ""
+                except Exception as exc:
+                    self._readiness_error = repr(exc)[:200]
+                    log.exception("analysis dry-run failed")
+                backoff = min(600.0, 30.0 * (2 ** max(0, attempt - 1)))
+                self._readiness_next_at = time.time() + backoff
 
     async def _lock_initial(self, warning: bool) -> None:
         if self.locked:
@@ -5452,7 +6221,10 @@ class PredictionEngine:
         now = time.time()
         for symbol in SYMBOL_ORDER:
             try:
-                res_pack = self.compute_asset(symbol, record=True, display=True)
+                # the initial lock computes all six assets; inline it stalled
+                # the loop right at the moment the UI expects its first frame
+                res_pack = await run_pass(
+                    self.compute_asset, symbol, record=True, display=True)
             except Exception:
                 log.exception("initial compute failed for %s", symbol)
                 res_pack = self.last_result
@@ -5461,7 +6233,19 @@ class PredictionEngine:
                 if not res:
                     continue
                 self.last_result[(symbol, tf)] = res
-                self.fresh_cycle(symbol, tf, now, res, reason="initial_lock", warning=warning)
+                try:
+                    self.fresh_cycle(symbol, tf, now, res,
+                                     reason="initial_lock", warning=warning)
+                except Exception as exc:
+                    # One failing lane used to abort the WHOLE initial lock:
+                    # phase never reached "live", _tick_loop never ran and no
+                    # TF ever got a contract (the "waiting for the first
+                    # lock…" dead end). Log, record and keep going.
+                    log.exception("initial lock failed for %s/%s", symbol, tf)
+                    errs = getattr(self, "cycle_errors", None)
+                    if errs is None:
+                        errs = self.cycle_errors = {}
+                    errs[f"{symbol}:{tf}"] = repr(exc)[:200]
         self.phase = "live"
         await self.emit({
             "type": "phase",
@@ -5481,6 +6265,13 @@ class PredictionEngine:
     # ==================================================================
     async def on_grc(self, ts: float) -> None:
         async with self._busy:
+            self.grc_started_at = time.time()
+            _prof: dict[str, float] = {}
+            self.grc_profile = _prof
+
+            def _t(label, since):
+                _prof[label] = round((time.time() - since) * 1000, 1)
+                return time.time()
             now = time.time()
             self.last_grc = ts
             self.grc_count += 1
@@ -5491,12 +6282,21 @@ class PredictionEngine:
                 # GRC baselines within a single cycle)
                 for symbol in SYMBOL_ORDER:
                     try:
-                        res_pack = self.compute_asset(symbol, record=False, display=False)
+                        # OFF THE EVENT LOOP. compute_asset is seconds of pure
+                        # CPU per asset; run inline in this async def it froze
+                        # /api/health and the websocket for the whole pass,
+                        # which the client saw as "ENGINE BUSY" and which made
+                        # the brain chip fall back to its offline text.
+                        res_pack = await run_pass(
+                            self.compute_asset, symbol,
+                            record=False, display=False)
                         for tf in TF_ORDER:
                             self.last_result[(symbol, tf)] = res_pack[tf]
                     except Exception:
                         log.exception("analysis GRC compute failed")
-                self._update_readiness()
+                _t("analysis_compute", now)
+                await run_pass(self._update_readiness)
+                _t("analysis_readiness", now)
                 if all(self.readiness.values()):
                     await self._lock_initial(warning=False)
                 return
@@ -5507,13 +6307,19 @@ class PredictionEngine:
             _done = 0
             for symbol in SYMBOL_ORDER:
                 try:
-                    res_pack = self.compute_asset(symbol, record=True, display=True)
+                    # yield to the loop between assets when it is starved
+                    # (the pass is a burst; the board must stay responsive)
+                    await asyncio.sleep(0)
+                    _gov.cooperate()
+                    # same reason as above: keep the loop answering while the
+                    # heavy per-asset pipeline runs on a worker thread
+                    res_pack = await run_pass(
+                        self.compute_asset, symbol, record=True, display=True)
                 except Exception:
                     log.exception("GRC compute failed for %s", symbol)
                     continue
-                # the pass blocks the event loop for seconds per asset; a
-                # progress frame keeps the websocket and the client's
-                # silence detector alive instead of a 10 s dead air gap
+                # one progress frame per finished asset: the client's silence
+                # detector stays fed even though the work is off-loop now
                 _done += 1
                 await self.emit({"type": "grc_progress",
                                  "done": _done, "of": len(SYMBOL_ORDER),
@@ -5526,22 +6332,37 @@ class PredictionEngine:
                 for tf in TF_ORDER:
                     res = res_pack[tf]
                     self.last_result[(symbol, tf)] = res
-                    self._apply_grc_lock_rules(symbol, tf, now, res)
-                # Sections 10/13 learning + history bookkeeping
+                    # lock rules are per-lane bookkeeping (measured 154 ms);
+                    # they mutate this lane's cycle only, so they stay in
+                    # order but off the loop
+                    await run_pass(self._apply_grc_lock_rules,
+                                   symbol, tf, now, res)
+                # Sections 10/13 learning + history bookkeeping (263 ms of
+                # rings/scorecards per asset — the second biggest loop-bound
+                # cost in the pass after compute_asset)
                 try:
-                    self._record_learning(symbol, res_pack, now)
+                    await run_pass(self._record_learning, symbol, res_pack, now)
                 except Exception:
                     log.exception("learning bookkeeping failed for %s", symbol)
+            _t("compute+agents+locks+learning", now)
+            _mark = time.time()
             # Section 10 macro (every 15 GRCs) + deep (every 247 min)
             try:
-                self.learning.maybe_macro(self.grc_count, self)
-                self.learning.maybe_deep(self)
-                self.learning.save(self)
+                await run_pass(self.learning.maybe_macro, self.grc_count, self)
+                await run_pass(self.learning.maybe_deep, self)
+                await run_pass(self.learning.save, self)
             except Exception:
                 log.exception("macro/deep learning cycle failed")
-            self.cci.save()
-            self.physics.save()
+            await run_pass(self.cci.save)
+            await run_pass(self.physics.save)
+            _t("learning_saves", _mark)
+            _mark = time.time()
             await self._broadcast_full("grc")
+            _t("broadcast", _mark)
+            # what the pass ACTUALLY cost, once it is fully done — the clock's
+            # handler_ms only covers the coroutine, which now hands its CPU to
+            # worker threads; without this the health panel under-reported.
+            self.grc_ms = round((time.time() - self.grc_started_at) * 1000, 1)
 
     # -- lock rules at GRC --------------------------------------------------
     def _apply_grc_lock_rules(
@@ -5851,6 +6672,25 @@ class PredictionEngine:
                     continue
                 for tf in TF_ORDER:
                     cyc = self.cycles.get((symbol, tf))
+                    if cyc is None:
+                        # SELF-HEAL: if the initial lock (or a rollover)
+                        # failed, this lane would never show a contract.
+                        # Retry at most every 30 s, off the lock path.
+                        retry = getattr(self, "_cycle_retry", None)
+                        if retry is None:
+                            retry = self._cycle_retry = {}
+                        _k = (symbol, tf)
+                        if now - float(retry.get(_k, 0.0)) > 30.0:
+                            retry[_k] = now
+                            try:
+                                _res = self._event_result(symbol, tf)
+                                self.last_result[_k] = _res
+                                self.fresh_cycle(symbol, tf, now, _res,
+                                                 reason="self_heal")
+                            except Exception:
+                                log.exception("self-heal lock failed %s/%s",
+                                              symbol, tf)
+                        cyc = self.cycles.get((symbol, tf))
                     if cyc is None or cyc.pending_reset:
                         continue
                     # sub-target / TP / SL hit detection (event-driven locks)
@@ -6002,7 +6842,19 @@ class PredictionEngine:
             out["pass_age_s"] = (round(time.time() - fw.last_pass_at, 1)
                                  if getattr(fw, "last_pass_at", 0) else None)
             th = getattr(self, "_fw_heal_thread", None)
-            if fw.state == "absent" and (th is None or not th.is_alive()):
+            # "building" is not a healthy state — it is an UNPROVEN one. Ask
+            # the component whether the attempt is still alive; this is what
+            # turns a silent, killed or wedged build into an automatic retry
+            # instead of an indefinite "brain offline — vote withheld".
+            if fw.state == "building":
+                try:
+                    sup = fw.supervise()
+                    out["supervise"] = sup
+                    out["action"] = ("flywire-build-" + str(sup.get("action")))
+                except Exception as exc:      # pragma: no cover - defensive
+                    out["supervise"] = {"error": repr(exc)[:200]}
+                    out["action"] = "supervise-failed"
+            elif fw.state == "absent" and (th is None or not th.is_alive()):
                 def _load() -> None:
                     try:
                         fw.ensure()
@@ -6205,6 +7057,13 @@ class PredictionEngine:
             for tf in TF_ORDER:
                 cyc = self.cycles.get((symbol, tf))
                 d = cyc.to_dict(now) if cyc else None
+                if d is None:
+                    # PROVISIONAL CARD: a TF with a computed signal but no
+                    # locked cycle yet used to render an empty hero
+                    # ("waiting for the first lock…") even though the
+                    # analysis had a call, a confidence and a preview
+                    # ladder. Publish those, explicitly flagged preview.
+                    d = self._provisional_cycle_dict(symbol, tf, now, price)
                 # LEVELS GATE (rewrite): the snapshot NEVER invents a
                 # level from the current price. Levels come only from
                 # the cycle's frozen block anchored at the LOCKED entry
@@ -6556,6 +7415,16 @@ class PredictionEngine:
                 },
                 "probation_count": len(self.learning.probation),
             },
+            # AUTHORITATIVE BRAIN STATE (one source): the per-TF display
+            # entries can lag the connectome, which made the header say
+            # "brain offline — vote withheld" while the BRAIN tab showed
+            # FlyWire ready with 138k neurons.
+            "brain": (lambda _fw: {
+                "state": getattr(_fw, "state", "absent"),
+                "ready": getattr(_fw, "state", "absent") == "ready",
+                "chip": (_fw.chip() if _fw is not None else None),
+                "vote": getattr(self.brains, "last_vote", None),
+            })(getattr(self.brains, "fw", None)),
             "agents": self.agents.status(),
             "feed": self.feed.stats(),
             "ledger": self.ledger.api_payload(SYMBOL_ORDER, TF_ORDER),
@@ -6570,7 +7439,21 @@ class PredictionEngine:
         }
 
     async def _broadcast_full(self, reason: str) -> None:
-        snap = self.build_snapshot()
+        # assembling the snapshot is hundreds of ms of CPU; awaiting an
+        # asyncio.Event around a synchronous build (the old shape) still
+        # blocked every other coroutine, including /api/health
+        snap = await run_pass(self.build_snapshot)
         snap["reason"] = reason
         self.last_snapshot = snap
+        # HAND THE SAME PAYLOAD TO THE REST CACHE. Without this, every GRC
+        # built the snapshot twice: once here, then again on the next
+        # /api/snapshot poll ~1 s later (the broadcast never populated the
+        # cache). Under the old 0.75 s TTL those two builds plus a poll could
+        # chain together and hold the CPU. The snapshot is the authoritative
+        # representation of this moment, so the poll can serve it verbatim.
+        try:
+            from . import main as _m
+            _m.prime_snapshot_cache(snap)
+        except Exception:
+            pass
         await self.emit(snap)

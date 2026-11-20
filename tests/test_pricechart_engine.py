@@ -51,7 +51,10 @@ def test_candle_fetches_reject_stale_symbol_and_key_history_revision():
     assert "const symbol = S.symbol;" in JS
     assert "S._candleLoadSeq = seq;" in JS
     assert "seq !== S._candleLoadSeq || symbol !== S.symbol" in JS
-    assert "S.tfBarsRevision[tf] = historyRevision;" in JS
+    # per-TF server charts: a card bound to /api/tf-charts keys on the
+    # server's revision, otherwise on the local history revision
+    assert "S.tfBarsRevision[tf] = useSrv ? String(srv.revision" in JS
+    assert ": historyRevision;" in JS
     assert "const sourceRevision =" in JS and "S.tfBarsRevision?.[S.focusTf]" in JS
     assert "String(md.revision ||" in JS and "candleRevisionFallback(md.bars)" in JS
 
