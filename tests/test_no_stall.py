@@ -338,3 +338,55 @@ def test_stall_is_self_diagnosing():
     assert "def _dump_stacks(" in main
     assert "faulthandler.dump_traceback(" in main
     assert "_dump_stacks(f\"lag {_loop_lag['s']}s\")" in main
+
+
+def test_restore_and_load_announce_themselves():
+    """A bundle restore / cache load is a build attempt, not 'offline'.
+
+    It leaves `state` at "building" with a real stage so the chip shows
+    progress; the old code kept state == "absent" for the whole 16 s of
+    gunzip + scipy load and the dashboard painted the red
+    "brain offline — vote withheld (RECONNECT)" chip over a working brain.
+    """
+    from app.flywire import FlyWireBrain
+
+    src = _src("app/flywire.py")
+    i = src.index("def ensure(")
+    body = src[i:src.index("def _acquire_then_build(")]
+    # the attempt is announced BEFORE the restore/load path
+    assert 'self.state = "building"' in body.split("if npz.exists():")[0]
+    assert '"restoring bundled connectome"' in body
+    assert '"loading connectome"' in body
+    assert "self.build_beat_at = time.time()" in body
+
+    fw = _fake_fw()
+    fw.state = "absent"
+    fw.progress = {"stage": "not started", "pct": 0.0}
+    fw.build_started_at = fw.build_beat_at = 0.0
+    fw.attempt = 0
+    fw.last_error = ""
+    # a load path is now always preceded by a "building" announcement
+    assert FlyWireBrain.progress_line(fw) in (
+        "not started", "brain offline — vote withheld "
+        "(Settings → Brain → RECONNECT)")
+
+
+def test_healthy_load_thread_is_not_reported_as_lost(monkeypatch):
+    """The restore/load path runs on the CALLER's thread.
+
+    worker_alive() only looked at `_acquire_thread`, so a perfectly healthy
+    bundle restore was classified "dead" and the chip said "build worker
+    lost … restarting automatically" — a false alarm as bad as the false
+    "offline" it replaced.
+    """
+    from app.flywire import FlyWireBrain
+
+    fw = _fake_fw()
+    fw._build_thread = threading.current_thread()   # this very thread
+    assert fw.worker_alive() is True
+    assert fw._classify_worker() == "working"
+    assert "lost" not in fw.progress_line()
+    assert fw.chip()["stalled"] is False
+
+    fw._build_thread = None
+    assert fw._classify_worker() == "dead"           # nothing running -> lost

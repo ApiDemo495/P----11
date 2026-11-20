@@ -370,6 +370,8 @@ class FlyWireBrain:
         self.build_beat_at: float = 0.0
         self.attempt: int = 0
         self.build_pid: int | None = None
+        self._build_thread: threading.Thread | None = None
+        self._acquire_thread: threading.Thread | None = None
         self.last_error: str | None = None
         self.steps: list[dict] = []
         self.load_ms: float | None = None
@@ -503,10 +505,27 @@ class FlyWireBrain:
             if self.state in ("building", "ready"):
                 return
             npz = self.npz_path()
+            # A restore/load IS a build attempt. It used to leave `state` at
+            # "absent" for the whole 16 s of gunzip + scipy load, so the UI
+            # (correctly reading `state`) painted "brain offline — vote
+            # withheld (RECONNECT)" over a brain that was busy loading from
+            # the repo bundle. Users read that as "the brain is broken" and
+            # pressed RECONNECT, restarting the load. Announce the attempt.
+            self.build_started_at = self.build_beat_at = time.time()
+            self.attempt += 1
+            self.progress = {"stage": "checking local cache", "pct": 1.0}
+            self.state = "building"
+            # the restore/load below runs on THIS thread
+            self._build_thread = threading.current_thread()
             if not npz.exists():
+                self.progress = {"stage": "restoring bundled connectome",
+                                 "pct": 5.0}
+                self.build_beat_at = time.time()
                 self._restore_bundled()
             if npz.exists():
                 try:
+                    self.progress = {"stage": "loading connectome", "pct": 60.0}
+                    self.build_beat_at = time.time()
                     t0 = time.perf_counter()
                     self._load(npz)
                     self.load_ms = round((time.perf_counter() - t0) * 1000, 1)
@@ -525,7 +544,6 @@ class FlyWireBrain:
             self.state = "building"
             self.progress = {"stage": "starting", "pct": 0.0}
             self.build_started_at = self.build_beat_at = time.time()
-            self.attempt += 1
             self._acquire_thread = threading.Thread(
                 target=self._acquire_then_build,
                 name="flywire-acquire", daemon=True)
@@ -874,8 +892,18 @@ class FlyWireBrain:
         return None
 
     def worker_alive(self) -> bool:
-        th = getattr(self, "_acquire_thread", None)
-        return bool(th is not None and th.is_alive())
+        """True while EITHER build path is actually running on a thread.
+
+        Two paths exist: the load/restore runs on the caller's thread (so
+        there is no extra thread to inspect), and the cold download+build
+        runs on ``_acquire_thread``. Checking only the latter made a
+        perfectly healthy bundle restore look like a dead worker.
+        """
+        for attr in ("_acquire_thread", "_build_thread"):
+            th = getattr(self, attr, None)
+            if th is not None and th.is_alive():
+                return True
+        return False
 
     def _classify_worker(self) -> str:
         """Compare the recorded attempt against this process's own threads.
