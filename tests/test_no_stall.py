@@ -390,3 +390,20 @@ def test_healthy_load_thread_is_not_reported_as_lost(monkeypatch):
 
     fw._build_thread = None
     assert fw._classify_worker() == "dead"           # nothing running -> lost
+
+
+def test_restore_reports_progress_and_heartbeats():
+    """A 33 s gunzip must not sit on one frozen percentage.
+
+    The single copyfileobj() call reported "5 %" for the whole restore and
+    emitted no heartbeat, so (a) the user could not tell it was working and
+    (b) the supervisor's BEAT_TIMEOUT_S could mistake it for wedged.
+    """
+    src = _src("app/flywire.py")
+    i = src.index("def _restore_bundled(")
+    body = src[i:src.index("def ensure(")]
+    assert "self.build_beat_at = time.time()" in body
+    assert "self.progress = " in body
+    assert "_BUNDLE_NPZ_BYTES" in src
+    # still chunked, so the loop gets a turn and progress is real
+    assert "fh.read(" in body

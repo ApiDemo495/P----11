@@ -332,6 +332,11 @@ def get_flywire() -> "FlyWireBrain":
 
 
 
+# uncompressed size of the bundled connectome (~193 MB); used only to turn
+# restore progress into a percentage
+_BUNDLE_NPZ_BYTES = 202_320_403
+
+
 def short_error(e) -> str | None:
     """One-line human summary of a brain failure. Raw exception text
     (thrift deserialize / page-header fragments) read as 'millions of
@@ -490,8 +495,24 @@ class FlyWireBrain:
             import gzip, shutil
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
             tmp = self.npz_path().with_suffix(".npz.part")
+            want = bundled.stat().st_size or 1
+            # gunzip 61 MB -> 193 MB took 33 s on a 2-core box. Copying in
+            # one `copyfileobj` call meant no heartbeat and a frozen "5 %"
+            # for half a minute: unreadable, and long enough for the
+            # supervisor to mistake a healthy restore for a wedged build.
             with gzip.open(bundled, "rb") as fh, open(tmp, "wb") as out:
-                shutil.copyfileobj(fh, out, 1 << 20)
+                while True:
+                    chunk = fh.read(4 << 20)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    # report the UNCOMPRESSED share: the gzip reader cannot
+                    # cheaply say how far into the archive it is
+                    pct = min(55.0, 5.0 + 50.0 * (out.tell() /
+                                                  max(1, _BUNDLE_NPZ_BYTES)))
+                    self.progress = {"stage": "restoring bundled connectome",
+                                     "pct": round(pct, 1)}
+                    self.build_beat_at = time.time()
             tmp.replace(self.npz_path())
             _log("connectome restored from repo bundle (no download)")
             return True
