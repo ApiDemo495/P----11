@@ -170,12 +170,25 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-repair-link")?.addEventListener("click", () => repairChartLink(true));
   $("#btn-system")?.addEventListener("click", async () => {
     const next = S.systemMode === "new" ? "old" : "new";
+    const b = $("#btn-system");
+    if (b) b.disabled = true;
     try {
-      const r = await api("/api/settings", { method: "PUT",
+      const r = await api("/api/system/mode", { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ system_mode: next }) });
-      if (r?.ok) { S.systemMode = next; syncSystemBtn(); toast(`prediction system: ${next.toUpperCase()}`, "ok"); }
-    } catch (e) { toast("system switch failed", "bad"); }
+        body: JSON.stringify({ mode: next }) });
+      if (r?.ok) {
+        S.systemMode = r.system_mode || next;
+        syncSystemBtn();
+        // retarget the OPEN cycles immediately (server already did); the
+        // snapshot below repaints every card from one source of truth
+        try { renderHero(); renderQuads(); } catch (e) { /* optional */ }
+        api("/api/snapshot").then(applySnapshot).catch(() => {});
+        toast(`prediction model: ${S.systemMode.toUpperCase()} · ${r.cycles_retargeted ?? 0} windows retargeted`, "ok");
+      } else {
+        toast("system switch refused", "bad");
+      }
+    } catch (e) { toast("system switch failed: " + (e.message || e), "bad"); }
+    finally { if (b) b.disabled = false; }
   });
   $("#boot-dismiss")?.addEventListener("click", () => {
     S.bootDismissed = true;
@@ -214,6 +227,7 @@ function setSymbol(sym) {
     resetOwnChartForSymbol(sym);
   }
   S.symbol = sym;
+  try { localStorage.setItem("symbol", sym); } catch (e) { /* private */ }
   $$(".asset-btn").forEach(b => b.classList.toggle("active", b.dataset.sym === sym));
   syncToolbar();
   // ATOMIC SWITCH (defect: the hero kept BTC's locked TP/SL, its
@@ -941,10 +955,10 @@ function renderBranches() {
   }
   const outcomePct = i => percentages ? `${percentages[i]}%` : "—";
   stats.innerHTML = `
-    <div class="kv"><span>P(target before stop)</span><b class="acc-up">${outcomePct(0)}${b.cal_delta ? ` <span class="dim" style="font-size:9px">calibrated separately ${_pct(b.p_target_cal)}</span>` : ""}</b></div>
+    <div class="kv"><span>P(target before stop)</span><b class="acc-up">${outcomePct(0)}${b.cal_delta ? ` <span class="dim" style="font-size:11px">calibrated separately ${_pct(b.p_target_cal)}</span>` : ""}</b></div>
     <div class="kv"><span>calibration (graded forecasts)</span><b>${S.snap?.prob_audit?.n ? `Δ ${S.snap.prob_audit.calibration_delta > 0 ? "+" : ""}${Math.round((S.snap.prob_audit.calibration_delta || 0) * 100)} pts · Brier raw ${S.snap.prob_audit.brier ?? "—"}${S.snap.prob_audit.brier_cal != null ? ` vs cal ${S.snap.prob_audit.brier_cal}` : ""} · n=${S.snap.prob_audit.n}` : "collecting — active after 30 graded windows"}</b></div>
     <div class="kv"><span>P(stop first)</span><b class="acc-dn">${outcomePct(2)}</b></div>
-    <div class="kv"><span>P(target | similar setups)</span><b class="acc-up">${b.p_target_cond != null ? `${_pct(b.p_target_cond)} <span class="dim" style="font-size:9px">n=${b.n_cond} · EV ${b.ev_bps_cond > 0 ? "+" : ""}${fmt(b.ev_bps_cond, 1)} bp</span>` : `<span class="dim">collecting (n=${b.n_cond || 0}/30 matched)</span>`}</b></div>
+    <div class="kv"><span>P(target | similar setups)</span><b class="acc-up">${b.p_target_cond != null ? `${_pct(b.p_target_cond)} <span class="dim" style="font-size:11px">n=${b.n_cond} · EV ${b.ev_bps_cond > 0 ? "+" : ""}${fmt(b.ev_bps_cond, 1)} bp</span>` : `<span class="dim">collecting (n=${b.n_cond || 0}/30 matched)</span>`}</b></div>
     <div class="kv"><span>fan basis</span><b>${esc(b.fan_basis || "all windows")}${b.drift_bps != null ? ` · q50 ${b.drift_bps >= 0 ? "+" : ""}${fmt(b.drift_bps, 1)} bp <span class="${b.fan_drift === "against" ? "acc-dn" : b.fan_drift === "with" ? "acc-up" : "dim"}">(${esc(b.fan_drift || "—")})</span>` : ""}</b></div>
     <div class="kv"><span>P(neither barrier touched)</span><b>${outcomePct(1)}</b></div>
     <div class="kv"><span>P(close down)</span><b>${Math.round(b.p_close_down * 100)}%</b></div>
@@ -1180,12 +1194,17 @@ function syncToolbar() {
   $$("#seg-tf .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.tf === S.focusTf));
 }
 function setFocusTf(tf) {
+  if (!TF.includes(tf)) return;
   S.focusTf = tf;
+  try { localStorage.setItem("focusTf", tf); } catch (e) { /* private */ }
   // choosing a timeframe switches the DASHBOARD to focus mode:
   // that window + its sub-timeframe TPs only (⊞ all timeframes reverts)
   S.tfFocus = true;
   try { localStorage.setItem("tfFocus", "1"); } catch (e) { /* private mode */ }
   syncToolbar(); renderWhy(); renderQuads(); S.lastViewFetch = 0;
+  // repaint the hero IMMEDIATELY for the new TF: the previous window's
+  // TP/SL must never survive the click while waiting for the next snapshot
+  try { renderHero(); } catch (e) { console.error("hero", e); }
   try { applyChartSrc(); } catch (e) { /* main TV widget follows the focused TF */ }
   loadCandles().catch(() => {});
   refreshActiveView(true);
@@ -1210,18 +1229,18 @@ function _pWinRow(res) {
   const pc = res?.p_correct;
   const cs = res?.calib_iso || {};
   const cal = pc != null
-    ? `<b>${fx(pc, 3)} <span class="dim" style="font-size:9px">P(win) · ${esc(cs.source || "map")} n=${cs.n ?? 0}${cs.slope != null ? ` · slope ${fx(cs.slope, 2)}` : ""}</span></b>`
+    ? `<b>${fx(pc, 3)} <span class="dim" style="font-size:11px">P(win) · ${esc(cs.source || "map")} n=${cs.n ?? 0}${cs.slope != null ? ` · slope ${fx(cs.slope, 2)}` : ""}</span></b>`
     : `<b class="dim">needs 40 settled · ${esc(cs.source || "insufficient")} n=${cs.n ?? 0}</b>`;
   const sp = res?.spillover || {};
   const spTxt = sp.available
     ? `<b class="${Number(sp.score) > 0 ? "acc-up" : Number(sp.score) < 0 ? "acc-dn" : "dim"}">${fx(sp.score, 2)}
-        <span class="dim" style="font-size:9px">spillover · ${Math.round((sp.coverage || 0) * 100)}% inputs
+        <span class="dim" style="font-size:11px">spillover · ${Math.round((sp.coverage || 0) * 100)}% inputs
         ${sp.xasset ? `· BTC6h ${(sp.xasset.ret * 100).toFixed(2)}%` : ""}</span></b>`
     : `<b class="dim">spillover — (thin tape)</b>`;
   const hz = res?.horizon || {};
   const hzRow = hz.state
     ? `<div class="kv"><span>horizon</span><b class="${hz.state === "tradable" ? "" : hz.state === "marginal" ? "acc-warn" : "acc-dn"}">${esc(hz.state)}
-        <span class="dim" style="font-size:9px">σ ${hz.sigma_bps ?? "—"}bp vs ${hz.required_bps ?? "—"}bp needed · ${esc(hz.note || "")}</span></b></div>`
+        <span class="dim" style="font-size:11px">σ ${hz.sigma_bps ?? "—"}bp vs ${hz.required_bps ?? "—"}bp needed · ${esc(hz.note || "")}</span></b></div>`
     : "";
   const eg = res?.edge || {};
   // cost gate: the ONLY tradeability claim the UI makes. Gross expectancy
@@ -1229,22 +1248,22 @@ function _pWinRow(res) {
   // that cannot pay its own fees says so instead of printing a nice score.
   const edgeRow = eg.state
     ? `<div class="kv"><span>cost gate</span><b class="${eg.state === "open" ? "" : eg.state === "thin" ? "acc-warn" : "acc-dn"}">${esc(eg.state)}
-        <span class="dim" style="font-size:9px">OOF gross ${fx(eg.gross_bp, 1)}bp vs ${fx(eg.friction_bps, 1)}bp cost · net ${fx(eg.expected_net_bp, 1)}bp${eg.state === "blocked" ? ` · needs ${fx(eg.required_gross_bp, 1)}bp` : ""} · ${esc(eg.state === "blocked" ? "fee not covered" : eg.source || "")}</span></b></div>`
+        <span class="dim" style="font-size:11px">OOF gross ${fx(eg.gross_bp, 1)}bp vs ${fx(eg.friction_bps, 1)}bp cost · net ${fx(eg.expected_net_bp, 1)}bp${eg.state === "blocked" ? ` · needs ${fx(eg.required_gross_bp, 1)}bp` : ""} · ${esc(eg.state === "blocked" ? "fee not covered" : eg.source || "")}</span></b></div>`
     : "";
   const sv = (res?.sleeves || []).filter(x => x && x.state !== "blocked");
   // event sleeves carry their own verdict; "unproven" is shown as such
   const sleeveRow = sv.length
     ? sv.slice(0, 2).map(x => `<div class="kv"><span>sleeve · ${esc(x.name || "")}</span><b class="${x.state === "open" ? "" : "acc-warn"}">${esc(x.state)}
-        <span class="dim" style="font-size:9px">${fx(x.gross_bp, 1)}bp gross vs ${fx(x.fee_bp, 1)}bp cost · net ${fx(x.expected_net_bp, 1)}bp · PF ${fx(x.profit_factor, 2)} · n ${x.n ?? "—"} · boot t ${fx(x.boot_t, 2)} · folds ${esc(x.folds || "—")}</span></b></div>`).join("")
+        <span class="dim" style="font-size:11px">${fx(x.gross_bp, 1)}bp gross vs ${fx(x.fee_bp, 1)}bp cost · net ${fx(x.expected_net_bp, 1)}bp · PF ${fx(x.profit_factor, 2)} · n ${x.n ?? "—"} · boot t ${fx(x.boot_t, 2)} · folds ${esc(x.folds || "—")}</span></b></div>`).join("")
     : "";
   const mi = res?.micro || {};
   const micRow = (mi && Object.keys(mi).length)
-    ? `<div class="kv"><span>microstructure</span><b class="dim" style="font-size:9px">OFI ${fx(mi.ofi, 2)} · persist ${fx(mi.ofi_persist, 2)} · VPIN ${fx(mi.vpin, 2)} · size skew ${fx(mi.size_skew, 2)} · Hawkes ${fx(mi.hawkes, 2)} · friction ${fx(mi.friction_bps, 1)}bp</b></div>`
+    ? `<div class="kv"><span>microstructure</span><b class="dim" style="font-size:11px">OFI ${fx(mi.ofi, 2)} · persist ${fx(mi.ofi_persist, 2)} · VPIN ${fx(mi.vpin, 2)} · size skew ${fx(mi.size_skew, 2)} · Hawkes ${fx(mi.hawkes, 2)} · friction ${fx(mi.friction_bps, 1)}bp</b></div>`
     : "";
   const vb = res?.vol_barriers || {};
   const vbRow = (vb.tp_bps != null)
     ? `<div class="kv"><span>vol barriers</span><b class="${vb.ok ? "" : "acc-warn"}">TP ${fx(vb.tp_bps, 1)}bp · SL ${fx(vb.sl_bps, 1)}bp
-        <span class="dim" style="font-size:9px">${esc(vb.reason || "")}</span></b></div>` : "";
+        <span class="dim" style="font-size:11px">${esc(vb.reason || "")}</span></b></div>` : "";
   return `<div class="kv"><span>P(win)</span>${cal}</div>
     <div class="kv"><span>cross-asset</span>${spTxt}</div>${hzRow}${edgeRow}${sleeveRow}${micRow}${vbRow}`;
 }
@@ -1359,6 +1378,19 @@ function renderBook() {
   }
 }
 
+/* One honest label for every surface: the sealed verdict. `issued` is kept
+   true by the contract (the card always exists) so it can no longer be the
+   thing the UI prints as "ISSUED". */
+function verdictOf(cyc, res) {
+  const v = cyc?.verdict || (cyc?.provisional ? "PREVIEW" : "");
+  if (v === "ISSUE") return "ISSUED";
+  if (v === "WATCH") return "WATCH";
+  if (v === "NO CALL") return "NO CALL";
+  if (v === "PREVIEW") return "PREVIEW";
+  if (res?.gate_ok === true) return "ISSUED";
+  if (res?.gate_ok === false) return "NO CALL";
+  return "NO CALL";
+}
 function renderHero() {
   const tf = S.focusTf;
   const a = S.snap?.assets?.[S.symbol] || {};
@@ -1371,9 +1403,11 @@ function renderHero() {
   const issued = cyc?.issued ?? res.issued ?? false;
   // ISSUED means "cleared the issue floor" — the analysis and the card now
   // read the same gate, so the hero can never advertise a call the recheck
-  // rejects.
+  // rejects. `verdict` is the sealed answer written with the prediction lock.
   const gateOk = cyc?.gate_ok ?? res.gate_ok ?? issued;
   const prov = !!cyc?.provisional;
+  const verdict = verdictOf(cyc, res);
+  const lockedId = cyc?.prediction_lock?.id || res?.prediction_lock?.id || "";
   const heroEntry = cyc?.entry ?? res.entry ?? res.lock?.price ?? null;
   const heroSl = cyc?.sl ?? res.sl ?? null;
   const weak = String(res?.ladder?.source || "").includes("inside noise floor")
@@ -1386,13 +1420,14 @@ function renderHero() {
   const badge = $("#hero-badge");
   if (badge) {
     badge.className = "hero-badge " + (dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat");
-    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)}${cyc?.tier ? ` · ${cyc.tier} · P ${fmt(cyc.p_side, 2)}` : " · ISSUED"}</small>`;
+    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)} · ${verdict}${cyc?.tier ? ` · ${cyc.tier}` : ""}${cyc?.p_side != null ? ` · P ${fmt(cyc.p_side, 2)}` : ""}${lockedId ? ` · lock ${lockedId.slice(-6)}` : ""}</small>`;
   }
   const stats = $("#hero-stats");
   if (stats) {
     stats.innerHTML = `
       <div class="kv"><span>call</span><b class="${dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat"}">${dir > 0 ? "▲ BULL" : dir < 0 ? "▼ BEAR" : "● FLAT"}${weak && dir ? "*" : ""}</b></div>
-      <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} ${gateOk ? (prov ? "· PREVIEW" : "· ISSUED") : "· below floor"}${res.issue_note ? ` <span class="dim" style="font-size:9px">${esc(res.issue_note)}</span>` : ""}</b></div>
+      <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} · ${verdict}${res.issue_note ? ` <span class="dim" style="font-size:11px">${esc(res.issue_note)}</span>` : ""}</b></div>
+      <div class="kv"><span>prediction lock</span><b class="${cyc?.prediction_lock?.locked ? "acc-up" : "dim"}">${cyc?.prediction_lock?.locked ? `🔒 ${esc(cyc.prediction_lock.side || "")} · ${esc(String(cyc.prediction_lock.id || "").slice(-8))}` : "not sealed yet"}</b></div>
       ${_pWinRow(res)}
       <div class="kv"><span>strength (voter agreement)</span><b>${fx(cyc?.strength ?? res.strength ?? 0, 2)}</b></div>
       <div class="kv"><span>measured win-rate (this conf)</span><b>${cyc?.winrate != null ? `${Math.round(cyc.winrate * 100)}% · n=${cyc.winrate_n}` : `collecting · n=${cyc?.winrate_n ?? 0}`}</b></div>
@@ -1401,7 +1436,7 @@ function renderHero() {
       <div class="kv"><span>countdown</span><b>${cyc?.countdown_s != null ? `${Math.floor(cyc.countdown_s / 60)}m ${cyc.countdown_s % 60}s` : "—"}</b></div>
       <div class="kv"><span>${prov ? "entry (preview)" : "entry (locked contract)"}</span><b>${heroEntry ? px(heroEntry) : "—"}</b></div>
       <div class="kv"><span>price now</span><b>${a.price ? px(a.price) : "—"}</b></div>
-      <div class="kv"><span>stop loss</span><b class="acc-dn">${heroSl ? px(heroSl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:9px">prov</span>' : ""}</b></div>
+      <div class="kv"><span>stop loss</span><b class="acc-dn">${heroSl ? px(heroSl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:11px">prov</span>' : ""}</b></div>
       <div class="kv"><span>TP:SL ratio</span><b>${cyc?.ratio ? Number(cyc.ratio).toFixed(2) + ":1" : "—"}</b></div>`;
   }
   // TP ladder — the TF's own horizon ALWAYS first (user rule)
@@ -1713,14 +1748,17 @@ function renderQuads(opts = {}) {
     const qd = $("#qd-" + tf);
     if (qd) {
       qd.className = "q-dir " + (dir > 0 ? "up" : dir < 0 ? "down" : "flat");
-      qd.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "▲ BULLISH"}
+      const v = verdictOf(cyc, res);
+      qd.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}
         <span class="iss">${cyc?.provisional
           ? "PREVIEW · no lock yet"
-          : cyc?.tier
-            ? `${cyc.tier} · P ${fmt(cyc.p_side, 2)} · s ${fmt(res?.raw_score, 3)} (floor ${fmt(res?.noise_floor_s, 3)})`
-            : (res?.gate_ok ? "ISSUED · targets active" : "below issue floor")}</span>`;
+          : `${v}${cyc?.tier ? ` · ${cyc.tier}` : ""}${cyc?.p_side != null ? ` · P ${fmt(cyc.p_side, 2)}` : ""}`}</span>`;
     }
-    $("#qf-" + tf).textContent = res ? `CCI ${fmt(res.cci_adjusted, 4)} · conf ${fmt(res.confidence, 3)}` : "";
+    const _rk = cyc?.risk || {};
+    $("#qf-" + tf).textContent = res
+      ? `CCI ${fmt(res.cci_adjusted, 4)} · conf ${fmt(res.confidence, 3)}`
+        + (_rk.tp_bps != null ? ` · TP +${fmt(_rk.tp_bps, 0)}bp / SL −${fmt(_rk.sl_bps, 0)}bp` : "")
+      : "";
     const ag = res?.agent;
     const _agMode = S.snap?.agents?.mode || S.snap?.agents?.active_slot || "";
     $("#qa-" + tf).textContent = ag && ag.source && ag.source !== "none"
@@ -1950,7 +1988,8 @@ function onAnalyseDone(msg) {
   box.innerHTML = `<div class="an-box">
     <div class="an-signal ${dirCls}">
       <div class="big">${r.signal}</div>
-      <div class="conf">confidence ${fx(r.confidence, 3)}${(r.gate_ok ?? r.issued) ? " · ISSUED" : " · below floor"}${r.issue_note ? ` · ${esc(r.issue_note)}` : ""}</div>
+      <div class="conf">confidence ${fx(r.confidence, 3)} · ${r.verdict === "ISSUE" ? "ISSUED" : (r.verdict || (r.gate_ok ? "WATCH" : "NO CALL"))}${r.issue_note ? ` · ${esc(r.issue_note)}` : ""}</div>
+      ${r.prediction_lock?.locked ? `<div class="conf acc-up">🔒 LOCKED ${esc(r.prediction_lock.side)} · ${esc(String(r.prediction_lock.id || "").slice(-10))} · TP ${px(r.prediction_lock.tp)} / SL ${px(r.prediction_lock.sl)} · saved to history</div>` : `<div class="conf acc-warn">lock refused: ${esc((r.prediction_lock?.why || ["no finite ladder"]).join("; "))}</div>`}
       <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? Number(r.ratio).toFixed(2) + ":1" : "—"} · ${esc(r.levels_source || "preview only")}</div>
       <div class="conf">${r.contract_state === "locked" ? `LOCKED CONTRACT ${esc((r.contract_id || "").slice(0, 16))}` : "PREVIEW ONLY — NO LOCKED CONTRACT"} · ${r.execution_eligible ? "EXECUTION ELIGIBLE" : (r.recheck?.passed ? "PAPER ONLY — signal produced, orders not routed (tape: " + esc((r.tape_mode || (S.snap?.feed?.source) || "sim")) + ")" : "NOT EXECUTION-ELIGIBLE")}</div>
     </div>
@@ -1958,10 +1997,10 @@ function onAnalyseDone(msg) {
       ${r.contract_tp ? `<div class="an-cell"><div class="k">LOCKED CONTRACT TP</div><div class="v" style="color:#26a69a">${px(r.contract_tp)}</div></div>` : ""}
       ${r.tps.map(t => `<div class="an-cell"><div class="k">MEASURED RUNG ${t.k} · ${t.minutes}m</div><div class="v">${px(t.level)}</div></div>`).join("")}
       <div class="an-cell"><div class="k">LOCKED CONTRACT SL</div><div class="v" style="color:#f0385a">${r.contract_sl ? px(r.contract_sl) : r.sl ? px(r.sl) : "—"}</div></div>
-      <div class="an-cell"><div class="k">LADDER</div><div class="v" style="font-size:10.5px;font-weight:400">${esc(r.ladder?.source || "—")}</div></div>
+      <div class="an-cell"><div class="k">LADDER</div><div class="v" style="font-size:11.5px;font-weight:400">${esc(r.ladder?.source || "—")}</div></div>
       <div class="an-w">weightage for ${msg.symbol} (per-asset mix): ${(r.weightage || []).map(w => `F${w.id} <b>${w.w}</b>`).join(" · ")}<br/><span class="dim">${esc(r.weightage_note || "")}</span></div>
       <div class="an-ai">AI review — ${esc(aiLine)}</div>
-      ${r.recheck ? `<div class="an-recheck" style="margin-top:6px;font-size:10.5px">
+      ${r.recheck ? `<div class="an-recheck" style="margin-top:6px;font-size:11.5px">
         <b class="${r.recheck.passed ? "acc-up" : "acc-dn"}">${esc(r.recheck.verdict)}</b>
         ${r.recheck.score != null ? `<div class="dim">weighted opinion score
           <b>${fmt(r.recheck.score, 2)}</b> / needed ${fmt(r.recheck.threshold, 2)}
@@ -2382,7 +2421,7 @@ function renderCalls() {
         ? `<b class="${_weak ? "flat" : "down"}">▼ BEAR${_weak ? "*" : ""}</b>`
         : '<b class="flat">● FLAT</b>';
     const _leanNote = _weak
-      ? `<br/><span class="dim" style="font-size:9.5px">* weak lean inside noise floor — never issued</span>` : "";
+      ? `<br/><span class="dim" style="font-size:11px">* weak lean inside noise floor — never issued</span>` : "";
     // TP4 = THIS timeframe's own horizon → ALWAYS shown/calc-first
     const _tg = cyc?.targets || [];
     const _ord = _tg.map((_, i) => i);
@@ -2396,11 +2435,11 @@ function renderCalls() {
       const lbl = isTf ? `TF ${m.mins}m` : `TP${i + 1} · ${m.tps[i]}m`;
       return `<td class="tp-cell">${t.level ? px(t.level) : "—"}<br/><span class="tp-min${isTf ? " tp-horizon" : ""}">${lbl}</span> ${st}</td>`;
     }).join("");
-    const sl = cyc?.sl ? `${px(cyc.sl)}${cyc.sl_provisional ? ' <span class="dim" style="font-size:9px">prov</span>' : ""}` : "—";
+    const sl = cyc?.sl ? `${px(cyc.sl)}${cyc.sl_provisional ? ' <span class="dim" style="font-size:11px">prov</span>' : ""}` : "—";
     return `<tr class="${tf === S.focusTf ? "focus-row" : ""}">
       <td class="mono">${tf.toUpperCase()}</td>
       <td class="mono">${m.mins}m</td>
-      <td>${dirTxt} <span class="dim">${cyc?.tier ? "· " + cyc.tier : "· issued"}</span>${_leanNote}</td>
+      <td>${dirTxt} <span class="dim">· ${verdictOf(cyc, res)}${cyc?.tier ? " · " + cyc.tier : ""}</span>${_leanNote}</td>
       <td class="mono">${fmt(res?.confidence, 3)}</td>
       ${tps}
       <td class="mono sl-cell">${sl}</td>
@@ -2570,7 +2609,7 @@ async function loadFormulas() {
       <div class="kv"><span>base confidence</span><b>${fmt(bd.base_confidence, 4)}</b></div>
       <div class="kv"><span>final confidence</span><b>${fmt(s.confidence, 4)} ${s.confidence > 0.35 ? "✓" : ""}</b></div>
       <div class="kv"><span>direction</span><b>${s.direction > 0 ? "▲ BULL" : s.direction < 0 ? "▼ BEAR" : "● FLAT"}</b></div>
-      <div class="kv"><span>issued</span><b>${s.issued ? "YES" : "no"}</b></div>`;
+      <div class="kv"><span>verdict</span><b>${verdictOf(s, bd)}</b></div>`;
     const contribs = {};
     (bd.components || []).forEach(c => contribs[c.id] = c);
     const cards = $("#fl-cards"); cards.innerHTML = "";
@@ -3335,7 +3374,7 @@ async function loadBrains() {
             const txt = !ok ? "n/a"
               : num === 0 ? "0.00"
               : Math.abs(num) < 0.01 ? num.toExponential(1) : num.toFixed(2);
-            return `<td style="background:rgba(0,212,240,${a2.toFixed(3)});text-align:right;font-family:var(--mono);font-size:10px" title="${ok ? num : "n/a"}">${txt}</td>`;
+            return `<td style="background:rgba(0,212,240,${a2.toFixed(3)});text-align:right;font-family:var(--mono);font-size:11.5px" title="${ok ? num : "n/a"}">${txt}</td>`;
           };
           const ntc = Object.entries(an.nt_census || an.mbon_nt || {})
             .filter(([k]) => k && k !== "?").slice(0, 6);
@@ -3433,7 +3472,7 @@ async function loadBrains() {
             const txt = !Number.isFinite(num) ? "n/a"
               : num === 0 ? "0.000"
               : Math.abs(num) < 0.01 ? num.toExponential(1) : num.toFixed(3);
-            return `<td style="background:${bg};text-align:right;font-family:var(--mono);font-size:9.5px" title="${Number.isFinite(num) ? num : "n/a"}">${txt}</td>`;
+            return `<td style="background:${bg};text-align:right;font-family:var(--mono);font-size:11px" title="${Number.isFinite(num) ? num : "n/a"}">${txt}</td>`;
           };
           cmEl.innerHTML = `<div style="overflow-x:auto"><table class="blk-matrix">
             <tr><th>channel</th>${kx.map(ci => `<th title="${esc(cm.classes[ci])}">${esc(cm.classes[ci]).slice(0, 8)}</th>`).join("")}</tr>
@@ -3600,14 +3639,14 @@ async function loadAgents() {
         ${packs.map(pk => `<div class="key-card">
           <b>${pk.name}</b>
           <span>${pk.model} · slot ${pk.slot}</span>
-          <div class="dim" style="font-size:10px;margin-top:4px">score ${pk.score != null
+          <div class="dim" style="font-size:11.5px;margin-top:4px">score ${pk.score != null
             ? `${Math.round(pk.score * 100)}% over ${pk.samples} outcomes`
             : (pk.samples ? `${pk.samples} samples` : "no outcomes yet")}${pk.imported ? " · IMPORTED" : ""}</div>
           <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;align-items:center">
             <input type="password" class="key-in" data-key-for="${pk.id}" placeholder="paste ${pk.name} API key" style="flex:1;min-width:130px">
             <button class="btn" data-install="${pk.id}">⬇ install in app</button>
           </div>
-          <div class="dim" style="font-size:9.5px;margin-top:6px"><a href="${pk.setup}" target="_blank" rel="noopener">get API key ↗</a></div>
+          <div class="dim" style="font-size:11px;margin-top:6px"><a href="${pk.setup}" target="_blank" rel="noopener">get API key ↗</a></div>
         </div>`).join("")}
       </div>`;
     const autoBtn = $("#ag-auto-btn");
@@ -3667,7 +3706,7 @@ async function loadAgents() {
       : `<span class="dim">none yet</span>`;
     const stepsHtml = (ins.steps || []).length
       ? `<div class="hint" style="margin-top:6px">runtime ladder:</div>
-         <div class="logic" style="font-size:10px">${(ins.steps || []).map(st =>
+         <div class="logic" style="font-size:11.5px">${(ins.steps || []).map(st =>
            `${st.ok ? "✓" : "✗"} <b>${esc(st.step)}</b>${st.reason ? " — " + esc(st.reason) : ""}`).join("<br/>")}</div>`
       : "";
     const ollamaHtml = ins.ollama
@@ -3703,7 +3742,7 @@ async function loadAgents() {
            <button class="btn" id="ag-retry" style="margin-top:10px">re-probe runtime</button>`
         : installing
         ? `<div class="hint" style="margin-top:8px">⬇ ${phaseTxt}… ${ins.elapsed_s ? Math.floor(ins.elapsed_s / 60) + "m " + (ins.elapsed_s % 60) + "s" : ""} — the app keeps running; this panel refreshes itself</div>
-           <div class="logic" style="max-height:110px;overflow:auto;font-size:10px">${(ins.log || []).slice(-6).map(esc).join("<br/>")}</div>
+           <div class="logic" style="max-height:110px;overflow:auto;font-size:11.5px">${(ins.log || []).slice(-6).map(esc).join("<br/>")}</div>
            <button class="btn" disabled style="margin-top:10px">downloading…</button>`
         : `<button class="btn" id="ag-download" style="margin-top:10px">⬇ DOWNLOAD LOCAL AGENT</button>
            <button class="btn" id="ag-retry" style="margin-top:10px">re-probe runtime</button>
@@ -3758,8 +3797,13 @@ async function loadAgents() {
     const map = { "key-gemini": "gemini_key", "key-backup1": "backup1_key", "key-backup2": "backup2_key",
                   "key-backup3": "backup3_key", "key-newsapi": "newsapi_key", "key-neuprint": "neuprint_key" };
     const sset = st?.settings;
+    // NEVER fill a password field with the key (or its mask). A stored key is
+    // announced by the placeholder; an empty submit means "keep it".
     if (sset) for (const [id, k] of Object.entries(map)) {
-      const el = $("#" + id); if (el && sset[k]) el.value = sset[k];
+      const el = $("#" + id);
+      if (!el) continue;
+      el.value = "";
+      el.placeholder = sset[k] ? "stored — paste a new key to replace" : "paste API key";
     }
     $$(".test-slot").forEach(b => b.addEventListener("click", async () => {
       b.textContent = "…";
@@ -3805,12 +3849,12 @@ function renderMind(t) {
     box.innerHTML = (t.steps || []).map((s, i) => `
       <div class="pad" style="border-left:2px solid var(--${s.status === "warn" || s.status === "conflict" ? "gold" : "line"});margin:6px 0;padding-left:10px">
         <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
-          <b class="dim" style="font-family:var(--mono);font-size:10px">${i + 1}. ${esc(s.step.toUpperCase())}</b>
+          <b class="dim" style="font-family:var(--mono);font-size:11.5px">${i + 1}. ${esc(s.step.toUpperCase())}</b>
           <b>${esc(s.title)}</b>
-          <span class="${MIND_STATUS[s.status] || "dim"}" style="font-family:var(--mono);font-size:9px">${esc(s.status)}</span>
+          <span class="${MIND_STATUS[s.status] || "dim"}" style="font-family:var(--mono);font-size:11px">${esc(s.status)}</span>
         </div>
         <div class="logic" style="font-size:11.5px">${esc(s.detail)}</div>
-        ${(s.cites || []).length ? `<div class="hint" style="font-size:9px">source: ${s.cites.map(esc).join(" · ")}</div>` : ""}
+        ${(s.cites || []).length ? `<div class="hint" style="font-size:11px">source: ${s.cites.map(esc).join(" · ")}</div>` : ""}
       </div>`).join("")
       || `<div class="dim pad">the server returned no steps</div>`;
   }
@@ -3827,9 +3871,9 @@ function renderMind(t) {
       <div class="kv"><span>trust in itself</span><b class="${trustCls}">${esc(c.trust || "unknown")}</b></div>
       <div class="kv"><span>graded outcomes</span><b>${c.n ?? 0}${c.state ? ` · ${esc(c.state)}` : ""}</b></div>
       <div class="kv"><span>hit-rate</span><b>${c.hit_rate != null ? (c.hit_rate * 100).toFixed(0) + "%" : "—"}
-        ${c.wilson_lo != null ? `<span class="dim" style="font-size:9px">95% floor ${(c.wilson_lo * 100).toFixed(0)}%</span>` : ""}</b></div>
+        ${c.wilson_lo != null ? `<span class="dim" style="font-size:11px">95% floor ${(c.wilson_lo * 100).toFixed(0)}%</span>` : ""}</b></div>
       <div class="kv"><span>Brier</span><b>${c.brier != null
-        ? `${fmt(c.brier, 3)} <span class="dim" style="font-size:9px">rel ${fmt(c.brier_parts?.reliability, 3)} · res ${fmt(c.brier_parts?.resolution, 3)}</span>`
+        ? `${fmt(c.brier, 3)} <span class="dim" style="font-size:11px">rel ${fmt(c.brier_parts?.reliability, 3)} · res ${fmt(c.brier_parts?.resolution, 3)}</span>`
         : `<span class="dim">${esc(c.brier_parts?.why || "not enough settled calls")}</span>`}</b></div>
       <div class="kv"><span>verdict</span><b class="${ab.abstain ? "acc-warn" : "dim"}">${ab.abstain ? "ABSTAINING" : "proceeding"}</b></div>`;
   }
@@ -3844,7 +3888,7 @@ function renderMind(t) {
   const wm = t.working_memory || {};
   const wmBox = $("#mind-wm");
   if (wmBox) {
-    const pill = (x, ok) => `<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:9px;font-size:10px;border:1px solid var(--line);color:var(--${ok ? "green" : "gold"})">${esc(x.label)}</span>`;
+    const pill = (x, ok) => `<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:9px;font-size:11.5px;border:1px solid var(--line);color:var(--${ok ? "green" : "gold"})">${esc(x.label)}</span>`;
     wmBox.innerHTML = `
       <div class="dim" style="font-size:11px">${esc(wm.summary || "")}</div>
       <div style="margin-top:6px">${(wm.present || []).map(p => pill(p, true)).join("") || '<span class="dim">nothing reached the reasoning</span>'}</div>
@@ -3861,7 +3905,7 @@ function renderMind(t) {
                   : `<span class="acc-dn">DOES NOT HOLD</span>`;
       return `<div class="pad" style="font-size:11px;border-left:2px solid var(--${a.holds === false ? "red" : "line"});padding-left:8px;margin:4px 0">
         <div>${tag} — <b>${esc(a.claim)}</b></div>
-        <div class="dim" style="font-size:10px">${esc(a.evidence || "")}</div></div>`;
+        <div class="dim" style="font-size:11.5px">${esc(a.evidence || "")}</div></div>`;
     }).join("");
     asBox.innerHTML = rows || `<div class="dim">no assumptions reported</div>`;
   }
@@ -3886,15 +3930,18 @@ function renderMindHistory(h) {
     <div class="kv-row">
       <div class="kv"><span>traces recorded</span><b>${h.n ?? 0}</b></div>
       <div class="kv"><span>graded by settlement</span><b>${h.graded ?? 0}${h.graded ? ` · ${h.wins} won` : ""}</b></div>
-      <div class="kv"><span>reasoning hit-rate</span><b>${st.hit_rate != null ? (st.hit_rate * 100).toFixed(0) + "%" : "—"}</b></div>
+      <div class="kv"><span>reasoning hit-rate</span><b>${st.hit_rate != null ? (st.hit_rate * 100).toFixed(0) + "%" : "—"}${st.n ? ` <span class="dim">n=${st.n}</span>` : ""}</b></div>
+      <div class="kv"><span>open / abstained</span><b>${st.open ?? 0} / ${st.abstained ?? 0}</b></div>
+      <div class="kv"><span>scope</span><b class="dim">${esc(st.scope || "all")}</b></div>
       <div class="kv"><span>trust</span><b class="dim">${esc(st.trust || "unknown")}</b></div>
     </div>
-    <div style="font-size:10px;font-family:var(--mono);margin-top:6px">
+    <div style="font-size:11.5px;font-family:var(--mono);margin-top:6px">
       ${recs.map(r => `<div style="display:flex;gap:8px;flex-wrap:wrap;color:var(--dim)">
         <span>${new Date(r.ts * 1000).toISOString().slice(5, 16).replace("T", " ")}</span>
         <span>${esc(r.signal || "—")}</span>
         <span>conf ${fmt(r.confidence, 3)}</span>
         <span>${esc(r.signature || "")}</span>
+        ${r.lock_id ? `<span class="dim">🔒 ${esc(String(r.lock_id).slice(-8))}</span>` : ""}
         <span class="${r.outcome === "win" ? "acc-up" : r.outcome === "loss" ? "acc-dn" : "dim"}">${r.outcome || "open"}</span>
         ${r.abstain ? `<span class="acc-warn">abstained</span>` : ""}
         ${r.split ? `<span class="acc-warn">routes split</span>` : ""}
@@ -3905,8 +3952,52 @@ function renderMindHistory(h) {
 }
 
 /* ═══════════ HISTORY ═══════════ */
+async function loadSealedPredictions() {
+  const box = $("#pred-history");
+  if (!box) return;
+  try {
+    const [p, s] = await Promise.all([
+      api("/api/predictions?limit=40"),
+      api("/api/predictions/stats"),
+    ]);
+    const st = p.stats || s || {};
+    const meta = $("#pred-meta");
+    if (meta) meta.textContent =
+      `${st.graded ?? 0} settled · hit ${st.hit_rate != null ? Math.round(st.hit_rate * 100) + "%" : "—"}` +
+      ` · avg ${st.avg_bps != null ? (st.avg_bps >= 0 ? "+" : "") + fmt(st.avg_bps, 1) + " bp" : "—"}` +
+      ` · ${st.open ?? 0} open`;
+    const rows = (p.locks || []).map(r => {
+      const outcome = r.outcome === "won" ? '<span class="acc-up">WON</span>'
+        : r.outcome === "lost" ? '<span class="acc-dn">LOST</span>'
+        : r.outcome === "push" ? '<span class="dim">PUSH</span>'
+        : '<span class="dim">open</span>';
+      const when = Number(r.created_at) ? new Date(r.created_at * 1000).toISOString().slice(5, 16).replace("T", " ") : "—";
+      return `<tr>
+        <td class="mono">${esc(r.symbol)}</td>
+        <td class="mono">${esc(String(r.tf || "").toUpperCase())}</td>
+        <td class="mono">${when}</td>
+        <td class="mono ${r.side === "BUY" ? "acc-up" : "acc-dn"}">${esc(r.side || "—")}</td>
+        <td class="mono">${px(r.entry)}</td>
+        <td class="mono">${px(r.tp)}</td>
+        <td class="mono">${px(r.sl)}</td>
+        <td class="mono">${fmt(r.confidence, 3)}</td>
+        <td class="mono">${r.kind === "watch" ? "watch" : "issued"}</td>
+        <td>${outcome}${r.bps != null ? ` <span class="mono dim">${Number(r.bps) >= 0 ? "+" : ""}${fmt(r.bps, 1)}bp</span>` : ""}</td>
+        <td class="dim" style="text-transform:none">${esc(r.settle_reason || (r.why || []).join("; ") || r.reason || "")}</td>
+      </tr>`;
+    }).join("");
+    box.innerHTML = `<table class="tbl"><thead><tr>
+      <th>ASSET</th><th>TF</th><th>LOCKED</th><th>SIDE</th><th>ENTRY</th>
+      <th>TP</th><th>SL</th><th>CONF</th><th>KIND</th><th>OUTCOME</th><th>WHY</th>
+      </tr></thead><tbody>${rows || '<tr><td colspan="11" class="dim">no sealed predictions yet — press ▶ ANALYSE</td></tr>'}</tbody></table>`;
+  } catch (e) {
+    box.innerHTML = `<div class="dim pad">sealed predictions unavailable: ${esc(e.message)}</div>`;
+  }
+}
+
 async function loadHistory() {
   try {
+    loadSealedPredictions().catch(() => {});
     // 24h warm-history seed status — the banner explains WHERE the
     // history below came from (real replayed tape vs live windows)
     try {
@@ -4413,7 +4504,8 @@ function checkIssuedAlerts(snap) {
     for (const [tf, c] of Object.entries(a.tfs || {})) {
       const k = `${sym}|${tf}`;
       const was = S._issuedSeen[k];
-      const isNow = !!c.issued;
+      // alert only on a real ISSUE verdict — `issued` is contract-true
+      const isNow = verdictOf(c, null) === "ISSUED";
       S._issuedSeen[k] = isNow;
       if (isNow && was === false) {
         toast(`⚡ ISSUED ${sym} ${tf.toUpperCase()} ${c.direction > 0 ? "▲ BULL" : "▼ BEAR"} · entry ${px(c.entry)} · TP ${px(c.tp)} · SL ${px(c.sl)}`, "ok");
@@ -4588,8 +4680,11 @@ function bindGlobal() {
       newsapi_key: $("#key-newsapi").value.trim(), neuprint_key: $("#key-neuprint").value.trim(),
     };
     try {
-      await api("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      toast("keys saved"); loadAgents();
+      const r = await api("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const applied = (r?.applied || []).filter(k => k.endsWith("_key"));
+      toast(applied.length ? `keys saved (${applied.join(", ")}) — press TEST on the slot`
+                           : "no new key entered — stored keys are unchanged",
+            applied.length ? "ok" : ""); loadAgents();
       // §10.5 (D-5): data-affecting settings force a refetch — the UI
       // never keeps showing pre-change data
       const dataKeys = ["feed_mode", "symbol", "tf", "focus_tf", "news_enabled"];
@@ -4711,6 +4806,14 @@ window.addEventListener("unhandledrejection", e => {
 /* ═══════════ boot ═══════════ */
 (function boot() {
   try { S.tfFocus = localStorage.getItem("tfFocus") === "1"; } catch (e) { S.tfFocus = false; }
+  // remember the user's asset/timeframe across reloads (the old build always
+  // came back on BTC·TF1 — read as "switching did nothing")
+  try {
+    const sym = localStorage.getItem("symbol");
+    if (sym && ASSETS.includes(sym)) S.symbol = sym;
+    const tf = localStorage.getItem("focusTf");
+    if (tf && TF.includes(tf)) S.focusTf = tf;
+  } catch (e) { /* private mode */ }
   buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); bindChartSrc(); bindTrading(); bindRiskCalc(); syncAnalyseButton(); bindAllTf(); renderDashboardMode();
   connectWS();
   api("/api/snapshot").then(applySnapshot).catch(() => {});

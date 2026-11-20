@@ -527,6 +527,8 @@ def think(*, symbol: str, tf: str, res: dict, store: dict,
         _step("observe", "What I am looking at",
               (f"{symbol} \u00b7 {tf} \u00b7 {system_mode.upper()} system \u00b7 "
                f"confidence {conf_txt} \u00b7 call {signal}"
+               + (f" \u00b7 verdict {res.get('verdict')}"
+                  if res.get("verdict") else "")
                + (f" \u00b7 {note[:180]}" if note else "")),
               cites=["engine.compute_asset", "emotion.compute"],
               data={"signal": signal, "confidence": conf,

@@ -745,14 +745,19 @@ async def think_history(symbol: str = "BTC", tf: str = "tf1") -> JSONResponse:
     items = list((engine._thoughts or {}).get(key) or [])
     graded = [r for r in items if r.get("outcome") in ("win", "loss")]
     wins = sum(1 for r in graded if r["outcome"] == "win")
+    abstained = sum(1 for r in items if r.get("outcome") == "abstain")
+    open_n = sum(1 for r in items if r.get("outcome") is None)
     return JSONResponse({
         "ok": True, "symbol": symbol, "tf": tf, "records": items[-40:],
         "n": len(items), "graded": len(graded), "wins": wins,
-        "thought_stats": engine.thought_stats(),
-        "rule": ("every analysis records a signature and its confidence; a "
-                 "settled window grades the thought that produced it, which is "
-                 "what makes the competence estimate about reasoning rather "
-                 "than about bookkeeping"),
+        "abstained": abstained, "open": open_n,
+        # scope-first: the Mind tab for BTC/tf1 must describe BTC/tf1's
+        # reasoning, not every scope's records pooled together
+        "thought_stats": engine.thought_stats(symbol=symbol, tf=tf),
+        "thought_stats_all": engine.thought_stats(),
+        "rule": ("every analysis records a signature and its confidence; the "
+                 "sealed prediction's settlement grades the thought that "
+                 "produced it; abstentions are counted, never scored as wins"),
     })
 
 
@@ -1476,30 +1481,98 @@ async def history_leaderboard() -> JSONResponse:
     return JSONResponse({"ok": True, "leaderboard": rows})
 
 
+def _public_settings() -> dict:
+    """Settings safe for the browser: secrets are never sent back.
+
+    The old endpoint returned the live Gemini key in clear text on every
+    dashboard poll path. A key belongs in the server's secret store, not in
+    a JSON response (and not in a screenshot of the network tab).
+    """
+    from .agents import KEY_FIELDS
+    out = {}
+    for k, v in engine.agents.settings.items():
+        if k in KEY_FIELDS:
+            out[k] = ("•••• set" if v else "")
+        else:
+            out[k] = v
+    return out
+
+
 @app.get("/api/settings")
 async def settings_get() -> JSONResponse:
-    s = dict(engine.agents.settings)
-    return JSONResponse({"ok": True, "settings": s})
+    return JSONResponse({"ok": True, "settings": _public_settings()})
 
 
 @app.put("/api/settings")
 async def settings_put(body: dict) -> JSONResponse:
-    rejected = []
+    from .agents import KEY_ALIASES, KEY_FIELDS
+    rejected, applied = [], []
     for k, v in body.items():
-        if k in engine.agents.settings:
+        if k == "system_mode":
+            # this IS a real switch — it used to be dropped while the header
+            # button claimed it had changed the model
+            engine.set_system_mode(str(v))
+            applied.append(k)
+        elif k == "feed_mode":
+            rejected.append(k)      # applied through /api/feeds/connect
+        elif k in engine.agents.settings or k in KEY_ALIASES:
+            # blank key field = keep: never reported as applied
+            if (KEY_ALIASES.get(k, k) in KEY_FIELDS
+                    and isinstance(v, str) and not v.strip()):
+                continue
             engine.agents.configure(**{k: v})
-        elif k in ("feed_mode", "system_mode"):
-            # these are NOT agent settings; dropping them silently meant the
-            # UI could save a "change" that did nothing at all
-            rejected.append(k)
+            applied.append(k)
         else:
             rejected.append(k)
-    return JSONResponse({"ok": True, "settings": engine.agents.settings,
+    return JSONResponse({"ok": True, "settings": _public_settings(),
+                         "applied": sorted(set(applied)),
+                         "system_mode": engine.agents.settings.get(
+                             "system_mode", "old"),
                          "ignored": sorted(set(rejected)),
                          "note": ("feed_mode is applied with "
-                                  "POST /api/feeds/connect; system_mode with "
-                                  "the SYSTEM button"
+                                  "POST /api/feeds/connect"
                                   if rejected else "all keys applied")})
+
+
+@app.post("/api/system/mode")
+async def system_mode(body: dict) -> JSONResponse:
+    """Dedicated switch for OLD ladder ⇄ NEW horizon forecast."""
+    return JSONResponse(engine.set_system_mode(str(body.get("mode", "old"))))
+
+
+@app.get("/api/system/mode")
+async def system_mode_get() -> JSONResponse:
+    return JSONResponse({"ok": True,
+                         "system_mode": engine.agents.settings.get(
+                             "system_mode", "old")})
+
+
+@app.get("/api/predictions")
+async def predictions(symbol: str | None = None, tf: str | None = None,
+                      limit: int = 50) -> JSONResponse:
+    """Sealed prediction locks — the immutable record ANALYSE writes."""
+    if symbol is not None and symbol not in SYMBOLS:
+        return JSONResponse({"ok": False, "error": "unknown symbol"},
+                            status_code=400)
+    if tf is not None and tf not in TF_ORDER:
+        return JSONResponse({"ok": False, "error": "unknown timeframe"},
+                            status_code=400)
+    return JSONResponse(engine.predlocks.payload(symbol, tf, limit))
+
+
+@app.get("/api/predictions/stats")
+async def prediction_stats(symbol: str | None = None,
+                           tf: str | None = None) -> JSONResponse:
+    return JSONResponse({"ok": True,
+                         **engine.predlocks.stats(symbol, tf)})
+
+
+@app.get("/api/predictions/{lock_id}")
+async def prediction_one(lock_id: str) -> JSONResponse:
+    for row in engine.predlocks.rows:
+        if row.get("id") == lock_id:
+            return JSONResponse({"ok": True, "lock": row})
+    return JSONResponse({"ok": False, "error": "unknown lock"}, status_code=404)
 
 
 @app.get("/api/trading/status")
@@ -1650,24 +1723,33 @@ async def secrets_status() -> JSONResponse:
     """§9.1 vault view: which secret SOURCES exist — values never shown,
     never written to any file in the repo (I-5)."""
     import os as _os
-    from .agents import KEY_FIELDS, SETTINGS_FILE
+    from .agents import KEY_FIELDS, SECRETS_FILE, SETTINGS_FILE
     env_present = {k: bool(_os.environ.get(k)) for k in
                    ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY",
                     "ANTHROPIC_API_KEY", "NEWS_API_KEY", "NEUPRINT_TOKEN")}
+    configured = {k: k in engine.agents.settings and
+                  bool(engine.agents.settings.get(k)) for k in KEY_FIELDS}
     on_disk = False
     try:
         txt = open(SETTINGS_FILE, encoding="utf-8").read()
         on_disk = any(f'"{k}"' in txt for k in KEY_FIELDS)
     except OSError:
-        on_disk = False
+        pass
+    secrets_file = bool(_os.path.exists(SECRETS_FILE))
+    # Git-ignored, owner-only secret store. This is intentional and is NOT
+    # "a leak": it is the only way a pasted key survives a restart without
+    # putting it in a tracked file.
     return JSONResponse({
         "ok": True,
         "env": env_present,
-        "settings_file_exists": True,
+        "settings_file_exists": _os.path.exists(SETTINGS_FILE),
+        "secrets_file": secrets_file,
+        "configured": configured,
         "keys_on_disk": on_disk,
         "keyring": engine.agents.status().get("keyring") or {},
-        "rule": ("keys live in platform secrets/env only — save_settings "
-                 "strips KEY_FIELDS; on_disk=True is a leak and a bug"),
+        "rule": ("tracked settings never contain a key; the local store "
+                 "data/secrets.json is chmod 600 and git-ignored. "
+                 "configured=true means the agent will try that key now."),
     })
 
 

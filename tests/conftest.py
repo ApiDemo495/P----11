@@ -72,6 +72,22 @@ def _fresh_locks(_isolate_lock_file):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _isolate_pred_journal(monkeypatch, tmp_path):
+    """A prediction seal written by one test must not make the next test's
+    analyse take the duplicate-window path.
+
+    PredictionJournal reads its default path from a module global captured
+    at import, so pointing the env var at a tmp file is not enough — patch
+    the global itself. Without this, an ETH|tf2 lock sealed by an earlier
+    test made test_cognition's analyse skip its ledger write (session run
+    failed where the file-only run passed).
+    """
+    from app import predlock
+    monkeypatch.setattr(predlock, "JOURNAL_FILE",
+                        str(tmp_path / "prediction_locks.json"))
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_persisted_state():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
