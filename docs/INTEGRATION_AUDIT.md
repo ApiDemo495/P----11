@@ -20,9 +20,10 @@ conflicting features were retained or work correctly.
 | `arena/f07a39b8-p-11` | `c31d0d4` | History-only merge, earlier integrated implementations retained |
 | `main` | `43ad8a3` | Ancestor of the imported history |
 
-The combined branch has not itself been merged into the repository's default
-branch. Keep the original branches until you have reviewed the combined app
-and its limitations; no branches were deleted in this consolidation.
+At the time of this audit, the combined branch had not yet been merged into
+the default branch; pull request #4 subsequently merged it. Keep the original
+branches until you have reviewed the combined app and its limitations; no
+branches were deleted in this consolidation.
 
 The branch comparison found that the independent alpha-lab, calibration,
 contract, event-alpha, derivatives, portfolio and related test files are
