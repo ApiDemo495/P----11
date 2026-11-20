@@ -1,17 +1,36 @@
 # Integration audit
 
-The branch histories shown in the screenshot are ancestors of this branch.
-The earlier combined tree (`d969c40`) had already incorporated the two
-independent lines without recording their ancestry. The merge commits retain
-that later tree rather than blindly overwriting it with older code.
+The branch histories shown in the screenshot are ancestors of this branch
+at the commits listed below (checked against the remote on 2026-11-20).
+A branch can advance later, so this is a snapshot, not a promise about
+future commits. The earlier combined tree (`d969c40`) had already incorporated
+parts of the two independent lines without recording their ancestry. The
+merge commits for those two lines retain that later tree rather than blindly
+overwriting it with older code; Git ancestry alone does not prove all
+conflicting features were retained or work correctly.
+
+| Remote branch | Inspected commit | Integration |
+|---|---|---|
+| `arena/023f99d5-p-11` | `63082af` | Ancestor of the imported default history |
+| `arena/0c8f7b9b-p-11` | `70d02f5` | Three-way merged after the initial consolidation; adds its audit note |
+| `arena/4977d7a0-p-11` | `e4241a0` | Original base of this branch |
+| `arena/605bdcca-p-11` | `269caa7` | Imported default-branch history |
+| `arena/68bbb922-p-11` | `d1469ce` | History-only merge, earlier integrated implementations retained |
+| `arena/e4edde2f-p-11` | `e200cad` | Ancestor of the imported default history |
+| `arena/f07a39b8-p-11` | `c31d0d4` | History-only merge, earlier integrated implementations retained |
+| `main` | `43ad8a3` | Ancestor of the imported history |
+
+The combined branch has not itself been merged into the repository's default
+branch. Keep the original branches until you have reviewed the combined app
+and its limitations; no branches were deleted in this consolidation.
 
 The branch comparison found that the independent alpha-lab, calibration,
 contract, event-alpha, derivatives, portfolio and related test files are
 present. Its older cost-gate implementation is retained as `app/cost_gate.py`;
 `app/edge_gate.py` is the later, separate certified-sleeve gate. Earlier
 positive research claims remain explicitly retracted where the later audit
-could not reproduce them. A small GitHub connection demonstration text file
-from the other line was not part of the integrated application.
+could not reproduce them. The GitHub connection demonstration text file from
+the other line is preserved too, although it is not part of the application.
 
 ## Safety changes in this audit
 

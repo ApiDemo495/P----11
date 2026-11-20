@@ -688,8 +688,7 @@ work) built on top of this merge — every file from the merge above is
 byte-identical in it — plus a measured agent-runtime ladder, a
 measurement-based affect model, event-loop offloading with load
 governance, a clock-watchdog fix, and a cognition trace
-(§`docs/REWRITE-AGENT-EMOTION.md`, §`docs/COGNITION.md`). Absorbed here
-in full (26 files, no content dropped on either side). The old branch
-refs were deleted from the remote with the squash; this document plus
-`REWRITE-AGENT-EMOTION.md` §7 is now the audit trail. Full suite on the
-united tree: 733 passed, 1 skipped.
+(§`docs/REWRITE-AGENT-EMOTION.md`, §`docs/COGNITION.md`). That audit
+reported the 26-file delta as absorbed and the then-current suite as 733
+passed, 1 skipped. The branch refs currently exist; their latest inspected
+commits and integration caveats are recorded in `INTEGRATION_AUDIT.md`.
