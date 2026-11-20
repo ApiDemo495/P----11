@@ -28,6 +28,7 @@ import numpy as np
 from collections import deque
 from typing import Any, Awaitable, Callable
 
+from . import loadgov as _gov
 from .bgn import BgnSynchronizer
 from .cci import CCIEngine, calibrate_confidence, finalize_confidence
 from .clock import grc_id, next_grc_ts, seconds_to_next_grc
@@ -329,6 +330,29 @@ def _lock_emotion_text(dom) -> str:
     return str(dom or "")
 
 
+# ── heavy-pass executor ────────────────────────────────────────────────
+# A SEPARATE, small pool for the CPU-bound passes (GRC, analyse, readiness
+# dry-run, snapshot build). The first attempt used asyncio.to_thread, which
+# runs on the SAME default executor FastAPI uses for every sync route — so
+# "off the loop" work simply moved the stall into the request pool: with the
+# analytics queue saturated, /api/health and /api/snapshot queued behind it
+# (measured: 3.1 s round-trip, lag 6.6 s on a 2-core box). Bounded to the
+# core count so jobs cannot pile up either.
+import concurrent.futures as _fut
+import functools as _ft
+
+_PASS_WORKERS = max(2, min(4, (os.cpu_count() or 2)))
+_pass_pool = _fut.ThreadPoolExecutor(max_workers=_PASS_WORKERS,
+                                    thread_name_prefix="engine-pass")
+
+
+async def run_pass(fn, /, *args, **kwargs):
+    """Run a CPU-bound pass on the engine's own pool (never the loop)."""
+    loop = asyncio.get_running_loop()
+    call = _ft.partial(fn, *args, **kwargs)
+    return await loop.run_in_executor(_pass_pool, call)
+
+
 class PredictionEngine:
     def __init__(
         self,
@@ -436,6 +460,8 @@ class PredictionEngine:
         self.auditor = FormulaAuditor()
         from .ledger import SettlementLedger
         self.ledger = SettlementLedger()
+        self._thoughts: dict[str, list[dict]] = {}
+        self._load_thoughts()
         # honest confidence: isotonic map confidence → P(win), fed by the
         # ledger's own settled rows (app/calib.py)
         from .calib import calibrator
@@ -462,6 +488,14 @@ class PredictionEngine:
 
         self._tasks: list[asyncio.Task] = []
         self._busy = asyncio.Lock()
+        # readiness dry-run bookkeeping (see _update_readiness): attempt count,
+        # next allowed attempt, and the last measured failure
+        self._readiness_tries = 0
+        self._readiness_next_at = 0.0
+        self._readiness_error = ""
+        self.grc_started_at = 0.0
+        self.grc_ms: float | None = None
+        self.grc_profile: dict[str, float] = {}
         # Probability-Branches replay cache: the empirical first-touch scan
         # is O(history x window) and was 32% of every snapshot build (the
         # single biggest reason /api/snapshot took ~2 s). Keyed on the
@@ -2641,12 +2675,24 @@ class PredictionEngine:
             # 1 ── formulas: every value, every timeframe, timed ----------
             t0 = time.time()
             raws, per_tf_ms = {}, {}
-            for t in TF_ORDER:
-                ctx = self.build_ctx(symbol, t)
-                anoms: list = []
-                f0 = time.perf_counter()
-                raws[t] = compute_all(ctx, record=False, anomalies=anoms)
-                per_tf_ms[t] = round((time.perf_counter() - f0) * 1000, 1)
+            # EVERY heavy stage of this job runs on a worker thread. The job
+            # is auto-triggered every 45 s and is ~10-20 s of pure-CPU
+            # analytics; inline in this async def it owned the event loop,
+            # so /api/health, the websocket and the snapshot build all
+            # stalled behind it. That is the "ENGINE BUSY" banner — measured
+            # at clock.handler_ms ~10400 — not a slow network.
+            def _stage_formulas():
+                out, ms = {}, {}
+                for t in TF_ORDER:
+                    _gov.cooperate()
+                    ctx = self.build_ctx(symbol, t)
+                    anoms: list = []
+                    f0 = time.perf_counter()
+                    out[t] = compute_all(ctx, record=False, anomalies=anoms)
+                    ms[t] = round((time.perf_counter() - f0) * 1000, 1)
+                return out, ms
+
+            raws, per_tf_ms = await run_pass(_stage_formulas)
             store["raws"] = raws
             nz = sum(1 for t in TF_ORDER for v in raws[t].values()
                      if abs(v) > 1e-9)
@@ -2663,27 +2709,32 @@ class PredictionEngine:
             t0 = time.time()
             market = self._build_market(symbol)
             news_agg = self.news.aggregate(symbol)
-            em_out = {}
-            for t in TF_ORDER:
-                ctx = self.build_ctx(symbol, t)
-                atr = self._atr(ctx)
-                thing2 = self._thing2(symbol, t, ctx, atr, market)
-                affinity = {fid: abs(v) for fid, v in raws[t].items()
-                            if abs(v) > 0.7}
-                br = self.brains.evaluate(symbol, t, market, affinity,
-                                          thing2, advance=False,
-                                          raws=raws[t])
-                em = self.emotions.compute(ctx, market, br, news_agg, None)
-                from .emotion import CHANNELS as _ECH
-                _pe = (em.get("primary_emotion") or {})
-                dom = _pe.get("name") or _ECH[
-                    max(em["emotions"], key=em["emotions"].get)][1]
-                em_out[t] = {"cerc": round(em["cerc"], 4),
-                             "top_emotion": str(dom),
-                             "fear_greed": (em.get("fear_greed") or {}).get("index"),
-                             "valence": (em.get("core_affect") or {}).get("valence"),
-                             "brain_state": br["dominant"],
-                             "polarity": br["polarity"]}
+            def _stage_emotions():
+                out = {}
+                for t in TF_ORDER:
+                    _gov.cooperate()
+                    ctx = self.build_ctx(symbol, t)
+                    atr = self._atr(ctx)
+                    thing2 = self._thing2(symbol, t, ctx, atr, market)
+                    affinity = {fid: abs(v) for fid, v in raws[t].items()
+                                if abs(v) > 0.7}
+                    br = self.brains.evaluate(symbol, t, market, affinity,
+                                              thing2, advance=False,
+                                              raws=raws[t])
+                    em = self.emotions.compute(ctx, market, br, news_agg, None)
+                    from .emotion import CHANNELS as _ECH
+                    _pe = (em.get("primary_emotion") or {})
+                    dom = _pe.get("name") or _ECH[
+                        max(em["emotions"], key=em["emotions"].get)][1]
+                    out[t] = {"cerc": round(em["cerc"], 4),
+                              "top_emotion": str(dom),
+                              "fear_greed": (em.get("fear_greed") or {}).get("index"),
+                              "valence": (em.get("core_affect") or {}).get("valence"),
+                              "brain_state": br["dominant"],
+                              "polarity": br["polarity"]}
+                return out
+
+            em_out = await run_pass(_stage_emotions)
             store["emotions"] = em_out
             e1 = em_out[tf]
             await self._emit_stage(
@@ -2696,32 +2747,37 @@ class PredictionEngine:
             long_closes = {sym: list(self.feed.state(sym).closes)
                            for sym in SYMBOL_ORDER}
             news_minutes = self.news.arrival_minutes_last(600)
-            phys_out = {}
-            for t in TF_ORDER:
-                ctx = self.build_ctx(symbol, t)
-                w = self.cci.get_weights(symbol, t)
-                comp_core = {fid: raws[t].get(fid, 0.0)
-                             for fid in FORMULA_FUNCTIONS}
-                wsum = sum(w.get(fid, 0.0) for fid in comp_core) or 1.0
-                cci_ref = sum(w.get(fid, 0.0) * v
-                              for fid, v in comp_core.items()) / wsum
+            def _stage_physics():
+                out = {}
+                for t in TF_ORDER:
+                    _gov.cooperate()
+                    ctx = self.build_ctx(symbol, t)
+                    w = self.cci.get_weights(symbol, t)
+                    comp_core = {fid: raws[t].get(fid, 0.0)
+                                 for fid in FORMULA_FUNCTIONS}
+                    wsum = sum(w.get(fid, 0.0) for fid in comp_core) or 1.0
+                    cci_ref = sum(w.get(fid, 0.0) * v
+                                  for fid, v in comp_core.items()) / wsum
 
-                def _recompute(c):
-                    return compute_all(c, record=False)
-                ph = self.physics.evaluate(
-                    symbol, t, ctx, atr=self._atr(ctx), raws=raws[t],
-                    cci_ref=cci_ref, long_closes=long_closes,
-                    news_minutes=news_minutes, weights=w,
-                    recompute=_recompute, hist=self.hist, record=False)
-                mech = ph.get("mechanisms") or []
-                phys_out[t] = {
-                    "ufp": round(ph["ufp"]["value"], 4),
-                    "wfcp": round(ph["wfcp"], 4),
-                    "drpt": round(ph["drpt"], 4),
-                    "gspi": round(ph["gspi"], 4),
-                    "mech_active": sum(1 for m in mech if m["active"]),
-                    "mech_total": len(mech),
-                }
+                    def _recompute(c):
+                        return compute_all(c, record=False)
+                    ph = self.physics.evaluate(
+                        symbol, t, ctx, atr=self._atr(ctx), raws=raws[t],
+                        cci_ref=cci_ref, long_closes=long_closes,
+                        news_minutes=news_minutes, weights=w,
+                        recompute=_recompute, hist=self.hist, record=False)
+                    mech = ph.get("mechanisms") or []
+                    out[t] = {
+                        "ufp": round(ph["ufp"]["value"], 4),
+                        "wfcp": round(ph["wfcp"], 4),
+                        "drpt": round(ph["drpt"], 4),
+                        "gspi": round(ph["gspi"], 4),
+                        "mech_active": sum(1 for m in mech if m["active"]),
+                        "mech_total": len(mech),
+                    }
+                return out
+
+            phys_out = await run_pass(_stage_physics)
             store["physics"] = phys_out
             pe = phys_out[tf]
             await self._emit_stage(
@@ -2731,8 +2787,8 @@ class PredictionEngine:
                 phys_out)
             # 4 ── news ----------------------------------------------------
             t0 = time.time()
-            self.news.refresh()
-            agg = self.news.aggregate(symbol)
+            await run_pass(self.news.refresh)
+            agg = await run_pass(self.news.aggregate, symbol)
             news_out = {"value": agg["value"], "niv": agg["niv"],
                         "count": agg["count"],
                         "dropped": agg.get("relevance_dropped", 0),
@@ -2747,20 +2803,24 @@ class PredictionEngine:
                 news_out)
             # 5 ── hedge / dark-pool ---------------------------------------
             t0 = time.time()
-            hedge_out = {}
-            for t in TF_ORDER:
-                ctx = self.build_ctx(symbol, t)
-                ifr = hedgefund.institutional_flow(ctx)
-                dpad = hedgefund.dark_pool_flow(ctx)
-                smdi = hedgefund.smart_money_divergence(
-                    ifr["value"], store["emotions"][t]["polarity"])
-                hedge_out[t] = {
-                    "ifr": round(ifr["value"], 4),
-                    "dpad": round(dpad["value"], 4),
-                    "smdi": round(smdi, 4),
-                    "combined": round(hedgefund.combined_signal(
-                        ifr["value"], dpad["value"], smdi), 4),
-                }
+            def _stage_hedge():
+                out = {}
+                for t in TF_ORDER:
+                    ctx = self.build_ctx(symbol, t)
+                    ifr = hedgefund.institutional_flow(ctx)
+                    dpad = hedgefund.dark_pool_flow(ctx)
+                    smdi = hedgefund.smart_money_divergence(
+                        ifr["value"], store["emotions"][t]["polarity"])
+                    out[t] = {
+                        "ifr": round(ifr["value"], 4),
+                        "dpad": round(dpad["value"], 4),
+                        "smdi": round(smdi, 4),
+                        "combined": round(hedgefund.combined_signal(
+                            ifr["value"], dpad["value"], smdi), 4),
+                    }
+                return out
+
+            hedge_out = await run_pass(_stage_hedge)
             store["hedge"] = hedge_out
             he = hedge_out[tf]
             await self._emit_stage(
@@ -2772,7 +2832,8 @@ class PredictionEngine:
             await self._analyse_ai_review(job, store, tf)
             # 7 ── final: authoritative fusion + box ------------------------
             t0 = time.time()
-            res_pack = self.compute_asset(symbol, record=False, display=True)
+            res_pack = await run_pass(
+                self.compute_asset, symbol, record=False, display=True)
             # SAME-NUMBER RULE: the FINAL stage must analyse exactly what the
             # card publishes. Recomputing produced a second, different
             # answer (card 0.176 BULL vs analysis 0.055 FLAT), so the
@@ -2983,12 +3044,30 @@ class PredictionEngine:
                 # advisory only: the call stands; the failed checks are
                 # printed so the arithmetic can be audited (doc §1)
                 final["recheck_advisory"] = recheck["verdict"]
+            # COGNITION: produce and record the thinking trace for the call
+            # that was just made (signature + metacognitive snapshot). Failure
+            # here must never cost the user their analysis.
+            try:
+                self._think_and_record(symbol, tf, final)
+            except Exception:
+                log.exception("cognition record failed for %s|%s", symbol, tf)
             job["result"] = final
             job["status"] = "done"
+            # A FLAT call has no rungs by construction (`tps` stays empty
+            # because the preview block only builds levels for a signed
+            # direction), so `tps[0]` raised IndexError on every flat tape and
+            # threw away an analysis that had already completed — the user saw
+            # "analysis is not happening" while the engine had in fact
+            # finished and discarded the result. A summary line must never be
+            # able to destroy a result, so it degrades instead.
+            _tp1 = (f"TP1 {tps[0]['level']}" if tps else
+                    "TP1 — (no levels: flat call)")
+            _sl = (f"SL {final['sl']}" if final.get("sl") is not None
+                   else "SL —")
             await self._emit_stage(
                 job, "final", "done", t0, time.time(),
                 f"{final['signal']} · conf {final['confidence']:.3f} · "
-                f"TP1 {tps[0]['level']} · SL {final['sl']} · "
+                f"{_tp1} · {_sl} · "
                 f"total {final['elapsed_ms']:.0f} ms", final)
             await self.emit({"type": "analyse_done", "symbol": symbol,
                              "tf": tf, "result": final})
@@ -3002,9 +3081,20 @@ class PredictionEngine:
 
     async def _analyse_ai_review(self, job: dict, store: dict,
                                  tf: str) -> None:
-        """Stage 6: Gemini and the local qwen2.5-coder review the assembled
-        analysis for errors/mistakes and propose corrections. Keyless →
-        skipped with a printed note (agents are always optional)."""
+        """Stage 6: every configured agent reviews the assembled analysis.
+
+        This stage used to consult exactly two things — a Gemini key and an
+        installed ``llama_cpp`` — so on a host with neither it printed
+        "no AI configured" even when a working Ollama daemon was answering on
+        11434, and the whole Agents tab looked dead. It now goes through
+        ``AgentManager.review()``, which walks the full ladder (cloud keys →
+        local GGUF → Ollama) and returns a payload that always explains
+        itself, including which backend answered.
+
+        Review is advisory: it can flag errors and propose a correction, and
+        a correction at high confidence is printed in the result, but the
+        deterministic ladder underneath is never overwritten.
+        """
         t0 = time.time()
         symbol = job["symbol"]
         raws = store.get("raws", {}).get(tf, {})
@@ -3018,68 +3108,84 @@ class PredictionEngine:
             "hedge": store.get("hedge", {}).get(tf),
         }
         prompt = (
-            'You are reviewing an intraday market analysis BEFORE it is '
-            'shown to a trader. Find mistakes or contradictions in this '
-            'analysis (sign conflicts, stale/absurd numbers, risk that '
-            'does not match volatility) and give your own call. '
+            "You are reviewing an intraday market analysis BEFORE it is "
+            "shown to a trader. Find mistakes or contradictions in this "
+            "analysis (sign conflicts, stale/absurd numbers, risk that does "
+            "not match volatility) and give your own call. "
             'Reply ONLY with JSON: {"errors": ["..."], "fixes": ["..."], '
             '"direction": 1|-1|0, "confidence": 0.0..1.0, '
             '"reason": "one sentence"}. Data:\n'
             + json.dumps(payload, default=str)[:4000]
         )
+        try:
+            review = await self.agents.review(
+                symbol, tf, store,
+                result={"direction": int(
+                    (self.last_result.get((symbol, tf)) or {}).get("direction")
+                    or 0)})
+        except Exception as exc:                     # never fail the stage
+            log.exception("agent review failed")
+            review = {"available": False, "backend": "",
+                      "note": f"review stage error: {exc!r}"[:200],
+                      "reviews": {}, "correction": None}
+
+        raw_reviews = review.get("reviews") or {}
         reviews: dict[str, dict] = {}
-        # Gemini (real API call through the key ring)
-        key = (self.agents.settings.get("gemini_key") or "")
-        if key:
-            try:
-                res = await self.agents._call_provider("gemini", key, prompt)
-                if res.get("ok"):
-                    reviews["gemini"] = self._parse_ai_review(
-                        res.get("insight") or res.get("text") or "", res)
-                else:
-                    reviews["gemini"] = {"ok": False,
-                                         "error": str(res.get("reason"))}
-            except Exception as e:
-                reviews["gemini"] = {"ok": False, "error": repr(e)}
-        # local qwen2.5-coder (the engine's own reviewer)
-        if getattr(self.agents.local, "available", False):
-            try:
-                text = await asyncio.get_event_loop().run_in_executor(
-                    None, self.agents.local.query, prompt)
-                reviews["qwen2.5-coder"] = self._parse_ai_review(text or "", {})
-            except Exception as e:
-                reviews["qwen2.5-coder"] = {"ok": False, "error": repr(e)}
+        for name, rv in raw_reviews.items():
+            if rv.get("ok"):
+                fed = {"direction": rv.get("direction"),
+                       "confidence": rv.get("confidence"),
+                       "insight": rv.get("reason")}
+                parsed = self._parse_ai_review(rv.get("reason") or "", fed)
+                parsed["errors"] = list(rv.get("errors") or [])
+                parsed["backend"] = rv.get("backend") or name
+                reviews[name] = parsed
+            else:
+                reviews[name] = {"ok": False,
+                                 "error": str(rv.get("error") or "failed")}
+
         t1 = time.time()
-        if not reviews:
-            await self._emit_stage(
-                job, "ai_review", "skipped", t0, t1,
-                "no AI configured — deterministic pipeline only "
-                "(keyless operation, agents optional)", {})
-            job["ai"] = {"available": False,
-                         "note": "keyless — brain + formulas + physics only"}
+        if not review.get("available"):
+            note = str(review.get("note") or "no AI available")
+            await self._emit_stage(job, "ai_review", "skipped", t0, t1,
+                                   note, {"backend": "", "reviews": reviews})
+            job["ai"] = {"available": False, "backend": "",
+                         "note": note, "reviews": reviews,
+                         "correction": None}
             return
-        # an AI correction only counts at confidence ≥ 0.70 (printed, never
+
+        # an AI correction only counts at confidence >= 0.60 (printed, never
         # silent — the deterministic ladder stays visible underneath)
-        correction = None
-        for name, rv in reviews.items():
-            if rv.get("ok") and abs(int(rv.get("direction") or 0)) == 1                     and float(rv.get("confidence") or 0) >= 0.70:
-                correction = {"by": name,
-                              "direction": int(rv["direction"]),
-                              "confidence": float(rv["confidence"]),
-                              "reason": rv.get("reason", "")}
-                break
-        job["ai"] = {"available": True, "reviews": reviews,
-                     "correction": correction}
+        correction = review.get("correction")
+        if not correction:
+            for name, rv in reviews.items():
+                if (rv.get("ok") and abs(int(rv.get("direction") or 0)) == 1
+                        and float(rv.get("confidence") or 0) >= 0.60):
+                    correction = {
+                        "by": name,
+                        "direction": int(rv["direction"]),
+                        "confidence": float(rv["confidence"]),
+                        "reason": rv.get("reason", "")}
+                    break
+        job["ai"] = {"available": True,
+                     "backend": review.get("backend") or "",
+                     "note": review.get("note") or "",
+                     "reviews": reviews, "correction": correction}
         bits = []
         for name, rv in reviews.items():
             if rv.get("ok"):
                 n_err = len(rv.get("errors") or [])
-                bits.append(f"{name}: {n_err} issue(s), "
-                            f"{'CORRECTS to ' + ('BUY' if rv['direction'] > 0 else 'SELL') if rv is correction else 'concurs'}")
+                verdict = ("CORRECTS to " + ("BUY" if rv["direction"] > 0
+                                             else "SELL")
+                           if correction and correction.get("by") == name
+                           else "concurs")
+                bits.append(f"{name}: {n_err} issue(s), {verdict}")
             else:
                 bits.append(f"{name}: {rv.get('error', 'failed')}")
         await self._emit_stage(
-            job, "ai_review", "done", t0, t1, " · ".join(bits),
+            job, "ai_review", "done", t0, t1,
+            (" · ".join(bits) or "no review") +
+            f" [{review.get('backend') or 'agent'}]",
             job["ai"])
 
     @staticmethod
@@ -4657,6 +4763,142 @@ class PredictionEngine:
         start = math.floor(now / ws) * ws
         return float(start), float(start + ws)
 
+    # ══════════════════════════════════════════════════════════════
+    # COGNITION — the thinking process, and learning from its own record
+    # ══════════════════════════════════════════════════════════════
+    THOUGHT_FILE = os.path.join("data", "thoughts.json")
+    THOUGHT_KEEP = 400            # per (symbol, tf)
+
+    def _load_thoughts(self) -> None:
+        try:
+            with open(self.THOUGHT_FILE) as fh:
+                d = json.load(fh)
+            self._thoughts = {k: list(v)[-self.THOUGHT_KEEP:]
+                              for k, v in (d or {}).items()
+                              if isinstance(v, list)}
+        except (OSError, ValueError):
+            self._thoughts = {}
+
+    def _save_thoughts(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.THOUGHT_FILE), exist_ok=True)
+            tmp = self.THOUGHT_FILE + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(self._thoughts, fh)
+            os.replace(tmp, self.THOUGHT_FILE)
+        except OSError:
+            pass
+
+    def _graded_rows(self, symbol: str, tf: str) -> list[dict]:
+        """Settled ledger rows for this window — the evidence for competence."""
+        try:
+            return [r for r in (self.ledger.rows.get(f"{symbol}|{tf}") or [])
+                    if r.get("result") in ("win", "loss")]
+        except Exception:
+            return []
+
+    def thought_stats(self, ledger_only: bool = True) -> dict:
+        """Metacognition over the app's OWN thought record.
+
+        `ledger_only=True` measures competence on settled engine outcomes (the
+        app's real record). `ledger_only=False` measures it on graded thought
+        records, i.e. how often the app's stated confidence was borne out by
+        the settlement of the call it reasoned about. The second is what
+        makes this metacognition rather than just bookkeeping.
+        """
+        from .cognition import competence
+        rows = []
+        for key, items in (self._thoughts or {}).items():
+            sym, _, tf = key.partition("|")
+            for rec in items:
+                if rec.get("outcome") in ("win", "loss"):
+                    rows.append({"confidence": rec.get("confidence"),
+                                 "result": rec["outcome"]})
+        rows.sort(key=lambda r: float(r.get("confidence") or 0))
+        # The `conf` argument is what the app LAST claimed; without it the
+        # competence estimate can never report a dangling certainty, because
+        # it has nothing to compare the record against. Measured here, not
+        # guessed: the mean stated confidence over the graded traces.
+        claimed = ([float(r["confidence"]) for r in rows
+                    if r.get("confidence") is not None] or [None])
+        mean_claimed = (sum(claimed) / len(claimed)
+                        if claimed[0] is not None else None)
+        return competence(mean_claimed, rows)
+
+    def cognitive(self, symbol: str, tf: str) -> dict:
+        """THE THINKING TRACE for a window (pure read, no state change).
+
+        Every field is derived from the payload the engine already built, so
+        this can never disagree with the numbers on the cards.
+        """
+        from .cognition import think
+        res = (self.last_result.get((symbol, tf))
+               or self.display_systems.get((symbol, tf)) or {})
+        store = {
+            "emotions": {tf: (res.get("emotion") or
+                              (self.last_result.get((symbol, tf)) or {})
+                              .get("emotion") or {})},
+            "physics": {tf: res.get("physics") or {}},
+            "news": res.get("news_value") or {},
+            "hedge": {tf: res.get("hedge") or {}},
+            "feed": self.feed.stats(),
+        }
+        out = think(symbol=symbol, tf=tf, res=res, store=store,
+                    graded=self._graded_rows(symbol, tf),
+                    floor=float(CONFIDENCE_FLOOR),
+                    system_mode=str(self.agents.settings.get("system_mode", "old")))
+        out["thought_stats"] = self.thought_stats()
+        return out
+
+    def _think_and_record(self, symbol: str, tf: str, final: dict) -> None:
+        """Store the trace and its signature against the call it produced."""
+        try:
+            payload = self.cognitive(symbol, tf)
+        except Exception:
+            log.exception("cognition failed for %s|%s", symbol, tf)
+            return
+        key = f"{symbol}|{tf}"
+        rec = {"ts": time.time(),
+               "signature": payload.get("signature"),
+               "confidence": payload.get("steps", [{}])[0]
+                             .get("data", {}).get("confidence"),
+               "signal": final.get("signal"),
+               "abstain": bool((payload.get("abstain") or {}).get("abstain")),
+               "consistency": bool((payload.get("consistency") or {}).get("ok")),
+               "split": bool((payload.get("deliberation") or {}).get("split")),
+               "outcome": None}
+        self._thoughts.setdefault(key, []).append(rec)
+        self._thoughts[key] = self._thoughts[key][-self.THOUGHT_KEEP:]
+        self._save_thoughts()
+        final["thinking"] = {
+            "signature": payload.get("signature"),
+            "n_steps": payload.get("n_steps"),
+            "abstain": payload.get("abstain"),
+            "trust": (payload.get("competence") or {}).get("trust"),
+            "routes_agree": (payload.get("deliberation") or {}).get("routes_agree"),
+            "consistency": payload.get("consistency"),
+            "counterfactual": payload.get("counterfactual"),
+            "failing_assumptions": [a["claim"] for a in
+                                    payload.get("assumptions") or []
+                                    if a.get("holds") is False],
+        }
+
+    def _grade_last_thought(self, symbol: str, tf: str, won: bool) -> None:
+        """A settled window grades the thought that produced it.
+
+        This is the feedback loop: without it the app could output a
+        considered-looking trace for ever and never once learn whether its own
+        reasoning was any good.
+        """
+        key = f"{symbol}|{tf}"
+        items = self._thoughts.get(key) or []
+        for rec in reversed(items):
+            if rec.get("outcome") is None:
+                rec["outcome"] = "win" if won else "loss"
+                rec["graded_at"] = time.time()
+                self._save_thoughts()
+                return
+
     def explain_ctx(self, view: str, symbol: str, tf: str) -> dict:
         """Everything the tab explainer needs, built from live state.
         No computation of its own — it only READS the engine."""
@@ -5403,6 +5645,10 @@ class PredictionEngine:
                         if _row.get("result") in ("win", "loss")
                         else None)
                 self.rl.on_settle(issued=was_issued, won=_won, context=_ctx)
+                # METACOGNITION: grade the thought that produced this call, so
+                # the app learns whether its own reasoning was good
+                if _won is not None:
+                    self._grade_last_thought(symbol, tf, _won)
                 # Q-table: grade the mix this window actually traded
                 # under (decided windows only)
                 self.rl.q_on_settle(
@@ -5892,7 +6138,9 @@ class PredictionEngine:
         last_beat = 0.0
         while not self._stop.is_set() and self.phase == "analysis":
             now = time.time()
-            self._update_readiness()
+            # this loop ticks at 4 Hz; the dry-run inside readiness is a full
+            # pipeline pass whenever it is due, so it must not run on the loop
+            await run_pass(self._update_readiness)
             ready = all(self.readiness.values())
             # computable = everything except full-history bars, with
             # at least MIN_BARS_COMPUTE bars present. Locking then
@@ -5936,14 +6184,34 @@ class PredictionEngine:
         self.readiness["news"] = self.news.ready
         self.readiness["physics"] = self.physics.ready
         if enough_any and not self.readiness["formulas"]:
-            # dry-run the entire pipeline so all subsystems report readiness
+            # Dry-run the whole pipeline ONCE to let every subsystem report
+            # readiness. It must not repeat every GRC: this dry-run costs the
+            # same as a full pass (seconds of CPU × 6 assets), and the old
+            # code re-ran it on EVERY GRC until physics warmed up — ~10 s of
+            # blocking work every 4 minutes, i.e. the "ENGINE BUSY" banner
+            # coming back over and over. Attempts now back off exponentially
+            # (1st GRC, then ×2 up to 10 min) and the number of attempts plus
+            # the last error are reported, so a stuck dry-run is visible in
+            # /api/health rather than silently burning the box.
             try:
-                for symbol in SYMBOL_ORDER:
-                    self.compute_asset(symbol, record=False, display=False)
-                self.readiness["formulas"] = True
-                self.readiness["weights"] = True
-            except Exception:
-                log.exception("analysis dry-run failed")
+                attempt = int(self._readiness_tries) + 1
+            except AttributeError:
+                attempt = 1
+            now = time.time()
+            due = getattr(self, "_readiness_next_at", 0.0) or 0.0
+            if now >= due:
+                self._readiness_tries = attempt
+                try:
+                    for symbol in SYMBOL_ORDER:
+                        self.compute_asset(symbol, record=False, display=False)
+                    self.readiness["formulas"] = True
+                    self.readiness["weights"] = True
+                    self._readiness_error = ""
+                except Exception as exc:
+                    self._readiness_error = repr(exc)[:200]
+                    log.exception("analysis dry-run failed")
+                backoff = min(600.0, 30.0 * (2 ** max(0, attempt - 1)))
+                self._readiness_next_at = time.time() + backoff
 
     async def _lock_initial(self, warning: bool) -> None:
         if self.locked:
@@ -5953,7 +6221,10 @@ class PredictionEngine:
         now = time.time()
         for symbol in SYMBOL_ORDER:
             try:
-                res_pack = self.compute_asset(symbol, record=True, display=True)
+                # the initial lock computes all six assets; inline it stalled
+                # the loop right at the moment the UI expects its first frame
+                res_pack = await run_pass(
+                    self.compute_asset, symbol, record=True, display=True)
             except Exception:
                 log.exception("initial compute failed for %s", symbol)
                 res_pack = self.last_result
@@ -5994,6 +6265,13 @@ class PredictionEngine:
     # ==================================================================
     async def on_grc(self, ts: float) -> None:
         async with self._busy:
+            self.grc_started_at = time.time()
+            _prof: dict[str, float] = {}
+            self.grc_profile = _prof
+
+            def _t(label, since):
+                _prof[label] = round((time.time() - since) * 1000, 1)
+                return time.time()
             now = time.time()
             self.last_grc = ts
             self.grc_count += 1
@@ -6004,12 +6282,21 @@ class PredictionEngine:
                 # GRC baselines within a single cycle)
                 for symbol in SYMBOL_ORDER:
                     try:
-                        res_pack = self.compute_asset(symbol, record=False, display=False)
+                        # OFF THE EVENT LOOP. compute_asset is seconds of pure
+                        # CPU per asset; run inline in this async def it froze
+                        # /api/health and the websocket for the whole pass,
+                        # which the client saw as "ENGINE BUSY" and which made
+                        # the brain chip fall back to its offline text.
+                        res_pack = await run_pass(
+                            self.compute_asset, symbol,
+                            record=False, display=False)
                         for tf in TF_ORDER:
                             self.last_result[(symbol, tf)] = res_pack[tf]
                     except Exception:
                         log.exception("analysis GRC compute failed")
-                self._update_readiness()
+                _t("analysis_compute", now)
+                await run_pass(self._update_readiness)
+                _t("analysis_readiness", now)
                 if all(self.readiness.values()):
                     await self._lock_initial(warning=False)
                 return
@@ -6020,13 +6307,19 @@ class PredictionEngine:
             _done = 0
             for symbol in SYMBOL_ORDER:
                 try:
-                    res_pack = self.compute_asset(symbol, record=True, display=True)
+                    # yield to the loop between assets when it is starved
+                    # (the pass is a burst; the board must stay responsive)
+                    await asyncio.sleep(0)
+                    _gov.cooperate()
+                    # same reason as above: keep the loop answering while the
+                    # heavy per-asset pipeline runs on a worker thread
+                    res_pack = await run_pass(
+                        self.compute_asset, symbol, record=True, display=True)
                 except Exception:
                     log.exception("GRC compute failed for %s", symbol)
                     continue
-                # the pass blocks the event loop for seconds per asset; a
-                # progress frame keeps the websocket and the client's
-                # silence detector alive instead of a 10 s dead air gap
+                # one progress frame per finished asset: the client's silence
+                # detector stays fed even though the work is off-loop now
                 _done += 1
                 await self.emit({"type": "grc_progress",
                                  "done": _done, "of": len(SYMBOL_ORDER),
@@ -6039,22 +6332,37 @@ class PredictionEngine:
                 for tf in TF_ORDER:
                     res = res_pack[tf]
                     self.last_result[(symbol, tf)] = res
-                    self._apply_grc_lock_rules(symbol, tf, now, res)
-                # Sections 10/13 learning + history bookkeeping
+                    # lock rules are per-lane bookkeeping (measured 154 ms);
+                    # they mutate this lane's cycle only, so they stay in
+                    # order but off the loop
+                    await run_pass(self._apply_grc_lock_rules,
+                                   symbol, tf, now, res)
+                # Sections 10/13 learning + history bookkeeping (263 ms of
+                # rings/scorecards per asset — the second biggest loop-bound
+                # cost in the pass after compute_asset)
                 try:
-                    self._record_learning(symbol, res_pack, now)
+                    await run_pass(self._record_learning, symbol, res_pack, now)
                 except Exception:
                     log.exception("learning bookkeeping failed for %s", symbol)
+            _t("compute+agents+locks+learning", now)
+            _mark = time.time()
             # Section 10 macro (every 15 GRCs) + deep (every 247 min)
             try:
-                self.learning.maybe_macro(self.grc_count, self)
-                self.learning.maybe_deep(self)
-                self.learning.save(self)
+                await run_pass(self.learning.maybe_macro, self.grc_count, self)
+                await run_pass(self.learning.maybe_deep, self)
+                await run_pass(self.learning.save, self)
             except Exception:
                 log.exception("macro/deep learning cycle failed")
-            self.cci.save()
-            self.physics.save()
+            await run_pass(self.cci.save)
+            await run_pass(self.physics.save)
+            _t("learning_saves", _mark)
+            _mark = time.time()
             await self._broadcast_full("grc")
+            _t("broadcast", _mark)
+            # what the pass ACTUALLY cost, once it is fully done — the clock's
+            # handler_ms only covers the coroutine, which now hands its CPU to
+            # worker threads; without this the health panel under-reported.
+            self.grc_ms = round((time.time() - self.grc_started_at) * 1000, 1)
 
     # -- lock rules at GRC --------------------------------------------------
     def _apply_grc_lock_rules(
@@ -6534,7 +6842,19 @@ class PredictionEngine:
             out["pass_age_s"] = (round(time.time() - fw.last_pass_at, 1)
                                  if getattr(fw, "last_pass_at", 0) else None)
             th = getattr(self, "_fw_heal_thread", None)
-            if fw.state == "absent" and (th is None or not th.is_alive()):
+            # "building" is not a healthy state — it is an UNPROVEN one. Ask
+            # the component whether the attempt is still alive; this is what
+            # turns a silent, killed or wedged build into an automatic retry
+            # instead of an indefinite "brain offline — vote withheld".
+            if fw.state == "building":
+                try:
+                    sup = fw.supervise()
+                    out["supervise"] = sup
+                    out["action"] = ("flywire-build-" + str(sup.get("action")))
+                except Exception as exc:      # pragma: no cover - defensive
+                    out["supervise"] = {"error": repr(exc)[:200]}
+                    out["action"] = "supervise-failed"
+            elif fw.state == "absent" and (th is None or not th.is_alive()):
                 def _load() -> None:
                     try:
                         fw.ensure()
@@ -7119,7 +7439,21 @@ class PredictionEngine:
         }
 
     async def _broadcast_full(self, reason: str) -> None:
-        snap = self.build_snapshot()
+        # assembling the snapshot is hundreds of ms of CPU; awaiting an
+        # asyncio.Event around a synchronous build (the old shape) still
+        # blocked every other coroutine, including /api/health
+        snap = await run_pass(self.build_snapshot)
         snap["reason"] = reason
         self.last_snapshot = snap
+        # HAND THE SAME PAYLOAD TO THE REST CACHE. Without this, every GRC
+        # built the snapshot twice: once here, then again on the next
+        # /api/snapshot poll ~1 s later (the broadcast never populated the
+        # cache). Under the old 0.75 s TTL those two builds plus a poll could
+        # chain together and hold the CPU. The snapshot is the authoritative
+        # representation of this moment, so the poll can serve it verbatim.
+        try:
+            from . import main as _m
+            _m.prime_snapshot_cache(snap)
+        except Exception:
+            pass
         await self.emit(snap)

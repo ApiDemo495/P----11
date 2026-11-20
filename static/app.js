@@ -142,6 +142,17 @@ async function api(path, opts) {
     const r = await fetch(path, { ...(opts || {}), signal: ctl.signal });
     if (!r.ok) throw new Error(`${path} → ${r.status}`);
     return await r.json();
+  } catch (e) {
+    // A timeout means the engine is BUSY, not absent. The engine's event loop
+    // legitimately stalls for minutes during a warm replay or a GRC pass, and
+    // the old code let those aborts fall through to the offline banner, which
+    // then told the user to "start it: bash run.sh" while it was running.
+    if (e && e.name === "AbortError") {
+      const err = new Error(`${path} → timed out after 10 s (engine busy)`);
+      err.busy = true;
+      throw err;
+    }
+    throw e;
   } finally { clearTimeout(to); }
 }
 
@@ -582,7 +593,8 @@ function drawOwnChart() {
     }
   }
   const notes = [];
-  if (S.snap?.feed?.simulated) notes.push("SIM TAPE — simulated feed, not exchange bars");
+  if (S.snap?.feed?.simulated) notes.push("SIM TAPE — simulated feed, not exchange bars"
+    + (S.snap.feed.real_reason ? ` (${S.snap.feed.real_reason})` : ""));
   if (reasons.length)
     notes.push(`UNTRUSTED TAPE — ${reasons.join("; ")}; candles hidden`);
   if (desync > 0.002)
@@ -1583,6 +1595,7 @@ function refreshActiveView(force) {
   // (news refresh button wired below)
   else if (S.view === "brains") loadBrains();
   else if (S.view === "agents") loadAgents();
+  else if (S.view === "mind") loadMind(true);
   else if (S.view === "history") loadHistory();
   else if (S.view === "settings") loadSettings();
 }
@@ -1914,12 +1927,20 @@ function onAnalyseDone(msg) {
   box.classList.remove("hidden");
   const dirCls = r.signal === "BUY" ? "buy" : r.signal === "SELL" ? "sell" : "flat";
   const ai = r.ai || {};
+  // The review object now always carries available/backend/note, so the
+  // panel can say WHICH brain answered and why it did not — "keyless" was
+  // printed even when a local agent was loaded but silent.
+  const aiWhere = ai.backend ? ` via ${esc(ai.backend)}` : "";
   let aiLine = ai.available
-    ? Object.entries(ai.reviews || {}).map(([name, rv]) =>
-        `${name}: ${rv.ok ? ((rv.errors || []).length ? (rv.errors || []).length + " issue(s) found — " + (rv.reason || "") : "no issues — " + (rv.reason || "concurs")) : "unavailable (" + (rv.error || "") + ")"}`).join(" · ")
-    : (ai.note || "keyless — deterministic pipeline only");
+    ? Object.entries(ai.reviews || {}).map(([name, rv]) => {
+        if (!rv || rv.ok === false) return `${name}: unavailable (${esc((rv || {}).error || "no reply")})`;
+        const issues = (rv.errors || []).length;
+        return `${name}${issues ? `: ${issues} issue(s) — ${esc(rv.reason || "")}` : ": concurs"}`;
+      }).join(" · ") || "a reviewer answered but returned no readable verdict"
+    : `${esc(ai.note || "no AI answered — deterministic pipeline only")}`;
+  if (ai.available) aiLine = `${aiLine}${aiWhere}`;
   if (ai.correction) {
-    aiLine += ` · ⚠ AI CORRECTION by ${ai.correction.by}: ${ai.correction.direction > 0 ? "BUY" : "SELL"} (${Math.round(ai.correction.confidence * 100)}%) — ${ai.correction.reason}`;
+    aiLine += ` · ⚠ AI CORRECTION by ${esc(ai.correction.by)}: ${ai.correction.direction > 0 ? "BUY" : "SELL"} (${Math.round((ai.correction.confidence || 0) * 100)}%) — ${esc(ai.correction.reason || "")}`;
   }
   const period = (r.calculation_period?.stages || []).map(c =>
     `${c.stage} ${Math.round(c.ms)}ms`).join(" → ");
@@ -1990,6 +2011,31 @@ function renderRail() {
       || fly?.chip
       || (fly?.ready ? { kind: "ok", text: "FlyWire v783 · live" }
         : { kind: "absent", text: "brain — " + (fly?.reason || "no state yet") });
+    // "state": the component's own machine. A chip that only knows
+    // ok/build/absent cannot tell "loading" from "broken", which is exactly
+    // how a downloading connectome ended up painted as "brain offline —
+    // vote withheld (RECONNECT)". An unready brain whose state is not a
+    // failure is BLUE (working), never red.
+    const bstate = lb?.state || fly?.state || null;
+    if (bc.kind !== "ok" && (bstate === "building" ||
+        (bstate && bstate !== "ready" && bstate !== "absent"))) {
+      bc = { kind: "build",
+             text: lb?.chip?.text || fly?.chip?.text ||
+                   ("brain — loading (" + bstate + ")") };
+    }
+    if (bstate === "building" && lb?.chip) {
+      bc = { kind: "build", text: lb.chip.text, stalled: !!lb.chip.stalled };
+    }
+    // A READY CONNECTOME WITH NO VOTE YET IS NOT OFFLINE. `brain.vote` is null
+    // until the first GRC pass produces one, and `systems[].brain` is only
+    // rebuilt at GRC — so on a freshly booted board every window reported
+    // "brain offline — vote withheld" while FlyWire was ready with 138k
+    // neurons (the screenshot's red chip over a healthy brain tab). If the
+    // component says ready, the chip says ready and explains the pending vote.
+    if (lb?.ready && (!bc || bc.kind !== "ok")) {
+      bc = { kind: "ok", text: `FlyWire ready · vote pending until the next GRC`
+             + (lb.pass_age_s != null ? ` (pass ${Math.round(lb.pass_age_s)}s ago)` : "") };
+    }
     const snapAge = S.snap?.ts ? (Date.now() / 1000 - S.snap.ts) : null;
     if (snapAge != null && snapAge > 20 && bc.kind !== "ok") {
       bc = { kind: "build", text: `brain — state stale ${Math.round(snapAge)}s (snapshot lagging)` };
@@ -2005,8 +2051,11 @@ function renderRail() {
     const bchip = $("#brain-chip");
     if (bchip) {
       bchip.textContent = "🧠 " + bc.text;
+      // a build that has gone silent is not "working": gold = progressing,
+      // orange = the supervisor is retrying, red = a real, reported failure
       const cc = bc.kind === "ok" ? "var(--green)"
-        : bc.kind === "build" ? "var(--gold)" : "var(--red)";
+        : bc.kind === "build" ? (bc.stalled ? "var(--orange)" : "var(--gold)")
+        : "var(--red)";
       bchip.style.color = cc;
       bchip.style.borderColor = cc;
       bchip.classList.add("live");
@@ -2719,6 +2768,16 @@ function drawSparks(core) {
   });
 }
 
+/* Side-aware wording for the dominant channel. A state channel reading
+   0.04 is 92 % away from its 0.5 neutral on the LOW side — calling that
+   "the dominant emotion" without saying which side made the panel announce
+   the *absence* of a state (e.g. "Trend exhaustion" when exhaustion was 0). */
+function domSideTxt(dom) {
+  if (!dom || !dom.side) return "from";
+  if (dom.side === "low") return "below";
+  if (dom.side === "high") return "above";
+  return "at";
+}
 /* ═══════════ EMOTION ═══════════ */
 async function loadEmotion() {
   try {
@@ -2754,20 +2813,41 @@ async function loadEmotion() {
         const nm = (i) => names[String(i)]?.name || (typeof EMO !== "undefined" && EMO[i - 1]) || ("E" + i);
         const pe = em.primary_emotion || null;
         const fg = em.fear_greed || null;
+        // A composite index that only measures part of its own weighting must
+        // say so: printing 53 "Neutral" while 50% of the published inputs are
+        // missing is the same lie as reporting 0.50 with no input at all.
+        const fgCov = Math.round((fg?.coverage ?? fg?.measured_weight ?? 0) * 100);
+        // `unmeasured` is a name → reason map, not a list
+        const fgMiss = Object.keys(fg?.unmeasured || {}).join(", ");
+        const fgHtml = !fg ? "" :
+          `<div class="kv"><span>fear &amp; greed</span><b>${fmt(fg.index, 1)} · ${esc(fg.label)} ` +
+          (fg.partial
+            ? `<span class="acc-warn">(partial — ${fgCov}% of the published weighting has an input here` +
+              (fgMiss ? `; missing ${esc(fgMiss)}` : "") + `)</span>`
+            : `<span class="dim">(full composite)</span>`) +
+          (fg.components
+            ? ` <span class="dim">(vol ${fmt(fg.components.volatility, 0)} · momentum ${fmt(fg.components.momentum_volume, 0)})</span>`
+            : "") +
+          `</b></div>` +
+          (fg.published_index != null
+            ? `<div class="kv"><span>published F&amp;G</span><b>${fmt(fg.published_index, 1)}` +
+              (fg.index != null ? ` <span class="dim">(model is ${fmt(fg.index - fg.published_index, 1)} away)</span>` : "") +
+              `</b></div>`
+            : "");
         const ca = em.core_affect || null;
         const at = em.action_tendency || null;
         const pad = em.pad || null;
         dom.innerHTML = `
           <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
             <div style="font:700 26px/1 var(--mono);color:var(--gold)">${esc((pe?.name || nm(bi)).replace(/^./, c => c.toUpperCase()))}</div>
-            <div class="dim">${pe ? `${Math.round((pe.intensity || 0) * 100)}% prototype match (Ekman 1992) · runner-up ${esc((pe.runner_up || {}).name || "—")} ${Math.round((pe.runner_up?.intensity || 0) * 100)}%` : `channel ${esc(nm(bi))} · ${pct}% from neutral`} · held ${heldS}s${em.dominant?.tied ? ` · <span class="acc-warn">+${em.dominant.tied} channel${em.dominant.tied > 1 ? "s" : ""} tied at this extreme (saturated tape — no single winner)</span>` : ""}</div>
+            <div class="dim">${pe ? `${Math.round((pe.intensity || 0) * 100)}% prototype match (Ekman 1992) · runner-up ${esc((pe.runner_up || {}).name || "—")} ${Math.round((pe.runner_up?.intensity || 0) * 100)}%` : `channel ${esc(nm(bi))} · ${pct}% ${domSideTxt(em.dominant)} neutral`} · held ${heldS}s${em.dominant && em.dominant.directional === false ? ' · <span class="acc-warn">no channel carries a direction this window — this is amplitude, not a state</span>' : ""}${em.dominant?.tied ? ` · <span class="acc-warn">+${em.dominant.tied} channel${em.dominant.tied > 1 ? "s" : ""} tied at this extreme (saturated tape — no single winner)</span>` : ""}</div>
           </div>
           <div class="bar" style="margin-top:8px;max-width:420px"><i class="pos" style="width:${clamp(pe ? (pe.intensity || 0) * 100 : pct, 2, 100)}%"></i></div>
           <div class="kv-row" style="margin-top:8px">
             ${ca ? `<div class="kv"><span>valence (Russell 1980)</span><b>${(ca.valence >= 0 ? "+" : "") + fmt(ca.valence, 2)}</b></div>` : ""}
             ${ca ? `<div class="kv"><span>arousal</span><b>${fmt(ca.arousal, 2)}</b></div>` : ""}
             ${pad ? `<div class="kv"><span>dominance (PAD)</span><b>${fmt(pad.dominance, 2)}</b></div>` : ""}
-            ${fg ? `<div class="kv"><span>fear &amp; greed</span><b>${fmt(fg.index, 0)} · ${esc(fg.label)}${fg.components ? ` <span class="dim">(vol ${fmt(fg.components.volatility, 0)} · momentum ${fmt(fg.components.momentum_volume, 0)} · ${Math.round((fg.measured_weight || 0) * 100)}% of published weight measured)</span>` : ""}</b></div>` : ""}
+            ${fgHtml}
             ${at ? `<div class="kv"><span>action tendency (Frijda)</span><b>${esc(at.name)} · urge ${fmt(at.urge, 2)}</b></div>` : ""}
           </div>
           ${fg?.vs_affect ? `<div class="hint acc-warn">${esc(fg.vs_affect)}</div>` : ""}
@@ -3566,27 +3646,65 @@ async function loadAgents() {
         <button class="btn test-slot" data-slot="${["gemini", "backup1", "backup2", "backup3"][i]}" style="margin-top:10px">test</button>
       </div>`).join("");
     const lo = a.local || {};
-    const ins = lo.install || {};
+    // `a.installer` is top-level (it used to be null, so this panel had
+    // nothing to render); `lo.install` is the same object for older clients
+    const ins = a.installer || lo.install || {};
     const installing = ins.state === "installing";
-    const phaseTxt = { runtime: "installing llama.cpp runtime (may compile 10–20 min — normal)",
-                       model: "downloading model", load: "loading agent" }[ins.phase] || "working";
+    // Every phase names what is ACTUALLY happening. The old text promised
+    // "may compile 10–20 min — normal", which described the failure, not the
+    // fix: the ladder now tries a prebuilt wheel, an OPT-IN source build, and
+    // Ollama, and the model download is independent of all three.
+    const phaseTxt = {
+      runtime: "installing the runtime (prebuilt wheel → opt-in source build → Ollama)",
+      model: "downloading the model file",
+      load: "loading the agent",
+    }[ins.phase] || "working";
+    const backendTxt = ins.backend
+      ? `<span class="acc-up">${esc(ins.backend)}</span>`
+      : `<span class="dim">none yet</span>`;
+    const stepsHtml = (ins.steps || []).length
+      ? `<div class="hint" style="margin-top:6px">runtime ladder:</div>
+         <div class="logic" style="font-size:10px">${(ins.steps || []).map(st =>
+           `${st.ok ? "✓" : "✗"} <b>${esc(st.step)}</b>${st.reason ? " — " + esc(st.reason) : ""}`).join("<br/>")}</div>`
+      : "";
+    const ollamaHtml = ins.ollama
+      ? `<div class="kv"><span>Ollama :11434</span><b>${ins.ollama.ok
+            ? `up · ${esc((ins.ollama.models || []).join(", ") || "no model pulled")}`
+            : `down (${esc(ins.ollama.detail || "?")})`}</b></div>`
+      : "";
+    const compilerHtml = ins.compiler
+      ? `<div class="kv"><span>C/C++ compiler</span><b>${ins.compiler.ok
+            ? `present (${esc(ins.compiler.cxx || ins.compiler.cc || "cc")}) — source build needs PREDICT_AGENT_SOURCE_BUILD=1`
+            : "absent — a source build could never succeed"}</b></div>`
+      : "";
     $("#ag-local").innerHTML = `
       <div class="kv-row">
-        <div class="kv"><span>model</span><b>${lo.label || "—"}</b></div>
-        <div class="kv"><span>available</span><b>${lo.available ? "yes" : "no"}</b></div>
-        <div class="kv"><span>RAM tier</span><b>${lo.ram_gb ?? "?"} GB</b></div>
+        <div class="kv"><span>agent</span><b>${lo.available
+          ? `<span class="acc-up">${esc(lo.label || "ready")}</span>${lo.backend ? " · " + esc(lo.backend) : ""}`
+          : `<span class="acc-warn">not loaded</span>`}</b></div>
+        <div class="kv"><span>runtime</span><b>${backendTxt}</b></div>
+        <div class="kv"><span>RAM tier</span><b>${lo.ram_gb ?? "?"} GB · ${esc(ins.model_label || "—")}</b></div>
         <div class="kv"><span>last inference</span><b>${lo.last_ms ? lo.last_ms + " ms" : "—"}</b></div>
       </div>
-      ${ins.validation?.present ? `<div class="hint" style="margin-top:6px">✓ sha ${esc(ins.validation.sha || "?")} · ${esc(ins.validation.source || "")}</div>` : ""}
+      <div class="kv-row">
+        <div class="kv"><span>model file</span><b>${ins.model_present
+          ? `✓ ${esc((ins.validation || {}).sha || "present")}`
+          : `${(ins.bytes_on_disk || 0).toLocaleString()} B on disk (${esc(ins.model_size || "?")} expected)`}</b></div>
+        ${ollamaHtml}
+        ${compilerHtml}
+      </div>
+      ${stepsHtml}
       ${ins.installed
-        ? `<div class="hint" style="margin-top:8px">✓ local agent downloaded${lo.available ? " and loaded" : " — press test to load it"}</div>
-           <button class="btn test-slot" data-slot="local" style="margin-top:10px">test</button>`
+        ? `<div class="hint" style="margin-top:8px">✓ local agent ready${lo.available ? " and loaded" : " — press re-probe to load it"}</div>
+           <button class="btn test-slot" data-slot="local" style="margin-top:10px">test</button>
+           <button class="btn" id="ag-retry" style="margin-top:10px">re-probe runtime</button>`
         : installing
         ? `<div class="hint" style="margin-top:8px">⬇ ${phaseTxt}… ${ins.elapsed_s ? Math.floor(ins.elapsed_s / 60) + "m " + (ins.elapsed_s % 60) + "s" : ""} — the app keeps running; this panel refreshes itself</div>
            <div class="logic" style="max-height:110px;overflow:auto;font-size:10px">${(ins.log || []).slice(-6).map(esc).join("<br/>")}</div>
            <button class="btn" disabled style="margin-top:10px">downloading…</button>`
         : `<button class="btn" id="ag-download" style="margin-top:10px">⬇ DOWNLOAD LOCAL AGENT</button>
-           <div class="hint" style="margin-top:6px">One-time: llama.cpp runtime + ${ins.model_label || "preferred model"} (${ins.model_size || ""}). Preferred model: Qwen2.5-Coder-3B. Runs in the background; the app stays fully usable meanwhile.</div>
+           <button class="btn" id="ag-retry" style="margin-top:10px">re-probe runtime</button>
+           <div class="hint" style="margin-top:6px">The runtime is a ladder: a prebuilt wheel first, a source build only if you allow it, then Ollama if it is installed — nothing here can block the app. The model file (${esc(ins.model_label || "preferred")}, ${esc(ins.model_size || "")}) downloads independently of it, so a host with no compiler still banks the model.</div>
            ${(() => {
              const au = ins.auto || {};
              const next = au.next_try_in_s;
@@ -3596,8 +3714,8 @@ async function loadAgents() {
                return `<div class="hint" style="margin-top:6px">⚠ auto-download gave up after ${au.attempts || 0} attempt(s): ${esc(au.last_error || au.last_result || "unknown")} — press download to retry now (it also retries on the next boot)</div>`;
              return `<div class="hint" style="margin-top:6px">auto-download: ${esc(au.state || "idle")} — the engine fetches this by itself after boot; the button is only for "now"</div>`;
            })()}
-           ${ins.state === "failed" ? `<div class="hint">⚠ last attempt stopped: ${esc(ins.error || "unknown")} — press download to retry/resume</div>` : ""}
-           ${lo.error ? `<div class="hint">${lo.error}</div>` : ""}`}
+           ${ins.state === "failed" ? `<div class="hint">⚠ last attempt stopped: ${esc(ins.error || ins.why || "unknown")} — press download to retry/resume</div>` : ""}
+           ${lo.error ? `<div class="hint">${esc(lo.error)}</div>` : ""}`}
       `;
     const dlBtn = $("#ag-download");
     if (dlBtn) dlBtn.addEventListener("click", async () => {
@@ -3607,6 +3725,16 @@ async function loadAgents() {
         toast(r.install?.state === "done" ? "local agent already downloaded"
                                            : "local agent download started — watch this panel");
       } catch (e) { toast("download start failed: " + e.message, "err"); }
+      loadAgents();
+    });
+    const retryBtn = $("#ag-retry");
+    if (retryBtn) retryBtn.addEventListener("click", async () => {
+      retryBtn.disabled = true; retryBtn.textContent = "probing…";
+      try {
+        const r = await api("/api/agents/local/retry", { method: "POST" });
+        toast(r.ok ? `runtime found: ${r.backend || "local"}` : `still unavailable — ${r.error || "see the ladder below"}`,
+              r.ok ? "" : "warn");
+      } catch (e) { toast("re-probe failed: " + e.message, "err"); }
       loadAgents();
     });
     const autoRunning = (ins.auto || {}).state === "running";
@@ -3640,6 +3768,137 @@ async function loadAgents() {
       b.textContent = "test"; loadAgents();
     }));
   } catch (e) { toast("agents: " + e.message, "err"); }
+}
+
+
+/* ═══════════ MIND — cognition + metacognition ═══════════ */
+/* The thinking trace is produced by app/cognition.py. This view only draws
+   what the server reasoned; it never composes a step of its own, because a
+   UI that invents a reason is worse than one that shows none. */
+let _mindLast = null;
+async function loadMind(force) {
+  if (!force && _mindLast && Date.now() - _mindLast < 20000) return;
+  _mindLast = Date.now();
+  const sc = $("#mind-scope");
+  if (sc) sc.textContent = `${S.symbol} · ${S.focusTf.toUpperCase()}`;
+  try {
+    const t = await api(`/api/think?symbol=${S.symbol}&tf=${S.focusTf}`);
+    renderMind(t);
+  } catch (e) {
+    const box = $("#mind-steps");
+    if (box) box.innerHTML = `<div class="dim pad">trace unavailable: ${esc(e.message)}</div>`;
+  }
+  try { renderMindHistory(await api(`/api/think/history?symbol=${S.symbol}&tf=${S.focusTf}`)); }
+  catch (e) { /* ledger is optional */ }
+}
+
+const MIND_STATUS = { done: "acc-up", partial: "dim", warn: "acc-warn",
+                      conflict: "acc-warn" };
+
+function renderMind(t) {
+  // ── the six steps, verbatim from the server
+  const box = $("#mind-steps");
+  if (box) {
+    box.innerHTML = (t.steps || []).map((s, i) => `
+      <div class="pad" style="border-left:2px solid var(--${s.status === "warn" || s.status === "conflict" ? "gold" : "line"});margin:6px 0;padding-left:10px">
+        <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
+          <b class="dim" style="font-family:var(--mono);font-size:10px">${i + 1}. ${esc(s.step.toUpperCase())}</b>
+          <b>${esc(s.title)}</b>
+          <span class="${MIND_STATUS[s.status] || "dim"}" style="font-family:var(--mono);font-size:9px">${esc(s.status)}</span>
+        </div>
+        <div class="logic" style="font-size:11.5px">${esc(s.detail)}</div>
+        ${(s.cites || []).length ? `<div class="hint" style="font-size:9px">source: ${s.cites.map(esc).join(" · ")}</div>` : ""}
+      </div>`).join("")
+      || `<div class="dim pad">the server returned no steps</div>`;
+  }
+
+  // ── metacognition: what it thinks of itself, and whether that is earned
+  const c = t.competence || {};
+  const ab = t.abstain || {};
+  const meta = $("#mind-meta");
+  if (meta) {
+    const trustCls = c.trust === "calibrated" ? "acc-up"
+      : c.trust === "overconfident" ? "acc-dn"
+      : c.trust === "underconfident" ? "acc-warn" : "dim";
+    meta.innerHTML = `
+      <div class="kv"><span>trust in itself</span><b class="${trustCls}">${esc(c.trust || "unknown")}</b></div>
+      <div class="kv"><span>graded outcomes</span><b>${c.n ?? 0}${c.state ? ` · ${esc(c.state)}` : ""}</b></div>
+      <div class="kv"><span>hit-rate</span><b>${c.hit_rate != null ? (c.hit_rate * 100).toFixed(0) + "%" : "—"}
+        ${c.wilson_lo != null ? `<span class="dim" style="font-size:9px">95% floor ${(c.wilson_lo * 100).toFixed(0)}%</span>` : ""}</b></div>
+      <div class="kv"><span>Brier</span><b>${c.brier != null
+        ? `${fmt(c.brier, 3)} <span class="dim" style="font-size:9px">rel ${fmt(c.brier_parts?.reliability, 3)} · res ${fmt(c.brier_parts?.resolution, 3)}</span>`
+        : `<span class="dim">${esc(c.brier_parts?.why || "not enough settled calls")}</span>`}</b></div>
+      <div class="kv"><span>verdict</span><b class="${ab.abstain ? "acc-warn" : "dim"}">${ab.abstain ? "ABSTAINING" : "proceeding"}</b></div>`;
+  }
+  const hon = $("#mind-honesty");
+  if (hon) hon.textContent = c.how_sure || "";
+  if (hon && ab.reason) hon.textContent += (hon.textContent ? " · " : "") + ab.reason;
+
+  const cf = $("#mind-cf");
+  if (cf) cf.textContent = t.counterfactual || "—";
+
+  // ── working memory: present vs withheld, each with its reason
+  const wm = t.working_memory || {};
+  const wmBox = $("#mind-wm");
+  if (wmBox) {
+    const pill = (x, ok) => `<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:9px;font-size:10px;border:1px solid var(--line);color:var(--${ok ? "green" : "gold"})">${esc(x.label)}</span>`;
+    wmBox.innerHTML = `
+      <div class="dim" style="font-size:11px">${esc(wm.summary || "")}</div>
+      <div style="margin-top:6px">${(wm.present || []).map(p => pill(p, true)).join("") || '<span class="dim">nothing reached the reasoning</span>'}</div>
+      ${(wm.withheld || []).length ? `<div class="panel-h" style="margin-top:8px">WITHHELD — not silence, a stated abstention</div>
+        ${wm.withheld.map(w => `<div class="pad" style="font-size:11px"><b class="acc-warn">${esc(w.label)}</b> <span class="dim">— ${esc(w.why || "")}</span></div>`).join("")}` : ""}`;
+  }
+
+  // ── assumptions: a premise is a claim, so it gets a verdict
+  const asBox = $("#mind-assume");
+  if (asBox) {
+    const rows = (t.assumptions || []).map(a => {
+      const tag = a.holds === null ? `<span class="dim">unverifiable</span>`
+        : a.holds ? `<span class="acc-up">holds</span>`
+                  : `<span class="acc-dn">DOES NOT HOLD</span>`;
+      return `<div class="pad" style="font-size:11px;border-left:2px solid var(--${a.holds === false ? "red" : "line"});padding-left:8px;margin:4px 0">
+        <div>${tag} — <b>${esc(a.claim)}</b></div>
+        <div class="dim" style="font-size:10px">${esc(a.evidence || "")}</div></div>`;
+    }).join("");
+    asBox.innerHTML = rows || `<div class="dim">no assumptions reported</div>`;
+  }
+
+  // ── self-check
+  const chk = $("#mind-check");
+  if (chk && t.consistency) {
+    chk.innerHTML = t.consistency.ok
+      ? `<div class="kv"><span>internal consistency</span><b class="acc-up">holds</b></div>
+         <div class="kv"><span>checked</span><b class="dim">${(t.consistency.checked || []).join(" · ")}</b></div>`
+      : `<div class="kv"><span>internal consistency</span><b class="acc-dn">CONTRADICTION</b></div>`
+        + (t.consistency.problems || []).map(p => `<div class="hint acc-dn">${esc(p)}</div>`).join("");
+  }
+}
+
+function renderMindHistory(h) {
+  const box = $("#mind-history");
+  if (!box) return;
+  const recs = (h.records || []).slice().reverse();
+  const st = h.thought_stats || {};
+  box.innerHTML = `
+    <div class="kv-row">
+      <div class="kv"><span>traces recorded</span><b>${h.n ?? 0}</b></div>
+      <div class="kv"><span>graded by settlement</span><b>${h.graded ?? 0}${h.graded ? ` · ${h.wins} won` : ""}</b></div>
+      <div class="kv"><span>reasoning hit-rate</span><b>${st.hit_rate != null ? (st.hit_rate * 100).toFixed(0) + "%" : "—"}</b></div>
+      <div class="kv"><span>trust</span><b class="dim">${esc(st.trust || "unknown")}</b></div>
+    </div>
+    <div style="font-size:10px;font-family:var(--mono);margin-top:6px">
+      ${recs.map(r => `<div style="display:flex;gap:8px;flex-wrap:wrap;color:var(--dim)">
+        <span>${new Date(r.ts * 1000).toISOString().slice(5, 16).replace("T", " ")}</span>
+        <span>${esc(r.signal || "—")}</span>
+        <span>conf ${fmt(r.confidence, 3)}</span>
+        <span>${esc(r.signature || "")}</span>
+        <span class="${r.outcome === "win" ? "acc-up" : r.outcome === "loss" ? "acc-dn" : "dim"}">${r.outcome || "open"}</span>
+        ${r.abstain ? `<span class="acc-warn">abstained</span>` : ""}
+        ${r.split ? `<span class="acc-warn">routes split</span>` : ""}
+        ${r.consistency === false ? `<span class="acc-dn">trace contradicted itself</span>` : ""}
+      </div>`).join("") || '<span class="dim">no traces recorded yet — run ▶ ANALYSE</span>'}
+    </div>
+    <div class="hint" style="margin-top:6px">${esc(h.rule || "")}</div>`;
 }
 
 /* ═══════════ HISTORY ═══════════ */
@@ -3921,7 +4180,15 @@ async function loadSettings() {
 
 function syncSystemBtn() {
   const b = $("#btn-system");
-  if (b) b.textContent = `SYSTEM: ${(S.systemMode || "old").toUpperCase()}`;
+  if (!b) return;
+  const m = (S.systemMode || "old").toUpperCase();
+  // "SYSTEM: OLD" read as "this build is out of date" (the version watch
+  // reloads on a new commit, so there was nothing to update). It is a MODEL
+  // selector, so the label says which one is selected and the tooltip says
+  // what tapping does instead of leaving the ambiguity to the reader.
+  b.textContent = `MODEL: ${m}`;
+  b.title = `prediction model in use: ${m} — tap to switch to ` +
+            (m === "OLD" ? "NEW" : "OLD");
 }
 /* ═══════════ boot overlay + timers ═══════════ */
 let bootDeadline = 0;
@@ -4187,7 +4454,11 @@ function applySnapshot(snap) {
     const f = snap.feed;
     fchip.textContent = f.simulated ? "⚠ SIMULATED TAPE" : f.label;
     fchip.className = "feed-chip " + (f.simulated ? "sim" : f.stale ? "stale" : "live");
-    fchip.title = `source ${f.source} · last delivery ${f.last_delivery_age_s ?? "?"}s ago · ${f.updates} updates · ${f.switches} switches`;
+    // "simulated" alone reads as a setting. The chip says WHY the real feed is
+    // not in use, because the honest answer is usually "this host cannot reach
+    // the exchange" and the user deserves to see the attempt and its error.
+    fchip.title = `source ${f.source} · last delivery ${f.last_delivery_age_s ?? "?"}s ago · ${f.updates} updates · ${f.switches} switches`
+      + (f.real_reason ? `\n${f.real_reason}` : "");
   }
   // §10.3 status chips — every subsystem's honesty state, one glance
   const sc = $("#status-chips");
@@ -4289,6 +4560,23 @@ function bindGlobal() {
   $("#nw-refresh")?.addEventListener("click", loadNews);
   $("#nw-drill")?.addEventListener("click", drillEmergency);
   $("#hs-reload")?.addEventListener("click", loadHistory);
+  $("#mind-refresh")?.addEventListener("click", () => loadMind(true));
+  $("#mind-narrate")?.addEventListener("click", async (e) => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = "narrating…";
+    const box = $("#mind-narration");
+    try {
+      const n = await api(`/api/think?symbol=${S.symbol}&tf=${S.focusTf}&narrate=1`);
+      const r = n.narration || {};
+      if (box) {
+        box.classList.remove("hidden");
+        box.innerHTML = `<div class="hint">narration source: <b>${esc(r.source || "?")}</b>`
+          + (r.why ? ` — ${esc(r.why)}` : "")
+          + (r.guard && r.guard.ok === false ? ` · <span class="acc-dn">model text REJECTED: ${esc((r.guard.stray_numbers || []).join(", "))}</span>` : "")
+          + `</div><div style="white-space:pre-wrap;font-size:11.5px">${esc(r.text || "—")}</div>`;
+      }
+    } catch (err) { toast("narrate: " + err.message, "err"); }
+    b.disabled = false; b.textContent = "narrate";
+  });
   $("#ag-reload")?.addEventListener("click", loadAgents);
   $("#ag-save")?.addEventListener("click", async () => {
     const body = {
@@ -4313,9 +4601,20 @@ function bindGlobal() {
 /* ═══════════ resilience: surface errors + detect engine offline ═══════════ */
 let _errShown = 0, _fetchFails = 0;      // _fetchFails = unreachable only
 let _httpFails = 0;                      // one panel erroring != offline
+let _busyStreak = 0;                     // timeouts = busy, never "offline"
+let _bannerSince = 0;                    // when the banner first appeared
 function _netBanner(show, detail) {
   let b = $("#net-banner");
-  if (!show) { if (b) b.remove(); return; }
+  if (!show) {
+    // Don't retract instantly. A busy engine answers SOME requests and times
+    // out on others, so removing on the first success then re-adding made the
+    // bar strobe (the flicker in the screenshot). Keep it at least 6 s, and
+    // reset the counters so the next real outage still needs 3 misses.
+    if (b && Date.now() - _bannerSince < 6000) return;
+    if (b) b.remove();
+    _fetchFails = 0; _httpFails = 0; _busyStreak = 0;
+    return;
+  }
   if (!b) {
     b = document.createElement("div");
     b.id = "net-banner";
@@ -4323,8 +4622,43 @@ function _netBanner(show, detail) {
       "color:#f0385a;border-bottom:1px solid #f0385a;padding:8px 16px;font:600 12px monospace;" +
       "letter-spacing:1px;text-align:center";
     document.body.appendChild(b);
+    _bannerSince = Date.now();
+    // text and the dismiss control are separate nodes so a message update can
+    // never wipe the ✕
+    const msg = document.createElement("span");
+    msg.className = "net-msg";
+    const x = document.createElement("span");
+    x.textContent = " ✕";
+    x.style.cssText = "float:right;cursor:pointer;padding:0 4px";
+    x.title = "dismiss (the panel keeps retrying)";
+    x.addEventListener("click", () => { const el = $("#net-banner"); if (el) el.remove(); });
+    b.append(msg, x);
   }
-  b.textContent = detail || "ENGINE OFFLINE — retrying every 2s (start it: bash run.sh)";
+  const msgEl = b.querySelector(".net-msg");
+  if (msgEl) msgEl.textContent = detail || "ENGINE OFFLINE — retrying every 2s (start it: bash run.sh)";
+}
+let _busyProbeAt = 0;
+async function _confirmBusy() {
+  const now = Date.now();
+  if (now - _busyProbeAt < 3000) return;   // one probe per burst
+  _busyProbeAt = now;
+  try {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 4000);
+    const r = await _origFetch("/api/health", { signal: ctl.signal });
+    clearTimeout(to);
+    if (r.ok) {
+      // loop is answering: this is a slow panel, not a stuck engine
+      const h = await r.json().catch(() => null);
+      if (h && h.loop_lag_s != null && h.loop_lag_s > 2) {
+        _netBanner(true, `ENGINE BUSY — loop lag ${h.loop_lag_s.toFixed(1)}s ` +
+                         "(measured); panels refresh when it clears (do not restart)");
+      } else {
+        _busyStreak = 0;
+        _netBanner(false);            // no banner theatre: nothing is wrong
+      }
+    }
+  } catch (e) { /* health blocked too -> the next poll decides */ }
 }
 let _lastOkAt = Date.now();
 const _origFetch = window.fetch;
@@ -4332,7 +4666,7 @@ window.fetch = async (...args) => {
   const isApi = String(args[0]).includes("/api/");
   try {
     const r = await _origFetch(...args);
-    if (r.ok) { _fetchFails = 0; _httpFails = 0; _netBanner(false); }
+    if (r.ok) { _fetchFails = 0; _httpFails = 0; _busyStreak = 0; _netBanner(false); }
     else if (String(args[0]).includes("/api/")) {
       _fetchFails = 0;                   // the engine answered
       if (++_httpFails >= 3)
@@ -4341,8 +4675,24 @@ window.fetch = async (...args) => {
     return r;
   } catch (e) {
     _httpFails = 0;
-    if (String(args[0]).includes("/api/") && ++_fetchFails >= 3)
-      _netBanner(true, "ENGINE UNREACHABLE — retrying (start it: bash run.sh)");
+    // `AbortError` = we gave up waiting; the socket was never refused. That is
+    // a busy engine (warm replay / GRC / model load), so say so and do NOT
+    // count it toward "unreachable" — otherwise a long analysis reads as a
+    // dead server and the banner tells the user to start what is running.
+    const busy = !!(e && e.name === "AbortError");
+    if (String(args[0]).includes("/api/")) {
+      if (busy) {
+        // ONE slow endpoint is not a busy engine. The banner used to fire on
+        // any two aborted calls, so a single expensive panel (or a snapshot
+        // rebuild) announced "ENGINE BUSY" over a perfectly responsive app.
+        // Confirm with the cheapest request there is: if /api/health answers,
+        // the event loop is alive and the honest report is "a panel is slow",
+        // not "the engine is stuck".
+        if (++_busyStreak >= 2) _confirmBusy();
+      } else if (++_fetchFails >= 3) {
+        _netBanner(true, "ENGINE UNREACHABLE — retrying (start it: bash run.sh)");
+      }
+    }
     throw e;
   }
 };
@@ -4367,12 +4717,33 @@ window.addEventListener("unhandledrejection", e => {
 // [binance-header-btn] discoverable exchange entry point in the header.
 (() => {
   const b = $("#btn-binance"); if (!b) return;
-  b.addEventListener("click", () => {
-    document.querySelector('.tab[data-t="settings"]')?.click();
-    setTimeout(() => $("#trade-enable")?.scrollIntoView({behavior:"smooth", block:"center"}), 80);
-    toast("Binance: paste keys → Enable → ARM. Nothing trades until a qualifying prediction is issued.", "ok");
+  // The MARKETS tape and Binance EXECUTION are two different things, and the
+  // old button only ever opened the execution settings — while the tape chip
+  // said "SIMULATED" with no way to do anything about it. Clicking now tries
+  // the real market feed first (measured, and it reports the error verbatim),
+  // and offers execution settings after.
+  b.addEventListener("click", async () => {
+    const was = b.textContent;
+    b.disabled = true; b.textContent = "⌛ CONNECTING REAL FEED…";
+    try {
+      const r = await api("/api/feeds/connect", { method: "POST" });
+      if (r.ok && r.mode === "binance") {
+        toast(`real tape adopted — ${r.detail || r.source || "exchange"}`, "ok");
+        refreshActiveView(true);
+      } else {
+        toast("real feed unavailable — " + (r.error || r.detail || "unknown") +
+              " · the simulator keeps the tape", "warn");
+      }
+      // execution settings stay reachable regardless
+      document.querySelector('.tab[data-t="settings"]')?.click();
+      setTimeout(() => $("#trade-enable")?.scrollIntoView({behavior:"smooth", block:"center"}), 250);
+    } catch (e) {
+      toast("connect real feed: " + e.message, "err");
+    } finally {
+      b.disabled = false; b.textContent = was; paint();
+    }
   });
-  const paint = async () => {
+  var paint = async () => {
     try { const t = await (await fetch("/api/trading/status")).json();
       const c = t.config || {};
       b.textContent = !c.enabled ? "⬢ CONNECT BINANCE"

@@ -681,3 +681,15 @@ unique content). Conflict resolutions that affect this document:
 * Emergency re-locking unions both lines' guards: the 15-minute /
   3-ATR window freeze plus the 15-minute lock-age cooldown and a
   strictly-greater-than 3 ATR automatic trigger (§`test_audit_regressions`).
+
+Addendum (2026-11-20): the default branch was then replaced by a
+squashed snapshot (`269caa7`, PR #3, ENGINE BUSY / false brain-offline
+work) built on top of this merge — every file from the merge above is
+byte-identical in it — plus a measured agent-runtime ladder, a
+measurement-based affect model, event-loop offloading with load
+governance, a clock-watchdog fix, and a cognition trace
+(§`docs/REWRITE-AGENT-EMOTION.md`, §`docs/COGNITION.md`). Absorbed here
+in full (26 files, no content dropped on either side). The old branch
+refs were deleted from the remote with the squash; this document plus
+`REWRITE-AGENT-EMOTION.md` §7 is now the audit trail. Full suite on the
+united tree: 733 passed, 1 skipped.

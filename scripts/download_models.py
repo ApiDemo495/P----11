@@ -81,24 +81,55 @@ def main() -> int:
         os.remove(path)
 
     try:
-        from huggingface_hub import hf_hub_download  # type: ignore
+        from huggingface_hub import hf_hub_download, list_repo_files  # type: ignore
     except Exception as e:
         print(f"[model] SKIPPED huggingface_hub unavailable ({e.__class__.__name__}); "
               "run: pip install -r requirements-agents.txt")
         return 0
 
     os.makedirs(MODELS_DIR, exist_ok=True)
-    print(f"[model] downloading {repo}/{fname} …")
+
+    # Resolve the REAL filename from the repo listing. The tier table names a
+    # canonical file, but GGUF repos rename their quantisations; a hard-coded
+    # name that 404s used to look like "huggingface is blocked". Exact match
+    # wins, otherwise the first *.gguf that carries the quantisation tag.
+    resolved = fname
     try:
-        got = hf_hub_download(repo_id=repo, filename=fname, local_dir=MODELS_DIR)
+        files = [f for f in list_repo_files(repo_id=repo) if f.endswith(".gguf")]
+        if fname not in files and files:
+            tag = fname.split(".")[0].rsplit("-", 1)[-1]     # e.g. q4_k_m
+            preferred = [f for f in files if tag.lower() in f.lower()]
+            resolved = (preferred or files)[0]
+            print(f"[model] {fname} is not in {repo}; using {resolved}")
+            # keep the tier table's path so the rest of the app agrees
+            path = os.path.join(MODELS_DIR, fname)
+    except Exception as e:
+        print(f"[model] could not list {repo} ({e.__class__.__name__}) — "
+              f"trying the canonical name")
+        resolved = fname
+
+    print(f"[model] downloading {repo}/{resolved} …")
+    try:
+        got = hf_hub_download(repo_id=repo, filename=resolved,
+                              local_dir=MODELS_DIR)
+        # A renamed file must still land at the path the app validates.
+        want = os.path.join(MODELS_DIR, fname)
+        if os.path.abspath(got) != os.path.abspath(want):
+            try:
+                os.replace(got, want)
+                got = want
+            except OSError:
+                pass
         rec = write_model_sidecar(got)
         print(f"[model] DONE -> {got} (sha256 {rec['sha256'][:12]}…, "
               f"{rec['size'] / 1e9:.2f} GB)")
         return 0
     except Exception as e:
-        reason = e.__class__.__name__
-        print(f"[model] SKIPPED download failed ({reason}) — offline or hub "
-              "unreachable; retried automatically on first model use")
+        reason = f"{e.__class__.__name__}: {str(e)[:160]}"
+        print(f"[model] SKIPPED download failed ({reason}) — huggingface.co "
+              "or its CDN is unreachable from this host, or the repo/file "
+              "name changed; the app stays fully usable and retries on the "
+              "next attempt")
         return 0
 
 

@@ -32,6 +32,7 @@ import json
 import math
 import multiprocessing as mp
 import os
+import signal
 import threading
 import time
 from pathlib import Path
@@ -331,6 +332,11 @@ def get_flywire() -> "FlyWireBrain":
 
 
 
+# uncompressed size of the bundled connectome (~193 MB); used only to turn
+# restore progress into a percentage
+_BUNDLE_NPZ_BYTES = 202_320_403
+
+
 def short_error(e) -> str | None:
     """One-line human summary of a brain failure. Raw exception text
     (thrift deserialize / page-header fragments) read as 'millions of
@@ -359,6 +365,18 @@ class FlyWireBrain:
     def __init__(self) -> None:
         self.state = "absent"               # absent | building | ready
         self.progress: dict[str, Any] = {"stage": "not started", "pct": 0.0}
+        # When the CURRENT build/load attempt began, and when the worker last
+        # proved it was alive. Before this the component only knew "building":
+        # a worker that was killed, wedged on a stalled socket, or waiting on
+        # an unreachable host looked identical to one making progress, and
+        # there was nothing for a supervisor to key on. Now a build with no
+        # heartbeat (or one past its deadline) is a *measurable* stall.
+        self.build_started_at: float = 0.0
+        self.build_beat_at: float = 0.0
+        self.attempt: int = 0
+        self.build_pid: int | None = None
+        self._build_thread: threading.Thread | None = None
+        self._acquire_thread: threading.Thread | None = None
         self.last_error: str | None = None
         self.steps: list[dict] = []
         self.load_ms: float | None = None
@@ -477,8 +495,24 @@ class FlyWireBrain:
             import gzip, shutil
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
             tmp = self.npz_path().with_suffix(".npz.part")
+            want = bundled.stat().st_size or 1
+            # gunzip 61 MB -> 193 MB took 33 s on a 2-core box. Copying in
+            # one `copyfileobj` call meant no heartbeat and a frozen "5 %"
+            # for half a minute: unreadable, and long enough for the
+            # supervisor to mistake a healthy restore for a wedged build.
             with gzip.open(bundled, "rb") as fh, open(tmp, "wb") as out:
-                shutil.copyfileobj(fh, out, 1 << 20)
+                while True:
+                    chunk = fh.read(4 << 20)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    # report the UNCOMPRESSED share: the gzip reader cannot
+                    # cheaply say how far into the archive it is
+                    pct = min(55.0, 5.0 + 50.0 * (out.tell() /
+                                                  max(1, _BUNDLE_NPZ_BYTES)))
+                    self.progress = {"stage": "restoring bundled connectome",
+                                     "pct": round(pct, 1)}
+                    self.build_beat_at = time.time()
             tmp.replace(self.npz_path())
             _log("connectome restored from repo bundle (no download)")
             return True
@@ -492,10 +526,27 @@ class FlyWireBrain:
             if self.state in ("building", "ready"):
                 return
             npz = self.npz_path()
+            # A restore/load IS a build attempt. It used to leave `state` at
+            # "absent" for the whole 16 s of gunzip + scipy load, so the UI
+            # (correctly reading `state`) painted "brain offline — vote
+            # withheld (RECONNECT)" over a brain that was busy loading from
+            # the repo bundle. Users read that as "the brain is broken" and
+            # pressed RECONNECT, restarting the load. Announce the attempt.
+            self.build_started_at = self.build_beat_at = time.time()
+            self.attempt += 1
+            self.progress = {"stage": "checking local cache", "pct": 1.0}
+            self.state = "building"
+            # the restore/load below runs on THIS thread
+            self._build_thread = threading.current_thread()
             if not npz.exists():
+                self.progress = {"stage": "restoring bundled connectome",
+                                 "pct": 5.0}
+                self.build_beat_at = time.time()
                 self._restore_bundled()
             if npz.exists():
                 try:
+                    self.progress = {"stage": "loading connectome", "pct": 60.0}
+                    self.build_beat_at = time.time()
                     t0 = time.perf_counter()
                     self._load(npz)
                     self.load_ms = round((time.perf_counter() - t0) * 1000, 1)
@@ -513,8 +564,11 @@ class FlyWireBrain:
             # no valid cache: acquire + build in a worker (B-11)
             self.state = "building"
             self.progress = {"stage": "starting", "pct": 0.0}
-            threading.Thread(target=self._acquire_then_build,
-                             name="flywire-acquire", daemon=True).start()
+            self.build_started_at = self.build_beat_at = time.time()
+            self._acquire_thread = threading.Thread(
+                target=self._acquire_then_build,
+                name="flywire-acquire", daemon=True)
+            self._acquire_thread.start()
 
     def _acquire_then_build(self) -> None:
         try:
@@ -542,6 +596,7 @@ class FlyWireBrain:
                 self.progress = {"stage": "downloading",
                                  "pct": round(min(40.0, 1.0 + 39.0
                                                   * _have / _want), 1)}
+                self.build_beat_at = time.time()
                 _th.join(timeout=0.5)
             states = _res.get("states") or {}
             # curl fallback returns "downloaded (curl)" — anything that
@@ -559,8 +614,10 @@ class FlyWireBrain:
                 return
             self.progress = {"stage": "building", "pct": 2.0}
             self._proc = start_build()
+            self.build_pid = getattr(self._proc, "pid", None)
             pipe = getattr(start_build, "last_pipe", None)
             while self._proc.is_alive():
+                self.build_beat_at = time.time()
                 if pipe is not None and pipe.poll(0.5):
                     msg = pipe.recv()
                     if msg.get("error"):
@@ -597,6 +654,58 @@ class FlyWireBrain:
             self._purge_corrupt(exc)
             self._schedule_retry()
             self.verify()
+
+    def supervise(self) -> dict:
+        """Keep the build honest: detect a dead/wedged attempt and restart it.
+
+        Called from the engine's 5 s self-heal tick. Returns a small report so
+        /api/health shows whether anything was done and why. This is the part
+        that was missing: ``ensure()`` returns early on "building" and the
+        engine only ever healed "absent", so a build whose worker vanished
+        (OOM kill, killed download, an exception in a nested thread) left the
+        UI on "building 2 %" — and the vote withheld — forever, until someone
+        restarted the process by hand.
+        """
+        out: dict[str, Any] = {"at": time.time(), "state": self.state,
+                               "attempt": self.attempt,
+                               "class": self._classify_worker(),
+                               "action": "none"}
+        if self.state != "building":
+            return out
+        now = time.time()
+        kill_pid = None
+        reason = ""
+        if self._classify_worker() in ("dead", "foreign"):
+            reason = f"build worker lost (attempt {self.attempt})"
+        elif self.stalled_for() is not None:
+            reason = (f"no build progress for {self.stalled_for():.0f}s "
+                      f"at {self.progress.get('pct', 0):.0f} %")
+            kill_pid = self.build_pid
+        else:
+            return out
+        # rate-limit restarts: a build that fails instantly must not spin
+        last = getattr(self, "_last_supervise_at", 0.0)
+        if last and now - last < 60.0:
+            out["action"] = "restart-suppressed"
+            out["detail"] = reason
+            return out
+        self._last_supervise_at = now
+        if kill_pid:
+            # the wedged child holds the CPU/RAM the retry needs
+            try:
+                os.kill(int(kill_pid), signal.SIGKILL)
+                out["killed_pid"] = int(kill_pid)
+            except Exception:
+                pass
+        self.last_error = f"self-heal: {reason}"
+        _log(f"supervise: {reason} -> restarting build")
+        self.state = "absent"          # so ensure() does not early-return
+        self.build_pid = None
+        self.ensure()
+        out["action"] = "restarted"
+        out["detail"] = reason
+        out["attempt"] = self.attempt
+        return out
 
     def rebuild(self) -> dict:
         """POST /api/brain/reconnect — drop cache state and start over."""
@@ -777,6 +886,90 @@ class FlyWireBrain:
                         "detail": "skipped"})
         return out
 
+    # ---------------------------------------------------------- stall state
+    # Hard ceilings for one attempt. The bundle path (normal Codespace) takes
+    # seconds; a full cold download+build takes minutes. Past these, the
+    # attempt is dead even if the thread is still "alive", and the supervisor
+    # must restart it instead of showing "building 2 %" forever.
+    BUILD_DEADLINE_S = 900.0
+    BEAT_TIMEOUT_S = 180.0
+
+    def stalled_for(self) -> float | None:
+        """Seconds this attempt has been silent, or None if it looks healthy.
+
+        ``None`` = ready, absent-with-no-attempt, or genuinely progressing.
+        A number means: nothing has proven liveness within
+        ``BEAT_TIMEOUT_S``, or the attempt blew ``BUILD_DEADLINE_S``.
+        """
+        if self.state != "building":
+            return None
+        now = time.time()
+        started = self.build_started_at or 0.0
+        beat = self.build_beat_at or started
+        if started and now - started > self.BUILD_DEADLINE_S:
+            return round(now - started, 1)
+        if beat and now - beat > self.BEAT_TIMEOUT_S:
+            return round(now - beat, 1)
+        return None
+
+    def worker_alive(self) -> bool:
+        """True while EITHER build path is actually running on a thread.
+
+        Two paths exist: the load/restore runs on the caller's thread (so
+        there is no extra thread to inspect), and the cold download+build
+        runs on ``_acquire_thread``. Checking only the latter made a
+        perfectly healthy bundle restore look like a dead worker.
+        """
+        for attr in ("_acquire_thread", "_build_thread"):
+            th = getattr(self, attr, None)
+            if th is not None and th.is_alive():
+                return True
+        return False
+
+    def _classify_worker(self) -> str:
+        """Compare the recorded attempt against this process's own threads.
+
+        ``dead``      — the build thread is gone but the state is still
+                        "building" (thread died on an unpicklable error, or a
+                        previous process left the marker behind).
+        ``wedged``    — alive but silent for longer than the heartbeat allows.
+        ``working``   — alive and beating.
+        ``foreign``   — "building" but this process never started the attempt,
+                        so nothing here can observe or repair it.
+        """
+        if self.state != "building":
+            return "none"
+        if not self.build_started_at:
+            return "foreign"
+        if not self.worker_alive():
+            return "dead"
+        if self.stalled_for() is not None:
+            return "wedged"
+        return "working"
+
+    def progress_line(self) -> str:
+        """One human sentence describing what the build is actually doing."""
+        st = self.state
+        if st == "ready":
+            return (f"ready · {self.meta.get('neurons', 0):,} neurons · "
+                    f"pass {self.last_pass_ms or 0:.0f} ms")
+        if st != "building":
+            return self.last_error or "not started"
+        pct = float(self.progress.get("pct", 0.0) or 0.0)
+        stage = self.progress.get("stage", "starting")
+        age = (round(time.time() - self.build_started_at)
+               if self.build_started_at else None)
+        kind = self._classify_worker()
+        if kind == "wedged":
+            silent = self.stalled_for() or 0
+            return (f"stalled at {pct:.0f} % ({stage}) — no progress for "
+                    f"{silent:.0f}s; retrying automatically")
+        if kind in ("dead", "foreign"):
+            return (f"build worker lost at {pct:.0f} % ({stage}) — "
+                    "restarting automatically")
+        return (f"building {pct:.0f} % — {stage}"
+                + (f" · {age}s elapsed" if age is not None else ""))
+
     def chip(self) -> dict:
         """UI brain chip: green ready / blue building / red absent."""
         if self.state == "ready":
@@ -791,11 +984,21 @@ class FlyWireBrain:
         if self.state == "building":
             _live = (getattr(self, "last_pass_at", 0)
                      and time.time() - self.last_pass_at < 30)
+            kind = self._classify_worker()
             return {"kind": "build",
-                    "text": (f"building {self.progress.get('pct', 0):.0f} %"
-                             f" — {self.progress.get('stage', '')}"
+                    "stalled": kind in ("wedged", "dead", "foreign"),
+                    "text": (self.progress_line()
                              + (" · vote live from current build"
                                 if _live else ""))}
+        if self.last_error:
+            # a REAL failure: say what failed and that it is being retried,
+            # instead of a bare "offline" that reads like a dead component
+            return {"kind": "absent",
+                    "text": (f"brain offline — vote withheld · "
+                             f"{self.last_error[:90]}"
+                             f" · retrying automatically"
+                             + (f" (attempt {self.attempt})"
+                                if self.attempt else ""))}
         return {"kind": "absent",
                 "text": "brain offline — vote withheld "
                         "(Settings → Brain → RECONNECT)"}

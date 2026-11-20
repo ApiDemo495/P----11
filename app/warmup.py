@@ -32,6 +32,8 @@ from __future__ import annotations
 import logging
 import math
 import time
+
+from . import loadgov
 from typing import Any
 
 from .cci import uniform_prior
@@ -248,7 +250,17 @@ def warm_history(engine, *, hours: int = 168,
             starts.reverse()
             row["available"] = len(starts)
 
-            for start_i in starts:
+            for _n, start_i in enumerate(starts):
+                # COOPERATIVE YIELD, scaled to the MEASURED loop lag. This
+                # replay is ~2 minutes of pure-Python numeric work
+                # (584 windows x 6 assets) on a worker thread, but CPython
+                # still serialises it against the event loop on the GIL:
+                # with the loop starved, /api/health and the websocket
+                # answered 1.8-2.6 s late — the client painted that as
+                # "ENGINE BUSY". A fixed sleep was guesswork; loadgov hands
+                # the CPU back exactly as much as the loop needs.
+                if _n:
+                    loadgov.cooperate()
                 end_i = start_i + width
                 cslice = slice(start_i - width, start_i + 1)
                 ctx = FormulaContext(

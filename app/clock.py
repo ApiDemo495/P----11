@@ -99,8 +99,16 @@ class MasterClock:
         if self._task is None and not self.started_at:
             # never started yet (boot still in progress): nothing to heal
             return {**st, "silent_for_s": 0.0, "action": "not-started"}
-        silent_for = (now - self.last_fired) if self.last_fired else \
-            (now - self.started_at if self.started_at else 0.0)
+        # Silence is measured from the LAST LIVENESS EVENT, which is either a
+        # real fire or the moment the scheduler was (re)built. Measuring only
+        # `last_fired` made the watchdog self-defeating: after one missed GRC
+        # it rebuilt the task, but `last_fired` stayed old, so the very next
+        # pass declared the fresh task silent again and cancelled it — up to
+        # 240 s before its next boundary. One miss became a permanent outage
+        # (observed as "clock watchdog: restarting scheduler (silent=649.7s)"
+        # repeating forever while no GRC ever fired). The baseline must be
+        # reset by the restart itself.
+        silent_for = now - max(self.last_fired or 0.0, self.started_at or 0.0)
         healthy = st["alive"] and silent_for <= self.SILENT_AFTER_S
         st["silent_for_s"] = round(silent_for, 1)
         st["action"] = "healthy" if healthy else "restart"
@@ -118,8 +126,8 @@ class MasterClock:
             pass
         self.restarts += 1
         self._stop = asyncio.Event()
+        self.started_at = time.time()      # new liveness baseline, see above
         self._task = asyncio.create_task(self._run())
-        self.started_at = time.time()
         return {**self.status(), "action": "restarted",
                 "silent_for_s": round(silent_for, 1)}
 
