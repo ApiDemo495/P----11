@@ -178,11 +178,13 @@ class _St:
     def __init__(self, times, closes):
         self.times = times
         self.closes = closes
+        self.sources = ["binance-rest"] * len(times)
 
 
 class _Feed:
     def __init__(self, mapping):
         self._m = mapping
+        self.mode = "binance"
 
     def state(self, symbol):
         return self._m[symbol]
@@ -191,7 +193,7 @@ class _Feed:
 def _grid(n15=900, seed=5):
     """15m closes, upsampled to 1m bars the way the live feed delivers them."""
     rng = random.Random(seed)
-    now = int(time.time())
+    now = int(time.time() // 900) * 900
     closes = [100.0]
     for _ in range(n15 - 1):
         closes.append(closes[-1] * math.exp(rng.gauss(0, 0.004)))
@@ -240,11 +242,11 @@ def _registry(status="open"):
 
 
 def test_resample_drops_the_partial_trailing_bar():
-    t = [0, 60, 900, 960, 1800]          # last bucket 1800 is incomplete
-    c = [1.0, 2.0, 3.0, 4.0, 5.0]
+    t = list(range(0, 1800, 60)) + [1800]  # last bucket is incomplete
+    c = [float(i + 1) for i in range(len(t))]
     bt, bc = sleeve_mod.resample_bars(t, c, 900)
     assert bt == [0, 900]
-    assert bc == [2.0, 4.0]
+    assert bc == [15.0, 30.0]
 
 
 def test_impulse_z_is_none_while_warming_up():
@@ -258,7 +260,6 @@ def test_impulse_z_matches_the_certified_formula():
     assert z is not None
     # recompute by hand on the same 15m grid
     bt, bc = sleeve_mod.resample_bars(t, c, 900)
-    bt, bc = bt[:-1], bc[:-1]
     rets = [0.0] + [math.log(bc[i] / bc[i - 1]) for i in range(1, len(bc))]
     win = rets[-500:]
     m = sum(win) / len(win)

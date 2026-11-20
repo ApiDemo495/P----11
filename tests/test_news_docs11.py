@@ -103,7 +103,7 @@ def niv_keys():
 
 # 6. Emergency re-lock: new entry = today's price, original entry preserved,
 #    reason says so, locks halt 30 s, drill path works with no open lock.
-def test_acc6_emergency_relock():
+def test_acc6_emergency_relock(monkeypatch):
     from app.engine import PredictionEngine
     from app.feed import MarketFeed
     feed = MarketFeed()
@@ -112,10 +112,11 @@ def test_acc6_emergency_relock():
     # tape has a close (the engine falls back to the last close when the
     # feed has no live price yet — a re-lock must NEVER clobber a real
     # entry with price0, that forced every settlement into 'skip')
-    feed.state("BTC").closes.append(50000.0)
+    feed.state("BTC").closes.append(50400.0)
+    monkeypatch.setattr(eng, "_atr", lambda ctx: 100.0)
     # audit §1.3 WINDOW FREEZE: a locked contract is immutable for its
-    # window unless ≥15 min have elapsed (>3 ATR is also required when the
-    # ATR is measurable). This lock is 17 minutes old — a legitimate
+    # window unless ≥15 min have elapsed and the move is strictly >3 ATR.
+    # This lock is 17 minutes old with a 4 ATR move — a legitimate
     # structural re-anchor — while the fresh one below must be refused.
     eng.locks[("BTC", "tf1")] = {
         "symbol": "BTC", "tf": "tf1", "side": 1, "confidence": 0.9,

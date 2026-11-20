@@ -1,6 +1,8 @@
 """Global configuration. Every constant mirrors the specification exactly."""
 from __future__ import annotations
 
+import os
+
 # ---------------------------------------------------------------------------
 # Master clock — World Clock Alignment System
 # ---------------------------------------------------------------------------
@@ -203,7 +205,9 @@ BINANCE_WS = "wss://stream.binance.com:9443/stream"
 BACKFILL_BARS = 10_080            # 1m klines at startup = 7 days of tape
 MIN_BARS_FULL_WINDOW = TIMEFRAMES["tf4"]["minutes"] + 1   # 248
 MIN_BARS_COMPUTE = 30             # below this a formula pass returns zeros
-FEED_MODE = "auto"                # auto | binance | sim   (auto falls back to simulator)
+FEED_MODE = os.environ.get("FEED_MODE", "auto").strip().lower()
+if FEED_MODE not in {"auto", "binance", "sim"}:
+    raise ValueError("FEED_MODE must be one of: auto, binance, sim")
 
 # ---------------------------------------------------------------------------
 # Paths

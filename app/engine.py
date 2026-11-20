@@ -3771,9 +3771,9 @@ class PredictionEngine:
         **both** (a) the move from its entry exceeds ``RELOCK_MIN_MOVE_ATR``
         (3.0 ATR) and (b) ``RELOCK_MIN_AGE_S`` (15 min) have elapsed since
         the lock. On top of the freeze, every re-anchor of an active lock
-        observes a 15-minute lock-age cooldown, and automatic triggers
-        additionally require a measurable ATR and a move STRICTLY greater
-        than 3 ATR. Manual drills with no open entry (audit-row only) keep
+        observes a 15-minute lock-age cooldown. Both manual and automatic
+        re-locks require a measurable ATR and a move STRICTLY greater than
+        3 ATR. Manual drills with no open entry (audit-row only) keep
         their explicit behaviour. All paths share the six-per-hour N-8 cap
         and the 30 s new-lock halt.
         """
@@ -3825,12 +3825,12 @@ class PredictionEngine:
             _atr_known = math.isfinite(_atr_freeze) and _atr_freeze > 0
             _move_atr = (abs(price - _old_entry) / _atr_freeze
                          if _atr_known else 0.0)
-            if _atr_known and _move_atr < RELOCK_MIN_MOVE_ATR:
+            if _atr_known and _move_atr <= RELOCK_MIN_MOVE_ATR:
                 return {"ok": False, "frozen": True, "skipped": True,
                         "move_atr": round(_move_atr, 3),
                         "required_move_atr": RELOCK_MIN_MOVE_ATR,
                         "error": f"window frozen — move {_move_atr:.2f} ATR "
-                                 f"< {RELOCK_MIN_MOVE_ATR:.1f} ATR structural gate"}
+                                 f"must exceed {RELOCK_MIN_MOVE_ATR:.1f} ATR"}
             if _age_s < RELOCK_MIN_AGE_S:
                 return {"ok": False, "frozen": True, "skipped": True,
                         # the age bar IS a cooldown: surfaced as one so
@@ -3859,24 +3859,15 @@ class PredictionEngine:
                 return {"ok": False, "cooldown": True,
                         "cooldown_s": round(remaining, 1),
                         "error": "emergency gated: lock younger than 15 minutes"}
-            if automatic:
-                if price <= 0 or _old_entry <= 0:
-                    return {"ok": False, "skipped": True,
-                            "error": ("automatic emergency needs a valid "
-                                      "entry and price")}
-                try:
-                    _atr_gate = float(self._atr(self.build_ctx(symbol, tf)))
-                except Exception:
-                    _atr_gate = 0.0
-                if not math.isfinite(_atr_gate) or _atr_gate <= 0.0:
-                    return {"ok": False, "skipped": True,
-                            "error": "automatic emergency gated: ATR unavailable"}
-                _move_atr = abs(price - _old_entry) / _atr_gate
-                if _move_atr <= EMERGENCY_RELOCK_MIN_MOVE_ATR:
-                    return {"ok": False, "skipped": True,
-                            "move_atr": round(_move_atr, 3),
-                            "required_move_atr": EMERGENCY_RELOCK_MIN_MOVE_ATR,
-                        "error": "automatic emergency gated: move below ATR threshold"}
+            if (not math.isfinite(price) or price <= 0 or
+                    not math.isfinite(_old_entry) or _old_entry <= 0):
+                return {"ok": False, "skipped": True,
+                        "error": "emergency needs a valid entry and price"}
+            # _atr_known is computed by the freeze guard above. Missing ATR
+            # must not let manual re-locks bypass the structural condition.
+            if not _atr_known:
+                return {"ok": False, "frozen": True, "skipped": True,
+                        "error": "emergency gated: ATR unavailable"}
         halt = getattr(self, "_halt_until", None)
         if halt is None:
             halt = self._halt_until = {}
@@ -6954,71 +6945,21 @@ class PredictionEngine:
         return block
 
     def _step_portfolio(self, block: dict[str, Any]) -> dict[str, Any]:
-        """Advance the paper book one bar using the certified sleeve states.
+        """Expose the existing paper book without fabricating live fills.
 
-        The book only ever sees signals the gate promoted to ``open``, and
-        every fill comes from a real bar the feed actually holds.
-
-        Every ASSET in the registry is handled, not just ETH: hard-coding
-        the cash asset meant a certified BTC/BNB/PAXG sleeve could never
-        open a position no matter how strong its trigger, and the book
-        would silently look complete while ignoring most of the registry.
+        The old integration filled at the latest one-minute *close* while
+        claiming a next-15-minute-bar open, and also consumed simulated tape.
+        Freeze entries, exits and marks until the execution adapter can prove
+        source, timing and OHLC parity with the research fill contract. The
+        existing ledger is preserved; it is not evidence of verified fills.
         """
-        from .sleeves import resample_bars
-
-        pf = self.portfolio
-        sleeve_asset = {sid: rt.asset for sid, rt in pf.sleeves.items()}
-
-        # which assets actually have sleeves in the book
-        assets = sorted(set(sleeve_asset.values())) or ["ETH"]
-
-        # one bar grid per asset: bar indices are NOT comparable across
-        # assets, so each asset keeps its own index (the same class of bug
-        # that made cross-grid cooldowns meaningless).
-        prices: dict[str, dict[str, Any]] = {}
-        bar_index: dict[str, int] = {}
-        for asset in assets:
-            st = self.feed.state(asset)
-            if not st.times:
-                continue
-            bt, bc = resample_bars(st.times, st.closes, 900)
-            if not bt:
-                continue
-            prices[asset] = {"t": bt[-1], "c": bc[-1],
-                             "h": bc[-1], "l": bc[-1]}
-            bar_index[asset] = len(bt) - 1
-
-        # exits / mark-to-market first, per asset
-        for asset, px in prices.items():
-            pf.manage(bar_index[asset], {asset: px})
-
-        entered: list[dict[str, Any]] = []
-        by_id = {sig.get("sleeve_id"): sig for sig in block.get("signals", [])}
-        for sid, asset in sleeve_asset.items():
-            sig = by_id.get(sid)
-            if not sig or sig.get("state") not in ("long", "short"):
-                continue
-            if asset not in prices:
-                continue
-            st = self.feed.state(asset)
-            rets = []
-            for i in range(1, min(len(st.closes), 901)):
-                a, b = st.closes[-i - 1], st.closes[-i]
-                if a > 0 and b > 0:
-                    rets.append(math.log(b / a))
-            vol = 0.0
-            if len(rets) > 2:
-                m = sum(rets) / len(rets)
-                vol = (sum((r - m) ** 2 for r in rets) / len(rets)) ** 0.5
-            res = pf.try_enter(
-                sid, sig["state"],
-                {"t": int(st.times[-1]), "o": float(st.closes[-1])},
-                bar_index[asset], vol,
-            )
-            if res.get("ok"):
-                entered.append({"sleeve_id": sid, "asset": asset, **res})
-        snap = pf.snapshot()
-        snap["entered_this_bar"] = entered
+        snap = self.portfolio.snapshot()
+        snap["execution_status"] = "paused"
+        snap["execution_reason"] = (
+            "Paper execution paused: next-bar open and real-tape provenance "
+            "are not yet verified; existing positions and results are frozen."
+        )
+        snap["entered_this_bar"] = []
         return snap
 
     def _current_meta_inputs(self) -> dict:

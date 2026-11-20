@@ -1119,7 +1119,12 @@ def betti_numbers(P: list[float]) -> tuple[int, int]:
     eps = 2.0 * sigma
     if eps <= 1e-12:
         return 1, 0
-    res = _ripser(pts, thresh=eps, maxdim=1)
+    # Supplying Euclidean distances directly avoids ripser's sklearn
+    # pairwise_distances path, which can inspect a partially initialized
+    # pyarrow module while the brain loader imports it on another thread.
+    from scipy.spatial.distance import cdist
+    distances = cdist(pts, pts, metric="euclidean")
+    res = _ripser(distances, distance_matrix=True, thresh=eps, maxdim=1)
     dgm0, dgm1 = res["dgms"][0], res["dgms"][1]
 
     def covering(dgm: np.ndarray) -> int:
