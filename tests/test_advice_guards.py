@@ -153,6 +153,7 @@ def test_g7_health_does_not_build_snapshot():
 def test_i5_keys_never_touch_disk(monkeypatch, tmp_path):
     from app import agents as ag
     monkeypatch.setattr(ag, "SETTINGS_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(ag, "SECRETS_FILE", str(tmp_path / "secrets.json"))
     mgr = ag.AgentManager()
     mgr.configure(gemini_key="AIzaSUPERSECRET")
     data = json.loads((tmp_path / "s.json").read_text())
@@ -176,10 +177,10 @@ def test_i2_choose_model_filters_and_ranks():
          "supportedGenerationMethods": ["generateContent"]},
     ]
     chosen = AgentManager.choose_model(models)
-    assert chosen == "models/gemini-2.0-flash"   # newest flash, no vision
+    assert chosen == "gemini-2.0-flash"   # newest flash, bare id, no vision
     # without gemini-2: flash preferred over pro
     models2 = [m for m in models if "2.0" not in m["name"]]
-    assert AgentManager.choose_model(models2) == "models/gemini-1.5-flash"
+    assert AgentManager.choose_model(models2) == "gemini-1.5-flash"
     # no generateContent at all -> None
     assert AgentManager.choose_model(
         [{"name": "models/x", "supportedGenerationMethods": ["foo"]}]) is None
@@ -355,11 +356,15 @@ def test_analyse_pipeline_stages_and_readonly():
     # read-only: every lock identical after the analysis
     for k, v in locks_before.items():
         assert eng.locks[k] == v, f"lock {k} mutated by analysis"
-    # one analysis at a time (guard fires before any task is created)
+    # one analysis at a time: a second request is QUEUED, never started
+    # concurrently (the old refusal is gone by design)
     eng.analyse_job = {"status": "running"}
+    task_before = eng._analyse_task
     out2 = eng.start_analyse("ETH", "tf2")
-    assert out2["ok"] is False
+    assert out2["ok"] is True and out2.get("queued") is True
+    assert eng._analyse_task is task_before   # queueing spawns no task
     eng.analyse_job = None
+    eng._analyse_queue.clear()
 
 
 def test_vault_saves_real_state():

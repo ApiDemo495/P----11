@@ -74,6 +74,7 @@ from .formulas import FORMULA_FUNCTIONS, FORMULA_NAMES, compute_all
 from .formulas.trace import traced_compute
 from .forward import ForwardTables
 from .meta import MetaCombiner
+from .predlock import PredictionJournal
 from . import genesis as genesis_mod
 
 # §2.10 non-directional components: never a direction vote (confidence /
@@ -395,6 +396,10 @@ class PredictionEngine:
         self.analyse_job: dict | None = None   # staged ANALYSE flow
         self._last_auto_analyse: float = 0.0   # AUTO-PREDICT cadence
         self._analyse_task: asyncio.Task | None = None
+        # A manual ▶ ANALYSE must never be refused because the 45-second
+        # auto pass happens to be running. A different scope is queued and
+        # started the moment the running job finishes.
+        self._analyse_queue: list[tuple[str, str]] = []
         self.started_at = time.time()      # §12 ops: uptime
         self.vault_last_write = 0.0        # §12 ops: vault last write
         self.build_id = ""                 # §12 ops: build id vs remote
@@ -460,6 +465,11 @@ class PredictionEngine:
         self.auditor = FormulaAuditor()
         from .ledger import SettlementLedger
         self.ledger = SettlementLedger()
+        # SEALED PREDICTIONS: ANALYSE writes one immutable lock per window,
+        # the tick loop grades it, and the settlement feeds the learners.
+        # This is the user-visible "prediction lock" (app/predlock.py).
+        self.predlocks = PredictionJournal()
+        self._last_lock_settle = 0.0
         self._thoughts: dict[str, list[dict]] = {}
         self._load_thoughts()
         # honest confidence: isotonic map confidence → P(win), fed by the
@@ -2618,13 +2628,29 @@ class PredictionEngine:
     ANALYSE_STAGES = ("formulas", "emotions", "physics", "news", "hedge",
                       "ai_review", "recheck", "final")
 
-    def start_analyse(self, symbol: str, tf: str = "tf1") -> dict:
-        if self.analyse_job and self.analyse_job.get("status") == "running":
-            return {"ok": False, "error": "an analysis is already running"}
+    def start_analyse(self, symbol: str, tf: str = "tf1",
+                      source: str = "manual") -> dict:
         if symbol not in SYMBOL_ORDER:
             return {"ok": False, "error": "unknown symbol"}
+        if tf not in TF_ORDER:
+            return {"ok": False, "error": "unknown timeframe"}
+        if self.analyse_job and self.analyse_job.get("status") == "running":
+            same = (self.analyse_job.get("symbol") == symbol
+                    and self.analyse_job.get("tf") == tf)
+            if same:
+                return {"ok": True, "symbol": symbol, "tf": tf,
+                        "started_at": self.analyse_job["started_at"],
+                        "stages": list(self.ANALYSE_STAGES),
+                        "already_running": True}
+            item = (symbol, tf)
+            if item not in self._analyse_queue:
+                self._analyse_queue.append(item)
+            return {"ok": True, "symbol": symbol, "tf": tf,
+                    "queued": True, "queue_position": len(self._analyse_queue),
+                    "started_at": None,
+                    "stages": list(self.ANALYSE_STAGES)}
         self.analyse_job = {
-            "symbol": symbol, "tf": tf,
+            "symbol": symbol, "tf": tf, "source": source,
             "started_at": time.time(), "stages": [],
             "status": "running", "result": None,
         }
@@ -2633,6 +2659,21 @@ class PredictionEngine:
         return {"ok": True, "symbol": symbol, "tf": tf,
                 "started_at": self.analyse_job["started_at"],
                 "stages": list(self.ANALYSE_STAGES)}
+
+    def _start_queued_analyse(self) -> None:
+        """Start the next manual analysis once the running one is done."""
+        while self._analyse_queue:
+            symbol, tf = self._analyse_queue.pop(0)
+            if (self.analyse_job
+                    and self.analyse_job.get("symbol") == symbol
+                    and self.analyse_job.get("tf") == tf):
+                continue
+            try:
+                self.start_analyse(symbol, tf, source="queued")
+                return
+            except Exception:
+                log.exception("queued analyse failed for %s|%s", symbol, tf)
+
 
     async def _emit_stage(self, job: dict, stage: str, status: str,
                           t0: float, t1: float, summary: str,
@@ -2663,6 +2704,10 @@ class PredictionEngine:
                              "tf": job.get("tf"), "result": None,
                              "error": "exceeded the 175 s budget "
                                       "(3 minute cap)"})
+        finally:
+            if job.get("status") == "running":      # defensive: never stuck
+                job["status"] = "done" if job.get("result") else "error"
+            self._start_queued_analyse()
 
     async def _analyse_body(self, job: dict) -> None:
         symbol, tf = job["symbol"], job["tf"]
@@ -3044,11 +3089,50 @@ class PredictionEngine:
                 # advisory only: the call stands; the failed checks are
                 # printed so the arithmetic can be audited (doc §1)
                 final["recheck_advisory"] = recheck["verdict"]
+            # The honest verdict: a side can be ISSUED for grading while
+            # never clearing the issue floor. The UI and the sealed lock read
+            # THIS field, so no panel can advertise "ISSUED" at conf 0.20.
+            final["verdict"] = ("ISSUE" if (final.get("gate_ok")
+                                            and recheck["passed"])
+                                else "WATCH" if final.get("direction")
+                                else "NO CALL")
+            # SEAL THE PREDICTION. This is the user requirement: pressing
+            # ANALYSE locks what the app just said, writes it to history and
+            # lets settlement teach the learners. A refused lock is printed
+            # with every failing check instead of silently doing nothing.
+            # the thought trace is part of the evidence, so it is produced
+            # BEFORE the seal and stored in the lock's evidence dict
+            _cog = None
+            try:
+                _cog = self.cognitive(symbol, tf)
+            except Exception:
+                log.exception("cognition pre-compute failed for %s|%s",
+                              symbol, tf)
+            try:
+                final["prediction_lock"] = self._seal_analysis_lock(
+                    symbol, tf, final, store, res, cyc,
+                    signature=(_cog or {}).get("signature"),
+                    target=("forecast price at horizon end"
+                            if str(self.agents.settings.get(
+                                "system_mode", "old")) == "new"
+                            else "measured TP/SL ladder"))
+            except Exception:
+                log.exception("prediction lock failed for %s|%s", symbol, tf)
+                final["prediction_lock"] = {
+                    "locked": False, "status": "refused",
+                    "why": ["the lock writer raised — see server log"]}
+            # publish the same verdict + lock on the CYCLE CARD, so the hero
+            # and the timeframe cards read one answer (not "ISSUED" + a lock
+            # that says NO CALL)
+            if cyc is not None:
+                cyc.verdict = str(final.get("verdict") or "NO CALL")
+                cyc.gate_ok = bool(final.get("gate_ok"))
+                cyc.prediction_lock = dict(final.get("prediction_lock") or {})
             # COGNITION: produce and record the thinking trace for the call
             # that was just made (signature + metacognitive snapshot). Failure
             # here must never cost the user their analysis.
             try:
-                self._think_and_record(symbol, tf, final)
+                self._think_and_record(symbol, tf, final, _cog)
             except Exception:
                 log.exception("cognition record failed for %s|%s", symbol, tf)
             job["result"] = final
@@ -4781,40 +4865,77 @@ class PredictionEngine:
             pass
 
     def _graded_rows(self, symbol: str, tf: str) -> list[dict]:
-        """Settled ledger rows for this window — the evidence for competence."""
-        try:
-            return [r for r in (self.ledger.rows.get(f"{symbol}|{tf}") or [])
-                    if r.get("result") in ("win", "loss")]
-        except Exception:
-            return []
+        """Every settled outcome for this window — the evidence for competence.
 
-    def thought_stats(self, ledger_only: bool = True) -> dict:
+        The ledger only settles positions it opened; a watch-only call still
+        proves (or disproves) the app's confidence, and the sealed prediction
+        journal records those. Merging both is what makes metacognition warm
+        up at all on a keyless/simulated host.
+        """
+        rows: list[dict] = []
+        try:
+            rows += [{"confidence": r.get("confidence"),
+                      "result": r.get("result"),
+                      "ts": r.get("ts") or 0.0}
+                     for r in (self.ledger.rows.get(f"{symbol}|{tf}") or [])
+                     if r.get("result") in ("win", "loss")]
+        except Exception:
+            pass
+        try:
+            for r in self.predlocks.rows:
+                if r.get("symbol") != symbol or r.get("tf") != tf:
+                    continue
+                if r.get("outcome") not in ("won", "lost"):
+                    continue
+                rows.append({"confidence": r.get("confidence"),
+                             "result": ("win" if r["outcome"] == "won"
+                                        else "loss"),
+                             "ts": r.get("settled_at") or 0.0})
+        except Exception:
+            pass
+        rows.sort(key=lambda r: float(r.get("ts") or 0.0))
+        return rows[-400:]
+
+    def thought_stats(self, ledger_only: bool = True,
+                      symbol: str | None = None,
+                      tf: str | None = None) -> dict:
         """Metacognition over the app's OWN thought record.
 
-        `ledger_only=True` measures competence on settled engine outcomes (the
-        app's real record). `ledger_only=False` measures it on graded thought
-        records, i.e. how often the app's stated confidence was borne out by
-        the settlement of the call it reasoned about. The second is what
-        makes this metacognition rather than just bookkeeping.
+        Only *decided* traces (win/loss) enter the hit-rate. Abstained traces
+        are counted separately — an app that refuses to call is not scored as
+        if it had called. Traces still waiting for settlement are ``open``.
+        With ``symbol``/``tf`` the estimate is scoped to that window; the
+        global estimate remains available for context.
         """
         from .cognition import competence
-        rows = []
+        rows, open_n, abstained = [], 0, 0
         for key, items in (self._thoughts or {}).items():
-            sym, _, tf = key.partition("|")
+            sym, _, tfk = key.partition("|")
+            if symbol and sym != symbol:
+                continue
+            if tf and tfk != tf:
+                continue
             for rec in items:
-                if rec.get("outcome") in ("win", "loss"):
+                if rec.get("outcome") is None:
+                    open_n += 1
+                elif rec.get("outcome") == "abstain":
+                    abstained += 1
+                elif rec.get("outcome") in ("win", "loss"):
                     rows.append({"confidence": rec.get("confidence"),
-                                 "result": rec["outcome"]})
-        rows.sort(key=lambda r: float(r.get("confidence") or 0))
-        # The `conf` argument is what the app LAST claimed; without it the
-        # competence estimate can never report a dangling certainty, because
-        # it has nothing to compare the record against. Measured here, not
-        # guessed: the mean stated confidence over the graded traces.
-        claimed = ([float(r["confidence"]) for r in rows
-                    if r.get("confidence") is not None] or [None])
-        mean_claimed = (sum(claimed) / len(claimed)
-                        if claimed[0] is not None else None)
-        return competence(mean_claimed, rows)
+                                 "result": rec["outcome"],
+                                 "ts": rec.get("ts") or 0.0})
+        rows.sort(key=lambda r: float(r.get("ts") or 0.0))
+        claimed = [float(r["confidence"]) for r in rows
+                   if r.get("confidence") is not None]
+        mean_claimed = (sum(claimed) / len(claimed)) if claimed else None
+        out = competence(mean_claimed, rows)
+        out.update({"open": open_n, "abstained": abstained,
+                    "decided": len(rows),
+                    "scope": f"{symbol or 'all'}|{tf or 'all'}",
+                    "rule": ("win/loss only measures the traces that actually "
+                             "made a call; abstentions and open traces are "
+                             "reported but never folded into the hit-rate")})
+        return out
 
     def cognitive(self, symbol: str, tf: str) -> dict:
         """THE THINKING TRACE for a window (pure read, no state change).
@@ -4825,12 +4946,22 @@ class PredictionEngine:
         from .cognition import think
         res = (self.last_result.get((symbol, tf))
                or self.display_systems.get((symbol, tf)) or {})
+        # the verdict lives on the CYCLE card; overlay it on the copy the
+        # trace reads so the observe step can narrate the same word the
+        # hero shows (never mutate last_result — this is a read path)
+        _cyc = self.cycles.get((symbol, tf))
+        if _cyc is not None and _cyc.verdict:
+            res = {**res, "verdict": _cyc.verdict}
         store = {
             "emotions": {tf: (res.get("emotion") or
                               (self.last_result.get((symbol, tf)) or {})
                               .get("emotion") or {})},
             "physics": {tf: res.get("physics") or {}},
-            "news": res.get("news_value") or {},
+            # a numeric news reading was passed as the dict itself, so a live
+            # 0.0 was "withheld" and a live +0.4 became an unreadable float.
+            # Wrap it with its own availability flag.
+            "news": ({} if res.get("news_value") is None else
+                     {"value": res.get("news_value"), "available": True}),
             "hedge": {tf: res.get("hedge") or {}},
             "feed": self.feed.stats(),
         }
@@ -4838,22 +4969,211 @@ class PredictionEngine:
                     graded=self._graded_rows(symbol, tf),
                     floor=float(CONFIDENCE_FLOOR),
                     system_mode=str(self.agents.settings.get("system_mode", "old")))
-        out["thought_stats"] = self.thought_stats()
+        cyc = _cyc
+        if cyc is not None:
+            out["verdict"] = cyc.verdict
+            out["prediction_lock"] = dict(cyc.prediction_lock or {})
+            out["prediction_open"] = [
+                r for r in self.predlocks.open_for(symbol, tf)]
+        out["thought_stats"] = self.thought_stats(symbol=symbol, tf=tf)
+        out["thought_stats_all"] = self.thought_stats()
         return out
 
-    def _think_and_record(self, symbol: str, tf: str, final: dict) -> None:
+    def _seal_analysis_lock(self, symbol: str, tf: str, final: dict,
+                            store: dict, res: dict, cyc,
+                            signature: str | None = None,
+                            target: str = "measured TP/SL ladder") -> dict:
+        """Seal the ANALYSE result as an immutable, graded prediction.
+
+        The evidence saved here is exactly what the decision used: formula
+        signs, subsystem votes, brain signals, the AI reply and the weightage.
+        Settlement later feeds those numbers back into the same learners that
+        grade every other window, so the lock teaches the app rather than
+        merely decorating the page.
+        """
+        raws = (store.get("raws") or {}).get(tf) or {}
+        formula_signs = {str(k): _sign(v) for k, v in raws.items()
+                         if abs(float(v or 0.0)) > 1e-9}
+        brain_sigs = [float(inst.get("h_signal", 0.0))
+                      for inst in (res.get("brain") or {}).get("instances", [])]
+        tps = final.get("tps") or []
+        tp = final.get("contract_tp")
+        if tp is None and tps:
+            tp = tps[-1].get("level")
+        if tp is None:
+            tp = final.get("prediction", {}).get("tp")
+        sl = final.get("sl") or final.get("contract_sl")
+        # NEW system: the prediction being sealed is "price at horizon end",
+        # so the lock's target must be that forecast — sealing the measured
+        # ladder while labelling the call NEW would grade the wrong number.
+        _mode = str(self.agents.settings.get("system_mode", "old"))
+        _fc = ((getattr(cyc, "forecast", {}) or {}).get("price")
+               if cyc is not None else None)
+        if _mode == "new" and _fc:
+            tp = float(_fc)
+        evidence = {
+            "formula_signs": formula_signs,
+            "subsystems": {k: _sign(v) if k != "final" else int(v or 0)
+                           for k, v in (final.get("voters") or {}).items()},
+            "brain_signals": brain_sigs,
+            "voters": final.get("voters"),
+            "weightage": final.get("weightage"),
+            "ai": {k: v for k, v in (final.get("ai") or {}).items()
+                   if k in ("source", "backend", "direction", "confidence",
+                            "insight", "available", "note", "model")},
+            "levels_source": final.get("levels_source"),
+            "recheck": {"passed": (final.get("recheck") or {}).get("passed"),
+                        "score": (final.get("recheck") or {}).get("score"),
+                        "verdict": (final.get("recheck") or {}).get("verdict")},
+            "signature": (signature
+                          or (final.get("thinking") or {}).get("signature")),
+        }
+        return self.predlocks.seal(
+            symbol, tf,
+            direction=int(final.get("direction") or 0),
+            # the entry is the FROZEN contract anchor when one exists —
+            # otherwise the lock would be stamped at a price the level
+            # contract never traded at
+            entry=float((getattr(cyc, "level_contract", {}) or {}).get("entry")
+                        or final.get("entry") or 0.0),
+            tp=float(tp or 0.0),
+            sl=float(sl or 0.0),
+            confidence=float(final.get("confidence") or 0.0),
+            minutes=int(TIMEFRAMES[tf]["minutes"]),
+            gate_ok=bool(final.get("gate_ok") and
+                         (final.get("recheck") or {}).get("passed")),
+            recheck_ok=(final.get("recheck") or {}).get("passed"),
+            reason=(f"{final.get('verdict')} · conf {final.get('confidence')}"
+                    f" · {(final.get('recheck') or {}).get('verdict') or ''}"),
+            evidence=evidence,
+            target=target,
+            source=str((self.analyse_job or {}).get("source") or "analyse"),
+            system_mode=str(self.agents.settings.get("system_mode", "old")),
+            cycle_id=(getattr(cyc, "cycle_id", None) if cyc else None),
+            lock_id=(getattr(cyc, "lock_id", None) if cyc else None),
+        )
+
+    # ==================================================================
+    # prediction SYSTEM selector (old ladder ⇄ new horizon forecast)
+    # ==================================================================
+    def _retarget_display(self, cyc, mode: str) -> None:
+        """Point the DISPLAYED TP at the selected model's target.
+
+        Execution and settlement keep reading the frozen level contract, so
+        flipping the selector can never move the barrier a live trade or the
+        ledger is graded against. Only what the user sees as "the target"
+        changes, immediately — not at the next 22-minute boundary.
+        """
+        if cyc is None:
+            return
+        forecast = dict(cyc.forecast or {})
+        risk = dict(cyc.risk or {})
+        entry = float((cyc.level_contract or {}).get("entry")
+                      or risk.get("entry") or 0.0)
+        d = int(cyc.direction or 0)
+        if mode == "new":
+            fc = forecast.get("price")
+            if fc and entry > 0:
+                cyc.tp = float(fc)
+                cyc.tp_dist = abs(cyc.tp - entry)
+                cyc.sl = float(forecast.get("sl") or risk.get("sl") or cyc.sl)
+                cyc.sl_dist = (abs(entry - cyc.sl) if cyc.sl else cyc.sl_dist)
+                cyc.ratio = (round(cyc.tp_dist / cyc.sl_dist, 6)
+                             if cyc.sl_dist else cyc.ratio)
+                if cyc.targets:
+                    cyc.targets[-1].level = cyc.tp
+                forecast["mode"] = "new"
+                cyc.forecast = forecast
+        else:
+            measured_tp = risk.get("tp") or (cyc.level_contract or {}).get("tp")
+            if measured_tp:
+                cyc.tp = float(measured_tp)
+                if entry > 0:
+                    cyc.tp_dist = abs(cyc.tp - entry)
+                    cyc.ratio = (round(cyc.tp_dist / cyc.sl_dist, 6)
+                                 if cyc.sl_dist else cyc.ratio)
+                if cyc.targets:
+                    cyc.targets[-1].level = cyc.tp
+            forecast["mode"] = "old"
+            cyc.forecast = forecast
+        cyc.events.append({"ts": time.time(), "type": "system_mode",
+                           "mode": mode,
+                           "note": "display target switched; settlement "
+                                   "contract unchanged"})
+
+    def set_system_mode(self, mode: str) -> dict:
+        """Switch old/new prediction model everywhere, right now."""
+        mode = "new" if str(mode).lower() in ("new", "forecast", "horizon",
+                                              "1", "true") else "old"
+        self.agents.settings["system_mode"] = mode
+        self.agents.save_settings()
+        touched = 0
+        for cyc in self.cycles.values():
+            if cyc is not None:
+                self._retarget_display(cyc, mode)
+                touched += 1
+        self._save_cycles_state()
+        return {
+            "ok": True, "system_mode": mode, "cycles_retargeted": touched,
+            "label": ("NEW — the forecast price at the end of the timeframe "
+                      "is the target (stop kept)" if mode == "new" else
+                      "OLD — measured TP/SL ladder"),
+            "rule": ("the selector changes the model used from this window on; "
+                     "a trade/ledger already sealed keeps its contract"),
+        }
+
+    def _save_cycles_state(self) -> None:
+        """Persist display retargets only if the lock/cycle writer supports it.
+
+        Called from the system switch: a persistence failure must never make
+        the switch look broken, so it is deliberately best-effort.
+        """
+        try:
+            self._save_locks()
+        except Exception:
+            pass
+
+    def _think_and_record(self, symbol: str, tf: str, final: dict,
+                          payload: dict | None = None) -> None:
         """Store the trace and its signature against the call it produced."""
         try:
-            payload = self.cognitive(symbol, tf)
+            payload = payload or self.cognitive(symbol, tf)
         except Exception:
             log.exception("cognition failed for %s|%s", symbol, tf)
             return
         key = f"{symbol}|{tf}"
+        lock = final.get("prediction_lock") or {}
+        # one thought per sealed prediction: re-analysing inside the same
+        # locked window must not create an ungradeable duplicate trace
+        if lock.get("locked") and lock.get("already"):
+            # same full summary the unique path builds (the result box and
+            # the tests read every field) — only the LEDGER write is skipped
+            final["thinking"] = {
+                "signature": payload.get("signature"),
+                "n_steps": payload.get("n_steps"),
+                "abstain": payload.get("abstain"),
+                "trust": (payload.get("competence") or {}).get("trust"),
+                "routes_agree": (payload.get("deliberation") or {})
+                .get("routes_agree"),
+                "consistency": payload.get("consistency"),
+                "counterfactual": payload.get("counterfactual"),
+                "failing_assumptions": [a["claim"] for a in
+                                        payload.get("assumptions") or []
+                                        if a.get("holds") is False],
+                "duplicate_window": True,
+                "note": "a lock already exists for this window; its original "
+                        "thought trace is the one that gets graded",
+            }
+            return
         rec = {"ts": time.time(),
+               "symbol": symbol, "tf": tf,
+               "lock_id": (lock.get("id") if lock.get("locked") else None),
                "signature": payload.get("signature"),
-               "confidence": payload.get("steps", [{}])[0]
-                             .get("data", {}).get("confidence"),
+               "confidence": float(final.get("confidence")
+                                   or payload.get("steps", [{}])[0]
+                                   .get("data", {}).get("confidence") or 0.0),
                "signal": final.get("signal"),
+               "direction": int(final.get("direction") or 0),
                "abstain": bool((payload.get("abstain") or {}).get("abstain")),
                "consistency": bool((payload.get("consistency") or {}).get("ok")),
                "split": bool((payload.get("deliberation") or {}).get("split")),
@@ -4885,10 +5205,126 @@ class PredictionEngine:
         items = self._thoughts.get(key) or []
         for rec in reversed(items):
             if rec.get("outcome") is None:
-                rec["outcome"] = "win" if won else "loss"
+                # a trace bound to a sealed lock is graded by THAT lock's
+                # settlement (exact id), never by whichever window boundary
+                # happens to pass first
+                if rec.get("lock_id"):
+                    return
+                # An ABSTAINED trace has no hit/miss to earn: grading it as a
+                # win or a loss taught the competence estimate nothing and
+                # inflated the sample with calls the app refused to make.
+                rec["outcome"] = ("abstain" if rec.get("abstain")
+                                  else ("win" if won else "loss"))
                 rec["graded_at"] = time.time()
                 self._save_thoughts()
                 return
+
+    def _grade_thought_by_lock(self, lock: dict) -> None:
+        """Grade the trace that produced this exact lock (by lock id).
+
+        Matching on the lock id is what keeps metacognition honest: the
+        thought record can never be graded against a different window's
+        outcome just because it happened to be the latest ungraded row.
+        """
+        lid = lock.get("id")
+        if not lid:
+            return
+        for items in (self._thoughts or {}).values():
+            for rec in reversed(items):
+                if rec.get("lock_id") == lid and rec.get("outcome") is None:
+                    outcome = str(lock.get("outcome") or "")
+                    if rec.get("abstain"):
+                        rec["outcome"] = "abstain"
+                    elif outcome in ("won", "lost"):
+                        rec["outcome"] = "win" if outcome == "won" else "loss"
+                    else:
+                        return          # push/ambiguous: nothing to grade
+                    rec["graded_at"] = time.time()
+                    rec["settled_bps"] = lock.get("bps")
+                    self._save_thoughts()
+                    return
+
+    def learn_from_prediction_lock(self, lock: dict) -> None:
+        """Feed a settled sealed lock back into the app's learners.
+
+        The stored evidence is the decision's own reading — not a re-read of
+        the latest pass — so the credit (and the blame) lands on what
+        actually made the call.
+        """
+        try:
+            symbol, tf = str(lock.get("symbol")), str(lock.get("tf"))
+            outcome = str(lock.get("outcome") or "")
+            if outcome not in ("won", "lost"):
+                self._grade_thought_by_lock(lock)
+                return
+            move_sign = (1 if outcome == "won" else -1) * int(
+                lock.get("direction") or 1)
+            ev = lock.get("evidence") or {}
+            signals = {}
+            for k, v in (ev.get("formula_signs") or {}).items():
+                try:
+                    fid = int(k)
+                except (TypeError, ValueError):
+                    continue
+                s = _sign(v)
+                if s:
+                    signals[fid] = s
+            subs = {str(k): int(v or 0)
+                    for k, v in (ev.get("subsystems") or {}).items()}
+            brain = [float(x or 0.0) for x in (ev.get("brain_signals") or [])]
+            self.learning.record_micro(
+                symbol, tf, move_sign, signals, subs, brain,
+                1 if outcome == "won" else None,
+                1 if outcome == "lost" else None)
+            # calibration ring: stated confidence vs realised sign
+            conf = float(lock.get("confidence") or 0.0)
+            if conf > 0:
+                self.hist.ring(self.hist.tf_key(symbol, tf, "calib_p"),
+                               400).append(round(min(1.0, conf) * 20) / 20.0)
+                self.hist.ring(self.hist.tf_key(symbol, tf, "calib_h"),
+                               400).append(1.0 if outcome == "won" else 0.0)
+            # thought record + agent scorecard
+            self._grade_thought_by_lock(lock)
+            ai = ev.get("ai") or {}
+            if (ai.get("direction") not in (None, 0)
+                    and ai.get("source") not in (None, "", "none")):
+                self.agents.record_outcome(
+                    int(ai.get("direction") or 0) == move_sign)
+            self.predlocks.mark_learned(str(lock.get("id")))
+        except Exception:
+            log.exception("lock learning failed")
+
+    def settle_prediction_locks(self, now: float | None = None) -> list[dict]:
+        """Settle due locks and learn from each one that closed."""
+        try:
+            prices = self.feed.prices()
+            extremes = {}
+            for symbol in SYMBOL_ORDER:
+                st = self.feed.state(symbol)
+                closes = list(getattr(st, "closes", []) or [])
+                highs = list(getattr(st, "highs", []) or [])
+                lows = list(getattr(st, "lows", []) or [])
+                # only the bars printed since the newest open lock matter;
+                # passing the session extreme would settle a lock on a touch
+                # that happened before it existed.
+                opens = [r for r in (self.predlocks.rows or [])
+                         if r.get("symbol") == symbol
+                         and r.get("status") == "open"]
+                if opens and closes:
+                    since = min(float(r.get("created_at") or 0.0)
+                                for r in opens)
+                    n = len(closes)
+                    lo_i = max(0, n - int(max(1, (time.time() - since) / 60)))
+                    extremes[symbol] = (
+                        max(highs[lo_i:] or [closes[-1]]),
+                        min(lows[lo_i:] or [closes[-1]]))
+            rows = self.predlocks.settle_all(prices, extremes=extremes, now=now)
+            for row in rows:
+                self.learn_from_prediction_lock(row)
+            return rows
+        except Exception:
+            log.exception("prediction-lock settlement failed")
+            return []
 
     def explain_ctx(self, view: str, symbol: str, tf: str) -> dict:
         """Everything the tab explainer needs, built from live state.
@@ -5792,6 +6228,9 @@ class PredictionEngine:
             "direction": direction, "confidence": round(conf, 4),
             "strength": float(res.get("strength") or 0.0),
             "issued": bool(res.get("issued")),
+            "verdict": ("WATCH" if res.get("gate_ok") else "NO CALL"),
+            "gate_ok": bool(res.get("gate_ok")),
+            "prediction_lock": {},
             "tier": res.get("tier") or "watch-only",
             "p_side": res.get("p_side"),
             "entry": (res.get("entry")
@@ -5939,6 +6378,34 @@ class PredictionEngine:
                 _b["note"] = (_b.get("note", "")
                               + f" · asset profile ×{_prof['sl_mult']} SL"
                                 f" TP = 2x unit ({symbol} nature)")
+        # TF ENVELOPE (user rule): a longer timeframe can never carry a
+        # smaller TP/SL range than a shorter one. The measured q80 MAE is
+        # noisy at small samples and can invert (tf2 < tf1 on a quiet tape),
+        # which reads as "the range does not scale with the timeframe".
+        # Enforce a monotone floor of +3% per step on the bps distances and
+        # re-anchor the levels at the SAME locked entry; the measured value
+        # is kept in `measured_*_bps` so nothing is hidden.
+        _prev_sl = _prev_tp = 0.0
+        for _m in sorted(_blocks):
+            _b = _blocks[_m]
+            _b["measured_sl_bps"] = _b.get("sl_bps")
+            _b["measured_tp_bps"] = _b.get("tp_bps")
+            if _prev_sl > 0 and _b["sl_bps"] < _prev_sl * 1.03:
+                _b["sl_bps"] = round(_prev_sl * 1.03, 3)
+                _b["envelope"] = "raised to keep SL increasing with the timeframe"
+            if _prev_tp > 0 and _b["tp_bps"] < _prev_tp * 1.03:
+                _b["tp_bps"] = round(_prev_tp * 1.03, 3)
+                _b["envelope"] = "raised to keep TP increasing with the timeframe"
+            _b["tp"] = round(_price0 * (1 + _dir * _b["tp_bps"] / 1e4), 6)
+            _b["sl"] = round(_price0 * (1 - _dir * _b["sl_bps"] / 1e4), 6)
+            _b["rr"] = (round(_b["tp_bps"] / _b["sl_bps"], 3)
+                        if _b["sl_bps"] else None)
+            _b["below_floor"] = bool(
+                _b["sl_bps"] > 0 and _b["tp_bps"] / _b["sl_bps"] < 1.0)
+            if _b.get("envelope"):
+                _b["note"] = (_b.get("note", "")
+                              + f" · TF envelope: {_b['envelope']}")
+            _prev_sl, _prev_tp = float(_b["sl_bps"]), float(_b["tp_bps"])
         _horizon_block = _blocks[_mins[-1]]     # horizon TP ALWAYS calculated FIRST
         # CANONICAL LADDER (audit §1.2): TP1 is a monotone fraction of the
         # entry → TF-TP span, built in ONE place (app/contracts.py). It used
@@ -5972,6 +6439,13 @@ class PredictionEngine:
         # from seconds to W (countdown drift). Settlement keying in
         # _settle_and_lock keeps its own grid, unaffected.
         _g_start, _g_end = now, now + W * 60
+        # public verdict for the card: the contract keeps `issued` true so a
+        # call can be graded, but the badge must say what actually cleared.
+        _gate_ok = bool(res.get("gate_ok", res.get("issued")))
+        _verdict = ("ISSUE" if _gate_ok and str(res.get("tier")
+                                                or "watch-only") != "watch-only"
+                    else "WATCH" if _gate_ok and res.get("direction")
+                    else "NO CALL")
         cyc = TFCycle(
             symbol=symbol,
             tf=tf,
@@ -5981,6 +6455,8 @@ class PredictionEngine:
             cci=res["cci_adjusted"],
             drhe=res["drhe"],
             issued=res["issued"],
+            verdict=_verdict,
+            gate_ok=_gate_ok,
             tier=str(res.get("tier") or "watch-only"),
             p_side=float(res.get("p_side") or 0.5),
             calib_n=int(res.get("calib_n") or 0),
@@ -6657,6 +7133,16 @@ class PredictionEngine:
             except Exception:
                 pass
             prices = self.feed.prices()
+            # SEALED PREDICTIONS settle on the live tape (TP touch, SL touch,
+            # or strict sign at their own horizon), then teach the learners.
+            try:
+                settled = self.settle_prediction_locks(now)
+                if settled:
+                    await self.emit({"type": "prediction_settled",
+                                     "locks": settled[-6:],
+                                     "stats": self.predlocks.stats()})
+            except Exception:
+                log.exception("prediction-lock tick failed")
             for symbol in SYMBOL_ORDER:
                 price = prices.get(symbol, 0.0)
                 if price <= 0:
@@ -7131,6 +7617,28 @@ class PredictionEngine:
                                 reason="cycle lock/level contract failed validation",
                                 lock_id=cyc.lock_id, side=cyc.direction,
                                 revision=cyc.level_revision)
+                # SYSTEM SELECTOR (display): in NEW mode the target shown is
+                # the horizon forecast. The level CONTRACT keeps the measured
+                # ladder (settlement/execution read that), so this is the one
+                # place where the displayed TP may legitimately differ.
+                if (d and cyc is not None
+                        and str(self.agents.settings.get("system_mode", "old"))
+                        == "new"):
+                    _fc = (cyc.forecast or {}).get("price")
+                    if _fc:
+                        _entry_d = (float((cyc.level_contract or {})
+                                          .get("entry") or 0.0) or price)
+                        d["tp"] = float(_fc)
+                        d["tp_dist"] = (round(abs(float(_fc) - _entry_d), 6)
+                                        if _entry_d else None)
+                        if d.get("sl") is not None and _entry_d:
+                            _sl_d = abs(_entry_d - float(d["sl"]))
+                            d["ratio"] = (round(abs(float(_fc) - _entry_d)
+                                                / _sl_d, 6) if _sl_d else None)
+                        if d.get("targets"):
+                            d["targets"][-1]["level"] = float(_fc)
+                        d["system_mode"] = "new"
+                        d["tp_source"] = "forecast price at horizon end"
                 if d and price > 0:
                     bs = self.branch_stats_cached(symbol, tf, d, price, now)
                     if bs:

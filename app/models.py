@@ -87,6 +87,12 @@ class TFCycle:
     cci: float = 0.0                 # signed, double-checked CCI
     drhe: float = 1.0
     issued: bool = False             # side issued (docs11-doublecheck: always)
+    #: the honest public verdict written with the sealed lock:
+    #: "ISSUE" | "WATCH" | "NO CALL". `issued` stays true by contract, so
+    #: the UI must read THIS field for the badge.
+    verdict: str = "NO CALL"
+    gate_ok: bool = False
+    prediction_lock: dict = field(default_factory=dict)
     tier: str = "watch-only"         # full|half|quarter|watch-only (size hint)
     p_side: float = 0.5              # calibrated P(side) in [0.50, 1)
     # provenance of that probability — the board must be able to show the
@@ -163,6 +169,9 @@ class TFCycle:
             "winrate_n": self.winrate_n,
             "drhe": round(self.drhe, 4),
             "issued": self.issued,
+            "verdict": self.verdict,
+            "gate_ok": self.gate_ok,
+            "prediction_lock": self.prediction_lock,
             "cycle_start": self.cycle_start,
             "cycle_end": self.cycle_end,
             "countdown_s": max(0, int(self.cycle_end - now)) if now else 0,

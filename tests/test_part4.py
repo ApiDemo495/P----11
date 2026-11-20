@@ -475,6 +475,7 @@ def test_agent_mode_keyless_runs_drosophila(monkeypatch, tmp_path):
     blocks; adding a key flips it to cloud; local model counts too."""
     from app import agents as ag
     monkeypatch.setattr(ag, "SETTINGS_FILE", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(ag, "SECRETS_FILE", str(tmp_path / "secrets.json"))
     m = ag.AgentManager()
     m.local.available = False
     st = m.status()
@@ -497,8 +498,9 @@ def test_agent_mode_keyless_runs_drosophila(monkeypatch, tmp_path):
     fresh.local.available = False
     assert fresh.status()["has_cloud_keys"] is True
     assert fresh.status()["mode"] == "cloud"
-    # keyless + local model → local mode
-    m.configure(gemini_key="")
+    # keyless + local model → local mode (None explicitly clears a key;
+    # a blank string means "keep the stored one")
+    m.configure(gemini_key=None)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     m.local.available = True
     assert m.status()["mode"] == "local"

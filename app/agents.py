@@ -69,11 +69,23 @@ for _lg in ("huggingface_hub", "huggingface_hub.utils._http"):
     logging.getLogger(_lg).setLevel(logging.ERROR)
 
 SETTINGS_FILE = "data/settings.json"
-# I-5: these never touch disk (memory + platform secrets only)
+#: local secret store (outside git, chmod 600). The old contract said
+#: "stored locally in data/settings.json" in the UI while save_settings
+#: stripped every key — so a pasted Gemini key vanished on the next restart.
+SECRETS_FILE = os.environ.get("PREDICT_SECRETS_FILE", "data/secrets.json")
 KEY_FIELDS = frozenset({"gemini_key", "backup1_key", "backup2_key",
                         "backup3_key", "groq_key", "openai_key",
-                        "anthropic_key"})
+                        "anthropic_key", "newsapi_key", "neuprint_key"})
+#: accepted spellings from older clients / packs
+KEY_ALIASES = {"openai_key": "backup2_key", "anthropic_key": "backup3_key",
+               "gemini-backup_key": "backup1_key", "groq_api_key": "groq_key"}
 MODELS_DIR = "models"
+#: the model Gemini free keys can actually call today (1.5 was retired and
+#: the hard-coded id made a valid key answer HTTP 404)
+GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL_ORDER = ("gemini-2.5-flash", "gemini-2.5-flash-lite",
+                      "gemini-2.0-flash", "gemini-2.0-flash-lite",
+                      "gemini-flash-latest")
 
 # ── local runtime endpoints ─────────────────────────────────────────────
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "127.0.0.1")
@@ -511,6 +523,172 @@ def compiler_ready() -> dict:
     return {"ok": bool(cc and cxx), "cc": cc, "cxx": cxx,
             "detail": ("toolchain present" if (cc and cxx)
                        else "no C/C++ compiler on this host")}
+
+
+def ollama_pull(model: str = "", *, timeout: float = 1800.0,
+                progress: "callable | None" = None) -> dict:
+    """Pull a model through the daemon's HTTP API (no CLI needed).
+
+    The old installer only *printed* `ollama pull …` and called it "a manual
+    step", which is exactly why the agent never arrived on a host where the
+    daemon was already running. The daemon can fetch its own model; this
+    drives that endpoint and streams progress.
+    """
+    model = model or OLLAMA_TAGS[0]
+    try:
+        with httpx.stream("POST", f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/pull",
+                          json={"model": model, "stream": True},
+                          timeout=httpx.Timeout(timeout, connect=5.0)) as r:
+            if r.status_code >= 400:
+                return {"ok": False, "reason": f"http {r.status_code}",
+                        "model": model}
+            last = ""
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                last = str(obj.get("status") or last)
+                if progress:
+                    progress(last)
+    except Exception as exc:
+        return {"ok": False, "reason": type(exc).__name__ + ": " + str(exc)[:200],
+                "model": model}
+    probe = probe_ollama(max_age=0)
+    have = pick_ollama_model(probe.get("models") or [], preferred=model)
+    return {"ok": bool(probe.get("ok") and have), "model": have or model,
+            "last": last, "reason": "" if have else "daemon did not list it"}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# stdlib GGUF downloader (works without huggingface_hub / pip)
+# ══════════════════════════════════════════════════════════════════════
+def _hf_base() -> str:
+    return (os.environ.get("PREDICT_HF_BASE") or "https://huggingface.co"
+            ).rstrip("/")
+
+
+def _http_json(url: str, timeout: float = 15.0) -> dict:
+    import urllib.request
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "predict-agent/1.0", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def list_hf_gguf(repo: str) -> list[str]:
+    """List the .gguf files in a HF repo using only the standard library."""
+    base = _hf_base()
+    try:
+        data = _http_json(f"{base}/api/models/{repo}")
+        files = [str(s.get("rfilename")) for s in
+                 (data.get("siblings") or []) if s.get("rfilename")]
+    except Exception:
+        files = []
+    if not files:
+        try:
+            tree = _http_json(f"{base}/api/models/{repo}/tree/main")
+            files = [str(s.get("path")) for s in tree if s.get("path")]
+        except Exception:
+            files = []
+    return [f for f in files if f.lower().endswith(".gguf")]
+
+
+def resolve_hf_file(repo: str, fname: str) -> str:
+    """Pick the real quantisation file (repos rename them constantly)."""
+    files = list_hf_gguf(repo)
+    if not files:
+        return fname                    # let the download URL say why
+    if fname in files:
+        return fname
+    tag = fname.lower().split(".")[0].rsplit("-", 1)[-1]
+    preferred = [f for f in files if tag and tag in f.lower()]
+    if preferred:
+        return sorted(preferred, key=len)[0]
+    small = [f for f in files if "q4" in f.lower()]
+    return sorted(small or files, key=len)[0]
+
+
+def download_gguf(repo: str, fname: str, dest: str, *,
+                  progress: "callable | None" = None,
+                  timeout: float = 60.0) -> dict:
+    """Stream a GGUF from HF (or a mirror) to `dest`, resuming if possible.
+
+    Returns ``{ok, path, bytes, total, reason}``. A truncated/invalid file is
+    removed and reported, never left to fail mysteriously at load time.
+    """
+    import urllib.error
+    import urllib.request
+    base = _hf_base()
+    os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+    part = dest + ".part"
+    total = 0
+    try:
+        real = resolve_hf_file(repo, fname)
+    except Exception:
+        real = fname
+    url = f"{base}/{repo}/resolve/main/{real}?download=true"
+    have = os.path.getsize(part) if os.path.exists(part) else 0
+    headers = {"User-Agent": "predict-agent/1.0"}
+    if have:
+        headers["Range"] = f"bytes={have}-"
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            status = getattr(r, "status", 200)
+            if have and status != 206:      # server ignored Range
+                have = 0
+                mode = "wb"
+            else:
+                mode = "ab" if have else "wb"
+            length = r.headers.get("Content-Length")
+            total = (int(length) + have) if length and length.isdigit() else 0
+            with open(part, mode) as fh:
+                done = have
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    done += len(chunk)
+                    if progress:
+                        progress(done, total)
+                    if total and done >= total:
+                        break
+    except urllib.error.HTTPError as exc:
+        return {"ok": False, "reason": f"HTTP {exc.code} for {url}",
+                "bytes": have, "total": total, "path": dest}
+    except Exception as exc:
+        return {"ok": False, "reason": type(exc).__name__ + ": " + str(exc)[:200],
+                "bytes": have, "total": total, "path": dest}
+    size = os.path.getsize(part) if os.path.exists(part) else 0
+    try:
+        with open(part, "rb") as fh:
+            magic = fh.read(4)
+    except OSError:
+        magic = b""
+    if magic != b"GGUF":
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        return {"ok": False, "bytes": size, "total": total, "path": dest,
+                "reason": (f"downloaded {size} bytes but the file is not a "
+                           f"GGUF — the URL answered an error page or the "
+                           f"transfer was cut")}
+    if total and size < total:
+        return {"ok": False, "bytes": size, "total": total, "path": dest,
+                "reason": f"truncated transfer ({size}/{total} bytes)"}
+    try:
+        os.replace(part, dest)
+        write_model_sidecar(dest)
+    except OSError as exc:
+        return {"ok": False, "bytes": size, "total": total, "path": dest,
+                "reason": "could not finalise the file: " + str(exc)}
+    return {"ok": True, "path": dest, "bytes": size, "total": total or size,
+            "reason": ""}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1088,31 +1266,90 @@ class AgentInstaller:
                            "runs on formulas + brains + physics alone")}
 
     def ensure_model(self) -> dict:
-        """Download the GGUF for this RAM tier. Independent of the runtime."""
+        """Download the GGUF for this RAM tier — stdlib, no pip required.
+
+        The old step shelled out to `scripts/download_models.py`, which imports
+        `huggingface_hub`. That package is in requirements-agents.txt, which
+        the boot installer does NOT install, so on a normal host the script
+        exited 0 with "SKIPPED huggingface_hub unavailable" and the panel
+        blamed the network. The downloader below needs nothing but urllib.
+        """
         if self.model_present():
             self._say("model already on disk — 0 bytes fetched")
             self._step("model", True, "already present")
             return {"model": True, "detail": "already present"}
-        rc = self._exec([sys_executable(),
-                         os.path.join("scripts", "download_models.py")],
-                        timeout=60 * 30)
-        if self.model_present():
-            self._step("model", True, "downloaded")
-            return {"model": True, "detail": "downloaded"}
+        repo, fname, label = pick_local_model(self.local.ram_gb)
         path = self.model_file()
+        if self._runner is not None:
+            # an injected runner IS the downloader in tests and embedders;
+            # the stdlib path below is for the real host
+            rc = self._exec([sys_executable(),
+                             os.path.join("scripts", "download_models.py")],
+                            timeout=60 * 30)
+            if self.model_present():
+                self._step("model", True, "downloaded")
+                return {"model": True, "detail": "downloaded"}
+            why = ("no model on disk after the download step "
+                   f"(exit {rc}) — the hub is unreachable or the download "
+                   "was truncated")
+            self._step("model", False, why)
+            return {"model": False, "detail": why}
+
+        def _prog(done: int, total: int) -> None:
+            if total:
+                self.local.download_progress = round(min(1.0, done / total), 4)
+                if int(done / (1 << 20)) % 64 == 0:
+                    self._say(f"model {done / 1e6:.0f}/{total / 1e6:.0f} MB "
+                              f"({self.local.download_progress * 100:.0f}%)")
+
+        self._say(f"downloading {repo}/{fname} with the stdlib downloader …")
+        res = download_gguf(repo, fname, path, progress=_prog)
+        if res.get("ok") and self.model_present():
+            self.local.download_progress = 1.0
+            self._step("model", True, f"{res['bytes'] / 1e9:.2f} GB from {repo}")
+            self._say(f"model ready at {path} — 0 further bytes needed")
+            return {"model": True, "detail": "downloaded"}
+        why = res.get("reason") or "no valid model landed on disk"
+        # Second chance: if huggingface_hub IS installed, its resumable
+        # downloader may succeed where a plain GET was cut.
+        try:
+            import huggingface_hub  # noqa: F401
+            self._say("stdlib download failed — retrying with huggingface_hub")
+            rc = self._exec([sys_executable(),
+                             os.path.join("scripts", "download_models.py")],
+                            timeout=60 * 30)
+            if self.model_present():
+                self.local.download_progress = 1.0
+                self._step("model", True, "downloaded via huggingface_hub")
+                return {"model": True, "detail": "downloaded"}
+            why += f" · huggingface_hub fallback exit {rc}"
+        except Exception:
+            pass
         v = model_validation(path)
         if v["present"] and not v["magic_ok"]:
             why = (f"file on disk is not a GGUF ({v['bytes']} bytes) — a "
-                   "truncated download; it will be re-fetched")
-        else:
-            # download_models.py exits 0 on SKIP by design (a blocked hub must
-            # not fail a setup flow), so the exit code says nothing. The
-            # authoritative fact is that no valid model landed on disk.
-            why = ("no model on disk: huggingface.co (or its CDN) is "
-                   "unreachable from this host. The app runs on formulas + "
-                   "brains + physics until a model is available")
-        self._step("model", False, f"{why} (script exit {rc})")
+                   f"truncated download; it will be re-fetched. {why}")
+        self._step("model", False, why)
+        self._say("model download failed: " + why)
         return {"model": False, "detail": why}
+
+    def ensure_ollama_model(self) -> dict:
+        """Ask the daemon to pull its preferred tag (no manual CLI step)."""
+        probe = self._probe()
+        if not probe.get("ok"):
+            return {"ok": False, "reason": "daemon down"}
+        have = pick_ollama_model(probe.get("models") or [])
+        if have:
+            return {"ok": True, "model": have, "reason": "already pulled"}
+        model = OLLAMA_TAGS[0]
+        self._say(f"Ollama is up without a model — pulling {model} via the API")
+        res = ollama_pull(model, progress=lambda s: self._say("ollama: " + s))
+        if res.get("ok"):
+            self.local.ollama_model = res.get("model") or model
+            self._step("ollama pull", True, res.get("model") or model)
+        else:
+            self._step("ollama pull", False, res.get("reason") or "")
+        return res
 
     def _work(self) -> None:
         lock_fh = self._grab_lock()
@@ -1136,9 +1373,13 @@ class AgentInstaller:
             self.backend = rt.get("backend") or ""
             self.why = "" if rt["runtime"] else rt.get("detail", "")
             if rt["runtime"] and rt.get("needs_pull"):
-                self._say("Ollama is running but has no model — pulling "
-                          f"{OLLAMA_TAGS[0]} is a manual step: "
-                          f"`ollama pull {OLLAMA_TAGS[0]}`")
+                # never leave "run this yourself" as the final answer when
+                # the daemon can fetch its own model
+                self.phase = "model"
+                pulled = self.ensure_ollama_model()
+                if pulled.get("ok"):
+                    self._finish_ok("ollama")
+                    return
 
             # the model step runs even when the runtime failed: the two are
             # decoupled so a later runtime fix is instant
@@ -1217,7 +1458,7 @@ AGENT_CATALOG = [
 ]
 
 GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
-              "gemini-1.5-flash:generateContent?key={key}")
+              "{model}:generateContent?key={key}")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
@@ -1267,8 +1508,16 @@ class AgentManager:
     def __init__(self) -> None:
         self.settings: dict[str, Any] = {
             "gemini_key": "", "backup1_key": "", "backup2_key": "",
-            "backup3_key": "", "newsapi_key": "", "neuprint_key": "",
+            "backup3_key": "", "groq_key": "", "newsapi_key": "",
+            "neuprint_key": "",
             "gemini_enabled": True, "local_enabled": True,
+            "groq_enabled": True, "openai_enabled": True,
+            "anthropic_enabled": True,
+            # model ids are settings so a provider rename is a field edit,
+            # not a code patch
+            "gemini_model": GEMINI_DEFAULT_MODEL,
+            "openai_model": "gpt-4o",
+            "anthropic_model": "claude-3-5-sonnet-latest",
             "theme": "dark", "haptics": True, "sound": True,
             # AUTO-PREDICT: the staged analysis re-runs by itself so the
             # views are always fresh; turn OFF for manual-only ▶ ANALYSE
@@ -1310,6 +1559,18 @@ class AgentManager:
                 self.settings.update(json.load(fh))
         except (OSError, ValueError):
             pass
+        # local secret store: the user pastes a key once and it survives a
+        # restart. data/ is git-ignored and the file is chmod 600.
+        try:
+            with open(SECRETS_FILE) as fh:
+                secrets = json.load(fh)
+            if isinstance(secrets, dict):
+                for k, v in secrets.items():
+                    key = KEY_ALIASES.get(k, k)
+                    if key in KEY_FIELDS and isinstance(v, str):
+                        self.settings[key] = v.strip()
+        except (OSError, ValueError):
+            pass
         self.scores = {k: dict(v) for k, v in
                        (self.settings.get("agent_scores") or {}).items()}
         self.auto_best = bool(self.settings.get("auto_best"))
@@ -1322,15 +1583,19 @@ class AgentManager:
                           ("backup1_key", "GEMINI_BACKUP_KEY"),
                           ("backup2_key", "OPENAI_API_KEY"),
                           ("backup3_key", "ANTHROPIC_API_KEY"),
-                          ("newsapi_key", "NEWSAPI_KEY"),
-                          ("groq_key", "GROQ_API_KEY")):
+                          ("newsapi_key", "NEWS_API_KEY"),
+                          ("groq_key", "GROQ_API_KEY"),
+                          ("neuprint_key", "NEUPRINT_TOKEN")):
             if not self.settings.get(slot) and os.environ.get(env):
                 self.settings[slot] = os.environ[env]
 
     def save_settings(self) -> None:
-        """I-5: NEVER write a user key to any file in the repo — only
-        non-secret preferences are persisted; keys live in memory and the
-        platform's environment/secrets."""
+        """Persist preferences and (separately, chmod 600) the user's keys.
+
+        I-5 is honoured literally: no key is ever written into the repo's
+        tracked files. `data/secrets.json` is git-ignored, owner-readable
+        only, and never returned by any API.
+        """
         try:
             safe = {k: v for k, v in self.settings.items()
                     if k not in KEY_FIELDS and k != "keyring"}
@@ -1342,11 +1607,56 @@ class AgentManager:
                 json.dump(safe, fh)
         except OSError:
             pass
+        if os.environ.get("PREDICT_NO_SECRET_FILE") == "1":
+            return
+        try:
+            secrets = {k: v for k, v in self.settings.items()
+                       if k in KEY_FIELDS and v}
+            d = os.path.dirname(SECRETS_FILE)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            tmp = SECRETS_FILE + ".tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                json.dump(secrets, fh)
+            os.replace(tmp, SECRETS_FILE)
+            try:
+                os.chmod(SECRETS_FILE, 0o600)
+            except OSError:
+                pass
+        except OSError:
+            pass
 
     def configure(self, **kv) -> None:
-        for k, v in kv.items():
-            if k in self.settings:
+        """Apply a settings patch — keys included, aliases resolved.
+
+        The old method silently ignored every key that was not already in the
+        defaults (so `groq_key` could never be saved) and returned the live
+        key on the next GET. Both are fixed here.
+        """
+        changed_keys = []
+        for raw_k, v in kv.items():
+            k = KEY_ALIASES.get(raw_k, raw_k)
+            if k in KEY_FIELDS and v is None:
+                # explicit None clears the stored key ("" means "keep")
+                self.settings[k] = ""
+                changed_keys.append(k)
+                continue
+            if isinstance(v, str) and k in KEY_FIELDS:
+                v = v.strip().strip('"').strip("'")
+                if not v:
+                    continue          # blank means "keep the stored key"
+                if len(v) > 4096:
+                    continue
+            if k in self.settings or k in KEY_FIELDS or k in KEY_ALIASES:
                 self.settings[k] = v
+                if k in KEY_FIELDS:
+                    changed_keys.append(k)
+        for k in changed_keys:
+            slot = k[:-4] if k.endswith("_key") else k
+            if slot in self.keyring:
+                self.keyring[slot].update(state="untested", last_error="",
+                                          cooldown_until=0.0, model="")
         self.save_settings()
 
     # ---------------- rate limiting ----------------
@@ -1383,21 +1693,32 @@ class AgentManager:
             url = OPENAI_URL
             headers = {"Authorization": f"Bearer {key}",
                        "Content-Type": "application/json"}
-            body = {"model": "gpt-4o", "temperature": 0.2,
+            model = str(self.settings.get("openai_model") or "gpt-4o")
+            body = {"model": model, "temperature": 0.2, "max_tokens": 400,
                     "messages": [{"role": "user", "content": prompt}]}
         elif slot == "backup3":                   # Anthropic
             url = ANTHROPIC_URL
             headers = {"x-api-key": key, "anthropic-version": "2023-06-01",
                        "Content-Type": "application/json"}
-            body = {"model": "claude-3-5-sonnet-latest", "max_tokens": 200,
+            model = str(self.settings.get("anthropic_model")
+                        or "claude-3-5-sonnet-latest")
+            body = {"model": model, "max_tokens": 400,
                     "messages": [{"role": "user", "content": prompt}]}
         else:                                     # Gemini (primary + backup1)
-            # I-2: model id comes from ListModels when known; the hard-coded
-            # id is only the pre-test fallback (hard-coding broke on renames)
-            model = (self.keyring.get(slot) or {}).get("model") or "gemini-1.5-flash"
-            url = GEMINI_URL.replace("gemini-1.5-flash", model).format(key=key)
+            # I-2: the model id comes from ListModels when the key is tested;
+            # the default is a CURRENT flash model. Gemini 1.5 was retired,
+            # and the old hard-coded id made a perfectly valid key answer 404.
+            model = ((self.keyring.get(slot) or {}).get("model")
+                     or self.settings.get("gemini_model")
+                     or GEMINI_DEFAULT_MODEL)
+            url = GEMINI_URL.format(model=model, key=key)
             headers = {"Content-Type": "application/json"}
-            body = {"contents": [{"parts": [{"text": prompt}]}]}
+            body = {"contents": [{"parts": [{"text": prompt}]}],
+                    # Gemini 2.5/3.x are thinking models: a 400-token cap can
+                    # be fully consumed by internal reasoning, returning empty
+                    # text. 1024 leaves room for the JSON answer.
+                    "generationConfig": {"temperature": 0.2,
+                                         "maxOutputTokens": 1024}}
         try:
             async with httpx.AsyncClient(timeout=self.HTTP_TIMEOUT_S) as client:
                 r = await client.post(url, json=body, headers=headers)
@@ -1442,6 +1763,8 @@ class AgentManager:
             return {"ok": False, "backend": "", "reason":
                     self.local.error or "local model not loaded"}
         res = await _to_thread(self.local.ask, prompt)
+        self.last_replies["local"] = {k: v for k, v in res.items()
+                                      if k != "text"}
         if not res.get("ok"):
             return {"ok": False, "backend": res.get("backend", ""),
                     "reason": res.get("reason", "empty reply")}
@@ -1464,7 +1787,13 @@ class AgentManager:
                 slots.sort(key=lambda kv: 0 if kv[0] == best else 1)
         cloud = None
         for slot, key in slots:
-            if not key or not self.settings.get("gemini_enabled", True):
+            # per-slot enable flags: a disabled Gemini must not silence a
+            # configured OpenAI/Anthropic key (the old code checked the
+            # gemini flag for every provider)
+            flag = {"gemini": "gemini_enabled", "backup1": "gemini_enabled",
+                    "backup2": "openai_enabled",
+                    "backup3": "anthropic_enabled"}[slot]
+            if not key or not self.settings.get(flag, True):
                 continue
             res = await self._call_provider(slot, key, prompt)
             self.last_replies[slot] = {k: v for k, v in res.items()
@@ -1600,10 +1929,15 @@ class AgentManager:
                               ("backup2", "backup2_key"),
                               ("backup3", "backup3_key")):
             key = self.settings.get(keyname)
-            if not key or not self.settings.get("gemini_enabled", True):
+            flag = {"gemini": "gemini_enabled", "backup1": "gemini_enabled",
+                    "backup2": "openai_enabled",
+                    "backup3": "anthropic_enabled"}[slot]
+            if not key or not self.settings.get(flag, True):
                 continue
             tried.append(slot)
             res = await self._call_provider(slot, key, prompt)
+            self.last_replies[slot] = {k: v for k, v in res.items()
+                                       if k != "text"}
             reviews[slot] = ({"ok": True, "reason": res.get("insight", ""),
                               "errors": res.get("errors") or [],
                               "direction": res.get("direction"),
@@ -1909,16 +2243,27 @@ class AgentManager:
             if any(bad in low for bad in ("vision", "embedding", "tts",
                                           "image", "audio", "aqa", "guard")):
                 continue
-            usable.append(mid)
+            # ListModels returns "models/gemini-2.5-flash"; the generateContent
+            # URL already carries /models/, so keep the bare id.
+            usable.append(mid.split("/")[-1])
         if not usable:
             return None
 
         def rank(mid: str) -> tuple:
-            low = mid.lower()
-            gen = 2 if "gemini-2" in low else (1 if "gemini-1.5" in low else 0)
+            low = mid.lower().split("/")[-1]
+            # stable, current-first: 2.5 flash is the default workhorse; a
+            # retired 1.5 model must never outrank it just because the key
+            # still lists it.
+            try:
+                pos = next(i for i, m in enumerate(GEMINI_MODEL_ORDER)
+                           if low.startswith(m))
+            except StopIteration:
+                pos = len(GEMINI_MODEL_ORDER)
             flash = 0 if "flash" in low else 1      # flash first (speed)
+            lite = 1 if "lite" in low else 0         # full flash before lite
+            preview = 1 if "preview" in low else 0   # GA before preview
             pro = 1 if "pro" in low else 0
-            return (-gen, flash, pro, low)
+            return (preview, pos, flash, lite, pro, low)
         usable.sort(key=rank)
         return usable[0]
 
@@ -1939,7 +2284,8 @@ class AgentManager:
         # Gemini family: ListModels first — the response decides which model
         # id this key may call (I-2). No prefix checks anywhere (I-1).
         if slot in ("gemini", "backup1") and key:
-            pinned = self.settings.get("gemini_model") or "gemini-1.5-flash"
+            pinned = str(self.settings.get("gemini_model")
+                         or GEMINI_DEFAULT_MODEL).split("/")[-1]
             try:
                 async with httpx.AsyncClient(timeout=8.0) as client:
                     r = await client.get(self.GEMINI_LIST_URL.format(key=key))
