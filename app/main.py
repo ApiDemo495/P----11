@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .clock import MasterClock, seconds_to_next_grc
-from .config import SYMBOLS, SYMBOL_ORDER, TF_ORDER, TIMEFRAMES
+from .config import SYMBOLS, SYMBOL_ORDER, TF_ORDER, TIMEFRAMES, BACKFILL_BARS
 from .engine import PredictionEngine
 from .feed import MarketFeed, _family
 
@@ -71,6 +71,11 @@ clock = MasterClock(on_grc=engine.on_grc)
 
 app = FastAPI(title="Crypto Prediction 4", version="1.0.0",
               docs_url="/api-docs", redoc_url="/api-redoc")
+
+# §6 warmup: the 7-day candle payload is ~600 KB raw — gzip it for the
+# boot fetch and every 30 s refresh (starlette built-in, 1 KB threshold)
+from starlette.middleware.gzip import GZipMiddleware as _GZipMiddleware  # noqa: E402
+app.add_middleware(_GZipMiddleware, minimum_size=1024)
 
 
 async def _vault_loop() -> None:
@@ -1154,7 +1159,10 @@ async def candles(symbol: str = "BTC", n: int = 180, tf: str = "tf1") -> JSONRes
     if symbol not in SYMBOLS:
         return JSONResponse({"ok": False, "error": "unknown symbol"},
                             status_code=400)
-    n = max(10, min(1000, n))
+    # §6 7-10-day warmup: serve the full backfill window (BACKFILL_BARS
+    # = 7 days of 1m tape) — the old 1000-bar cap starved the main chart
+    # to 16 h and left boot in WARMING_UP / n=0 states
+    n = max(10, min(BACKFILL_BARS, n))
     st = engine.feed.state(symbol)
     active_family = _family(getattr(engine.feed, "mode", "unknown"))
     indices = st.indices_for_family(active_family)
@@ -1677,11 +1685,15 @@ async def feeds_diagnose() -> JSONResponse:
 
 
 @app.post("/api/analyse/{symbol}")
-async def analyse_start(symbol: str, tf: str = "tf1") -> JSONResponse:
+async def analyse_start(symbol: str, tf: str = "tf1",
+                        request_id: str | None = None) -> JSONResponse:
     """Staged ANALYSE: formulas → emotions → physics → news → hedge →
     AI review (Gemini + local qwen2.5-coder) → final box (signal, four
-    TPs, SL). Read-only — locks never change here."""
-    out = engine.start_analyse(symbol, tf)
+    TPs, SL). Read-only — locks never change here.
+
+    ``request_id`` (optional) is stamped onto every analyse_* event so
+    the UI can discard superseded work atomically (latest-wins)."""
+    out = engine.start_analyse(symbol, tf, request_id=request_id)
     status = 200 if out.get("ok") else 409
     return JSONResponse(out, status_code=status)
 

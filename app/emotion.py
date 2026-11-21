@@ -85,70 +85,6 @@ PROTOTYPES = {
     "enjoyment": (0.80, 0.30, 0.50),
 }
 
-# id → (key, printed name, citation, neutral value)
-CHANNELS = {
-    1: ("valence", "Valence (pleasure)", "Russell 1980", 0.5),
-    2: ("arousal", "Arousal (activation)", "Russell 1980", 0.5),
-    3: ("dominance", "Dominance (control)", "Mehrabian & Russell 1974", 0.5),
-    4: ("pa", "Positive affect (PA)", "Watson, Clark & Tellegen 1988", 0.5),
-    5: ("na", "Negative affect (NA)", "Watson, Clark & Tellegen 1988", 0.5),
-    6: ("fear", "Fear", "Ekman 1992", 0.0),
-    7: ("anger", "Anger", "Ekman 1992", 0.0),
-    8: ("disgust", "Disgust", "Ekman 1992", 0.0),
-    9: ("sadness", "Sadness", "Ekman 1992", 0.0),
-    10: ("surprise", "Surprise", "Ekman 1992", 0.0),
-    11: ("enjoyment", "Enjoyment", "Ekman 1992", 0.0),
-    12: ("loss_pressure", "Loss-aversion pressure", "Kahneman & Tversky 1979",
-         0.5),
-    13: ("somatic", "Somatic marker (risk memory)", "Damasio 1994", 0.5),
-    14: ("herding", "Herding (CSAD)", "Christie & Huang 1995", 0.5),
-    15: ("capitulation", "Capitulation", "Frijda 1986 · F&G volatility", 0.5),
-    16: ("extrapolation", "Extrapolation / chase",
-         "Barberis, Greenwood & Shleifer 2015", 0.5),
-    17: ("vol_stress", "Volatility stress", "CBOE VIX concept · F&G", 0.5),
-    18: ("momentum", "Momentum vs mean", "alternative.me momentum/volume", 0.5),
-    19: ("breadth", "Market breadth", "alternative.me dominance", 0.5),
-    20: ("news", "News sentiment (external NLP)", "measured news pipe", 0.5),
-    21: ("exhaustion", "Trend exhaustion", "Frijda 1986 · action tendency",
-         0.5),
-}
-CHANNEL_KEYS = {i: CHANNELS[i][0] for i in EMO_IDS}
-
-MODEL = {
-    "name": "core-affect (Russell) + PAD + PANAS + Ekman prototypes + "
-            "prospect theory + fear&greed components",
-    "citations": [
-        "Russell, J. A. (1980). A circumplex model of affect. JPSP 39(6).",
-        "Watson, D., Clark, L. A., & Tellegen, A. (1988). PANAS. JPSP 54(6).",
-        "Mehrabian, A., & Russell, J. A. (1974). An Approach to "
-        "Environmental Psychology (PAD).",
-        "Ekman, P. (1992). An argument for basic emotions. Cognition & "
-        "Emotion 6(3-4).",
-        "Kahneman, D., & Tversky, A. (1979). Prospect theory. Econometrica "
-        "47(2); Tversky & Kahneman (1992) λ=2.25, J. Risk & Uncertainty 5.",
-        "Damasio, A. (1994). Descartes' Error; Bechara et al. (1994) "
-        "somatic-marker hypothesis, Cognition 50.",
-        "Christie, W., & Huang, R. (1995). Following the pied piper: herding "
-        "in equity returns. Financial Analysts Journal 51(3).",
-        "Barberis, N., Greenwood, R., & Shleifer, A. (2015). X-CAPM. "
-        "J. Financial Economics 115(1).",
-        "Frijda, N. (1986). The Emotions (action tendencies).",
-        "alternative.me Crypto Fear & Greed Index methodology (volatility "
-        "25 %, momentum/volume 25 %, social 15 %, surveys 15 %, dominance "
-        "10 %, trends 10 %).",
-    ],
-    # the UI measures every channel against ITS OWN neutral — Ekman basics
-    # sit at 0.0, the state channels at 0.5 — so the neutral ships with the
-    # name and the citation
-    "channels": {str(i): {"name": CHANNELS[i][1], "cite": CHANNELS[i][2],
-                          "key": CHANNELS[i][0], "neutral": CHANNELS[i][3]}
-                 for i in EMO_IDS},
-    "fear_greed_measured_weight": round(sum(FG_WEIGHTS[k]
-                                            for k in FG_MEASURED), 4),
-    "fear_greed_missing": dict(FG_MISSING),
-}
-
-
 #: alternative.me Crypto Fear & Greed published component weights.
 FG_WEIGHTS = {"volatility": 0.25, "momentum_volume": 0.25,
               "social": 0.15, "surveys": 0.15, "dominance": 0.10,
@@ -191,60 +127,93 @@ _EK_IDS = {"fear": 6, "anger": 7, "disgust": 8, "sadness": 9,
            "surprise": 10, "enjoyment": 11}
 
 #: id → (key, printed name, citation, neutral value)
+#: E1–E21 rewritten from first principles (§3 directive): every channel
+#: is a stated microstructure statistic — event channels sit at neutral
+#: 0.0 (absence = "not happening"), state channels at 0.5 (bipolar).
 CHANNELS = {
-    1: ("valence", "Valence (pleasure)", "Russell 1980", 0.5),
-    2: ("arousal", "Arousal (activation)", "Russell 1980", 0.5),
-    3: ("dominance", "Dominance (control)", "Mehrabian & Russell 1974", 0.5),
-    4: ("pa", "Positive affect (PA)", "Watson, Clark & Tellegen 1988", 0.5),
-    5: ("na", "Negative affect (NA)", "Watson, Clark & Tellegen 1988", 0.5),
-    6: ("fear", "Fear", "Ekman 1992", 0.0),
-    7: ("anger", "Anger", "Ekman 1992", 0.0),
-    8: ("disgust", "Disgust", "Ekman 1992", 0.0),
-    9: ("sadness", "Sadness", "Ekman 1992", 0.0),
-    10: ("surprise", "Surprise", "Ekman 1992", 0.0),
-    11: ("enjoyment", "Enjoyment", "Ekman 1992", 0.0),
-    12: ("loss_pressure", "Loss-aversion pressure",
-         "Kahneman & Tversky 1979", 0.5),
-    13: ("somatic", "Somatic marker (risk memory)", "Damasio 1994", 0.5),
-    14: ("herding", "Herding (CSAD)", "Christie & Huang 1995", 0.5),
-    15: ("capitulation", "Capitulation", "Frijda 1986 · F&G volatility", 0.5),
-    16: ("extrapolation", "Extrapolation / chase",
-         "Barberis, Greenwood & Shleifer 2015", 0.5),
-    17: ("vol_stress", "Volatility stress", "CBOE VIX concept · F&G", 0.5),
-    18: ("momentum", "Momentum vs mean", "alternative.me momentum/volume", 0.5),
-    19: ("breadth", "Market breadth", "peer breadth (not BTC dominance)", 0.5),
-    20: ("news", "News sentiment (external NLP)", "measured news pipe", 0.5),
-    21: ("exhaustion", "Trend exhaustion", "Frijda 1986 · action tendency",
+    # ── E1–E5  behavioral panic, capitulation & tail stress ──────────
+    1: ("panic_velocity", "Fear & capitulation velocity",
+        "downside semi-variance acceleration × volume climax × lower-band "
+        "excursion", 0.0),
+    2: ("underwater_pain", "Cohort underwater pain (loss aversion)",
+        "VWAP-anchor cost basis vs spot, ATR-normalized · Kahneman & "
+        "Tversky 1979", 0.5),
+    3: ("tail_hedge", "Tail-hedge & liquidity withdrawal",
+        "downside kurtosis jump + range-spread expansion (GK estimator)",
+        0.0),
+    4: ("liquidation_cascade", "Liquidation cascade pressure",
+        "directional acceleration × tick-intensity spike × wick-rejection "
+        "asymmetry", 0.0),
+    5: ("startle_shock", "Startle shock (Lee–Mykland)",
+        "|return| / bipower variation — exogenous shock impulse", 0.0),
+    # ── E6–E11  smart-money vs retail crowd divergence ───────────────
+    6: ("session_greed", "Intraday session greed",
+        "session return & volume excess vs same-UTC-hour baseline", 0.5),
+    7: ("wyckoff_absorption", "Wyckoff smart-money absorption",
+        "(volume_z − range_z) signed by close-location value", 0.5),
+    8: ("vol_compression", "Volatility compression stress",
+        "percentile of RV15 / RV240 — coiled-spring tension", 0.5),
+    9: ("carry_pressure", "Basis & funding-proxy carry pressure",
+        "cumulative signed drift + pre-funding premium proxy", 0.5),
+    10: ("whale_skew", "Whale vs retail trade-size skew",
+         "avg quote volume per trade, recent vs baseline", 0.5),
+    11: ("herd_sync", "Herd synchronization (cross-asset)",
+         "rolling BTC/ETH/BNB correlation spike", 0.5),
+    # ── E12–E17  exhaustion, traps & mean-reversion psychology ───────
+    12: ("chop_fatigue", "Range chop fatigue",
+         "Kaufman efficiency-ratio decay (net/path)", 0.0),
+    13: ("breakout_trap", "Failed-breakout bull/bear trap",
+         "N-bar extreme pierce on declining volume, snap-back in 1–3 bars",
+         0.0),
+    14: ("news_confirmation", "News-price confirmation vs divergence",
+         "NIV polarity × realized post-headline follow-through", 0.5),
+    15: ("breakout_kinetic", "Breakout kinetic energy",
+         "volume acceleration × true-range expansion × flow delta out of "
+         "compression", 0.0),
+    16: ("headline_half_life", "Headline shock half-life",
+         "exponentially decayed volatility impulse after high-tier news",
+         0.0),
+    17: ("level_gravity", "Psychological level & anchored-VWAP gravity",
+         "distance & velocity toward round numbers and session VWAP", 0.5),
+    # ── E18–E21  rebuilt core channels ───────────────────────────────
+    18: ("chase_fatigue", "Trend-chase fatigue",
+         "RSI/stochastic overextension × ΔP per unit volume decay",
          0.5),
+    19: ("smart_divergence", "Smart-money divergence (OBV/MFI vs price)",
+         "multi-bar slope divergence: money-flow vs price", 0.5),
+    20: ("news_fomo", "News FOMO overreaction",
+         "extreme news sentiment × >2.2σ short-term extension", 0.0),
+    21: ("climax_streak", "Climax exhaustion streak",
+         "signed consecutive candle streak × relative-volume blow-off "
+         "(Vol > 2.5 × MA)", 0.0),
 }
 CHANNEL_KEYS = {i: CHANNELS[i][0] for i in EMO_IDS}
 
 MODEL = {
-    "name": "core-affect (Russell) + PAD + PANAS + Ekman prototypes + "
-            "prospect theory + fear&greed components",
+    "name": "behavioral microstructure E1–E22 (panic · smart-money · "
+            "exhaustion · meta) + derived core-affect/Ekman display",
     "citations": [
         "Russell, J. A. (1980). A circumplex model of affect. JPSP 39(6).",
-        "Watson, D., Clark, L. A., & Tellegen, A. (1988). PANAS. JPSP 54(6).",
-        "Mehrabian, A., & Russell, J. A. (1974). An Approach to "
-        "Environmental Psychology (PAD).",
         "Ekman, P. (1992). An argument for basic emotions. Cognition & "
         "Emotion 6(3-4).",
         "Kahneman, D., & Tversky, A. (1979). Prospect theory. Econometrica "
         "47(2); Tversky & Kahneman (1992) λ=2.25, J. Risk & Uncertainty 5.",
-        "Damasio, A. (1994). Descartes' Error; Bechara et al. (1994) "
-        "somatic-marker hypothesis, Cognition 50.",
-        "Christie, W., & Huang, R. (1995). Following the pied piper: herding "
-        "in equity returns. Financial Analysts Journal 51(3).",
+        "Lee, S. S. W., & Mykland, P. (2008). Jumps in financial markets: "
+        "a new nonparametric test and jump dynamics. JFE 88(2).",
         "Barberis, N., Greenwood, R., & Shleifer, A. (2015). X-CAPM. "
         "J. Financial Economics 115(1).",
+        "Christie, W., & Huang, R. (1995). Following the pied piper: herding "
+        "in equity returns. Financial Analysts Journal 51(3).",
         "Frijda, N. (1986). The Emotions (action tendencies).",
+        "Wyckoff, R. (1910). Studies in tape reading (absorption "
+        "accumulation/distribution).",
         "alternative.me Crypto Fear & Greed Index methodology (volatility "
         "25 %, momentum/volume 25 %, social 15 %, surveys 15 %, dominance "
         "10 %, trends 10 %).",
     ],
-    # the UI measures every channel against ITS OWN neutral — Ekman basics
-    # sit at 0.0, the state channels at 0.5 — so the neutral ships with the
-    # name and the citation
+    # the UI measures every channel against ITS OWN neutral — event
+    # channels sit at 0.0, state channels at 0.5 — so the neutral ships
+    # with the name and the citation
     "channels": {str(i): {"name": CHANNELS[i][1], "cite": CHANNELS[i][2],
                           "key": CHANNELS[i][0], "neutral": CHANNELS[i][3]}
                  for i in EMO_IDS},
@@ -384,6 +353,32 @@ def _run_persistence(rets: list[float], side: int) -> float:
     return best / len(rets)
 
 
+def _z(x: float, ref: list[float]) -> float:
+    """z-score of x against a reference series (0 when no spread)."""
+    if not ref:
+        return 0.0
+    m = sum(ref) / len(ref)
+    s = std_pop(ref)
+    if s <= 1e-12:
+        return 0.0
+    return (float(x) - m) / s
+
+
+def _pct_rank(vals: list[float], x: float) -> float:
+    if not vals:
+        return 0.5
+    return sum(1 for v in vals if v < x) / len(vals)
+
+
+def _ev(z: float, dead: float = 0.35, gain: float = 1.0) -> float:
+    """Event-channel mapper (neutral 0.0): a reading at or below the
+    deadband prints the 0.02 floor — 'not happening' — and rises
+    smoothly above it, so ordinary tape variation keeps the channel
+    alive (sd > 0.08) without ever faking an event."""
+    x = max(0.0, float(z) - dead)
+    return _clamp(0.02 + 0.96 * math.tanh(gain * x), 0.02, 0.98)
+
+
 def ekman_scores(valence: float, arousal: float,
                  dominance: float) -> dict[str, dict]:
     """Similarity of the current affect to Ekman's basic-emotion prototypes.
@@ -490,6 +485,40 @@ def action_tendency(*, fear: float, anger: float, sadness: float,
 # ══════════════════════════════════════════════════════════════════════
 # the system
 # ══════════════════════════════════════════════════════════════════════
+def _cerc_vectors(emos: dict, dirs: dict, w: list) -> dict:
+    """E22 — the agreement sum decomposed into the three telemetry
+    vectors the directive names: Retail Herd, Smart-Money Flow, and the
+    Crowd-vs-Smart split (high-conviction contrarian warning)."""
+
+    def _vec(ids, flip: bool) -> float:
+        num = den = 0.0
+        for eid in ids:
+            if eid not in emos or eid not in CHANNELS:
+                continue
+            neutral = CHANNELS[eid][3]
+            lean = (-dirs.get(eid, 0)) if flip else dirs.get(eid, 0)
+            dev = (emos[eid] - neutral) * lean
+            wt = float(w[eid - 1]) if w and eid - 1 < len(w) else 1.0
+            num += dev * wt
+            den += wt * (1.0 - neutral)
+        return _clamp(num / den, -1.0, 1.0) if den > 0 else 0.0
+
+    # retail channels vote FADE in CERC (buy-panic, fade-chase), so the
+    # crowd's own lean is the flipped direction
+    retail = _vec((18, 20, 1, 11, 21), flip=True)
+    # smart channels already carry the professional's side
+    smart = _vec((7, 10, 19, 9), flip=False)
+    split = _clamp(max(0.0, retail) * max(0.0, -smart) * 2.5, 0.0, 1.0)
+    return {
+        "retail_herd": round(retail, 4),
+        "smart_money": round(smart, 4),
+        "crowd_smart_split": round(split, 4),
+        "note": ("crowd_smart_split near 1.0 = retail chasing while smart "
+                 "money distributes (high-conviction contrarian warning); "
+                 "near 0.0 = same side or both quiet"),
+    }
+
+
 class EmotionSystem:
     """Computes the affect state (see module docstring) + learns weights."""
 
@@ -589,159 +618,421 @@ class EmotionSystem:
         z_drift = _clamp(z_drift, -8.0, 8.0)
         move_dir = sign(r_w)
 
-        # ── 1 VALENCE (Russell 1980, pleasure–displeasure) ───────────────
-        emos[1] = graded(_compress(z_drift, 1.5), gain=1.0)
-        dirs[1] = move_dir
-
-        # ── 2 AROUSAL (Russell 1980, activation) ─────────────────────────
-        # Activation is "how much is happening", measured against THIS
-        # asset's own recent baseline. The baseline is the whole window
-        # (up to 200 bars) rather than the adjacent 30: comparing a 10-bar
-        # σ to a 30-bar σ has an expected value of 1 but a standard error
-        # near 0.2, which made the axis jump between passes on unchanged
-        # volatility.
-        s_all = std_pop(rets) if len(rets) >= 10 else s30
-        baseline = max(s30, s_all, 1e-12)
-        vol_ratio = (s1 / baseline) if baseline > 1e-12 else 1.0
-        climax = (v5 / v30) if v30 > 0 else 1.0
-        arousal = graded(math.log(max(vol_ratio, 1e-6)), gain=1.4)
-        emos[2] = arousal
-        dirs[2] = 0                                   # magnitude, not a side
-
-        # ── 3 DOMINANCE (Mehrabian & Russell 1974, felt control) ─────────
-        # run persistence of same-signed bars — independent of drift size,
-        # which is what valence already carries
+        # ═══ E1–E21 behavioral microstructure channels (§3 rewrite) ═══
+        # Every channel is a stated statistic over THIS tape; event
+        # channels (neutral 0.0) print the 0.02 floor when the event is
+        # absent, state channels (neutral 0.5) are bipolar.
+        ohlc = market.get("ohlc") or {}
+        highs = list(ohlc.get("highs") or [])
+        lows = list(ohlc.get("lows") or [])
+        if len(highs) != len(mc):
+            highs = list(mc)
+        if len(lows) != len(mc):
+            lows = list(mc)
+        times = list(market.get("times") or ctx.T or [])
+        atr = _atr5(ohlc, mc)
+        n_b = len(mc)
+        # volume stats + climax (shared)
+        v_mean30 = v30 if v30 > 0 else (sum(vols) / len(vols) if vols else 0.0)
+        vol_z = _z(v5, vols[-min(60, len(vols)):]) if vols else 0.0
+        climax = (v5 / v_mean30) if v_mean30 > 0 else 1.0
+        vol_ratio = (s1 / max(s30, 1e-12)) if s30 > 0 else 1.0
+        d1 = mc[-1] - mc[-6] if n_b > 6 else 0.0
+        d2 = mc[-6] - mc[-11] if n_b > 11 else 0.0
+        ma30 = (sum(mc[-min(30, n_b):]) / min(30, n_b)) if n_b else 0.0
         persist = _run_persistence(rets[-min(30, len(rets)):], move_dir)
-        dom_raw = 0.5 * (persist - 0.5) + 0.25 * _clamp(z_drift / 3.0, -1, 1)
-        emos[3] = graded(dom_raw, gain=1.6)
-        dirs[3] = move_dir if abs(z_drift) > 0.3 else 0
+        # range / wick helpers aligned to mc
+        ranges = [max(highs[i] - lows[i], 0.0) for i in range(n_b)]
+        clv = ((mc[-1] - lows[-1]) / (highs[-1] - lows[-1]) - 0.5) \
+            if (highs[-1] > lows[-1]) else 0.0
 
-        # ── 4/5 PANAS (Watson, Clark & Tellegen 1988) ────────────────────
-        up, dn = _semi_deviations(rets[-min(60, len(rets)):])
-        tot = up + dn
-        up_share = (up / tot) if tot > 1e-12 else 0.5
-        act = (emos[2] - 0.5) * 1.2          # both PA and NA are ACTIVATED
-        pa = graded(3.2 * (up_share - 0.5) + act, gain=0.55)
-        na = graded(3.2 * ((1.0 - up_share) - 0.5) + act, gain=0.55)
-        emos[4], emos[5] = pa, na
-        dirs[4], dirs[5] = 1, -1
+        # ── E1 FEAR & CAPITULATION VELOCITY (event) ────────────────────
+        # downside semi-variance acceleration × volume climax × lower-band
+        # excursion depth
+        _dn_now = sum(r * r for r in rets[-10:] if r < 0) / max(1, len(rets[-10:]))
+        _dn_prev = (sum(r * r for r in rets[-30:-10] if r < 0)
+                    / max(1, len(rets[-30:-10]))) if len(rets) >= 30 else _dn_now
+        _sv_accel = _dn_now / _dn_prev if _dn_prev > 1e-18 else 1.0
+        _lb = None
+        if n_b >= 20:
+            _m20 = sum(mc[-20:]) / 20.0
+            _s20 = std_pop(mc[-20:])
+            _lb = _m20 - 2.0 * _s20
+        _exc = max(0.0, (_lb - live) / atr) if (_lb is not None and atr > 0) else 0.0
+        _e1 = (max(0.0, _sv_accel - 1.0) * 1.1
+               + max(0.0, climax - 1.0) * 1.4 + _exc * 1.6)
+        emos[1] = _ev(_e1, dead=0.25, gain=1.1)
+        dirs[1] = 1                       # contrarian: fear lows buy
 
-        # ── 6..11 EKMAN (1992) basic emotions via prototypes ─────────────
-        eks = ekman_scores(emos[1], emos[2], emos[3])
-        for name, eid in _EK_IDS.items():
-            emos[eid] = float(eks[name]["intensity"])
-            dirs[eid] = EKMAN_DIR[name]
-            if eks[name]["distance"] > 2.2:
-                zero_reasons[str(eid)] = (
-                    f"{name} prototype {eks[name]['distance']:.2f} away in "
-                    f"(v,a,d) — state is not this emotion")
+        # ── E2 COHORT UNDERWATER PAIN (state) ─────────────────────────
+        # volume-weighted average entry over the rolling window vs spot,
+        # normalized by ATR: buyers underwater → forced liquidation pain
+        _pv = sum(mc[i] * vols[i] for i in range(n_b)
+                  if i < len(vols) and vols[i] > 0)
+        _vv = sum(vols[i] for i in range(n_b)
+                  if i < len(vols) and vols[i] > 0)
+        _vwap = (_pv / _vv) if _vv > 0 else (ma30 or live)
+        _pain = ((_vwap - live) / atr) if atr > 0 else 0.0
+        emos[2] = graded(_pain, gain=0.55)
+        dirs[2] = -1                      # pain = bearish pressure
 
-        # ── 12 LOSS-AVERSION PRESSURE (prospect theory, λ=2.25) ──────────
-        peak = max(mc[-min(60, len(mc)):])
-        drawdown = ((peak - live) / peak) if peak > 0 else 0.0
-        dd_z = (drawdown / (s30 * math.sqrt(n_w))) if s30 > 0 else 0.0
-        # 0.22·λ keeps a 1σ pullback mid-scale and a 3σ one high-but-graded;
-        # the earlier 1.1·λ pinned this channel at 0.998 on ordinary
-        # pullbacks, so it won every "dominant" crown by saturation
-        emos[12] = graded(0.22 * (LOSS_LAMBDA * dd_z) - 0.15, gain=1.0)
-        dirs[12] = -1
+        # ── E3 TAIL-HEDGE & LIQUIDITY WITHDRAWAL (event) ──────────────
+        # realized downside kurtosis jump + range-spread expansion (GK)
+        _r60 = rets[-min(60, len(rets)):]
+        _kurt = 0.0
+        if len(_r60) >= 20 and s30 > 0:
+            _m = sum(_r60) / len(_r60)
+            _m4 = sum((x - _m) ** 4 for x in _r60) / len(_r60)
+            _kurt = (_m4 / (s30 ** 4) - 3.0) if s30 > 1e-12 else 0.0
+        _gk = [(highs[i] - lows[i]) / mc[i] for i in range(n_b)
+               if mc[i] > 0 and i < len(ranges)]
+        _spread_z = _z(_gk[-1], _gk[-min(60, len(_gk)):]) if _gk else 0.0
+        emos[3] = _ev(max(0.0, _kurt) * 0.8 + max(0.0, _spread_z) * 1.1,
+                      dead=0.4, gain=1.0)
+        dirs[3] = -1                      # hedging = risk-off
 
-        # ── 13 SOMATIC MARKER (Damasio 1994) ────────────────────────────
-        _key = (ctx.symbol, ctx.tf)
-        n_upd = int(self.n_updates.get(_key, 0))
-        if n_upd >= 3:
-            soma = float(self._soma.get(_key, 0.5))
-            emos[13] = _clamp(soma, 0.0, 1.0)
-            dirs[13] = 1 if soma > 0.5 else (-1 if soma < 0.5 else 0)
+        # ── E4 LIQUIDATION CASCADE PRESSURE (event) ───────────────────
+        # consecutive directional acceleration × tick-intensity spike ×
+        # wick-rejection asymmetry (downside cascade dominates)
+        _streak = 0
+        _accel = 0.0
+        for i in range(len(rets) - 1, max(0, len(rets) - 8), -1):
+            if sign(rets[i]) == move_dir and rets[i] != 0:
+                _streak += 1
+                if i > 0 and abs(rets[i]) > abs(rets[i - 1]):
+                    _accel += 1.0
+            else:
+                break
+        _wick = 0.0
+        if highs[-1] > lows[-1]:
+            _body = mc[-1] - (mc[-2] if n_b > 1 else mc[-1])
+            _rng = highs[-1] - lows[-1]
+            _wick = max(0.0, -(_body / _rng)) if move_dir <= 0 else \
+                max(0.0, (_body / _rng) if _body < 0 else 0.0)
+        _e4 = _streak * 0.35 + _accel * 0.45 + max(0.0, vol_z) * 0.8 + _wick * 1.2
+        emos[4] = _ev(_e4, dead=0.8, gain=0.8)
+        dirs[4] = 1                       # contrarian: cascade lows bounce
+
+        # ── E5 STARTLE SHOCK (Lee–Mykland, event) ─────────────────────
+        _bp_terms = [abs(rets[i]) * abs(rets[i - 1])
+                     for i in range(1, max(1, len(rets) - 1))]
+        _bp = (sum(_bp_terms) / len(_bp_terms) * (math.pi / 2.0)) \
+            if _bp_terms else 0.0
+        _bp = math.sqrt(_bp) if _bp > 0 else 0.0
+        _lm = (abs(rets[-1]) / _bp) if (_bp > 1e-12 and rets) else 1.0
+        emos[5] = _ev(_lm - 1.0, dead=0.5, gain=1.2)
+        dirs[5] = 0                       # shock magnitude, not a side
+
+        # ── E6 INTRADAY SESSION GREED (state) ─────────────────────────
+        # session return & volume excess vs the same-UTC-hour seasonal
+        # baseline of this tape (falls back to the tape's own baseline)
+        _hour_rets: dict[int, list[float]] = {}
+        for i in range(1, min(n_b, len(times))):
+            if times[i - 1] and mc[i - 1]:
+                _h = ((times[i - 1] % 86400) // 3600)
+                _hour_rets.setdefault(_h, []).append(
+                    (mc[i] - mc[i - 1]) / mc[i - 1])
+        _cur_h = ((times[-1] % 86400) // 3600) if times else 12
+        _season = _hour_rets.get(_cur_h) or []
+        _sret_z = _z(session_ret, _season) if len(_season) >= 10 else \
+            _z(session_ret, rets[-min(120, len(rets)):])
+        _svols_z = _z(sum(vols[-min(60, len(vols)):]) / max(1, min(60, len(vols))),
+                      vols[-min(240, len(vols)):]) if vols else 0.0
+        emos[6] = graded(0.55 * _sret_z + 0.45 * _svols_z, gain=1.0)
+        dirs[6] = sign(_sret_z) if abs(_sret_z) > 0.2 else 0
+
+        # ── E7 WYCKOFF SMART-MONEY ABSORPTION (state) ─────────────────
+        # high relative volume inside a compressed range, signed by CLV
+        _rng5 = sum(ranges[-min(5, n_b):]) / min(5, n_b) if n_b else 0.0
+        _rng30 = sum(ranges[-min(30, n_b):]) / min(30, n_b) if n_b else 0.0
+        _vz = _z(v5, vols[-min(60, len(vols)):]) if vols else 0.0
+        _rz = _z(_rng5, ranges[-min(60, n_b):]) if n_b else 0.0
+        _absorb = (_vz - _rz) * 0.6 + clv * 2.0
+        emos[7] = graded(_absorb, gain=1.1)
+        dirs[7] = sign(_absorb) if abs(_absorb) > 0.2 else 0
+
+        # ── E8 VOLATILITY COMPRESSION STRESS (state) ──────────────────
+        # percentile of RV15/RV240: tension builds as short-horizon vol
+        # compresses under the long-horizon baseline (coiled spring)
+        _rv15 = std_pop(rets[-min(15, len(rets)):]) if len(rets) >= 5 else 0.0
+        _rv240 = std_pop(rets[-min(240, len(rets)):]) if len(rets) >= 20 else s30
+        _ratio = (_rv15 / _rv240) if _rv240 > 1e-12 else 1.0
+        emos[8] = graded(-math.log(max(_ratio, 1e-6)), gain=1.0)
+        dirs[8] = 0                       # tension, not a side
+
+        # ── E9 BASIS & FUNDING-PROXY CARRY PRESSURE (state) ───────────
+        # cumulative signed return drift + pre-funding premium proxy
+        _drift24 = sum(rets[-min(24, len(rets)):]) if rets else 0.0
+        _prem = ((live - ma30) / ma30) if ma30 > 0 else 0.0
+        _carry = _z(_drift24, rets[-min(240, len(rets)):]) * 0.6 \
+            + (_prem / max(s30, 1e-9)) * 0.4 if rets else 0.0
+        emos[9] = graded(_clamp(_carry, -4.0, 4.0), gain=0.9)
+        dirs[9] = sign(_carry) if abs(_carry) > 0.25 else 0
+
+        # ── E10 WHALE vs RETAIL TRADE-SIZE SKEW (state) ───────────────
+        sizes = list(market.get("trade_sizes") or [])
+        if len(sizes) >= 20:
+            _half = len(sizes) // 2
+            _recent = sum(sizes[-_half:]) / _half
+            _base = sum(sizes[:_half]) / max(1, _half)
+            _skew = math.log(max(_recent, 1e-12) / max(_base, 1e-12))
+            emos[10] = graded(_skew * 1.4, gain=1.0)
+            dirs[10] = sign(_skew * move_dir) if abs(_skew) > 0.15 else 0
         else:
-            # no evidence yet: this is an ABSTENTION, not a neutral reading
-            emos[13] = CHANNELS[13][3]
-            dirs[13] = 0
-            zero_reasons["13"] = (
-                "no settled outcomes yet — somatic marker abstains until it "
-                f"has evidence ({n_upd} reward updates, needs 3)")
+            emos[10] = CHANNELS[10][3]
+            dirs[10] = 0
+            zero_reasons["10"] = ("no per-trade size ring on this tape — "
+                                  "whale skew cannot be measured")
 
-        # ── 14 HERDING (Christie & Huang 1995 CSAD) ─────────────────────
+        # ── E11 HERD SYNCHRONIZATION (state) ──────────────────────────
         peer = market.get("peer_returns") or []
-        disp = None
-        rows = [row for row in peer[-10:] if isinstance(row, (list, tuple))
+        rows = [row for row in peer[-30:] if isinstance(row, (list, tuple))
                 and len(row) >= 2]
+        disp = None
+        herd_corr = market.get("herd_corr")
         if rows:
             sds = [std_pop([float(x) for x in row]) for row in rows]
             disp = sum(sds) / len(sds)
-        if disp is not None and s30 > 1e-12:
-            # CSAD collapses below own volatility when the crowd moves as one
-            emos[14] = graded(1.0 - (disp / s30), gain=1.0)
-        else:
-            emos[14] = CHANNELS[14][3]
-            dirs[14] = 0
-            zero_reasons["14"] = ("no peer cross-section in this window — "
-                                  "CSAD cannot be measured")
-            emos[14] = CHANNELS[14][3]
-        dirs[14] = 0                                  # amplifier, not a side
-
-        # ── 15 CAPITULATION (panic selling; rtp alias) ──────────────────
-        emos[15] = graded(3.0 * (emos[5] - 0.5) + 3.0 * (0.5 - emos[3])
-                          + 1.2 * (climax - 1.0), gain=0.9)
-        dirs[15] = 1                                  # contrarian: fear lows
-        rtp_val = emos[15]
-
-        # ── 16 EXTRAPOLATION / CHASE (Barberis et al. 2015) ─────────────
-        d1 = mc[-1] - mc[-6] if len(mc) > 6 else 0.0
-        d2 = mc[-6] - mc[-11] if len(mc) > 11 else 0.0
-        sd5 = (std_pop(rets[-5:]) * math.sqrt(5.0)) if len(rets) >= 5 else 0.0
-        z5 = (d1 / (sd5 * live)) if (sd5 > 1e-12 and live > 0) else 0.0
-        emos[16] = graded(_compress(z5, 1.25), gain=0.9)
-        dirs[16] = sign(d1) if emos[16] > 0.55 else 0
-
-        # ── 17 VOLATILITY STRESS (VIX concept, F&G volatility) ───────────
-        emos[17] = graded(math.log(max(vol_ratio, 1e-6)), gain=1.4)
-        dirs[17] = -1
-
-        # ── 18 MOMENTUM vs MEAN (F&G momentum/volume) ───────────────────
-        _mwin = cl if len(cl) >= 10 else mc
-        ma30 = (sum(_mwin[-min(30, len(_mwin)):]) / min(30, len(_mwin)))
-        # log gap / (σ·√n) — the old `(live − ma30)/(σ√n·live)` divided by
-        # the price a second time, shrinking every reading ~100×, so the
-        # momentum channel read ~0.35 on a roaring uptrend
-        mom_z = ((math.log(live / ma30)
-                  / (s30 * math.sqrt(min(30, len(_mwin)))))
-                 if (s30 > 0 and live > 0 and ma30 > 0) else 0.0)
-        emos[18] = graded(_clamp(mom_z, -4.0, 4.0), gain=1.4)
-        dirs[18] = sign(mom_z) if abs(mom_z) > 0.2 else 0
-
-        # ── 19 MARKET BREADTH (peer breadth — NOT BTC dominance) ────────
         frac_same = None
         if rows:
-            last = rows[-1]
-            same = sum(1 for x in last
-                       if sign(float(x)) == move_dir and float(x) != 0)
-            frac_same = same / len(last) if last else None
-        if frac_same is None:
-            emos[19] = CHANNELS[19][3]
-            zero_reasons["19"] = ("no peer breadth in this window — "
-                                  "cross-section absent")
+            _last_row = [float(x) for x in rows[-1]]
+            _same = sum(1 for x in _last_row
+                        if x != 0 and sign(x) == move_dir)
+            frac_same = _same / len(_last_row) if _last_row else None
+        if herd_corr is not None:
+            emos[11] = graded((float(herd_corr) - 0.5) * 2.0, gain=1.0)
+            dirs[11] = 0
+        elif disp is not None and s30 > 1e-12:
+            # CSAD collapse: dispersion below own vol → everyone one boat
+            emos[11] = graded(1.0 - (disp / s30), gain=1.0)
+            dirs[11] = 0
         else:
-            emos[19] = graded(4.0 * (frac_same - 0.5), gain=0.8)
-        dirs[19] = move_dir if frac_same is not None else 0
+            emos[11] = CHANNELS[11][3]
+            dirs[11] = 0
+            zero_reasons["11"] = ("no peer cross-section in this window — "
+                                  "herd synchronization cannot be measured")
 
-        # ── 20 NEWS SENTIMENT (external NLP proxy, labelled) ────────────
+        # ── E12 RANGE CHOP FATIGUE (event) ────────────────────────────
+        # Kaufman ER decay: efficiency falling + level low = fatigue
+        def _er(win):
+            rr = rets[-win:]
+            if not rr:
+                return 0.0
+            path = sum(abs(x) for x in rr)
+            return abs(sum(rr)) / path if path > 1e-12 else 0.0
+        _er_now = _er(30)
+        _er_prev = _er(60) if len(rets) >= 60 else _er_now
+        _fatigue = max(0.0, 0.45 - _er_now) * 2.2 + max(0.0, _er_prev - _er_now) * 3.0
+        emos[12] = _ev(_fatigue, dead=0.1, gain=1.0)
+        dirs[12] = 0                      # suppressor, not a side
+
+        # ── E13 FAILED-BREAKOUT BULL/BEAR TRAP (event) ────────────────
+        # pierce of the prior N-bar extreme on declining volume, snapping
+        # back inside the range within 1–3 bars
+        _trap = 0.0
+        _trap_side = 0
+        if n_b >= 26:
+            for _back in (1, 2, 3):
+                _i = n_b - _back
+                if _i < 24:
+                    break
+                _hi20 = max(highs[_i - 20:_i])
+                _lo20 = min(lows[_i - 20:_i])
+                _c = mc[_i]
+                _prev_c = mc[_i - 1]
+                _vbar = vols[_i] if _i < len(vols) else 0.0
+                _vref = sum(vols[_i - 10:_i]) / 10 if _i >= 10 and vols else 0.0
+                if _c > _prev_c and highs[_i] > _hi20 and _c < _hi20 \
+                        and _vref > 0 and _vbar < _vref:
+                    _trap = 1.0 / _back
+                    _trap_side = 1
+                    break
+                if _c < _prev_c and lows[_i] < _lo20 and _c > _lo20 \
+                        and _vref > 0 and _vbar < _vref:
+                    _trap = 1.0 / _back
+                    _trap_side = -1
+                    break
+        if _trap > 0:
+            emos[13] = _ev(2.0 * _trap, dead=0.05, gain=1.4)
+            dirs[13] = -_trap_side        # fade the failed break
+        else:
+            emos[13] = CHANNELS[13][3]
+            dirs[13] = 0
+            zero_reasons["13"] = ("no range-pierce attempt in this window — "
+                                  "failed-breakout trap not measurable")
+
+        # ── E14 NEWS-PRICE CONFIRMATION vs DIVERGENCE (state) ─────────
         pol = float(news_agg.get("polarity", 0) or 0) if news_agg else 0.0
         count = int(news_agg.get("count", 0) or 0) if news_agg else 0
         if count:
-            emos[20] = graded(4.0 * pol, gain=0.8)
-            dirs[20] = 1 if pol > 1e-6 else (-1 if pol < -1e-6 else 0)
+            _news_ts = float(market.get("news_last_ts") or 0.0)
+            _follow = 0.0
+            if _news_ts and times:
+                _idx = next((i for i, t in enumerate(times)
+                             if t >= _news_ts), None)
+                if _idx is not None and _idx < n_b - 1:
+                    _follow = (mc[-1] - mc[_idx]) / mc[_idx] if mc[_idx] else 0.0
+                else:
+                    _follow = r_w
+            else:
+                _follow = r_w
+            _ft_z = _follow / max(s30 * math.sqrt(max(n_w, 2)), 1e-9)
+            _conf = pol * _clamp(_ft_z, -3.0, 3.0)
+            emos[14] = graded(_conf, gain=0.9)
+            dirs[14] = sign(_conf) if abs(_conf) > 0.15 else 0
+        else:
+            emos[14] = CHANNELS[14][3]
+            dirs[14] = 0
+            zero_reasons["14"] = ("no scored headlines this window — "
+                                  "news-price confirmation abstains")
+
+        # ── E15 BREAKOUT KINETIC ENERGY (event) ───────────────────────
+        # volume acceleration × range expansion × flow delta out of
+        # compression
+        _tension = max(0.0, -(math.log(max(_ratio, 1e-6))))   # from E8
+        _vol_accel = _z(v5, vols[-min(60, len(vols)):]) if vols else 0.0
+        _range_exp = _z(_rng5, ranges[-min(60, n_b):]) if n_b else 0.0
+        _flow = float(market.get("ofti") or 0.0)
+        _kin = (max(0.0, _tension) * 0.8 + max(0.0, _vol_accel) * 0.7
+                + max(0.0, _range_exp) * 0.9 + abs(_flow) * 0.6)
+        emos[15] = _ev(_kin, dead=0.55, gain=1.0)
+        dirs[15] = sign(_flow) if abs(_flow) > 0.2 else move_dir
+
+        # ── E16 HEADLINE SHOCK HALF-LIFE (event) ──────────────────────
+        if count:
+            _news_ts = float(market.get("news_last_ts") or 0.0)
+            if _news_ts and times:
+                _age_min = max(0.0, (times[-1] - _news_ts) / 60.0)
+            else:
+                _age_min = 15.0   # headline inside the window, age unstamped
+            _tier = float(market.get("news_tier") or 1.0)
+            _impulse = math.exp(-_age_min / 45.0) \
+                * max(0.0, vol_ratio - 0.85) * _tier \
+                * max(abs(pol), 0.3)
+            emos[16] = _ev(_impulse * 2.4, dead=0.05, gain=1.2)
+        else:
+            emos[16] = CHANNELS[16][3]
+            zero_reasons["16"] = ("no scored headlines this window — "
+                                  "headline half-life abstains")
+        dirs[16] = 0                       # decay magnitude, not a side
+
+        # ── E17 PSYCHOLOGICAL LEVEL & VWAP GRAVITY (state) ────────────
+        # nearest round-number liquidity pool; gravity rises as spot
+        # approaches it, direction points AT the level
+        _step = 10.0 ** math.floor(math.log10(max(live, 1e-9)))
+        if _step > 0:
+            _nearest = round(live / _step) * _step
+            if abs(_nearest - live) < 1e-12:
+                _nearest = _nearest + _step
+            _dist_atr = (live - _nearest) / atr if atr > 0 else 0.0
+            _closeness = _clamp(1.0 - abs(_dist_atr) / 3.0, 0.0, 1.0)
+            emos[17] = graded(2.2 * (_closeness - 0.4), gain=1.0)
+            dirs[17] = (1 if _dist_atr < 0 else -1) if abs(_dist_atr) < 2.0 else 0
+        else:
+            emos[17] = CHANNELS[17][3]
+            dirs[17] = 0
+
+        # ── E18 TREND-CHASE FATIGUE (state, rewritten) ────────────────
+        # RSI/stochastic overextension × diminishing ΔP per unit volume
+        _wins = cl if len(cl) >= 15 else mc
+        _g14 = _l14 = 0.0
+        for _i in range(max(1, len(_wins) - 14), len(_wins)):
+            _d = _wins[_i] - _wins[_i - 1]
+            if _d >= 0:
+                _g14 += _d
+            else:
+                _l14 -= _d
+        _rsi = (100.0 - 100.0 / (1.0 + _g14 / _l14)) if _l14 > 0 else 100.0
+        if _l14 <= 0 and _g14 <= 0:
+            _rsi = 50.0
+        _w14 = _wins[-min(14, len(_wins)):]
+        _hh, _ll = max(_w14), min(_w14)
+        _stoch = ((_wins[-1] - _ll) / (_hh - _ll) - 0.5) * 2.0 \
+            if _hh > _ll else 0.0
+        _over = (_rsi - 50.0) / 50.0 + _stoch * 0.5
+        _dp_now = abs(mc[-1] - mc[-6]) if n_b > 6 else 0.0
+        _v_now = sum(vols[-5:]) if vols else 0.0
+        _dp_prev = abs(mc[-6] - mc[-11]) if n_b > 11 else 0.0
+        _v_prev = sum(vols[-11:-5]) if len(vols) >= 11 else 0.0
+        _eff_now = (_dp_now / _v_now) if _v_now > 0 else 0.0
+        _eff_prev = (_dp_prev / _v_prev) if _v_prev > 0 else 0.0
+        _decay = (1.0 - _eff_now / _eff_prev) if _eff_prev > 1e-12 else 0.0
+        _chase = _over * (1.0 + 0.8 * _clamp(_decay, 0.0, 2.0))
+        emos[18] = graded(_clamp(_chase, -3.0, 3.0), gain=1.1)
+        dirs[18] = -sign(_over) if abs(_over) > 0.25 else 0
+
+        # ── E19 SMART-MONEY DIVERGENCE (OBV/MFI vs price) ─────────────
+        _obv = 0.0
+        _obv_r: list[float] = []
+        for _i in range(max(1, n_b - 20), n_b):
+            _obv += (1 if mc[_i] >= mc[_i - 1] else -1) * (
+                vols[_i] if _i < len(vols) else 0.0)
+            _obv_r.append(_obv)
+        _px_r = mc[-min(20, n_b):]
+        if len(_obv_r) >= 6 and len(_px_r) >= 6 and std_pop(_obv_r) > 0 \
+                and std_pop(_px_r) > 0:
+            _zobv = _z(_obv_r[-1], _obv_r)
+            _zpx = _z(_px_r[-1], _px_r)
+            _div = _zobv - _zpx
+            emos[19] = graded(_div, gain=1.0)
+            dirs[19] = sign(_div) if abs(_div) > 0.3 else 0
+        else:
+            emos[19] = CHANNELS[19][3]
+            dirs[19] = 0
+            zero_reasons["19"] = ("insufficient volume series for OBV slope "
+                                  "divergence")
+
+        # ── E20 NEWS FOMO OVERREACTION (event) ────────────────────────
+        if count:
+            _ext = abs(r_w) / max(s30 * math.sqrt(max(n_w, 2)), 1e-9)
+            _fomo = max(0.0, _ext - 2.2) * (0.5 + abs(pol))
+            emos[20] = _ev(_fomo, dead=0.05, gain=1.1)
+            dirs[20] = -sign(pol * move_dir) if pol and move_dir else 0
         else:
             emos[20] = CHANNELS[20][3]
             dirs[20] = 0
-            zero_reasons["20"] = "no scored headlines this window — abstains"
+            zero_reasons["20"] = ("no scored headlines this window — "
+                                  "news FOMO abstains")
 
-        # ── 21 TREND EXHAUSTION (Frijda action tendency input) ──────────
-        denom = abs(d2) + abs(d1)
-        decay = ((abs(d2) - abs(d1)) / denom) if denom > 1e-12 else 0.0
-        emos[21] = graded(4.0 * decay, gain=0.8)
-        dirs[21] = -move_dir if emos[21] > 0.6 else 0
+        # ── E21 CLIMAX EXHAUSTION STREAK (event) ──────────────────────
+        _cstreak = 0
+        _cside = 0
+        for _i in range(n_b - 1, 0, -1):
+            _s = 1 if mc[_i] > mc[_i - 1] else (-1 if mc[_i] < mc[_i - 1] else 0)
+            if _s == 0:
+                break
+            if _cside == 0:
+                _cside = _s
+            elif _s != _cside:
+                break
+            _cstreak += 1
+        _blow = (v5 / v_mean30) if v_mean30 > 0 else 1.0
+        # streak length carries the reading; a volume blow-off amplifies
+        # it (the 2.5× MA definition) but a long streak without one still
+        # reads as exhaustion-in-progress rather than staying flat
+        _climax_raw = max(0.0, _cstreak - 3) * (0.35 + 0.5 * max(0.0, _blow - 1.0))
+        emos[21] = _ev(_climax_raw * 1.6, dead=0.15, gain=1.1)
+        dirs[21] = -_cside if _cstreak >= 4 else 0
         tedr_val = emos[21]
+        rtp_val = emos[1]
+
+        # derived scalars the panels read (NOT channels): affect
+        # proxies for the Ekman/Russell display, FG inputs, PANAS
+        v_aff = graded(_compress(z_drift, 1.5), gain=1.0)     # valence 0..1
+        a_aff = graded(math.log(max(vol_ratio, 1e-6)), gain=1.4)
+        d_aff = graded(0.5 * (persist - 0.5) + 0.25
+                       * _clamp(z_drift / 3.0, -1, 1), gain=1.6)
+        up, dn = _semi_deviations(rets[-min(60, len(rets)):])
+        _tot = up + dn
+        _up_share = (up / _tot) if _tot > 1e-12 else 0.5
+        pa = graded(3.2 * (_up_share - 0.5) + (a_aff - 0.5) * 1.2, gain=0.55)
+        na = graded(3.2 * ((1.0 - _up_share) - 0.5) + (a_aff - 0.5) * 1.2,
+                    gain=0.55)
+        vol_stress = a_aff                    # FG volatility component
+        momentum_fg = v_aff                   # FG momentum/volume component
+        z5 = (d1 / (s30 * math.sqrt(5.0) * live)) if (
+            s30 > 1e-12 and live > 0 and len(rets) >= 5) else 0.0
+        n_upd = int(self.n_updates.get((ctx.symbol, ctx.tf), 0))
 
         # abstained channels never carry a direction — and neither does a
         # channel that is still sitting inside its OWN noise band. Without
@@ -791,19 +1082,22 @@ class EmotionSystem:
         agreement = (den / mass) if mass > 0 else 0.0
 
         # ---- derived model outputs -------------------------------------
-        ek = ekman_scores(emos[1], emos[2], emos[3])
+        # derived affect (Russell/Ekman DISPLAY): the new channels are
+        # behavioral, so the classic (v, a, d) axes are recomputed from
+        # the tape aggregates rather than borrowed from channel ids
+        ek = ekman_scores(v_aff, a_aff, d_aff)
         prim = max(ek, key=lambda k: ek[k]["intensity"])
         runner = max((k for k in ek if k != prim),
                      key=lambda k: ek[k]["intensity"])
-        fg = fear_greed_index(vol_stress=emos[17], momentum=emos[18],
-                              herding=emos[14])
-        # breadth is its own internal reading (peer cross-section), NOT the
-        # published BTC-dominance component — reported beside the index
-        fg["breadth_component"] = round(float(emos[19]), 4)
+        fg = fear_greed_index(vol_stress=vol_stress, momentum=momentum_fg,
+                              herding=emos[11])
+        # herd reading is its own internal reading (peer cross-section),
+        # NOT the published BTC-dominance component
+        fg["breadth_component"] = round(float(emos[11]), 4)
         # core affect and the index answer different questions (fast price
         # affect vs volatility/momentum survey). When they disagree, say WHY
         # instead of letting the panel look self-contradictory.
-        _v_raw = 2.0 * emos[1] - 1.0
+        _v_raw = 2.0 * v_aff - 1.0
         if _v_raw > 0.3 and fg["index"] < 45:
             fg["vs_affect"] = (
                 f"affect is positive (valence {_v_raw:+.2f}) while the index "
@@ -819,10 +1113,12 @@ class EmotionSystem:
                 f"its mean — greed in a falling drift")
         else:
             fg["vs_affect"] = None
-        act = action_tendency(fear=emos[6], anger=emos[7],
-                              sadness=emos[9], enjoyment=emos[11],
-                              pa=emos[4], na=emos[5], dominance=emos[3],
-                              capitulation=emos[15], trend_dir=move_dir)
+        act = action_tendency(fear=ek["fear"]["intensity"],
+                              anger=ek["anger"]["intensity"],
+                              sadness=ek["sadness"]["intensity"],
+                              enjoyment=ek["enjoyment"]["intensity"],
+                              pa=pa, na=na, dominance=d_aff,
+                              capitulation=emos[1], trend_dir=move_dir)
 
         lag_rings = {
             # key names kept for the history rings / UI legend; each now
@@ -835,6 +1131,7 @@ class EmotionSystem:
 
         # ---- dominant channel (ranked by distance from ITS OWN neutral) --
         import time as _time
+        _key = (ctx.symbol, ctx.tf)
         _prev = self._prev_emos.get(_key) or {}
 
         def _dev_of(i: int) -> float:
@@ -925,17 +1222,17 @@ class EmotionSystem:
             "prev_cerc": prev_cerc,
             "lag_values": lag_rings,
             # ---- the real model, printed -------------------------------
-            "core_affect": {"valence": round(2.0 * emos[1] - 1.0, 4),
-                            "arousal": round(emos[2], 4),
+            "core_affect": {"valence": round(2.0 * v_aff - 1.0, 4),
+                            "arousal": round(a_aff, 4),
                             "note": ("Russell (1980) circumplex: valence "
                                      "−1…+1 × arousal 0…1")},
-            "pad": {"pleasure": round(2.0 * emos[1] - 1.0, 4),
-                    "arousal": round(emos[2], 4),
-                    "dominance": round(emos[3], 4),
+            "pad": {"pleasure": round(2.0 * v_aff - 1.0, 4),
+                    "arousal": round(a_aff, 4),
+                    "dominance": round(d_aff, 4),
                     "note": "Mehrabian & Russell (1974)"},
-            "panas": {"positive": round(emos[4], 4),
-                      "negative": round(emos[5], 4),
-                      "balance": round(emos[4] - emos[5], 4),
+            "panas": {"positive": round(pa, 4),
+                      "negative": round(na, 4),
+                      "balance": round(pa - na, 4),
                       "note": ("Watson et al. (1988): PA and NA are separate "
                                "activated dimensions (upside/downside semi-"
                                "deviation), not complements")},
@@ -951,11 +1248,12 @@ class EmotionSystem:
             "action_tendency": act,
             "risk": {
                 "loss_lambda": LOSS_LAMBDA,
-                "loss_pressure": round(emos[12], 4),
-                "somatic_marker": (round(emos[13], 4)
+                "loss_pressure": round(emos[2], 4),
+                "somatic_marker": (round(float(self._soma.get(
+                                       (ctx.symbol, ctx.tf), 0.5)), 4)
                                    if n_upd >= 3 else None),
                 "somatic_updates": n_upd,
-                "risk_appetite": round(emos[4] - emos[5], 4),
+                "risk_appetite": round(pa - na, 4),
                 "note": ("prospect theory λ from Tversky & Kahneman (1992); "
                          "somatic marker learned from settled outcomes and "
                          "null until it has evidence"),
@@ -971,7 +1269,7 @@ class EmotionSystem:
                 "window_streak": int(round(persist * min(30, len(rets)))),
                 "r30": round(session_ret, 6),
                 "window_return": round(r_w, 6),
-                "pdi_session": round(emos[3], 4),
+                "pdi_session": round(d_aff, 4),
                 "trend_stretch": round((live / ma30 - 1.0) if ma30 else 0.0, 6),
                 "habituation": round(max(0.0, 1.0 - abs(d1) / abs(d2))
                                      if abs(d2) > 1e-12 else 0.0, 4),
@@ -985,14 +1283,17 @@ class EmotionSystem:
             },
             # retail vs professional reads: the channels that literally
             # describe each crowd, signed by each channel's own direction
-            "retail": _crowd(emos, dirs, (16, 15, 20, 19, 11),
-                             ("FOMO-chasing (chase + news euphoria)",
-                              "panic-selling (capitulation)",
+            "retail": _crowd(emos, dirs, (18, 20, 1, 11, 21),
+                             ("FOMO-chasing (chase fatigue + news euphoria)",
+                              "panic-selling (capitulation velocity)",
                               "retail quiet")),
-            "hedge": _crowd(emos, dirs, (12, 13, 3, 17, 21),
-                            ("hedges pressing (loss pressure + stress)",
-                             "risk appetite returning (somatic marker)",
+            "hedge": _crowd(emos, dirs, (2, 3, 9, 17, 5),
+                            ("hedges pressing (underwater pain + tail hedge)",
+                             "risk appetite returning",
                              "hedges quiet")),
+            # E22 — the CERC behavioral composite, decomposed: three
+            # telemetry vectors the panel prints beside the agreement sum
+            "cerc_vectors": _cerc_vectors(emos, dirs, w),
         }
 
     # ------------------------------------------------------------------

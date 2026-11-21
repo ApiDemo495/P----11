@@ -1414,6 +1414,27 @@ function chopInfo(tf) {
   } catch { return null; }
 }
 function chopChip(tf) {
+  // §1.3/§6: the 5-state regime engine is server truth — computed from
+  // THIS asset's tape (never BTC's) and stamped on every TF card.
+  // Yellow caution for the sideways states, red for the shock state.
+  try {
+    const r = S.snap?.assets?.[S.symbol]?.tfs?.[tf]?.regime;
+    if (r && r.state) {
+      const conf = (r.confidence != null) ? ` · conf ${Number(r.confidence).toFixed(2)}` : "";
+      const title = esc(`${r.state} — ${r.label}. ER ${Number(r.er_fast ?? 0).toFixed(2)}, vol×${Number(r.vol_ratio ?? 0).toFixed(2)}${conf} (5-state regime engine, this asset's tape)`);
+      if (r.state === "CHAOTIC_LIQUIDATION_SHOCK")
+        return `<span class="chip-err" title="${title}">🔴 LIQUIDATION SHOCK — no entries</span>`;
+      if (r.state === "MEAN_REVERTING_RANGE")
+        return `<span class="chip-warn" title="${title}">⚠ SIDEWAYS — trade with caution</span>`;
+      if (r.state === "VOLATILE_RANGE")
+        return `<span class="chip-warn" title="${title}">⚠ VOLATILE RANGE — whipsaw risk</span>`;
+      if (r.state === "IMPULSE_BULL")
+        return `<span class="chip-ok" title="${title}">📈 impulse bull${conf}</span>`;
+      if (r.state === "IMPULSE_BEAR")
+        return `<span class="chip-err" title="${title}">📉 impulse bear${conf}</span>`;
+    }
+  } catch { /* regime optional */ }
+  // fallback: local Kaufman ER chip when the server regime is absent
   const c = chopInfo(tf);
   if (!c || !c.level) return "";
   return `<span class="chip-warn" title="Kaufman efficiency ratio ${c.er.toFixed(2)} over ${c.n} bars — price is going nowhere; whipsaw risk high, expect stopped-out trades"
@@ -1949,7 +1970,15 @@ function bindAnalyse() {
     b.disabled = true;
     const sym = S.symbol;
     try {
-      const r = await api(`/api/analyse/${sym}?tf=${S.focusTf}`, { method: "POST" });
+      // §1.1 latest-wins: each click mints a monotonic request_id; the
+      // server stamps it onto every analyse_* event and the WS handler
+      // drops anything older than the id this cell currently owns
+      S.analyseSeq = (S.analyseSeq || 0) + 1;
+      const reqId = `${Date.now()}.${S.analyseSeq}`;
+      const cellKey = `${sym}|${S.focusTf}`;
+      S.analyseReqIds = S.analyseReqIds || {};
+      S.analyseReqIds[cellKey] = reqId;
+      const r = await api(`/api/analyse/${sym}?tf=${S.focusTf}&request_id=${encodeURIComponent(reqId)}`, { method: "POST" });
       if (!r.ok) { toast(r.error || "analysis unavailable", "err"); b.disabled = false; return; }
       // show the panel on the dashboard immediately — timestamps anchor
       // to the button press (started_at comes from the server)
@@ -2594,7 +2623,10 @@ async function loadCandles() {
   // issue 4: the two fetches are INDEPENDENT. They used to share one
   // try block, so a failed /api/candles (busy server, slow network)
   // skipped /api/tf-charts entirely and every mini-chart stayed blank.
-  const mdP = api(`/api/candles?symbol=${symbol}&tf=tf1&n=1000`)
+  // §6 7-10-day warmup: ask for the whole backfill window (server cap
+  // = BACKFILL_BARS, 7 days) so boot renders real history immediately
+  // instead of WARMING_UP / n=0 dead states
+  const mdP = api(`/api/candles?symbol=${symbol}&tf=tf1&n=10080`)
     .catch(() => null);
   // guide §1: the SERVER publishes tf_charts[asset][tf] with one step and
   // one lookback per timeframe. Cards bind to that series when it is
@@ -3173,7 +3205,10 @@ async function loadPhysics() {
       card.className = "card";
       let extra = "";
       if (p === 1 && det.p1) extra = `<div class="logic">predicted ${px(det.p1.p_predicted)} · σ ${fmt(det.p1.sigma_q, 1)} · Q ${fmt(det.p1.confidence_q, 2)}</div>`;
-      if (p === 15 && det.p15) extra = `<div class="logic">details: ${JSON.stringify(det.p15).slice(0, 110)}…</div>`;
+      if (p === 15 && det.p15) {
+        const d15 = det.p15;
+        extra = `<div class="logic">Doppler ${fmt(d15.doppler, 3)} · β ${fmt(d15.beta, 4)} · leader ${esc(String(d15.leader || "—"))} · momentum ${fmt(d15.momentum_raw, 3)} · ${d15.blueshift ? "blueshift (approaching)" : "redshift (receding)"}</div>`;
+      }
       const aW = (ph.alpha || {})[String(p)];
       const aA = (ph.accuracy || ph.alpha_accuracy || {})[String(p)];
       const accLine = aW != null
@@ -4526,10 +4561,39 @@ function renderBoot(snap) {
   });
   $("#boot-warning").classList.toggle("hidden", !an.warning);
 }
-/* ═══════ THE one setInterval (advice H-2): boot clock + quad countdown +
-   REST safety net. Multiple timers were the "glitchy countdown" bug. ═══ */
+/* ═══════ THE one setInterval (advice H-2): MASTER ASYNC SCHEDULER
+   (directive §1.2).  The interval fires every 250 ms but the body runs
+   on ABSOLUTE deadlines (drift-compensated): `nextAt += 1000` keeps the
+   1 Hz cadence anchored to wall time, so timer drift never accumulates
+   (loop_lag_ms is measured, and a >4 s stall — tab sleep — resyncs
+   instead of bursting).  Async work goes through schedRun(): an in-flight
+   lock per key with latest-wins coalescing, so a slow /api/snapshot can
+   never queue up behind itself.  Multiple timers were the "glitchy
+   countdown" bug — this is the ONLY interval. ═══ */
 let _tickN = 0;
+const SCHED = {
+  nextAt: Date.now() + 1000,
+  lagMs: 0,
+  locks: {},        // key -> in_flight
+  pending: {},      // key -> latest queued fn (latest wins)
+  runs: 0,
+};
+function schedRun(key, fn) {
+  if (SCHED.locks[key]) { SCHED.pending[key] = fn; return; }  // latest wins
+  SCHED.locks[key] = true;
+  Promise.resolve().then(fn).catch(() => {}).finally(() => {
+    SCHED.locks[key] = false;
+    const next = SCHED.pending[key];
+    if (next) { delete SCHED.pending[key]; schedRun(key, next); }
+  });
+}
 setInterval(() => {
+  const _nowMs = Date.now();
+  if (_nowMs < SCHED.nextAt) return;           // not due — fast lane idle
+  SCHED.lagMs = _nowMs - SCHED.nextAt;         // measured, not guessed
+  SCHED.nextAt += 1000;
+  if (SCHED.nextAt < _nowMs - 4000) SCHED.nextAt = _nowMs + 1000;  // sleep resync
+  SCHED.runs++;
   _tickN++;
   // realised-path ring for the probability-branches chart (1 Hz, capped)
   try {
@@ -4550,9 +4614,10 @@ setInterval(() => {
     const bc = $("#boot-clock");
     if (bc) bc.textContent = `${Math.floor(rem / 60)}:${String(Math.floor(rem % 60)).padStart(2, "0")}`;
   }
-  // 2) REST safety net every other tick (~2s) — keeps header honest
+  // 2) REST safety net every other tick (~2s) — keeps header honest.
+  //    Coalesced: one snapshot request in flight at a time, latest wins.
   if (_tickN % 2 === 0 && Date.now() - S.lastMsgAt >= 4000) {
-    api("/api/snapshot").then(applySnapshot).catch(() => {});
+    schedRun("snapshot", () => api("/api/snapshot").then(applySnapshot));
   }
   if (_tickN % 5 === 0) { pollChartLink(); pollBacktest(); }
   // issue 3: analyse REST reconciliation runs on THIS timer (every ~2 s
@@ -4577,8 +4642,9 @@ setInterval(() => {
     }).catch(() => {});
   }
   // 2b) candle series refresh (~30 s): the realised line's backfill
-  // must stay current or the charts drift from the tape again
-  if (_tickN % 30 === 0) loadCandles().catch(() => {});
+  // must stay current or the charts drift from the tape again —
+  // coalesced so a slow reload never stacks on the next due tick
+  if (_tickN % 30 === 0) schedRun("candles", loadCandles);
   // connection honesty on the chip while the socket is silent.
   // A dead websocket with a healthy REST poll is NORMAL behind the
   // Codespaces/mobile proxy — say "polling", don't accuse the engine.
@@ -4610,7 +4676,23 @@ setInterval(() => {
   }
   // 3) quadrant countdown rings (server-anchored)
   _quadTick();
+  // §1.4 header countdowns (server snapshot clock)
+  try { renderSyncChips(); } catch (e3) { /* chips optional */ }
 }, 1000);
+
+function renderSyncChips() {
+  // §1.4 the 5 named countdowns from the shared snapshot clock — one
+  // line in the header, full detail in the tooltip
+  const el = $("#sync-chips");
+  const sync = S.snap?.sync;
+  if (!el || !sync) return;
+  const pick = (k) => (sync[k] && sync[k].remaining) ? sync[k].remaining : "—";
+  const wc = sync.WINDOW_CLOSE_SETTLE;
+  el.textContent = `⏱ tick ${pick("NEXT_TICK_PASS")} · close ${pick("WINDOW_CLOSE_SETTLE")} · brain ${pick("BRAIN_METACOG_REWEIGHT")} · comm ${pick("AGENT_COMMITTEE_SYNTHESIS")} · news ${pick("NEWS_MACRO_POLL")}`;
+  el.title = `shared snapshot clock (${sync.anchor || "utc"}) — snapshot_ts ${sync.snapshot_ts ? new Date(sync.snapshot_ts * 1000).toISOString().slice(11, 19) : "?"}`
+    + (wc ? ` · ${wc.label || "window close"} in ${wc.remaining}` : "")
+    + " · NEXT_TICK_PASS · BRAIN_METACOG_REWEIGHT · AGENT_COMMITTEE_SYNTHESIS · NEWS_MACRO_POLL";
+}
 
 function _quadTick() {
   const now = Date.now() / 1000;
@@ -4820,6 +4902,26 @@ function onTick(msg) {
 }
 function handleMessage(msg) {
   S.lastMsgAt = Date.now();
+  // §1.1 atomic discard — an out-of-order snapshot or a superseded
+  // analysis never touches the store (composite asset|timeframe keys,
+  // monotonic state_version, latest-wins request_id)
+  if (msg && msg.state_version != null) {
+    if (S.lastStateVersion && msg.state_version < S.lastStateVersion) return;
+    S.lastStateVersion = msg.state_version;
+  }
+  if (msg && (msg.type === "analyse_started" || msg.type === "analyse_stage"
+              || msg.type === "analyse_done")) {
+    const _cell = `${msg.asset || msg.symbol || ""}|${msg.timeframe || msg.tf || ""}`;
+    if (msg.request_id) {
+      S.analyseReqIds = S.analyseReqIds || {};
+      const prev = S.analyseReqIds[_cell];
+      if (prev && prev !== msg.request_id
+          && Number(prev.split(".")[0]) > Number(msg.request_id.split(".")[0])) {
+        return;                 // older request — drop the whole event
+      }
+      S.analyseReqIds[_cell] = msg.request_id;
+    }
+  }
   if (msg.type === "NEWS") onNewsTicker(msg);
   else if (msg.type === "news_emergency" || msg.type === "news_emergency_ack") {
     toast(`⚡ NEWS_EMERGENCY ${msg.asset || ""}: ${msg.reason || ""}`, "err");
