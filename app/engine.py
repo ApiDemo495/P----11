@@ -750,6 +750,61 @@ class PredictionEngine:
             price_rets[-10:], list(self.news_polarity)[-10:]
         )
 
+        # ── §3 emotion feeds ─────────────────────────────────────────
+        # E11 herd synchronization: rolling correlation of this asset's
+        # returns vs the peer mean (0.5 = uncorrelated baseline)
+        herd_corr = None
+        try:
+            _mine = price_rets[-30:]
+            _peer_means = []
+            for j in range(len(price_rets)):
+                _vals = [peer_series[s][j] for s in SYMBOL_ORDER
+                         if s in peer_series and j < len(peer_series[s])]
+                if _vals:
+                    _peer_means.append(sum(_vals) / len(_vals))
+            _pm = _peer_means[-30:]
+            _n = min(len(_mine), len(_pm))
+            if _n >= 10:
+                _a, _b = _mine[-_n:], _pm[-_n:]
+                _ma, _mb = sum(_a) / _n, sum(_b) / _n
+                _sa = sum((x - _ma) ** 2 for x in _a) ** 0.5
+                _sb = sum((x - _mb) ** 2 for x in _b) ** 0.5
+                if _sa > 1e-12 and _sb > 1e-12:
+                    _cov = sum((_a[i] - _ma) * (_b[i] - _mb)
+                               for i in range(_n)) / _n
+                    herd_corr = max(-1.0, min(1.0, _cov / (_sa * _sb)))
+        except Exception:
+            herd_corr = None
+
+        # E10 whale-vs-retail trade sizes from the micro structure ring
+        trade_sizes: list[float] = []
+        try:
+            trade_sizes = list(
+                (getattr(self.feed, "micro", None)._qty.get(symbol)  # type: ignore[union-attr]
+                 or []))
+        except Exception:
+            trade_sizes = []
+
+        # E14/E16 headline stamps: newest live item relevant to this asset
+        news_last_ts = 0.0
+        news_tier = 1.0
+        try:
+            for it in self.news._live_items():
+                if symbol in (it.get("symbols") or ()) or float(
+                        it.get("macro_score") or 0) >= 0.6:
+                    _ts = float(it.get("ts") or 0.0)
+                    if _ts > news_last_ts:
+                        news_last_ts = _ts
+                        news_tier = float(1.0 / max(1, int(it.get("tier") or 1)))
+        except Exception:
+            news_last_ts = 0.0
+
+        try:
+            spread_bps = float((self.feed.book_status(symbol) or {})
+                               .get("spread_bps") or 0.0)
+        except Exception:
+            spread_bps = 0.0
+
         bundle = {
             "closes": closes,
             "volumes": volumes,
@@ -763,6 +818,11 @@ class PredictionEngine:
             "ofti": ofti_value,
             "cmp_divergence": cmp_value,
             "news_price_corr": corr,
+            "herd_corr": herd_corr,
+            "trade_sizes": trade_sizes,
+            "news_last_ts": news_last_ts,
+            "news_tier": news_tier,
+            "spread_bps": spread_bps,
         }
         self._market_cache[symbol] = bundle
         self._market_cache_ts = now

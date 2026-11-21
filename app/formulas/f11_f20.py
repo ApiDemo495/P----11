@@ -454,14 +454,11 @@ def f19_pmtl(ctx) -> float:
 # =============================================================================
 # FORMULA 20: Dynamic Regime Half-Life Estimator (DRHE)  — NOT bounded to [-1,1]
 # =============================================================================
-def classify_regime(trend_strength: float, volatility_level: float) -> str:
-    if trend_strength > 0.3:
-        return "volatile_trending" if volatility_level > 1.5 else "trending"
-    if volatility_level > 1.5:
-        return "volatile_ranging"
-    if volatility_level <= 0.8:
-        return "calm_ranging"
-    return "transitional"
+# Regime classification moved to app/regime.py (5-state engine + the
+# fixed-threshold scalar entry). The old 0.30 trend gate classified
+# almost every real tape as ranging — the dead-band that trapped the UI
+# in "sideways". F20 keeps the same call signature.
+from ..regime import classify_regime  # noqa: F401  (re-export)
 
 
 def _weibull_k_mle(durations: list[float]) -> float:

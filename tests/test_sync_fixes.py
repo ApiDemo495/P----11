@@ -14,15 +14,17 @@ def test_agents_status_fills_auditor():
 
 def test_e9_never_dominant_on_up_tape():
     # dominant ranking must measure deviation from each channel's OWN
-    # neutral: the discrete-emotion channels (fear…enjoyment) are 0-based —
-    # no emotion, no crown — so a flat up-tape cannot crown "sadness".
+    # neutral: EVENT channels (fear/capitulation … climax streak) are
+    # 0-based — no event, no crown — so a flat up-tape cannot crown
+    # "startle shock". State channels are bipolar 0.5.
     from app.emotion import CHANNELS
     src = open("app/emotion.py").read()
     assert "def _dev_of" in src and "CHANNELS[i][3]" in src
-    for eid in range(6, 12):                 # Ekman prototypes
+    for eid in (1, 3, 4, 5, 12, 13, 15, 16, 20, 21):   # event channels
         assert CHANNELS[eid][3] == 0.0, eid
-    for eid in (1, 2, 3, 4, 5, 12, 13, 14, 15, 17, 18, 19, 20):
+    for eid in (2, 6, 7, 8, 9, 10, 11, 14, 17, 18, 19):  # state channels
         assert CHANNELS[eid][3] == 0.5, eid
+    assert len(CHANNELS) == 21
 
 
 def test_quad_charts_aggregate_per_tf():

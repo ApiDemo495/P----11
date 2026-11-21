@@ -52,9 +52,10 @@ class MicroPhysics:
     BUCKET_BP = 25.0             # cluster buckets in basis points of price
 
     def __init__(self) -> None:
-        # per-symbol rings: tau (ms) and aggregate-id gaps
+        # per-symbol rings: tau (ms), aggregate-id gaps and trade sizes
         self._tau: dict[str, deque] = {}
         self._gap: dict[str, deque] = {}
+        self._qty: dict[str, deque] = {}
         self._last_a: dict[str, int] = {}
         # force orders: (ts, price, qty, side, symbol)
         self._liq: deque = deque()
@@ -70,6 +71,12 @@ class MicroPhysics:
             ring.append(float(e_ms - t_ms))
             while len(ring) > 500:
                 ring.popleft()
+        # per-trade size ring — E10 whale-vs-retail skew reads this
+        if qty and qty > 0:
+            qr = self._qty.setdefault(symbol, deque())
+            qr.append(float(qty))
+            while len(qr) > 500:
+                qr.popleft()
         prev = self._last_a.get(symbol)
         self._last_a[symbol] = agg_id
         if prev is not None and agg_id >= prev:
