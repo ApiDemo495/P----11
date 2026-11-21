@@ -1949,7 +1949,15 @@ function bindAnalyse() {
     b.disabled = true;
     const sym = S.symbol;
     try {
-      const r = await api(`/api/analyse/${sym}?tf=${S.focusTf}`, { method: "POST" });
+      // §1.1 latest-wins: each click mints a monotonic request_id; the
+      // server stamps it onto every analyse_* event and the WS handler
+      // drops anything older than the id this cell currently owns
+      S.analyseSeq = (S.analyseSeq || 0) + 1;
+      const reqId = `${Date.now()}.${S.analyseSeq}`;
+      const cellKey = `${sym}|${S.focusTf}`;
+      S.analyseReqIds = S.analyseReqIds || {};
+      S.analyseReqIds[cellKey] = reqId;
+      const r = await api(`/api/analyse/${sym}?tf=${S.focusTf}&request_id=${encodeURIComponent(reqId)}`, { method: "POST" });
       if (!r.ok) { toast(r.error || "analysis unavailable", "err"); b.disabled = false; return; }
       // show the panel on the dashboard immediately — timestamps anchor
       // to the button press (started_at comes from the server)
@@ -4526,10 +4534,39 @@ function renderBoot(snap) {
   });
   $("#boot-warning").classList.toggle("hidden", !an.warning);
 }
-/* ═══════ THE one setInterval (advice H-2): boot clock + quad countdown +
-   REST safety net. Multiple timers were the "glitchy countdown" bug. ═══ */
+/* ═══════ THE one setInterval (advice H-2): MASTER ASYNC SCHEDULER
+   (directive §1.2).  The interval fires every 250 ms but the body runs
+   on ABSOLUTE deadlines (drift-compensated): `nextAt += 1000` keeps the
+   1 Hz cadence anchored to wall time, so timer drift never accumulates
+   (loop_lag_ms is measured, and a >4 s stall — tab sleep — resyncs
+   instead of bursting).  Async work goes through schedRun(): an in-flight
+   lock per key with latest-wins coalescing, so a slow /api/snapshot can
+   never queue up behind itself.  Multiple timers were the "glitchy
+   countdown" bug — this is the ONLY interval. ═══ */
 let _tickN = 0;
+const SCHED = {
+  nextAt: Date.now() + 1000,
+  lagMs: 0,
+  locks: {},        // key -> in_flight
+  pending: {},      // key -> latest queued fn (latest wins)
+  runs: 0,
+};
+function schedRun(key, fn) {
+  if (SCHED.locks[key]) { SCHED.pending[key] = fn; return; }  // latest wins
+  SCHED.locks[key] = true;
+  Promise.resolve().then(fn).catch(() => {}).finally(() => {
+    SCHED.locks[key] = false;
+    const next = SCHED.pending[key];
+    if (next) { delete SCHED.pending[key]; schedRun(key, next); }
+  });
+}
 setInterval(() => {
+  const _nowMs = Date.now();
+  if (_nowMs < SCHED.nextAt) return;           // not due — fast lane idle
+  SCHED.lagMs = _nowMs - SCHED.nextAt;         // measured, not guessed
+  SCHED.nextAt += 1000;
+  if (SCHED.nextAt < _nowMs - 4000) SCHED.nextAt = _nowMs + 1000;  // sleep resync
+  SCHED.runs++;
   _tickN++;
   // realised-path ring for the probability-branches chart (1 Hz, capped)
   try {
@@ -4550,9 +4587,10 @@ setInterval(() => {
     const bc = $("#boot-clock");
     if (bc) bc.textContent = `${Math.floor(rem / 60)}:${String(Math.floor(rem % 60)).padStart(2, "0")}`;
   }
-  // 2) REST safety net every other tick (~2s) — keeps header honest
+  // 2) REST safety net every other tick (~2s) — keeps header honest.
+  //    Coalesced: one snapshot request in flight at a time, latest wins.
   if (_tickN % 2 === 0 && Date.now() - S.lastMsgAt >= 4000) {
-    api("/api/snapshot").then(applySnapshot).catch(() => {});
+    schedRun("snapshot", () => api("/api/snapshot").then(applySnapshot));
   }
   if (_tickN % 5 === 0) { pollChartLink(); pollBacktest(); }
   // issue 3: analyse REST reconciliation runs on THIS timer (every ~2 s
@@ -4577,8 +4615,9 @@ setInterval(() => {
     }).catch(() => {});
   }
   // 2b) candle series refresh (~30 s): the realised line's backfill
-  // must stay current or the charts drift from the tape again
-  if (_tickN % 30 === 0) loadCandles().catch(() => {});
+  // must stay current or the charts drift from the tape again —
+  // coalesced so a slow reload never stacks on the next due tick
+  if (_tickN % 30 === 0) schedRun("candles", loadCandles);
   // connection honesty on the chip while the socket is silent.
   // A dead websocket with a healthy REST poll is NORMAL behind the
   // Codespaces/mobile proxy — say "polling", don't accuse the engine.
@@ -4820,6 +4859,26 @@ function onTick(msg) {
 }
 function handleMessage(msg) {
   S.lastMsgAt = Date.now();
+  // §1.1 atomic discard — an out-of-order snapshot or a superseded
+  // analysis never touches the store (composite asset|timeframe keys,
+  // monotonic state_version, latest-wins request_id)
+  if (msg && msg.state_version != null) {
+    if (S.lastStateVersion && msg.state_version < S.lastStateVersion) return;
+    S.lastStateVersion = msg.state_version;
+  }
+  if (msg && (msg.type === "analyse_started" || msg.type === "analyse_stage"
+              || msg.type === "analyse_done")) {
+    const _cell = `${msg.asset || msg.symbol || ""}|${msg.timeframe || msg.tf || ""}`;
+    if (msg.request_id) {
+      S.analyseReqIds = S.analyseReqIds || {};
+      const prev = S.analyseReqIds[_cell];
+      if (prev && prev !== msg.request_id
+          && Number(prev.split(".")[0]) > Number(msg.request_id.split(".")[0])) {
+        return;                 // older request — drop the whole event
+      }
+      S.analyseReqIds[_cell] = msg.request_id;
+    }
+  }
   if (msg.type === "NEWS") onNewsTicker(msg);
   else if (msg.type === "news_emergency" || msg.type === "news_emergency_ack") {
     toast(`⚡ NEWS_EMERGENCY ${msg.asset || ""}: ${msg.reason || ""}`, "err");

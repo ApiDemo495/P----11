@@ -358,6 +358,38 @@ async def run_pass(fn, /, *args, **kwargs):
     return await loop.run_in_executor(_pass_pool, call)
 
 
+def _sync_block() -> dict:
+    """§1.4 snapshot clock: one shared snapshot_ts + the 5 countdowns."""
+    try:
+        from .sync_clock import CLOCK
+        return CLOCK.countdowns()
+    except Exception:
+        return {}
+
+
+def _metacog_block() -> dict:
+    """§4 metacognition telemetry: per-cell status + Exp3 weights."""
+    try:
+        from .metacognition import MC, CELL_IDS
+        return {
+            "statuses": {f"{s}|{t}": MC.status(s, t) for s, t in CELL_IDS},
+            "weights": MC.cell_weights(),
+        }
+    except Exception:
+        return {}
+
+
+def _committee_block() -> dict:
+    """§5 four-agent committee: the last vote each prediction cast."""
+    try:
+        from .agent_committee import COMMITTEE
+        last = COMMITTEE.last
+        return {"vote_count": COMMITTEE.vote_count,
+                "last": last.as_dict() if last else None}
+    except Exception:
+        return {"vote_count": 0, "last": None}
+
+
 class PredictionEngine:
     def __init__(
         self,
@@ -404,14 +436,21 @@ class PredictionEngine:
         # auto pass happens to be running. A different scope is queued and
         # started the moment the running job finishes.
         self._analyse_queue: list[tuple[str, str]] = []
+        # §1.1 latest-wins request ids per (symbol, tf)
+        self._analyse_reqids: dict[tuple[str, str], str] = {}
+        # §1.1 monotonic state version for atomic client-side discard
+        self._state_version: int = 0
         self.started_at = time.time()      # §12 ops: uptime
         self.vault_last_write = 0.0        # §12 ops: vault last write
         self.build_id = ""                 # §12 ops: build id vs remote
         # hourly/daily hindsight reviews (advice §8.3)
         self.hindsight_mult: dict[tuple[str, str, int], float] = {}
         self.hindsight_changes: list[dict] = []
-        self._hindsight_last: dict[str, float] = {}   # tf -> last review ts
-        self._hindsight_reviewed_n: dict[str, int] = {}
+        # §1.1 composite keys: per (symbol, tf) — a tf-only key let
+        # BTC's review stamp every asset's cadence, so ETH/BNB/PAXG
+        # skipped their own re-grade (the BTC-22m bleed root cause)
+        self._hindsight_last: dict[tuple[str, str], float] = {}
+        self._hindsight_reviewed_n: dict[tuple[str, str], int] = {}
         # fused-score history for the noise floor (advice §8.2 step 1)
         from collections import deque as _dq2
         self.score_hist: dict[tuple[str, str], _dq2] = {}
@@ -2774,36 +2813,50 @@ class PredictionEngine:
                       "ai_review", "recheck", "final")
 
     def start_analyse(self, symbol: str, tf: str = "tf1",
-                      source: str = "manual") -> dict:
+                      source: str = "manual",
+                      request_id: str | None = None) -> dict:
         if symbol not in SYMBOL_ORDER:
             return {"ok": False, "error": "unknown symbol"}
         if tf not in TF_ORDER:
             return {"ok": False, "error": "unknown timeframe"}
+        # §1.1 stamping: every analyse_* event carries {asset, timeframe,
+        # request_id} so the UI can atomically discard superseded work.
+        # Latest-wins: a newer request_id for the same cell replaces the
+        # queued one — the client never renders a stale analysis.
+        rid = str(request_id) if request_id else None
+        if rid:
+            self._analyse_reqids[(symbol, tf)] = rid
         if self.analyse_job and self.analyse_job.get("status") == "running":
             same = (self.analyse_job.get("symbol") == symbol
                     and self.analyse_job.get("tf") == tf)
             if same:
+                if rid and not self.analyse_job.get("request_id"):
+                    self.analyse_job["request_id"] = rid
                 return {"ok": True, "symbol": symbol, "tf": tf,
                         "started_at": self.analyse_job["started_at"],
                         "stages": list(self.ANALYSE_STAGES),
-                        "already_running": True}
+                        "already_running": True,
+                        "request_id": self.analyse_job.get("request_id")}
             item = (symbol, tf)
             if item not in self._analyse_queue:
                 self._analyse_queue.append(item)
             return {"ok": True, "symbol": symbol, "tf": tf,
                     "queued": True, "queue_position": len(self._analyse_queue),
                     "started_at": None,
-                    "stages": list(self.ANALYSE_STAGES)}
+                    "stages": list(self.ANALYSE_STAGES),
+                    "request_id": rid}
         self.analyse_job = {
             "symbol": symbol, "tf": tf, "source": source,
             "started_at": time.time(), "stages": [],
             "status": "running", "result": None,
+            "request_id": rid,
         }
         self._analyse_task = asyncio.create_task(
             self._run_analyse(self.analyse_job))
         return {"ok": True, "symbol": symbol, "tf": tf,
                 "started_at": self.analyse_job["started_at"],
-                "stages": list(self.ANALYSE_STAGES)}
+                "stages": list(self.ANALYSE_STAGES),
+                "request_id": rid}
 
     def _start_queued_analyse(self) -> None:
         """Start the next manual analysis once the running one is done."""
@@ -2814,7 +2867,9 @@ class PredictionEngine:
                     and self.analyse_job.get("tf") == tf):
                 continue
             try:
-                self.start_analyse(symbol, tf, source="queued")
+                self.start_analyse(
+                    symbol, tf, source="queued",
+                    request_id=self._analyse_reqids.get((symbol, tf)))
                 return
             except Exception:
                 log.exception("queued analyse failed for %s|%s", symbol, tf)
@@ -2831,6 +2886,8 @@ class PredictionEngine:
             entry["data"] = data
         job["stages"].append(entry)
         await self.emit({"type": "analyse_stage", "symbol": job["symbol"],
+                         "timeframe": job.get("tf"),
+                         "request_id": job.get("request_id"),
                          "stage": entry})
 
     async def _run_analyse(self, job: dict) -> None:
@@ -2846,7 +2903,11 @@ class PredictionEngine:
                       job.get("symbol"))
             await self.emit({"type": "analyse_done",
                              "symbol": job.get("symbol"),
-                             "tf": job.get("tf"), "result": None,
+                             "asset": job.get("symbol"),
+                             "tf": job.get("tf"),
+                             "timeframe": job.get("tf"),
+                             "request_id": job.get("request_id"),
+                             "result": None,
                              "error": "exceeded the 175 s budget "
                                       "(3 minute cap)"})
         finally:
@@ -2918,7 +2979,9 @@ class PredictionEngine:
         symbol, tf = job["symbol"], job["tf"]
         t_job0 = time.time()
         await self.emit({"type": "analyse_started", "symbol": symbol,
-                         "tf": tf, "started_at": job["started_at"],
+                         "asset": symbol, "tf": tf, "timeframe": tf,
+                         "request_id": job.get("request_id"),
+                         "started_at": job["started_at"],
                          "stages": list(self.ANALYSE_STAGES)})
         store: dict = {}
         try:
@@ -3364,13 +3427,17 @@ class PredictionEngine:
                 f"{_tp1} · {_sl} · "
                 f"total {final['elapsed_ms']:.0f} ms", final)
             await self.emit({"type": "analyse_done", "symbol": symbol,
-                             "tf": tf, "result": final})
+                             "asset": symbol, "tf": tf, "timeframe": tf,
+                             "request_id": job.get("request_id"),
+                             "result": final})
         except Exception as exc:
             job["status"] = "error"
             job["error"] = repr(exc)
             log.exception("analysis failed for %s", symbol)
             await self.emit({"type": "analyse_done", "symbol": symbol,
-                             "tf": tf, "result": None,
+                             "asset": symbol, "tf": tf, "timeframe": tf,
+                             "request_id": job.get("request_id"),
+                             "result": None,
                              "error": repr(exc)})
 
     async def _analyse_ai_review(self, job: dict, store: dict,
@@ -4403,7 +4470,8 @@ class PredictionEngine:
             "most_damped": top,
             "min_decided": self.HINDSIGHT_MIN_DECIDED,
             "cadence": {k: f"{v // 3600}h" for k, v in self._HINDSIGHT_CADENCE.items()},
-            "last_review": {k: v for k, v in self._hindsight_last.items()},
+            "last_review": {f"{s}|{t}": v
+                            for (s, t), v in self._hindsight_last.items()},
             "changes": self.hindsight_changes[-8:],
             "rule": ("mult = clip(1 + 0.25·z, 0.25, 1.5) on the strict-sign "
                      "edge; invert only at z ≤ −3 with ≥16 decided; "
@@ -4415,16 +4483,17 @@ class PredictionEngine:
         publish the multiplier changes, apply at THIS boundary (advice §8.3:
         changes apply at the next boundary and the card prints them)."""
         period = self._HINDSIGHT_CADENCE.get(tf, 24 * 3600)
-        last = self._hindsight_last.get(tf, 0.0)
+        ckey = (symbol, tf)
+        last = self._hindsight_last.get(ckey, 0.0)
         snap = self.hindsight()                 # cheap: reads rings only
         enough_n = sum(1 for e in snap["per"].values() if e.get("enough"))
-        reviewed_n = self._hindsight_reviewed_n.get(tf, 0)
+        reviewed_n = self._hindsight_reviewed_n.get(ckey, 0)
         # due by cadence, OR enough newly-decided entries that waiting out
         # the cadence would leave the card stale (cold-start refill)
         if last and now - last < period and enough_n <= reviewed_n + 4:
             return
-        self._hindsight_last[tf] = now
-        self._hindsight_reviewed_n[tf] = enough_n
+        self._hindsight_last[ckey] = now
+        self._hindsight_reviewed_n[ckey] = enough_n
         for key, entry in snap["per"].items():
             if not entry.get("enough"):
                 continue
@@ -7751,8 +7820,12 @@ class PredictionEngine:
             "agent": int((((sysd.get("agent") or {}).get("direction")) or 0)),
         }
 
+
     def build_snapshot(self) -> dict[str, Any]:
         now = time.time()
+        # §1.1 every snapshot is versioned at birth — the broadcast path
+        # and the REST-primed cache serve the SAME monotonic counter
+        self._state_version += 1
         try:
             self._refresh_flywire_display()
         except Exception:
@@ -7980,6 +8053,34 @@ class PredictionEngine:
                             .get("mode_share"),
                             "conformal": _conf,
                         }
+                # §1.3/§2/§4 — the decoupled context every TF card carries:
+                # 5-state regime (classify_tape on THIS asset's tape —
+                # never BTC's), the isolated Θ(a,τ) cell parameters, and
+                # the metacognition CONFIRM/SHADOW status for this cell
+                if d is not None:
+                    try:
+                        from .regime import classify_tape
+                        _rtf = classify_tape(
+                            list(st.closes or []),
+                            highs=list(st.highs or []) or None,
+                            lows=list(st.lows or []) or None,
+                            volumes=list(st.volumes or []) or None)
+                        d["regime"] = _rtf
+                    except Exception:
+                        log.exception("regime classify failed for %s|%s",
+                                      symbol, tf)
+                        d["regime"] = None
+                    try:
+                        from .cell_registry import cell_params
+                        _cp = cell_params(symbol, tf)
+                        d["cell"] = _cp.to_dict()
+                    except Exception:
+                        d["cell"] = None
+                    try:
+                        from .metacognition import MC as _MC
+                        d["metacog_status"] = _MC.status(symbol, tf)
+                    except Exception:
+                        d["metacog_status"] = "SHADOW"
                 tfs[tf] = d
             # PRICE PROVENANCE — the chart, the rail and the analysis all
             # quote a different moment in time; saying which one is which is
@@ -8018,6 +8119,8 @@ class PredictionEngine:
         return {
             "type": "snapshot",
             "ts": now,
+            "state_version": self._state_version,
+            "snapshot_ts": now,
             "phase": self.phase,
             "system_mode": str(
                 self.agents.settings.get("system_mode", "old")),
@@ -8039,6 +8142,13 @@ class PredictionEngine:
             "assets": assets,
             "sleeves": self.sleeve_block(now=now),
             "prob_audit": self.prob_audit_summary(),
+            # §1.4 / §4 / §5 — the decoupled subsystems' telemetry:
+            # one shared snapshot clock with the 5 named countdowns, the
+            # metacognition book (weights + CONFIRM/SHADOW board), and the
+            # four-agent committee's last vote
+            "sync": _sync_block(),
+            "metacog": _metacog_block(),
+            "committee": _committee_block(),
             "bgn": {
                 sym: {
                     tf: {t2: round(v, 4) for t2, v in row.items()}
@@ -8176,6 +8286,8 @@ class PredictionEngine:
         # blocked every other coroutine, including /api/health
         snap = await run_pass(self.build_snapshot)
         snap["reason"] = reason
+        # state_version/snapshot_ts are stamped inside build_snapshot —
+        # the UI drops any out-of-order snapshot (§1.1 atomic discard)
         self.last_snapshot = snap
         # HAND THE SAME PAYLOAD TO THE REST CACHE. Without this, every GRC
         # built the snapshot twice: once here, then again on the next
