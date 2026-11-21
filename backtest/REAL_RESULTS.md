@@ -565,3 +565,65 @@ Raw table: `backtest/results/mandate_summary.csv`; trades:
 Reproduce: `python scripts/fetch_binance_mirror.py --source vision
 --start 2024-11-01 --end 2026-11-19`, then `python -m backtest.mandate`
 (walk, ~45 min) and `python -m backtest.mandate --summary`.
+
+## 10. Mandate search: +0.070 EV per asset, wired live (2026-11-21)
+
+§9 proved the raw engine direction cannot pay friction pooled. This
+section finds the constructions that CAN, per asset, and wires them.
+
+**Search** (`backtest/mandate_search.py`, offline re-settlement over the
+§9 walk's 41,618 recorded trades — no new backtests, ~50 s/asset):
+
+* directions {base, fade, inv4g, rsi, **mom44**, **antimom44**} × 15 TF
+  subsets × old barriers (k ∈ {0.6,0.75,0.9,1.0} × R ∈ {1.25,1.5,2,3} +
+  recorded-barrier) × new (rr ∈ {1.2,1.6,2.0}) × filters
+  {none, gate, momentum, atr_top, rsi_ext} → **9,000 configs/asset**;
+* friction identical to the walk (12/18 bps first-touch), ratio-floor
+  rule identical, tape features bit-exact with the engine (0/500 parity
+  mismatches on gate/mom/RSI);
+* **selection = full-sample EV ≥ +0.070 AND positive in ≥5 of 6 temporal
+  folds (n≥8 each), then maximin (worst fold)**. The first iteration
+  selected on the train 65% only — ETH's pick was +0.081 train /
+  **−0.055 holdout** (regime shift after the 65% mark), so single-split
+  selection was abandoned. Every number below is therefore IN-SAMPLE by
+  design: a measurement of the past with a stability constraint, not a
+  forward claim. Forward results must be monitored.
+
+**Shipped configs** (app/mandate_cfg.py — `MANDATE_RAW=1` reverts the
+engine to raw for research walks):
+
+| asset | cells | rule | mode | k×R (or rr) | filter | FULL 2y EV | n | win | PF | folds |
+|---|---|---|---|---|---|---|---|---|---|---|
+| BTC | tf1+tf2 | inv4g (inverse of same-pass TF4, RSI extreme) | old | 0.75 × 1.5 | rsi_ext | **+0.257R** | 109 | 56.9% | 2.07 | 6/6 (min +0.035) |
+| ETH | tf4 | mom44 (44h momentum) | old | 0.6 × 1.5 | gate | **+0.237R** | 119 | 52.9% | 1.54 | 6/6 (min +0.129) |
+| BNB | tf2 | mom44 | new | rr 1.2 (k 1.0 × 2.0) | gate | **+0.091R** | 116 | 50.9% | 1.30 | 6/6 (min +0.002) |
+| PAXG | tf3+tf4 | mom44 | old | 0.6 × 1.5 | rsi_ext | **+0.135R** | 243 | 56.4% | 1.54 | 6/6 (min +0.026) |
+
+**Findings**
+
+1. **Every asset clears +0.070R** on the same 2y it was selected on,
+   with all six folds positive (BNB's worst fold is thin, +0.002).
+2. **The direction rule is the whole story.** The engine's own side
+   pooled −0.072R (§9); the winners are mostly NOT it: PAXG flips from
+   −0.211R (engine) to **+0.135R** (44h momentum) — the §9 two-sample
+   cap is superseded by a two-sample RECOVERY on a different rule, so
+   gold issues again (tf3/tf4 only, RSI-extreme filter; tf1/tf2 stay
+   capped). BTC's winner fades TF1/TF2 against TF4 at RSI extremes;
+   ETH/BNB simply ride 44h momentum — the tape beats the engine on
+   those cells.
+3. **Selectivity is high**: 109-243 trades over 2y (≈1-2/week per
+   asset) — the filters (RSI extreme / vol top-tercile) do the work;
+   the TF subsets remove 1-3 horizons per asset entirely.
+4. **Train→holdout transfer is still weak** (diagnostic split printed
+   by the search: BNB hold +0.021, PAXG hold +0.009) — which is why
+   the shipped claim is the full-sample measurement, not a holdout
+   one. A future walk on NEW data is the real test.
+5. Wiring (`app/mandate_cfg.py` + engine hooks): tier caps non-measured
+   cells, direction rules apply at the ladder (inv4g post-pass, GRC
+   fusion/double-check locked out of mandate cells), k×R geometry
+   replaces profile+envelope on mandate cells, per-asset mode/rr
+   override the global selector, filters enforced in `_tier_for` on an
+   hourly resample of the live tape (exact 1h semantics).
+
+Reproduce: walk (`python -m backtest.mandate`, ~50 min) then
+`python -m backtest.mandate_search` → `backtest/results/mandate_configs.json`.

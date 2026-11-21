@@ -1184,6 +1184,8 @@ class PredictionEngine:
             # record=False so the GRC-cadence rings stay untouched
             return compute_all(g, record=False)
 
+        _mandate_comps: dict = {}
+        _mandate_dc: dict = {}
         for tf in TF_ORDER:
             drhe = adj[tf].get(20, 1.0)
             # Hedge-Flow Tracer (id102): real-time cross-asset rotation
@@ -2039,14 +2041,30 @@ class PredictionEngine:
                 _lad, _lad_src, _floor = self._direction_ladder(
                     symbol, tf, float(pack["cci_adjusted"]), _comps,
                     brain_consensus, _prev_side)
+                # per-asset mandate direction rule (measured on 2y):
+                # raw ladder side is kept in direction_raw / prev_cci_dir
+                # so the ladder's own continuity stays honest; the
+                # TRADE side is the rule's output. inv4g needs this
+                # pass's TF4 side and is applied after the TF loop.
+                _lad_raw = _lad
+                from . import mandate_cfg as _mcfg
+                if _mcfg.direction_rule(symbol, tf) != "inv4g":
+                    _lad = _mcfg.apply_direction(symbol, tf, _lad, 0,
+                                                 self.feed)
                 pack["direction"] = _lad
                 results[tf]["direction"] = _lad
+                results[tf]["direction_raw"] = _lad_raw
                 results[tf]["ladder"] = {
                     "source": _lad_src, "noise_floor": round(_floor, 5),
                     "score": round(float(pack["cci_adjusted"]), 5),
                     "rung": (_lad_src.split("→")[0][:40] or "fused score"),
                 }
                 results[tf]["mass"] = self._mass_for_against(_comps, _lad)
+                # per-tf inputs the post-loop inv4g pass may need to
+                # re-derive display fields with the final side
+                _mandate_comps[tf] = _comps
+                _mandate_dc[tf] = (float(fin["confidence"]), pcv,
+                                   br["polarity"])
                 # §8.6 learners: edge guard, temporal twin, BOCPD clock,
                 # Hawkes boundary intensity — printed features, never
                 # silently absorbed into the score
@@ -2372,6 +2390,35 @@ class PredictionEngine:
                         pack["direction"], fin["confidence"], pcv,
                         br["polarity"]),
                 }
+        # ── mandate inv4g (post-loop): the traded side for these cells
+        # is the inverse of THIS pass's TF4 raw side, so it can only be
+        # applied once every TF has been computed (the search read the
+        # same-pass pack["tf4"]). Side-derived display fields (mass,
+        # double-check verdict) are re-derived with the final side.
+        from . import mandate_cfg as _mcfg_i
+        for _tf, _res in list(results.items()):
+            if _mcfg_i.direction_rule(symbol, _tf) != "inv4g":
+                continue
+            _tf4r = results.get("tf4") or {}
+            _t4raw = int(_tf4r.get("direction_raw",
+                                  _tf4r.get("direction") or 0) or 0)
+            _oldd = int(_res.get("direction") or 0)
+            _newd = _mcfg_i.apply_direction(symbol, _tf, _oldd, _t4raw,
+                                            self.feed)
+            if _newd == _oldd:
+                continue
+            _res["direction"] = _newd
+            if _tf in _mandate_comps:
+                _res["mass"] = self._mass_for_against(
+                    _mandate_comps[_tf], _newd)
+            _disp = self.display_systems.get((symbol, _tf))
+            if _disp is not None:
+                if _tf in _mandate_dc:
+                    _c_, _p_, _b_ = _mandate_dc[_tf]
+                    _disp["double_check"] = self._dc_display(
+                        _newd, _c_, _p_, _b_)
+                if "direction" in _disp:
+                    _disp["direction"] = _newd
         if record:
             self.cci.store_price(symbol, price)
             self.readiness["formulas"] = True
@@ -2475,19 +2522,33 @@ class PredictionEngine:
             tier = "half"
         else:
             tier = "full"
-        # ── 2y real-data mandate (backtest/mandate.py): PAXG measured
-        # negative holdout EV in BOTH modes × ALL TFs × BOTH splits
-        # (holdout 34.8%/33.9% win, −0.21/−0.24R), and the independent
-        # prior window (REAL_RESULTS per-TF) agreed: <50% on every TF.
-        # Two samples — the honest maximum win rate on gold is achieved
-        # by not issuing it. The side still stands (the ladder never
-        # suppresses it); only the tier is capped until forward data
-        # flips the measurement.
+        # ── per-asset mandate (2y real measurement, mandate_search):
+        # a configured asset only issues on its measured TFs and past
+        # its measured filter (§10: all four assets ≥ +0.070R full
+        # sample, 6/6 folds positive — PAXG recovered from the engine
+        # direction's −0.21R via the 44h-momentum rule on tf3/tf4).
+        # Non-measured cells are capped; the side still stands (the
+        # ladder never suppresses it), only the tier caps.
         _mandate_note = ""
-        if symbol == "PAXG" and tier != "watch-only":
-            tier = "watch-only"
-            _mandate_note = (" · PAXG capped watch-only by the 2y mandate "
-                             "(negative EV both modes, both splits)")
+        if tier != "watch-only":
+            from . import mandate_cfg as _mcfg
+            if not _mcfg.allows(symbol, tf):
+                tier = "watch-only"
+                _c = _mcfg.MANDATE.get(symbol) or {}
+                if _c.get("tfs"):
+                    _mandate_note = (
+                        f" · mandate: {symbol} issues only on "
+                        f"{', '.join(_c['tfs'])} (2y-measured cells)")
+                else:
+                    _mandate_note = (
+                        " · PAXG capped watch-only by the 2y mandate "
+                        "(negative EV both modes, both splits)")
+            else:
+                _mok, _mwhy = _mcfg.filter_ok(
+                    symbol, tf, getattr(self, "feed", None))
+                if not _mok:
+                    tier = "watch-only"
+                    _mandate_note = f" · {_mwhy}"
         return {"tier": tier, "p_side": round(p_side, 4),
                 "noise_floor_s": round(floor_s, 5),
                 "score_floor_ratio": round(x, 3),
@@ -3195,12 +3256,15 @@ class PredictionEngine:
                 log.exception("cognition pre-compute failed for %s|%s",
                               symbol, tf)
             try:
+                from . import mandate_cfg as _mcfg_t
+                _tmode = (str(self.agents.settings.get("system_mode", "old"))
+                          if _mcfg_t.mode(symbol) not in ("old", "new")
+                          else _mcfg_t.mode(symbol))
                 final["prediction_lock"] = self._seal_analysis_lock(
                     symbol, tf, final, store, res, cyc,
                     signature=(_cog or {}).get("signature"),
                     target=("forecast price at horizon end"
-                            if str(self.agents.settings.get(
-                                "system_mode", "old")) == "new"
+                            if _tmode == "new"
                             else "measured TP/SL ladder"))
             except Exception:
                 log.exception("prediction lock failed for %s|%s", symbol, tf)
@@ -3881,7 +3945,13 @@ class PredictionEngine:
                 _fwf = 1.0 + w_fw * fv * res.get("base_confidence", 0.0)
                 factor *= _fwf
                 _factors.append(f"brain vote {fv:+.3f} ×{w_fw:.2f} → {_fwf:.3f}")
-            if factor != 1.0:
+            # mandate cells trade the side the 2y measurement selected;
+            # the GRC fusion re-ladder / double-check override must not
+            # silently move it (the walk measured compute_asset output)
+            from . import mandate_cfg as _mcfg_g
+            _md_lock = (_mcfg_g.cfg(symbol) is not None
+                        and _mcfg_g.allows(symbol, tf))
+            if factor != 1.0 and not _md_lock:
                 res["cci_adjusted"] = res["cci_adjusted"] * factor
                 _lad2, _src2, _fl2 = self._direction_ladder(
                     symbol, tf, float(res["cci_adjusted"]),
@@ -3919,11 +3989,15 @@ class PredictionEngine:
                 res["tier"] = "quarter" if res.get("tier") in ("full", "half") else res.get("tier", "watch-only")
                 res["degraded_evidence"] = True
             res["confidence"] = dc["confidence"]
-            if dc["label"] == "overridden":
+            if dc["label"] == "overridden" and not _md_lock:
                 res["direction"] = dc["direction"]
             # The previous-signal cache must match the final post-agent /
-            # double-check direction used by the next learning pass.
-            self.prev_cci_dir[(symbol, tf)] = int(res.get("direction") or 0)
+            # double-check direction used by the next learning pass —
+            # but a mandate cell's ladder continuity stays on the RAW
+            # side compute_asset already stored (the rule is defined
+            # against the raw ladder, not against itself).
+            if not _md_lock:
+                self.prev_cci_dir[(symbol, tf)] = int(res.get("direction") or 0)
             self.last_result[(symbol, tf)] = res
             # keep the snapshot display in sync with the post-agent values
             disp = self.display_systems.get((symbol, tf))
@@ -5108,6 +5182,10 @@ class PredictionEngine:
         # so the lock's target must be that forecast — sealing the measured
         # ladder while labelling the call NEW would grade the wrong number.
         _mode = str(self.agents.settings.get("system_mode", "old"))
+        from . import mandate_cfg as _mcfg_s
+        _mmode = _mcfg_s.mode(symbol)
+        if _mmode in ("old", "new"):
+            _mode = _mmode          # per-asset mandate mode wins
         _fc = ((getattr(cyc, "forecast", {}) or {}).get("price")
                if cyc is not None else None)
         if _mode == "new" and _fc:
@@ -5167,6 +5245,10 @@ class PredictionEngine:
         """
         if cyc is None:
             return
+        from . import mandate_cfg as _mcfg_r
+        _mmode = _mcfg_r.mode(getattr(cyc, "symbol", "") or "")
+        if _mmode in ("old", "new"):
+            mode = _mmode          # per-asset mandate mode wins
         forecast = dict(cyc.forecast or {})
         risk = dict(cyc.risk or {})
         entry = float((cyc.level_contract or {}).get("entry")
@@ -6459,11 +6541,33 @@ class PredictionEngine:
                                   _highs, _lows, atr=res.get("atr", 0.0),
                                   spread_bps=_spread)
                    for m in dict.fromkeys(_mins)}
+        # per-asset MANDATE geometry (2y measured, mandate_search):
+        # sl ×= k, tp = sl × R on the raw measured block — exactly the
+        # geometry the EV numbers were computed on, so the generic
+        # asset profile and TF envelope are skipped for this cell.
+        from . import mandate_cfg as _mcfg_c
+        _mscale = _mcfg_c.level_scale(symbol, tf)
+        _mandate_cell = _mscale is not None
+        if _mscale:
+            _k, _Rm = _mscale
+            for _b in _blocks.values():
+                _b["sl_bps"] = round(float(_b["sl_bps"]) * _k, 3)
+                _b["tp_bps"] = round(float(_b["sl_bps"]) * _Rm, 3)
+                _b["tp"] = round(_price0 * (1 + _dir * _b["tp_bps"] / 1e4), 6)
+                _b["sl"] = round(_price0 * (1 - _dir * _b["sl_bps"] / 1e4), 6)
+                _b["rr"] = (round(_b["tp_bps"] / _b["sl_bps"], 3)
+                            if _b["sl_bps"] else None)
+                _b["below_floor"] = bool(
+                    _b["sl_bps"] > 0 and _b["tp_bps"] / _b["sl_bps"] < 1.0)
+                _b["note"] = ((_b.get("note") or "")
+                              + f" · mandate k={_k} × SL, R={_Rm} "
+                                "(2y-measured)")
         # per-asset nature scales the measured distances (gold wider,
         # BNB tighter, ETH wider) — bps scaled, levels recomputed from
         # the same locked anchor so the invariant cannot break
         _prof = asset_profile(symbol)
-        if _prof["sl_mult"] != 1.0 or _prof["tp_mult"] != 1.0:
+        if (not _mandate_cell
+                and (_prof["sl_mult"] != 1.0 or _prof["tp_mult"] != 1.0)):
             for _b in _blocks.values():
                 # asset nature scales the 1 unit (SL); TP scales by the
                 # SAME factor so the block's measured ratio survives
@@ -6491,10 +6595,12 @@ class PredictionEngine:
             _b = _blocks[_m]
             _b["measured_sl_bps"] = _b.get("sl_bps")
             _b["measured_tp_bps"] = _b.get("tp_bps")
-            if _prev_sl > 0 and _b["sl_bps"] < _prev_sl * 1.03:
+            if (not _mandate_cell and _prev_sl > 0
+                    and _b["sl_bps"] < _prev_sl * 1.03):
                 _b["sl_bps"] = round(_prev_sl * 1.03, 3)
                 _b["envelope"] = "raised to keep SL increasing with the timeframe"
-            if _prev_tp > 0 and _b["tp_bps"] < _prev_tp * 1.03:
+            if (not _mandate_cell and _prev_tp > 0
+                    and _b["tp_bps"] < _prev_tp * 1.03):
                 _b["tp_bps"] = round(_prev_tp * 1.03, 3)
                 _b["envelope"] = "raised to keep TP increasing with the timeframe"
             _b["tp"] = round(_price0 * (1 + _dir * _b["tp_bps"] / 1e4), 6)
@@ -6582,6 +6688,9 @@ class PredictionEngine:
         # by signal strength — labelled a model forecast, and graded
         # against the realised price at the horizon like any call.
         _mode = str(self.agents.settings.get("system_mode", "old"))
+        _mmode = _mcfg_c.mode(symbol)
+        if _mmode in ("old", "new"):
+            _mode = _mmode          # per-asset mandate mode wins
         _sigma = max(float(_horizon_block.get("sigma_bps") or 0.0),
                      float(_horizon_block.get("q50") or 0.0))
         # TAIL-UNIT SCALING (2y real-data mandate): the old formula
@@ -6596,7 +6705,8 @@ class PredictionEngine:
         _factor = (0.35 + 0.65 * min(1.0, abs(float(
             res.get("cci_adjusted") or res.get("cci") or 0.0)) / 0.08))
         _sl_bps = float(_horizon_block.get("sl_bps") or 0.0)
-        _mag = _factor * NEW_TARGET_RR * _sl_bps if _sl_bps > 0 \
+        _rr_n = _mcfg_c.new_rr(symbol) or NEW_TARGET_RR
+        _mag = _factor * _rr_n * _sl_bps if _sl_bps > 0 \
             else _factor * _sigma
         _fc_price = round(_price0 * (1 + _dir * _mag / 1e4), 6) \
             if _price0 > 0 else None

@@ -515,7 +515,11 @@ def test_breakdown_and_reason_in_display(tmp_path, monkeypatch):
     engine, _feed, _em = make_engine()
     run(_boot(engine))
     run(engine.on_grc(_t.time()))
-    s = engine.display_systems[("BTC", "tf1")]
+    # tf3, not tf1: tf1 is a mandate cell (BTC inv4g) whose measured
+    # side flip legitimately rewrites the reason to a TAPE VETO on
+    # this synthetic tape — the display plumbing is tf-independent, so
+    # assert the canonical WHY text on a non-mandate cell instead.
+    s = engine.display_systems[("BTC", "tf3")]
     bd = s["breakdown"]
     assert bd["n_components"] >= 27          # 21+ formulas + 5 subsystems
     assert bd["components"][0]["name"] and "contribution" in bd["components"][0]
