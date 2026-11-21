@@ -1414,6 +1414,27 @@ function chopInfo(tf) {
   } catch { return null; }
 }
 function chopChip(tf) {
+  // §1.3/§6: the 5-state regime engine is server truth — computed from
+  // THIS asset's tape (never BTC's) and stamped on every TF card.
+  // Yellow caution for the sideways states, red for the shock state.
+  try {
+    const r = S.snap?.assets?.[S.symbol]?.tfs?.[tf]?.regime;
+    if (r && r.state) {
+      const conf = (r.confidence != null) ? ` · conf ${Number(r.confidence).toFixed(2)}` : "";
+      const title = esc(`${r.state} — ${r.label}. ER ${Number(r.er_fast ?? 0).toFixed(2)}, vol×${Number(r.vol_ratio ?? 0).toFixed(2)}${conf} (5-state regime engine, this asset's tape)`);
+      if (r.state === "CHAOTIC_LIQUIDATION_SHOCK")
+        return `<span class="chip-err" title="${title}">🔴 LIQUIDATION SHOCK — no entries</span>`;
+      if (r.state === "MEAN_REVERTING_RANGE")
+        return `<span class="chip-warn" title="${title}">⚠ SIDEWAYS — trade with caution</span>`;
+      if (r.state === "VOLATILE_RANGE")
+        return `<span class="chip-warn" title="${title}">⚠ VOLATILE RANGE — whipsaw risk</span>`;
+      if (r.state === "IMPULSE_BULL")
+        return `<span class="chip-ok" title="${title}">📈 impulse bull${conf}</span>`;
+      if (r.state === "IMPULSE_BEAR")
+        return `<span class="chip-err" title="${title}">📉 impulse bear${conf}</span>`;
+    }
+  } catch { /* regime optional */ }
+  // fallback: local Kaufman ER chip when the server regime is absent
   const c = chopInfo(tf);
   if (!c || !c.level) return "";
   return `<span class="chip-warn" title="Kaufman efficiency ratio ${c.er.toFixed(2)} over ${c.n} bars — price is going nowhere; whipsaw risk high, expect stopped-out trades"
@@ -2602,7 +2623,10 @@ async function loadCandles() {
   // issue 4: the two fetches are INDEPENDENT. They used to share one
   // try block, so a failed /api/candles (busy server, slow network)
   // skipped /api/tf-charts entirely and every mini-chart stayed blank.
-  const mdP = api(`/api/candles?symbol=${symbol}&tf=tf1&n=1000`)
+  // §6 7-10-day warmup: ask for the whole backfill window (server cap
+  // = BACKFILL_BARS, 7 days) so boot renders real history immediately
+  // instead of WARMING_UP / n=0 dead states
+  const mdP = api(`/api/candles?symbol=${symbol}&tf=tf1&n=10080`)
     .catch(() => null);
   // guide §1: the SERVER publishes tf_charts[asset][tf] with one step and
   // one lookback per timeframe. Cards bind to that series when it is
@@ -3181,7 +3205,10 @@ async function loadPhysics() {
       card.className = "card";
       let extra = "";
       if (p === 1 && det.p1) extra = `<div class="logic">predicted ${px(det.p1.p_predicted)} · σ ${fmt(det.p1.sigma_q, 1)} · Q ${fmt(det.p1.confidence_q, 2)}</div>`;
-      if (p === 15 && det.p15) extra = `<div class="logic">details: ${JSON.stringify(det.p15).slice(0, 110)}…</div>`;
+      if (p === 15 && det.p15) {
+        const d15 = det.p15;
+        extra = `<div class="logic">Doppler ${fmt(d15.doppler, 3)} · β ${fmt(d15.beta, 4)} · leader ${esc(String(d15.leader || "—"))} · momentum ${fmt(d15.momentum_raw, 3)} · ${d15.blueshift ? "blueshift (approaching)" : "redshift (receding)"}</div>`;
+      }
       const aW = (ph.alpha || {})[String(p)];
       const aA = (ph.accuracy || ph.alpha_accuracy || {})[String(p)];
       const accLine = aW != null
@@ -4649,7 +4676,23 @@ setInterval(() => {
   }
   // 3) quadrant countdown rings (server-anchored)
   _quadTick();
+  // §1.4 header countdowns (server snapshot clock)
+  try { renderSyncChips(); } catch (e3) { /* chips optional */ }
 }, 1000);
+
+function renderSyncChips() {
+  // §1.4 the 5 named countdowns from the shared snapshot clock — one
+  // line in the header, full detail in the tooltip
+  const el = $("#sync-chips");
+  const sync = S.snap?.sync;
+  if (!el || !sync) return;
+  const pick = (k) => (sync[k] && sync[k].remaining) ? sync[k].remaining : "—";
+  const wc = sync.WINDOW_CLOSE_SETTLE;
+  el.textContent = `⏱ tick ${pick("NEXT_TICK_PASS")} · close ${pick("WINDOW_CLOSE_SETTLE")} · brain ${pick("BRAIN_METACOG_REWEIGHT")} · comm ${pick("AGENT_COMMITTEE_SYNTHESIS")} · news ${pick("NEWS_MACRO_POLL")}`;
+  el.title = `shared snapshot clock (${sync.anchor || "utc"}) — snapshot_ts ${sync.snapshot_ts ? new Date(sync.snapshot_ts * 1000).toISOString().slice(11, 19) : "?"}`
+    + (wc ? ` · ${wc.label || "window close"} in ${wc.remaining}` : "")
+    + " · NEXT_TICK_PASS · BRAIN_METACOG_REWEIGHT · AGENT_COMMITTEE_SYNTHESIS · NEWS_MACRO_POLL";
+}
 
 function _quadTick() {
   const now = Date.now() / 1000;
