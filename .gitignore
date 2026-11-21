@@ -38,3 +38,6 @@ backtest/results/*.jsonl
 
 # Downloaded market data (regenerate with scripts/fetch_binance_mirror.py)
 backtest/cache/
+
+# 2y mandate walk artifacts (regenerate: python -m backtest.mandate)
+backtest/results/mandate_*.csv

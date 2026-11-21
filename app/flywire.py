@@ -845,9 +845,9 @@ class FlyWireBrain:
             return [{"step": "neuprint reach", "ok": True,
                      "detail": "no key (optional — FlyWire is primary)"},
                     {"step": "neuprint auth", "ok": True,
-                     "detail": "no key"},
+                     "detail": "no key (optional — never required)"},
                     {"step": "neuprint query", "ok": True,
-                     "detail": "skipped (no key)"}]
+                     "detail": "skipped — no key (optional)"}]
         import httpx
         out = []
         t0 = time.time()

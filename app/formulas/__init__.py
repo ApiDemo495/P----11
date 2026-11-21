@@ -111,7 +111,12 @@ def compute_all(ctx: FormulaContext, record: bool = False,
     of failing silently.
     """
     out: dict[int, float] = {}
+    from .. import loadgov as _gov
     for fid, fn in FORMULA_FUNCTIONS.items():
+        # issue: one compute_all used to run ~1 s of pure Python as a SINGLE
+        # loadgov unit — the event loop starved behind it (ENGINE BUSY 3.5 s).
+        # Yield between formulas: ~0 ms when the loop is healthy.
+        _gov.cooperate()
         try:
             val = float(fn(ctx))
         except Exception as e:
