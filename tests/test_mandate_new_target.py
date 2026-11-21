@@ -50,11 +50,14 @@ def test_mandate_tiers_follow_measured_cells():
     """The win-rate directive search (43k–107k configs/asset, n≥60,
     EV>0 after friction, ≥5/6 folds EV>0, ≥4/6 folds WR≥0.60, full
     WR≥0.66 — see backtest/mandate_wr_search.py) decides which cells
-    issue — app/mandate_cfg.py. BTC issues tf2/tf4 (mom44+regime+majority
-    agree, WR 69.7%), ETH tf1/tf2 (inv4g+deep RSI, 70.5%), BNB tf2/tf3
-    (mom44+top-quartile gate+unanimous agree, 66.2%), PAXG tf3/tf4
-    (mom44+RSI band+majority agree, 70.5%); every non-measured cell
-    stays capped watch-only."""
+    issue — app/mandate_cfg.py. BTC issues tf2/tf4, ETH tf1/tf2,
+    BNB tf2/tf3, PAXG tf3/tf4; every non-measured cell stays capped
+    watch-only. Direction rules were re-pointed by the continuous
+    benchmark (REAL_RESULTS §12): BTC/ETH/BNB now run `fade_prev`
+    (previous-window fade, 51.5–53.9 % at the LIVE 22–247-minute
+    horizons vs mom44's 48–49.8 % — the WR search measured 22–247
+    hourly BARS, a horizon mismatch); PAXG keeps mom44 (measured tie
+    at its only gradeable cell)."""
     from tests.test_engine import make_engine
     engine, _feed, _ = make_engine()
     for sym, tf in (("BTC", "tf2"), ("BTC", "tf4"), ("ETH", "tf1"),

@@ -782,3 +782,27 @@ Two statements that must travel with the numbers:
    only BLOCK) in `app/mandate_cfg.py`; forward validation still runs
    through the metacognition DSR gate (≥30 settled windows, DSR > 0.90)
    and every cell stays SHADOW until it passes.
+
+## Continuous-cycle benchmark (2026-11-20): the ≥66 % directive, measured
+
+Full write-up: `backtest/REAL_RESULTS.md` §12; harness
+`backtest/continuous.py`; results `backtest/results/continuous_wr.json`.
+
+* **Continuous, every-window, no abstention** grading on real bars:
+  BTC/ETH 6 years (621,797 5m bars), BNB 8 months of exact 1m, PAXG
+  1h tf4-only; exact-1m-vs-5m validation shows ≤0.5 pp WR error.
+* **Honest best continuous sign WR = 51.5–53.9 %** (`revW` fade rule),
+  stable every year; shipped mom44 at live 22–247-minute horizons
+  measures 48–49.8 % — the WR-search mandate walk measured 22–247
+  **hourly bars**, a horizon mismatch with the live grid.
+* **EV after real friction:** best gross train EV +0.2…+3.0 bps per
+  window vs 24 bps round-trip → no (k,m) geometry is EV>0 anywhere;
+  at 22 min, break-even needs WR 89–114 % (impossible). WR ≥66 % and
+  EV>0 cannot coexist per-window at these horizons — the numbers do
+  not close, and §0 forbids pretending otherwise.
+* **Shipped fix:** `fade_prev` direction rule (causal previous-window
+  fade, byte-identical to the benchmark) on BTC/ETH/BNB cells,
+  `tests/test_fade_prev.py`; PAXG keeps mom44 (measured tie).
+* **Future 6y = SIMULATED** (`backtest/future_sim.py`, 200-path
+  day-block bootstrap, every key labelled `sim_`): P(WR ≥66 %) = 0.00
+  for every predictor × cell under resampled-history null.
