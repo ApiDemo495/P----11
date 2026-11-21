@@ -170,6 +170,42 @@ def write_model_sidecar(path: str) -> dict:
     return rec
 
 
+# paths currently being hashed by the TOFU recorder (issue 2: a model
+# downloaded by an older build or a failed sidecar write stayed
+# "unverified (no checksum record)" forever)
+_sidecar_writing: set[str] = set()
+
+
+def record_sidecar_async(path: str) -> bool:
+    """Trust-on-first-use: when the GGUF magic is good but no checksum
+    record exists, hash it ONCE on a daemon thread and write the sidecar.
+    Returns True if a writer was started (or is already running)."""
+    if not path or not os.path.exists(path):
+        return False
+    if path in _sidecar_writing:
+        return True
+    try:
+        with open(path, "rb") as fh:
+            if fh.read(4) != b"GGUF":
+                return False
+        if os.path.exists(model_sidecar(path)):
+            return False
+    except OSError:
+        return False
+    _sidecar_writing.add(path)
+
+    def _work() -> None:
+        try:
+            write_model_sidecar(path)
+        except Exception:
+            pass
+        finally:
+            _sidecar_writing.discard(path)
+
+    threading.Thread(target=_work, name="sidecar-tofu", daemon=True).start()
+    return True
+
+
 def model_validation(path: str) -> dict:
     """Local-only validation: exists, GGUF magic at offset 0, recorded sha
     still matches size+mtime. A half-finished download fails HERE and is
@@ -197,7 +233,12 @@ def model_validation(path: str) -> dict:
                       and rec.get("mtime") == int(st.st_mtime)
                       else "unverified (file changed since download)")
     except (OSError, ValueError):
-        out["sha"] = "unverified (no checksum record)"
+        # issue 2: a good GGUF with no sidecar used to stay "unverified"
+        # forever — record the checksum now (background hash of the file)
+        if record_sidecar_async(path):
+            out["sha"] = "verifying (recording checksum now)"
+        else:
+            out["sha"] = "unverified (no checksum record)"
     return out
 
 
@@ -2377,6 +2418,17 @@ def _boot_worker(manager=None) -> None:
                 except Exception as exc:
                     _boot_state["install"]["error"] = str(exc)
         if manager is not None:
+            # issue 2: bring the local model UP at boot (not on first
+            # query) — a downloaded GGUF + installed runtime must show
+            # LOADED immediately after a restart, not "not loaded"
+            local = getattr(manager, "local", None)
+            if local is not None and not local.available:
+                _boot_state["stage"] = "loading local model"
+                try:
+                    local.try_load()
+                    _boot_state["loaded"] = bool(local.available)
+                except Exception as exc:
+                    _boot_state["loaded_error"] = str(exc)
             _boot_state["stage"] = "refreshing agent status"
             try:
                 st = manager.status()

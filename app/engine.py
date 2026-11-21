@@ -2707,7 +2707,67 @@ class PredictionEngine:
         finally:
             if job.get("status") == "running":      # defensive: never stuck
                 job["status"] = "done" if job.get("result") else "error"
+            try:
+                self._journal_analyse(job)
+            except Exception:
+                log.exception("analyse journal write failed")
             self._start_queued_analyse()
+
+    def _journal_analyse(self, job: dict) -> None:
+        """Issue 3 — durable memory of EVERY analysis: what was decided,
+        what it learned (verdict/lock/hindsight) and, when the window
+        settles, how it turned out. Append-only JSONL under data/, capped
+        so the file cannot grow without bound."""
+        path = os.environ.get("ANALYSE_JOURNAL_PATH",
+                              os.path.join("data", "analyses.jsonl"))
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        res = job.get("result") or {}
+        lock = res.get("prediction_lock") or {}
+        rec = {
+            "ts": time.time(),
+            "started_at": job.get("started_at"),
+            "symbol": job.get("symbol"),
+            "tf": job.get("tf"),
+            "source": job.get("source"),
+            "status": job.get("status"),
+            "error": job.get("error"),
+            "signal": res.get("signal"),
+            "confidence": res.get("confidence"),
+            "verdict": res.get("verdict"),
+            "gate_ok": res.get("gate_ok"),
+            "issue_note": res.get("issue_note"),
+            "lock_id": lock.get("id"),
+            "locked": bool(lock.get("locked")),
+            "lock_side": lock.get("side"),
+            "recheck": (res.get("recheck") or {}).get("verdict"),
+            "recheck_passed": (res.get("recheck") or {}).get("passed"),
+            "elapsed_ms": res.get("elapsed_ms"),
+        }
+        # what it LEARNED to change: the AI correction + hindsight note,
+        # when present, are the actionable "needs to change" record
+        corr = res.get("ai_correction") or res.get("correction")
+        if corr:
+            rec["ai_correction"] = {
+                "by": corr.get("by"), "direction": corr.get("direction"),
+                "reason": (corr.get("reason") or "")[:400]}
+        hz = res.get("hindsight") or {}
+        if hz:
+            rec["hindsight"] = {k: hz.get(k)
+                                for k in ("outcome", "note", "rate", "n")
+                                if k in hz}
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, default=str) + "\n")
+        # cap: keep the newest 2000 records
+        try:
+            if os.path.getsize(path) > 4_000_000:
+                with open(path, encoding="utf-8") as fh:
+                    lines = fh.readlines()
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.writelines(lines[-2000:])
+        except OSError:
+            pass
 
     async def _analyse_body(self, job: dict) -> None:
         symbol, tf = job["symbol"], job["tf"]

@@ -1391,6 +1391,34 @@ function verdictOf(cyc, res) {
   if (res?.gate_ok === false) return "NO CALL";
   return "NO CALL";
 }
+/* issue 9 — sideways/choppy market caution: Kaufman efficiency ratio on
+   the card's own tape. ER ≈ |net move| / Σ|Δ| — near 0 = pure chop
+   (whipsaw), near 1 = clean trend. Trades in chop get a yellow flag. */
+function chopInfo(tf) {
+  try {
+    const bars = S.tfBars?.[tf] || [];
+    const n = Math.min(bars.length, 60);
+    if (n < 20) return null;
+    const win = bars.slice(-n);
+    let gross = 0;
+    for (let i = 1; i < win.length; i++) {
+      const d = Math.abs(win[i].close - win[i - 1].close);
+      if (isFinite(d)) gross += d;
+    }
+    const net = Math.abs(win[win.length - 1].close - win[0].close);
+    if (!(gross > 0)) return null;
+    const er = net / gross;
+    // < 0.20 = sideways/choppy (caution), < 0.10 = severe whipsaw
+    const level = er < 0.10 ? "severe" : er < 0.20 ? "chop" : null;
+    return { er, level, n };
+  } catch { return null; }
+}
+function chopChip(tf) {
+  const c = chopInfo(tf);
+  if (!c || !c.level) return "";
+  return `<span class="chip-warn" title="Kaufman efficiency ratio ${c.er.toFixed(2)} over ${c.n} bars — price is going nowhere; whipsaw risk high, expect stopped-out trades"
+    >⚠ SIDEWAYS${c.level === "severe" ? " (SEVERE)" : ""} — trade with caution</span>`;
+}
 function renderHero() {
   const tf = S.focusTf;
   const a = S.snap?.assets?.[S.symbol] || {};
@@ -1420,7 +1448,7 @@ function renderHero() {
   const badge = $("#hero-badge");
   if (badge) {
     badge.className = "hero-badge " + (dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat");
-    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)} · ${verdict}${cyc?.tier ? ` · ${cyc.tier}` : ""}${cyc?.p_side != null ? ` · P ${fmt(cyc.p_side, 2)}` : ""}${lockedId ? ` · lock ${lockedId.slice(-6)}` : ""}</small>`;
+    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)} · ${verdict}${cyc?.tier ? ` · ${cyc.tier}` : ""}${cyc?.p_side != null ? ` · P ${fmt(cyc.p_side, 2)}` : ""}${lockedId ? ` · lock ${lockedId.slice(-6)}` : ""}</small>${dir ? chopChip(tf) : ""}`;
   }
   const stats = $("#hero-stats");
   if (stats) {
@@ -1928,6 +1956,18 @@ function bindAnalyse() {
       setView("dashboard");
       const panel = $("#analyse-panel");
       panel?.classList.remove("hidden");
+      // issue 3: already_running/queued means a job is ALIVE — keep the
+      // live stage rows instead of resetting them to "queued" (the old
+      // reset wiped progress and looked like the click did nothing)
+      if (r.already_running || r.queued) {
+        $("#an-title").textContent = `ANALYSING ${sym} · ${S.focusTf.toUpperCase()}`;
+        $("#an-sub").textContent = r.queued
+          ? `queued (position ${r.queue_position || 1}) — waiting for the running job…`
+          : "already running — following the live stages below…";
+        resyncAnalyse();
+        b.disabled = false;
+        return;
+      }
       const started = new Date(r.started_at * 1000);
       $("#an-title").textContent = `ANALYSING ${sym} · ${S.focusTf.toUpperCase()}`;
       $("#an-sub").textContent = `started ${started.toISOString().slice(11, 23)}Z — calculating…`;
@@ -1938,9 +1978,82 @@ function bindAnalyse() {
            <span class="an-sum dim">queued</span></div>`).join("");
       const box = $("#an-result");
       if (box) { box.innerHTML = ""; box.classList.add("hidden"); }
+      // REST fallback: if analyse_done never arrives (WS blip), the poll
+      // below still completes the panel
+      startAnalysePoll();
     } catch (e) { toast("analyse: " + e.message, "err"); }
     b.disabled = false;
   });
+}
+/* issue 3 — REST reconciliation for missed analyse events.
+   Driven by THE one master setInterval (advice H-2) via a deadline flag —
+   a second interval here would violate the single-timer contract. */
+function startAnalysePoll() {
+  S._anPollUntil = Date.now() + 180000;   // 3 min budget (watchdog is 175 s)
+  S._anPollMisses = 0;
+}
+function stopAnalysePoll() { S._anPollUntil = 0; }
+async function _analysePollStep() {
+  if (S._anPollBusy) return;
+  S._anPollBusy = true;
+  try {
+    const st = await api("/api/analyse/status");
+    const job = st.job || {};
+    if (job.status === "done" && job.result) {
+      stopAnalysePoll();
+      onAnalyseDone({ symbol: job.symbol, tf: job.tf, result: job.result });
+    } else if (job.status === "error") {
+      stopAnalysePoll();
+      onAnalyseDone({ symbol: job.symbol, tf: job.tf, result: null,
+                      error: job.error || "analysis failed" });
+    } else if (job.status === "running") {
+      S._anPollMisses = 0;
+      (job.stages || []).forEach(onAnalyseStage);
+    } else if (++S._anPollMisses > 15) {
+      stopAnalysePoll();                       // idle elsewhere
+    }
+  } catch {
+    if (++S._anPollMisses > 30) stopAnalysePoll();
+  } finally { S._anPollBusy = false; }
+}
+async function resyncAnalyse() {
+  try {
+    const st = await api("/api/analyse/status");
+    const job = st.job || {};
+    if (job.status === "done" && job.result) {
+      const panel = $("#analyse-panel");
+      if (panel && panel.classList.contains("hidden")) return;  // not open
+      onAnalyseDone({ symbol: job.symbol, tf: job.tf, result: job.result });
+    } else if (job.status === "running") {
+      const panel = $("#analyse-panel");
+      if (panel) panel.classList.remove("hidden");
+      $("#an-title").textContent = `ANALYSING ${job.symbol} · ${(job.tf || "tf1").toUpperCase()}`;
+      if (!$("#an-stages")?.children.length) {
+        $("#an-stages").innerHTML = (job.stages || []).map((name, i) =>
+          `<div class="an-row" id="anr-${name}">
+             <span class="dim">${i + 1}</span><span class="an-name">${String(name).replace("_", " ")}</span>
+             <span class="an-ms">…</span><span class="an-at">—</span>
+             <span class="an-sum dim">…</span></div>`).join("");
+      }
+      (job.stages || []).forEach(onAnalyseStage);
+      startAnalysePoll();
+    }
+  } catch { /* offline */ }
+}
+function onAnalyseStarted(msg) {
+  const panel = $("#analyse-panel");
+  if (panel) panel.classList.remove("hidden");
+  $("#an-title").textContent = `ANALYSING ${msg.symbol} · ${(msg.tf || "tf1").toUpperCase()}`;
+  const started = msg.started_at ? new Date(msg.started_at * 1000) : new Date();
+  $("#an-sub").textContent = `started ${started.toISOString().slice(11, 23)}Z — calculating…`;
+  if (!$("#an-stages")?.children.length) {
+    $("#an-stages").innerHTML = (msg.stages || []).map((name, i) =>
+      `<div class="an-row" id="anr-${name}">
+         <span class="dim">${i + 1}</span><span class="an-name">${String(name).replace("_", " ")}</span>
+         <span class="an-ms">…</span><span class="an-at">—</span>
+         <span class="an-sum dim">queued</span></div>`).join("");
+  }
+  startAnalysePoll();
 }
 function onAnalyseStage(msg) {
   const st = msg.stage; if (!st) return;
@@ -1953,6 +2066,7 @@ function onAnalyseStage(msg) {
   row.title = st.summary || "";
 }
 function onAnalyseDone(msg) {
+  stopAnalysePoll();
   const b = $("#btn-analyse"); if (b) b.disabled = false;
   const r = msg.result;
   const sub = $("#an-sub");
@@ -1961,8 +2075,13 @@ function onAnalyseDone(msg) {
     toast("analysis failed: " + (msg.error || ""), "err");
     return;
   }
-  if (sub) sub.textContent =
-    `finished ${new Date(r.calculation_period.finished_at * 1000).toISOString().slice(11, 23)}Z · total ${r.elapsed_ms} ms`;
+  // issue 3: calculation_period may be absent on degraded results — an
+  // unguarded deref threw here and aborted the whole render (the click
+  // looked like it did nothing)
+  const finAt = r.calculation_period && r.calculation_period.finished_at;
+  if (sub) sub.textContent = finAt
+    ? `finished ${new Date(finAt * 1000).toISOString().slice(11, 23)}Z · total ${r.elapsed_ms} ms`
+    : `finished · total ${r.elapsed_ms || "—"} ms`;
   const box = $("#an-result");
   if (!box) return;
   box.classList.remove("hidden");
@@ -1991,6 +2110,7 @@ function onAnalyseDone(msg) {
       <div class="conf">confidence ${fx(r.confidence, 3)} · ${r.verdict === "ISSUE" ? "ISSUED" : (r.verdict || (r.gate_ok ? "WATCH" : "NO CALL"))}${r.issue_note ? ` · ${esc(r.issue_note)}` : ""}</div>
       ${r.prediction_lock?.locked ? `<div class="conf acc-up">🔒 LOCKED ${esc(r.prediction_lock.side)} · ${esc(String(r.prediction_lock.id || "").slice(-10))} · TP ${px(r.prediction_lock.tp)} / SL ${px(r.prediction_lock.sl)} · saved to history</div>` : `<div class="conf acc-warn">lock refused: ${esc((r.prediction_lock?.why || ["no finite ladder"]).join("; "))}</div>`}
       <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? Number(r.ratio).toFixed(2) + ":1" : "—"} · ${esc(r.levels_source || "preview only")}</div>
+      ${(r.signal === "BUY" || r.signal === "SELL") ? chopChip(msg.tf || S.focusTf) : ""}
       <div class="conf">${r.contract_state === "locked" ? `LOCKED CONTRACT ${esc((r.contract_id || "").slice(0, 16))}` : "PREVIEW ONLY — NO LOCKED CONTRACT"} · ${r.execution_eligible ? "EXECUTION ELIGIBLE" : (r.recheck?.passed ? "PAPER ONLY — signal produced, orders not routed (tape: " + esc((r.tape_mode || (S.snap?.feed?.source) || "sim")) + ")" : "NOT EXECUTION-ELIGIBLE")}</div>
     </div>
     <div class="an-grid">
@@ -2387,16 +2507,18 @@ function renderMeta() {
     <div class="kv-row">
       <div class="kv"><span>settled rows</span><b>${m.n}</b></div>
       <div class="kv"><span>40-window record</span><b>${rec.rate != null ? Math.round(rec.rate * 100) + "%" : "—"}${rec.takeover ? " · ✓ TAKEOVER" : ""}</b></div>
-      <div class="kv"><span>predictability</span><b>${bits != null ? bits.toFixed(3) + " bit" : (gauge?.note || "needs 40 windows")}</b></div>
+      <div class="kv"><span>predictability</span><b title="${bits != null && bits < 0.001 ? "0.000 bit = no measurable signal in the window yet (H₂ at or above 1 bit); it rises when outcomes become predictable" : ""}">${bits != null ? bits.toFixed(3) + " bit" : (gauge?.note || "needs 40 windows")}</b></div>
       <div class="kv"><span>calib a · b</span><b>${ev.calib_a ?? "—"} · ${ev.b ?? "—"}</b></div>
     </div>
     <div class="hint">${esc(rec.message || "")} · ${esc(m.expert?.message || "")}</div>
     ${gauge && gauge.ready ? `<div class="hint ${gauge.bits < 0.02 ? "chip-warn" : "chip-ok"}">P(up)=${gauge.p_up} · H₂=${gauge.h2_bits} bit — ${esc(gauge.note)}</div>` : ""}
     <table class="tbl" style="margin-top:6px">
       <thead><tr><th>SOURCE</th><th>slope aᵢ</th><th>MI (bits)</th><th>coefficient</th></tr></thead>
-      <tbody>${Object.entries(ev.slopes || {}).map(([k, v]) => `<tr>
-        <td>${esc(k)}</td><td>${v}</td><td>${(ev.mi_bits || {})[k] ?? "—"}</td>
-        <td>${(m.coefficients || {})[k] ?? "—"}</td></tr>`).join("")}</tbody>
+      <tbody>${Object.entries(ev.slopes || {}).map(([k, v]) => {
+        const mi = (ev.mi_bits || {})[k];
+        return `<tr>
+        <td>${esc(k)}</td><td>${v}</td><td>${mi ?? "—"}${mi != null && Number(mi) === 0 ? ' <span class="dim" title="no mutual information measured for this source in the current window">no signal</span>' : ""}</td>
+        <td>${(m.coefficients || {})[k] ?? "—"}</td></tr>`; }).join("")}</tbody>
     </table>
     <div class="hint">${esc(m.rule || "")}</div>`;
 }
@@ -2469,22 +2591,29 @@ async function loadCandles() {
   const symbol = S.symbol;
   const seq = (S._candleLoadSeq || 0) + 1;
   S._candleLoadSeq = seq;
+  // issue 4: the two fetches are INDEPENDENT. They used to share one
+  // try block, so a failed /api/candles (busy server, slow network)
+  // skipped /api/tf-charts entirely and every mini-chart stayed blank.
+  const mdP = api(`/api/candles?symbol=${symbol}&tf=tf1&n=1000`)
+    .catch(() => null);
+  // guide §1: the SERVER publishes tf_charts[asset][tf] with one step and
+  // one lookback per timeframe. Cards bind to that series when it is
+  // available and fall back to local aggregation only if it is not, so
+  // two cards of the same TF can no longer disagree.
+  const tfcP = api(`/api/tf-charts?symbol=${symbol}`)
+    .catch(() => null);
   try {
-    // ONE dense minute-series fetch drives every TF chart. Four horizon
-    // windows need up to 988 raw minutes at TF4; 1000 real source bars
-    // covers that without synthesising history. TP/lock overlays stay
-    // per-TF below.
-    const md = await api(`/api/candles?symbol=${symbol}&tf=tf1&n=1000`);
-    // guide §1: the SERVER publishes tf_charts[asset][tf] with one step and
-    // one lookback per timeframe. Cards bind to that series when it is
-    // available and fall back to local aggregation only if it is not, so
-    // two cards of the same TF can no longer disagree.
-    const tfc = await api(`/api/tf-charts?symbol=${symbol}`)
-      .catch(() => null);
+    let [md, tfc] = await Promise.all([mdP, tfcP]);
+    if (!md && !tfc) return;                       // both failed — keep state
     // Ignore an older response after a symbol switch or a newer refetch;
     // otherwise BTC bars can be written into another asset's chart state.
-    if (seq !== S._candleLoadSeq || symbol !== S.symbol ||
-        (md.symbol && md.symbol !== symbol) || !Array.isArray(md.bars)) return;
+    if (seq !== S._candleLoadSeq || symbol !== S.symbol) return;
+    if (md && (md.symbol && md.symbol !== symbol || !Array.isArray(md.bars)))
+      return;
+    // md may be null when only tf-charts answered — degrade to an empty
+    // minute series so the server-painted cards below still render
+    md = md || { bars: [] };
+    md.bars ||= [];
     const mbars = (md.bars || []).map(x =>
       ({ time: x.t, open: x.o, high: x.h, low: x.l, close: x.c, v: x.v || 0 }));
     // EACH timeframe card aggregates the tape at its OWN interval
@@ -2745,7 +2874,13 @@ async function loadFormulas() {
         </table>
         <div class="hint">${esc(gs.rules || "")}</div>`;
       }
-    } catch (e) { console.warn("genesis:", e); }
+    } catch (e) {
+      // issue 7: never leave the panel on "loading…" — show the error
+      // and a retry link instead (console.warn alone was invisible)
+      console.warn("genesis:", e);
+      const ge = $("#fl-genesis");
+      if (ge) ge.innerHTML = `<div class="dim pad">genesis status unavailable: ${esc(e.message)} — <a href="#" onclick="loadFormulas();return false">retry</a></div>`;
+    }
     // live series rings: backfill from the GRC history, then every
     // snapshot pushes the current raw — charts read a LONG, live series
     // instead of6 stale points (old-app style jagged tiles)
@@ -2777,8 +2912,15 @@ function drawSparks(core) {
     const sorted = [...win].sort((a2, b2) => a2 - b2);
     let mn = sorted[0], mx = sorted[sorted.length - 1];
     if (sorted.length >= 8) {
-      mn = sorted[Math.floor(sorted.length * 0.05)];
-      mx = sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)];
+      const pmn = sorted[Math.floor(sorted.length * 0.05)];
+      const pmx = sorted[Math.min(sorted.length - 1,
+        Math.ceil(sorted.length * 0.95) - 1)];
+      // issue 5: values move only at GRCs, so 90 % of ring samples are
+      // identical — the percentile range then collapses to ~0 and the
+      // chart drew a dead-flat line while the ticker showed movement.
+      // Use the robust range only when it actually contains movement;
+      // otherwise keep the full min/max (a couple of jumps must show).
+      if (pmx - pmn > 1e-12) { mn = pmn; mx = pmx; }
     }
     if (mx - mn < 1e-12) { mn -= 0.5; mx += 0.5; }   // dead-flat series: centre it
     const rng = (mx - mn) || 1;
@@ -3306,7 +3448,13 @@ async function loadBrains() {
           ${["dopamine", "serotonin", "octopamine", "tyramine"].map(k =>
             `<div class="kv"><span>${k.slice(0, 4)} ${fmt(h[k], 2)}</span><div class="bar"><i class="${(h[k] ?? 0) > 0.5 ? "pos" : "neg"}" style="width:${clamp((h[k] ?? 0) * 100, 0, 100)}%"></i></div></div>`).join("")}
         </div>
-        <div class="logic">pattern ${fmt(inst.pattern, 3)} · P(dominant) ${fmt(inst.p_dominant, 2)}</div>`;
+        <div class="logic">${inst.id === "DB-1"
+            ? `pattern ${fmt(inst.pattern, 3)} · P(dominant) ${inst.p_dominant == null ? "—" : fmt(inst.p_dominant, 2)}`
+            : inst.id === "DB-2"
+              ? `experience ${fmt(inst.experience, 3)} · MB/LH balance ${inst.mb_lh == null ? "—" : fmt(inst.mb_lh, 3)}`
+              : inst.id === "DB-3"
+                ? `state ${esc(inst.dominant ?? "—")} · engagement ${fmt(inst.engagement, 3)}`
+                : `learn thrust ${fmt(inst.signal, 3)} · informed ${inst.informative === false ? "no (all deltas identical)" : "yes"}`}</div>`;
       wrap.appendChild(card);
     });
     // ── FlyWire v783: chip, five-step verification, polarity, RPE ──
@@ -3995,9 +4143,51 @@ async function loadSealedPredictions() {
   }
 }
 
+async function loadAnalyses() {
+  const box = $("#an-journal"); if (!box) return;
+  try {
+    const j = await api("/api/analyses?limit=60");
+    const rows = (j.records || []).slice().reverse();
+    $("#an-j-meta").textContent = `${j.total ?? rows.length} run(s) logged`;
+    if (!rows.length) {
+      box.innerHTML = `<div class="dim pad">no analyses yet — press ▶ ANALYSE; every run lands here.</div>`;
+      return;
+    }
+    box.innerHTML = `<table class="tbl"><thead><tr>
+      <th>WHEN</th><th>SYM/TF</th><th>SIGNAL</th><th>CONF</th><th>VERDICT</th>
+      <th>LOCK</th><th>RECHECK</th><th>MS</th><th>LEARNED / NEEDS CHANGE</th>
+      </tr></thead><tbody>${rows.map(r => {
+        const when = r.started_at ? new Date(r.started_at * 1000) : new Date(r.ts * 1000);
+        const sig = r.signal || "—";
+        const sigCls = sig === "BUY" ? "acc-up" : sig === "SELL" ? "acc-dn" : "dim";
+        const learn = r.ai_correction
+          ? `⚠ ${esc(r.ai_correction.by || "AI")} → ${r.ai_correction.direction > 0 ? "BUY" : "SELL"}: ${esc(r.ai_correction.reason || "")}`
+          : r.hindsight?.note ? `hindsight: ${esc(String(r.hindsight.note).slice(0, 140))}`
+          : r.status === "error" ? `error: ${esc((r.error || "").slice(0, 140))}`
+          : r.status === "duplicate" ? "duplicate — followed the running job"
+          : r.status === "queued" ? "queued behind another run"
+          : `<span class="dim">—</span>`;
+        return `<tr>
+          <td class="mono">${when.toISOString().slice(5, 16).replace("T", " ")}</td>
+          <td>${esc(r.symbol || "?")}/${esc(String(r.tf || "?").toUpperCase())}</td>
+          <td class="${sigCls}">${esc(sig)}</td>
+          <td class="mono">${r.confidence != null ? fx(r.confidence, 3) : "—"}</td>
+          <td>${esc(r.verdict || "—")}${r.gate_ok ? " ✓" : ""}</td>
+          <td class="mono">${r.locked ? `🔒 ${esc(String(r.lock_id || "").slice(-8))}` : `<span class="dim">no</span>`}</td>
+          <td>${r.recheck_passed ? `<span class="acc-up">pass</span>` : r.recheck ? `<span class="acc-dn">fail</span>` : `<span class="dim">—</span>`}</td>
+          <td class="mono">${r.elapsed_ms != null ? Math.round(r.elapsed_ms) : "—"}</td>
+          <td class="dim" style="text-transform:none;max-width:340px">${learn}</td>
+        </tr>`;
+      }).join("")}</tbody></table>`;
+  } catch (e) {
+    box.innerHTML = `<div class="dim pad">journal unavailable: ${esc(e.message)} — <a href="#" onclick="loadAnalyses();return false">retry</a></div>`;
+  }
+}
+
 async function loadHistory() {
   try {
     loadSealedPredictions().catch(() => {});
+    loadAnalyses().catch(() => {});
     // 24h warm-history seed status — the banner explains WHERE the
     // history below came from (real replayed tape vs live windows)
     try {
@@ -4062,27 +4252,42 @@ async function loadHistory() {
         }
       }
     } catch { /* scoreboard optional */ }
-    const [days, lb] = await Promise.all([api("/api/history/days"), api("/api/history/leaderboard")]);
-    const dd = days.days || [];
-    const box = $("#hs-days");
-    box.innerHTML = `<div class="day-row head"><span>DATE</span><span>PROGRESS</span><span>GRC</span><span>PRED</span><span>HITS</span></div>` +
-      dd.map(d => `
-        <div class="day-row" data-date="${d.date}">
-          <span>${d.date}</span>
-          <span class="bar"><i style="width:${clamp((d.grcs / 360) * 100, 2, 100)}%"></i></span>
-          <span>${d.grcs}</span><span>${d.predictions}</span>
-          <span>${d.targets_hit ?? 0}/${d.sls_hit ?? 0}</span>
-        </div>`).join("") || `<div class="dim pad">no days yet</div>`;
-    $$(".day-row[data-date]").forEach(r => r.addEventListener("click", () => showDay(r.dataset.date)));
-    $("#hs-leader").innerHTML = (lb.leaderboard || []).map(r => {
-      const nn = r.n ?? 0;
-      const enough = nn >= 8;
-      return `<div class="kv"><span title="formula F${r.formula ?? ""}">${esc(r.name || r.symbol || r.tf || ("F" + r.formula))}</span>` +
-        (enough
-          ? `<b class="${(r.accuracy ?? 0) >= 0.55 ? "acc-up" : (r.accuracy ?? 0) <= 0.45 ? "acc-dn" : ""}">${fx(r.accuracy ?? r.score, 4)} <span class="dim" style="font-weight:400">n=${nn}</span></b>`
-          : `<b class="dim">— n=${nn} (needs ≥8)</b>`) + `</div>`;
-    }).join("")
-      || `<div class="dim pad">no resolved predictions yet</div>`;
+    // issue 7: each panel gets its OWN try/catch — one failed request
+    // used to throw out of the shared Promise.all and leave the day
+    // table + leaderboard stuck on "loading…" forever
+    let dd = [], lb = {};
+    try {
+      const days = await api("/api/history/days");
+      dd = days.days || [];
+      const box = $("#hs-days");
+      box.innerHTML = `<div class="day-row head"><span>DATE</span><span>PROGRESS</span><span>GRC</span><span>PRED</span><span>HITS</span></div>` +
+        dd.map(d => `
+          <div class="day-row" data-date="${d.date}">
+            <span>${d.date}</span>
+            <span class="bar"><i style="width:${clamp((d.grcs / 360) * 100, 2, 100)}%"></i></span>
+            <span>${d.grcs}</span><span>${d.predictions}</span>
+            <span>${d.targets_hit ?? 0}/${d.sls_hit ?? 0}</span>
+          </div>`).join("") || `<div class="dim pad">no days yet</div>`;
+      $$(".day-row[data-date]").forEach(r => r.addEventListener("click", () => showDay(r.dataset.date)));
+    } catch (e) {
+      const box = $("#hs-days");
+      if (box) box.innerHTML = `<div class="dim pad">day table unavailable: ${esc(e.message)} — <a href="#" onclick="loadHistory();return false">retry</a></div>`;
+    }
+    try {
+      lb = await api("/api/history/leaderboard");
+      $("#hs-leader").innerHTML = (lb.leaderboard || []).map(r => {
+        const nn = r.n ?? 0;
+        const enough = nn >= 8;
+        return `<div class="kv"><span title="formula F${r.formula ?? ""}">${esc(r.name || r.symbol || r.tf || ("F" + r.formula))}</span>` +
+          (enough
+            ? `<b class="${(r.accuracy ?? 0) >= 0.55 ? "acc-up" : (r.accuracy ?? 0) <= 0.45 ? "acc-dn" : ""}">${fx(r.accuracy ?? r.score, 4)} <span class="dim" style="font-weight:400">n=${nn}</span></b>`
+            : `<b class="dim">— n=${nn} (needs ≥8)</b>`) + `</div>`;
+      }).join("")
+        || `<div class="dim pad">no resolved predictions yet</div>`;
+    } catch (e) {
+      const el = $("#hs-leader");
+      if (el) el.innerHTML = `<div class="dim pad">leaderboard unavailable: ${esc(e.message)} — <a href="#" onclick="loadHistory();return false">retry</a></div>`;
+    }
     // confidence calibration (stated vs realised)
     try {
       const cal = await api("/api/history/calibration");
@@ -4342,6 +4547,11 @@ setInterval(() => {
     api("/api/snapshot").then(applySnapshot).catch(() => {});
   }
   if (_tickN % 5 === 0) { pollChartLink(); pollBacktest(); }
+  // issue 3: analyse REST reconciliation runs on THIS timer (every ~2 s
+  // while a poll budget is open) — never a second setInterval (H-2)
+  if (_tickN % 2 === 0 && S._anPollUntil && Date.now() < S._anPollUntil) {
+    _analysePollStep().catch(() => {});
+  }
   if (_tickN % 30 === 15) {           // version watch: auto-reload
     api("/api/health").then(h => {
       // scheduler liveness (measured, not guessed): a silent GRC clock is
@@ -4611,6 +4821,7 @@ function handleMessage(msg) {
   else if (msg.type === "tick") onTick(msg);
   else if (msg.type === "phase") renderBoot({ phase: msg.phase, analysis: msg });
   else if (msg.type === "sl_event") toast(msg.message || msg.kind, msg.kind === "close" ? "err" : "warn");
+  else if (msg.type === "analyse_started") onAnalyseStarted(msg);
   else if (msg.type === "analyse_stage") onAnalyseStage(msg);
   else if (msg.type === "analyse_done") onAnalyseDone(msg);
 }
@@ -4631,6 +4842,10 @@ function connectWS() {
     S.wsRetry = 0;
     S.wsLast = Date.now();
     try { ws.send(JSON.stringify({ type: "HELLO", view: S.view })); } catch {}
+    // issue 3: if an analysis ran while the socket was down, the
+    // analyse_done event is gone forever — reconcile from REST so the
+    // panel never stays stuck on "calculating…"
+    resyncAnalyse();
     // §10.4 silence is checked by the SINGLE master tick (H-2): a socket
     // silent for 15s is closed there — never wait the browser's 30-minute
     // timeout (error J-7)
