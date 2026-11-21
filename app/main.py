@@ -694,7 +694,13 @@ async def explain_tab(body: dict) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "unknown symbol"},
                             status_code=400)
     ctx = engine.explain_ctx(view, symbol, tf)
-    out = await explainer.explain(view, symbol, tf, ctx)
+
+    async def _alt(prompt: str) -> dict:
+        # loaded llama_cpp (or a configured cloud slot) via the agent —
+        # review_text already offloads inference to a worker thread
+        return await engine.agents.review_text(prompt, max_tokens=160)
+
+    out = await explainer.explain(view, symbol, tf, ctx, alt=_alt)
     return JSONResponse(out)
 
 

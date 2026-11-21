@@ -418,9 +418,12 @@ class BrainSystem:
                        thing2: dict, advance: bool,
                        raws: dict | None) -> dict:
         from .config import BRAIN_MARKET_STATES, WEIGHT_IDS
-        results = [real.evaluate_instance(b.id, symbol, tf, thing2,
-                                          advance=advance)
-                   for b in self.instances]
+        from . import loadgov as _gov
+        results = []
+        for b in self.instances:
+            _gov.cooperate()   # one instance = a long quantum for the loop
+            results.append(real.evaluate_instance(b.id, symbol, tf, thing2,
+                                                  advance=advance))
         wts = self._influence.get((symbol, tf), [0.25, 0.25, 0.25, 0.25])
         # a brain that was not driven, or did not move, does not vote
         voters = [i for i, r in enumerate(results)
@@ -553,7 +556,9 @@ class BrainSystem:
         }
 
         results = []
+        from . import loadgov as _gov
         for brain in self.instances:
+            _gov.cooperate()
             inputs: dict[int, float] = {}
             # --- Thing 1: hormone populations ---------------------------
             for pop_name, key in (("PAM", "dopamine"), ("SE", "serotonin"),

@@ -827,7 +827,10 @@ class LocalModel:
                           "CDN) is unreachable from this host")
             return False
         try:
-            self.llm = Llama(model_path=path, n_ctx=2048, n_threads=4,
+            # leave one core for the event loop: n_threads=all cores made
+            # every inference starve the loop behind the ENGINE BUSY banner
+            _cores = max(1, (os.cpu_count() or 4) - 1)
+            self.llm = Llama(model_path=path, n_ctx=2048, n_threads=_cores,
                              verbose=False)
             self.path = path
             self.available = True
@@ -1794,7 +1797,7 @@ class AgentManager:
         return parsed
 
     # ---------------- local provider (llama.cpp or Ollama) --------------
-    async def _call_local(self, prompt: str) -> dict:
+    async def _call_local(self, prompt: str, max_tokens: int = 200) -> dict:
         """Ask the local agent without blocking the event loop."""
         if not self.settings.get("local_enabled", True):
             return {"ok": False, "reason": "local agent disabled in settings"}
@@ -1803,7 +1806,16 @@ class AgentManager:
         if not self.local.available:
             return {"ok": False, "backend": "", "reason":
                     self.local.error or "local model not loaded"}
-        res = await _to_thread(self.local.ask, prompt)
+        # the review is ADVISORY — it must never be the reason the app
+        # freezes. If the loop is already starving, skip the local leg.
+        try:
+            from . import loadgov as _gov
+            if _gov.current() >= 0.75:
+                return {"ok": False, "backend": "",
+                        "reason": "skipped — event loop busy (advisory only)"}
+        except Exception:
+            pass
+        res = await _to_thread(self.local.ask, prompt, max_tokens)
         self.last_replies["local"] = {k: v for k, v in res.items()
                                       if k != "text"}
         if not res.get("ok"):
@@ -1989,8 +2001,9 @@ class AgentManager:
             if res.get("ok"):
                 break
 
-        # 2) local agent (llama.cpp GGUF or Ollama)
-        local_res = await self._call_local(prompt)
+        # 2) local agent (llama.cpp GGUF or Ollama) — short JSON only:
+        # 200 tokens on CPU took ~132 s and starved the loop (banner)
+        local_res = await self._call_local(prompt, max_tokens=120)
         if local_res.get("ok"):
             reviews["local"] = {"ok": True,
                                 "reason": local_res.get("insight", ""),

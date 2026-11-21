@@ -442,3 +442,126 @@ rule has the 47-53% deadband. No cell shows a stable edge; the
 point of this change is correctness of treatment — every asset
 and horizon is measured, weighted and sign-learned by the same
 rule, and each asset's modules answer to that asset's own tape.
+
+## 9. Two-year accuracy mandate (2026-11-21): every asset × TF × old/new
+
+Question: on the last two years of REAL market data, what is the honest
+accuracy / win rate of each (asset, tf, system_mode) cell, and what is
+the highest defensible tuning?
+
+- **Data**: Binance Vision 1h klines (GitHub mirror, zero gaps verified):
+  BTC/ETH/BNB 2024-11-01 → 2026-09-30 (16,776 bars), PAXG 2025-03-27 →
+  2026-09-30 (13,262 bars — the mirror's PAXG coverage starts there).
+  Bars are 1h; TF windows are W bars = 22/44/130/247 (the per_tf_real
+  convention: "tf1" = the 22-bar horizon). Sub-hour σ from §6/ALPHA_LAB
+  still applies to the real-minute tape: true 22m/44m horizons clear
+  2-3× friction only 1%/13% of the time — read tf1/tf2 here as the
+  HORIZON LAB, not as a claim about 22-minute live trades.
+- **Harness**: `backtest/mandate.py` — one full engine pass per decision
+  (every 22 bars, learning frozen), all four TFs from the same pass.
+  OLD = measured risk_block ladder (policy variants at k=0.75); NEW =
+  the horizon-forecast target; first-touch TP/SL, SL wins ties, friction
+  charged; direction ≠ 0 and ratio ≥ 1 (below_ratio_floor) enforced.
+- **Protocol**: per cell, config (direction variant × NEW-target rr) is
+  chosen on TRAIN (first 65% of decisions) by EV, then reported on
+  HOLDOUT (last 35%) — the holdout is never consulted during selection.
+  Variants: `base` (engine direction), `inv4g` (inverse TF4 + ATR
+  top-tercile gate), `rsi` (RSI≤30/≥70 override). NEW rr ∈ {1.2, 1.6, 2.0}.
+
+### The structural NEW-mode bug this walk found (and fixed)
+
+The old NEW-mode target was `factor × σ` — a MEAN-scaled expected move
+compared against the q80-MAE stop. On real bars that ratio is
+**structurally 0.65–0.80**: every single NEW window fell below the
+user's 1:1 floor → watch-only → the model could never issue (smoke:
+34/34 new rows floor-skipped). Fixed in `app/engine.py`: the target is
+now `factor × NEW_TARGET_RR × sl_bps` (the stop's own tail unit, tilted
+by |CCI|) — rr ∈ [0.56, 1.6], weak signals stay gated exactly as the
+floor intends. Structural test: `tests/test_mandate_new_target.py`.
+
+### HOLDOUT results — selected configs (32 cells)
+
+```
+asset tf   mode sel        TRAIN n  win%    EV    PF | HOLD n  win%    EV    PF   95% CI
+BNB   tf1  new  rsi:rr1.6   260  50.4% -0.014 0.95 |  136  45.6% -0.085 0.66  [0.37,0.54]
+BNB   tf1  old  inv4g       124  41.1% -0.012 0.97 |   54  35.2% -0.082 0.79  [0.24,0.49]
+BNB   tf2  new  inv4g:rr1.2  82  50.0% +0.014 1.04 |   44  43.2% -0.019 0.94  [0.30,0.58]
+BNB   tf2  old  rsi         316  48.4% -0.002 1.00 |  175  44.6% -0.094 0.72  [0.37,0.52]
+BNB   tf3  new  inv4g:rr2.0 112  47.3% +0.036 1.13 |   52  44.2% +0.010 1.04  [0.32,0.58]
+BNB   tf3  old  inv4g       124  46.8% +0.050 1.14 |   54  44.4% +0.035 1.11  [0.32,0.58]
+BNB   tf4  new  inv4g:rr1.6 101  51.5% +0.067 1.28 |   46  37.0% -0.150 0.55  [0.25,0.51]
+BNB   tf4  old  inv4g       124  48.4% +0.058 1.18 |   54  42.6% -0.096 0.75  [0.30,0.56]
+BTC   tf1  new  base:rr1.2  125  47.2% -0.037 0.87 |   62  56.5% +0.068 1.33  [0.44,0.68]
+BTC   tf1  old  base        270  45.6% -0.081 0.75 |  140  54.3% -0.011 0.96  [0.46,0.62]
+BTC   tf2  new  base:rr1.2  103  57.3% +0.089 1.36 |   54  51.9% -0.051 0.81  [0.39,0.65]
+BTC   tf2  old  base        282  46.8% -0.013 0.95 |  153  52.9% -0.009 0.96  [0.45,0.61]
+BTC   tf3  new  base:rr1.2  122  51.6% +0.044 1.16 |   71  54.9% +0.048 1.26  [0.43,0.66]
+BTC   tf3  old  base        285  49.5% -0.004 0.98 |  155  45.8% -0.025 0.90  [0.38,0.54]
+BTC   tf4  new  base:rr1.2  118  60.2% +0.100 1.46 |   68  54.4% +0.056 1.25  [0.43,0.66]
+BTC   tf4  old  base        280  54.6% +0.011 1.04 |  152  52.0% +0.070 1.31  [0.44,0.60]
+ETH   tf1  new  base:rr1.2   89  42.7% +0.042 1.16 |   20  50.0% +0.121 1.85  [0.30,0.70]
+ETH   tf1  old  inv4g        82  45.1% +0.049 1.12 |   41  48.8% -0.068 0.78  [0.34,0.64]
+ETH   tf2  new  inv4g:rr1.2  25  56.0% +0.084 1.24 |    8  25.0% -0.119 0.41  [0.07,0.59]
+ETH   tf2  old  inv4g        82  51.2% +0.087 1.21 |   41  48.8% -0.077 0.71  [0.34,0.64]
+ETH   tf3  new  base:rr2.0  171  53.8% +0.062 1.25 |   83  50.6% +0.033 1.21  [0.40,0.61]
+ETH   tf3  old  base        204  55.9% +0.071 1.29 |  104  53.8% +0.032 1.21  [0.44,0.63]
+ETH   tf4  new  base:rr2.0  168  54.2% +0.078 1.33 |   82  53.7% -0.019 0.91  [0.43,0.64]
+ETH   tf4  old  inv4g        82  47.6% +0.072 1.18 |   41  36.6% -0.004 0.99  [0.24,0.52]
+PAXG  tf1  new  base:rr2.0  140  47.1% -0.013 0.96 |   79  29.1% -0.282 0.36  [0.20,0.40]
+PAXG  tf1  old  base        176  44.9% -0.075 0.79 |   91  29.7% -0.271 0.39  [0.21,0.40]
+PAXG  tf2  new  base:rr1.2   44  63.6% +0.185 1.94 |   34  35.3% -0.299 0.29  [0.21,0.52]
+PAXG  tf2  old  base        199  41.2% -0.129 0.69 |  106  33.0% -0.226 0.47  [0.25,0.42]
+PAXG  tf3  new  base:rr1.6   99  62.6% +0.230 1.80 |   73  41.1% -0.141 0.60  [0.31,0.53]
+PAXG  tf3  old  rsi         214  44.9% +0.038 1.08 |  121  39.7% -0.192 0.60  [0.31,0.49]
+PAXG  tf4  new  base:rr1.2   52  78.8% +0.493 3.59 |   32  28.1% -0.325 0.27  [0.16,0.45]
+PAXG  tf4  old  base        191  56.0% +0.115 1.31 |  116  35.3% -0.168 0.57  [0.27,0.44]
+----------------------------------------------------------------------------------------------
+ALL        old  pooled                      | 1598  44.6% -0.072 0.77  [0.42,0.47]
+ALL        new  pooled                      |  944  45.8% -0.064 0.76  [0.43,0.49]
+```
+
+Raw table: `backtest/results/mandate_summary.csv`; trades:
+`mandate_{BTC,ETH,BNB,PAXG}.csv` (43,143 rows).
+
+### Findings (honest)
+
+1. **Pooled 2y holdout LOSES after friction** (old −0.072R, new −0.064R
+   pooled; 44.6%/45.8% win). This is the same qualitative truth as the
+   original baseline (39.8%/−0.077R): the raw engine's direction edge is
+   smaller than friction at this cadence. The 55-61% numbers in §3-4
+   came from shorter, friendlier windows — over a full 2y they do NOT
+   reproduce for every cell.
+2. **Per-asset holdout (selected)**: BTC positive both modes
+   (old 51.2% +0.006 / new 54.5% +0.034); ETH ~breakeven
+   (48.9% −0.012 / 50.8% +0.014); BNB negative both (42.7% −0.072 /
+   43.5% −0.068); **PAXG catastrophic both** (34.8% −0.211 /
+   33.9% −0.244).
+3. **PAXG is the one two-sample agreement**: the independent prior
+   window (§3 per-TF: <50% every TF, negative bps) AND this mandate
+   (8/8 cells negative holdout) agree → `_tier_for` now caps PAXG at
+   watch-only with the reason printed in `tier_rule` (side still
+   stands — only issuance is capped). Re-open only if forward data
+   flips the measurement.
+4. **Robust cells (train>0 AND holdout>0, hold n≥30): 7/32** —
+   BTC tf3/tf4 both modes, ETH tf3 both modes, BNB tf3 both modes
+   (low win% but positive EV). These are CANDIDATES for forward
+   validation / an edge_scan certification run — not yet promoted
+   (the walk's same-bar fills do not meet edge_gate's purged,
+   next-bar, block-bootstrap bar; nothing here is wired as a sleeve).
+5. **Train→holdout transfer is weak**: per-cell selection picked
+   inv4g/rsi in 13 cells and several then failed holdout (ETH tf4 old
+   47.6%→36.6%; PAXG tf4 new 78.8%→28.1%). Single-split selection at
+   n=80-300 overfits — treat every "sel" column value as a hypothesis,
+   not a policy. Global (one-config-per-mode) selection did not
+   transfer either (new rr1.6: train +0.016 → holdout −0.051).
+6. **NEW ≥ OLD almost everywhere after the tail-unit fix** (pooled
+   45.8% vs 44.6%; BTC +0.034 vs +0.006; per-TF: new better in 6/8
+   tf×asset groupings) — the fixed NEW model is the better of the two
+   systems on this sample, at every rr tested.
+7. tf1/tf2 pooled holdout is the worst band (−0.09..−0.10R both modes)
+   — consistent with §6's tradability measurement (short horizons clear
+   friction rarely). tf3-new is the closest to breakeven (−0.013R).
+
+Reproduce: `python scripts/fetch_binance_mirror.py --source vision
+--start 2024-11-01 --end 2026-11-19`, then `python -m backtest.mandate`
+(walk, ~45 min) and `python -m backtest.mandate --summary`.

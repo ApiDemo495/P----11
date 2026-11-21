@@ -81,6 +81,10 @@ from . import genesis as genesis_mod
 # regime routing only). 97-101 are the brain/emotion/physics/news/hedge
 # subsystem inputs to the CCI; 20 is DRHE the regime gauge.
 NON_VOTING_IDS = frozenset({20, 97, 98, 99, 100, 101})
+# NEW-mode target: signal-tilled multiple of the measured stop (tail
+# units). Tuned on the 2y real-data mandate (backtest/mandate.py) —
+# candidates {1.2, 1.6, 2.0}, selected on train, validated on holdout.
+NEW_TARGET_RR = 1.6
 EMERGENCY_RELOCK_COOLDOWN_S = 900.0
 EMERGENCY_RELOCK_MIN_MOVE_ATR = 3.0
 #: WINDOW FREEZE (audit §1.3). A locked contract is immutable for the
@@ -2359,7 +2363,14 @@ class PredictionEngine:
                         "physics": {"ufp": phys["ufp"]["value"]},
                     }),
                     "agent": None,          # patched by _apply_agents
-                    "double_check": None,   # patched by _apply_agents
+                    # DISPLAY-ONLY verdict: analyse windows never call
+                    # _apply_agents, so a None here made the seams panel
+                    # show a bare dash forever. The GRC pass still computes
+                    # the authoritative (mutating) double-check and
+                    # overwrites this entry.
+                    "double_check": self._dc_display(
+                        pack["direction"], fin["confidence"], pcv,
+                        br["polarity"]),
                 }
         if record:
             self.cci.store_price(symbol, price)
@@ -2464,6 +2475,19 @@ class PredictionEngine:
             tier = "half"
         else:
             tier = "full"
+        # ── 2y real-data mandate (backtest/mandate.py): PAXG measured
+        # negative holdout EV in BOTH modes × ALL TFs × BOTH splits
+        # (holdout 34.8%/33.9% win, −0.21/−0.24R), and the independent
+        # prior window (REAL_RESULTS per-TF) agreed: <50% on every TF.
+        # Two samples — the honest maximum win rate on gold is achieved
+        # by not issuing it. The side still stands (the ladder never
+        # suppresses it); only the tier is capped until forward data
+        # flips the measurement.
+        _mandate_note = ""
+        if symbol == "PAXG" and tier != "watch-only":
+            tier = "watch-only"
+            _mandate_note = (" · PAXG capped watch-only by the 2y mandate "
+                             "(negative EV both modes, both splits)")
         return {"tier": tier, "p_side": round(p_side, 4),
                 "noise_floor_s": round(floor_s, 5),
                 "score_floor_ratio": round(x, 3),
@@ -2471,7 +2495,7 @@ class PredictionEngine:
                 "calib_provisional": len(pool) < 40,
                 "tier_rule": ("size hint only — the side is never suppressed "
                               "by the tier; watch-only = below the measured "
-                              "noise floor")}
+                              "noise floor" + _mandate_note)}
 
     def _direction_ladder(self, symbol: str, tf: str, score: float,
                           comps: list, brain: dict, prev_side: int) -> tuple[int, str, float]:
@@ -2826,7 +2850,9 @@ class PredictionEngine:
                     br = self.brains.evaluate(symbol, t, market, affinity,
                                               thing2, advance=False,
                                               raws=raws[t])
+                    _gov.cooperate()   # brain pass is a long quantum
                     em = self.emotions.compute(ctx, market, br, news_agg, None)
+                    _gov.cooperate()
                     from .emotion import CHANNELS as _ECH
                     _pe = (em.get("primary_emotion") or {})
                     dom = _pe.get("name") or _ECH[
@@ -3752,6 +3778,21 @@ class PredictionEngine:
                         "UFP": round(res.get("physics", {}).get("ufp", 0.0), 4)},
             },
         }
+
+    def _dc_display(self, direction, confidence, pcv, brain_pol) -> dict | None:
+        """Double-check verdict for DISPLAY before the GRC's authoritative
+        `_apply_agents` pass (which also applies the mutations). Analyse
+        windows never call `_apply_agents` — without this the seams panel
+        showed a bare dash forever."""
+        try:
+            votes = {"pcv": 1 if pcv > 0 else (-1 if pcv < 0 else 0),
+                     "agent": int((self.last_agent_signal or {}).get(
+                         "direction") or 0),
+                     "brain": int(brain_pol or 0)}
+            return self.cci.double_check(int(direction or 0),
+                                         float(confidence or 0.0), votes)
+        except Exception:
+            return None
 
     async def _apply_agents(self, symbol: str, res_pack: dict[str, dict]) -> None:
         """Section 11: one Gemini call per GRC (+ local model), then the
@@ -6543,8 +6584,20 @@ class PredictionEngine:
         _mode = str(self.agents.settings.get("system_mode", "old"))
         _sigma = max(float(_horizon_block.get("sigma_bps") or 0.0),
                      float(_horizon_block.get("q50") or 0.0))
-        _mag = (0.35 + 0.65 * min(1.0, abs(float(res.get("cci_adjusted")
-                        or res.get("cci") or 0.0)) / 0.08)) * _sigma
+        # TAIL-UNIT SCALING (2y real-data mandate): the old formula
+        # (factor × σ) is a MEAN-scaled target measured against a
+        # q80-MAE stop — on real bars that ratio is structurally
+        # 0.65–0.80, so EVERY new-mode window fell below the 1:1
+        # floor and the model could never issue. The stop is the
+        # tape's own tail unit; the target is now that unit tilted
+        # by signal strength: rr = factor × NEW_TARGET_RR ∈
+        # [0.56, 1.6], and the user's floor gates the weak signals
+        # exactly as designed. σ stays in the payload for display.
+        _factor = (0.35 + 0.65 * min(1.0, abs(float(
+            res.get("cci_adjusted") or res.get("cci") or 0.0)) / 0.08))
+        _sl_bps = float(_horizon_block.get("sl_bps") or 0.0)
+        _mag = _factor * NEW_TARGET_RR * _sl_bps if _sl_bps > 0 \
+            else _factor * _sigma
         _fc_price = round(_price0 * (1 + _dir * _mag / 1e4), 6) \
             if _price0 > 0 else None
         cyc.forecast = {

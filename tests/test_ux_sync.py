@@ -62,7 +62,8 @@ async def test_explain_returns_text_even_without_ollama():
                                    "gspi": 0.01, "mechanisms": []})
     assert out["ok"] is True
     assert out["text"]
-    assert out["source"] in ("qwen2.5-coder", "local-fallback")
+    assert out["source"] in ("qwen2.5-coder", "local-fallback",
+                             "local-agent")
 
 
 # ------------------------------------------------------------------- ticks

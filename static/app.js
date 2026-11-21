@@ -3449,12 +3449,12 @@ async function loadBrains() {
             `<div class="kv"><span>${k.slice(0, 4)} ${fmt(h[k], 2)}</span><div class="bar"><i class="${(h[k] ?? 0) > 0.5 ? "pos" : "neg"}" style="width:${clamp((h[k] ?? 0) * 100, 0, 100)}%"></i></div></div>`).join("")}
         </div>
         <div class="logic">${inst.id === "DB-1"
-            ? `pattern ${fmt(inst.pattern, 3)} · P(dominant) ${inst.p_dominant == null ? "—" : fmt(inst.p_dominant, 2)}`
+            ? `pattern ${fmt(inst.pattern, 3)}${inst.selectivity != null ? ` · selectivity ${fmt(inst.selectivity, 4)}` : ""}`
             : inst.id === "DB-2"
-              ? `experience ${fmt(inst.experience, 3)} · MB/LH balance ${inst.mb_lh == null ? "—" : fmt(inst.mb_lh, 3)}`
+              ? `experience ${fmt(inst.experience, 3)}${inst.response != null ? ` · drive ${fmt(inst.response, 4)}` : ""}`
               : inst.id === "DB-3"
-                ? `state ${esc(inst.dominant ?? "—")} · engagement ${fmt(inst.engagement, 3)}`
-                : `learn thrust ${fmt(inst.signal, 3)} · informed ${inst.informative === false ? "no (all deltas identical)" : "yes"}`}</div>`;
+                ? `state ${esc(inst.dominant ?? "—")}${inst.p_dominant != null ? ` · P ${fmt(inst.p_dominant, 2)}${inst.confident === false ? " (shrug — flat posterior)" : ""}` : ""}`
+                : `learn thrust ${fmt(inst.signal, 3)} · informed ${inst.informative == null ? "—" : inst.informative === false ? "no (all deltas identical)" : "yes"}`}</div>`;
       wrap.appendChild(card);
     });
     // ── FlyWire v783: chip, five-step verification, polarity, RPE ──
@@ -3469,10 +3469,14 @@ async function loadBrains() {
         cel.style.color = cc;
         cel.style.border = `1px solid ${cc}`;
       }
-      $("#br-verify").innerHTML = (fw.verify || []).map(v =>
-        `<div class="kv"><span>${esc(v.step)}${v.ms != null ? ` <span class="dim">${v.ms} ms</span>` : ""}</span>` +
-        `<b class="${v.ok ? "acc-up" : "acc-dn"}" title="${esc(v.detail || "")}">${esc(String(v.detail || "").slice(0, 90))}</b></div>`
-      ).join("") || `<div class="dim">no verification yet</div>`;
+      $("#br-verify").innerHTML = (fw.verify || []).map(v => {
+        // optional sources with no key are neutral, never an error
+        // (screenshot: red "no key" beside a healthy connectome)
+        const d = String(v.detail || "");
+        const neutral = v.ok && (d.includes("optional") || d.includes("no key"));
+        return `<div class="kv"><span>${esc(v.step)}${v.ms != null ? ` <span class="dim">${v.ms} ms</span>` : ""}</span>` +
+        `<b class="${neutral ? "dim" : v.ok ? "acc-up" : "acc-dn"}" title="${esc(d)}">${esc(d.slice(0, 90))}</b></div>`;
+      }).join("") || `<div class="dim">no verification yet</div>`;
       const pol = fw.polarity || {};
       const flips = pol.flips || [];
       const flipped = flips.map((f, i) => f < 0 ? i : -1).filter(i => i >= 0);
@@ -3747,14 +3751,18 @@ async function loadAgents() {
       : `<b>CLOUD AGENTS</b> — ${ (a.slots || []).filter(s => s.status === "connected").length } slot(s) live. Drosophila core still runs every GRC.`;
     // ── local auditor (Ollama) ──
     const aud = a.auditor || {};
+    // llama.cpp is the ACTIVE local backend when loaded — the Ollama
+    // auditor daemon being down is then optional, never an error
+    // (screenshot: red "DAEMON offline" beside a healthy model file)
+    const audLocal = !!a.local?.available;
     $("#ag-auditor").innerHTML = `
       <div class="kv-row">
-        <div class="kv"><span>daemon</span><b class="${aud.available ? "acc-up" : "acc-dn"}">${aud.available ? "● online" : "○ offline"}</b></div>
+        <div class="kv"><span>daemon</span><b class="${aud.available ? "acc-up" : (audLocal ? "dim" : "acc-dn")}">${aud.available ? "● online" : audLocal ? "○ offline (optional)" : "○ offline"}</b></div>
         <div class="kv"><span>model</span><b>${aud.model || "qwen2.5-coder:3b"}</b></div>
         <div class="kv"><span>triggers (exc / low-acc)</span><b>${aud.triggers?.exceptions ?? 0} / ${aud.triggers?.accuracy ?? 0}</b></div>
         <div class="kv"><span>audits run</span><b>${aud.triggers?.audits ?? 0}</b></div>
       </div>
-      ${aud.available ? "" : `<div class="hint">${aud.hint || "run: bash scripts/setup_local_llm.sh"}</div>`}
+      ${aud.available ? "" : `<div class="hint">${audLocal ? "optional formula-auditor only — the llama.cpp agent is the active local backend" : (aud.hint || "run: bash scripts/setup_local_llm.sh")}</div>`}
       ${(aud.reports || []).slice(0, 3).map(r => `
         <div class="logic"><b>${r.formula}</b> · ${r.trigger} · ${r.ok ? "✓" : "✗"} ${r.latency_ms}ms
           <br/>${String(r.reply || "").slice(0, 240)}</div>`).join("")}`;
@@ -3858,9 +3866,9 @@ async function loadAgents() {
            `${st.ok ? "✓" : "✗"} <b>${esc(st.step)}</b>${st.reason ? " — " + esc(st.reason) : ""}`).join("<br/>")}</div>`
       : "";
     const ollamaHtml = ins.ollama
-      ? `<div class="kv"><span>Ollama :11434</span><b>${ins.ollama.ok
+      ? `<div class="kv"><span>Ollama :11434</span><b class="${ins.ollama.ok ? "" : (lo.available ? "dim" : "")}">${ins.ollama.ok
             ? `up · ${esc((ins.ollama.models || []).join(", ") || "no model pulled")}`
-            : `down (${esc(ins.ollama.detail || "?")})`}</b></div>`
+            : `down (${esc(ins.ollama.detail || "?")})${lo.available ? " · optional — llama.cpp active" : ""}`}</b></div>`
       : "";
     const compilerHtml = ins.compiler
       ? `<div class="kv"><span>C/C++ compiler</span><b>${ins.compiler.ok

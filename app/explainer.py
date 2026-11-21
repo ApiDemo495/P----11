@@ -244,7 +244,7 @@ def _ctx_hash(view: str, symbol: str, tf: str, ctx: dict) -> str:
 
 
 async def explain(view: str, symbol: str, tf: str,
-                  ctx: dict) -> dict[str, Any]:
+                  ctx: dict, alt=None) -> dict[str, Any]:
     key = f"{view}|{symbol}|{tf}|{_ctx_hash(view, symbol, tf, ctx)}"
     hit = _cache.get(key)
     if hit and time.time() - hit["t"] < CACHE_TTL_S:
@@ -278,6 +278,26 @@ async def explain(view: str, symbol: str, tf: str,
             body["llm_error"] = repr(exc)[:200]
     else:
         body["model_status"] = st["source"]
+        # Ollama is down but the llama_cpp agent may be loaded — a real
+        # model readout beats deterministic text (screenshot: the tab
+        # said "LOCAL FALLBACK · LOCAL FALLBACK (DETERMINISTIC)" forever)
+        if alt is not None:
+            try:
+                prompt = (f"Tab: {view} | {symbol}/{tf}\nEngine JSON:\n"
+                          f"{json.dumps(ctx, default=str)[:4000]}\n\n"
+                          f"{SYSTEM}")
+                res = await asyncio.wait_for(alt(prompt), timeout=45.0)
+                res = res if isinstance(res, dict) else {}
+                text = ((res.get("text") or "").strip()
+                        if res.get("ok") else "")
+                if text:
+                    body.update(
+                        text=text, source="local-agent",
+                        model=(res.get("model")
+                               or res.get("backend") or "local"))
+                    body.pop("model_status", None)
+            except Exception as exc:
+                body["llm_error"] = repr(exc)[:200]
     _cache[key] = {"t": time.time(), "body": body}
     if len(_cache) > 200:
         for k in [k for k, v in _cache.items()
