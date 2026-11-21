@@ -41,3 +41,5 @@ backtest/cache/
 
 # 2y mandate walk artifacts (regenerate: python -m backtest.mandate)
 backtest/results/mandate_*.csv
+backtest/results/*.lock
+backtest/results/*.tmp

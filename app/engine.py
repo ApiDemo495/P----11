@@ -440,6 +440,10 @@ class PredictionEngine:
         self._analyse_reqids: dict[tuple[str, str], str] = {}
         # §1.1 monotonic state version for atomic client-side discard
         self._state_version: int = 0
+        # win-rate search confluence: latest finalized direction per
+        # (symbol, tf) with its timestamp — the agree gate reads the
+        # OTHER timeframes from the most recent completed pass
+        self._last_dirs: dict[tuple[str, str], tuple[float, int]] = {}
         self.started_at = time.time()      # §12 ops: uptime
         self.vault_last_write = 0.0        # §12 ops: vault last write
         self.build_id = ""                 # §12 ops: build id vs remote
@@ -1599,6 +1603,8 @@ class PredictionEngine:
                     "— locked side held for this window")
             fin["direction_conflict"] = bool(
                 _locked_dir and _dir_final and _dir_final != _locked_dir)
+            self._last_dirs[(symbol, tf)] = (time.time(),
+                                             int(_dir_final or 0))
             fin["confidence"] = _beh["confidence"]
             # docs11-doublecheck §3: EVERY window gets a side. The old
             # chain (RL bandit -> asset floor -> noise gate) fused three
@@ -1660,8 +1666,11 @@ class PredictionEngine:
             _adv_k = self._adv_blend_k(symbol, tf)
             fin["adv_blend_k"] = round(_adv_k, 4)
             _beh["score"] = float(_beh["score"]) + _adv_k * _adv["vote"]
-            _tier = self._tier_for(symbol, tf, float(_beh["score"]),
-                                   strength=pack.get("strength"))
+            _tier = self._tier_for(
+                symbol, tf, float(_beh["score"]),
+                strength=pack.get("strength"),
+                direction=int(_dir_final or 0),
+                dirs_by_tf=self._sibling_dirs(symbol, tf))
             fin.update(_tier)
             fin["raw_score"] = round(float(_beh["score"]), 5)
             # ── volatility-scaled barriers (app/barriers.py) ──────────
@@ -2563,8 +2572,21 @@ class PredictionEngine:
             "edges": edges,
         }
 
+    def _sibling_dirs(self, symbol: str, exclude_tf: str) -> dict:
+        """Other timeframes' latest directions for the agree gate
+        (stale entries >30 min ignored — a silent sibling never vetoes)."""
+        now = time.time()
+        out = {}
+        for (s, t), (ts, d) in list(
+                (getattr(self, "_last_dirs", None) or {}).items()):
+            if s == symbol and t != exclude_tf and now - ts <= 1800:
+                out[t] = int(d)
+        return out
+
     def _tier_for(self, symbol: str, tf: str, score: float,
-                  strength: float | None = None) -> dict:
+                  strength: float | None = None, *,
+                  direction: int = 0,
+                  dirs_by_tf: dict | None = None) -> dict:
         """docs11-doublecheck §4: calibrated P(side) + tier. The noise
         floor lives in SCORE units and only sets the tier — it can
         never suppress the side. Provisional Platt: a = 1/median|s|
@@ -2648,6 +2670,16 @@ class PredictionEngine:
                 if not _mok:
                     tier = "watch-only"
                     _mandate_note = f" · {_mwhy}"
+                else:
+                    # win-rate search confluence (abstention only):
+                    # regime align + cross-TF agree, both causal
+                    _cok, _cwhy = _mcfg.confluence_ok(
+                        symbol, tf, int(direction or 0),
+                        getattr(self, "feed", None),
+                        dirs_by_tf or self._sibling_dirs(symbol, tf))
+                    if not _cok:
+                        tier = "watch-only"
+                        _mandate_note = f" · {_cwhy}"
         return {"tier": tier, "p_side": round(p_side, 4),
                 "noise_floor_s": round(floor_s, 5),
                 "score_floor_ratio": round(x, 3),

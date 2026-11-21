@@ -648,3 +648,66 @@ Reproduce the verification: `pytest tests/test_limitless_directive.py`
 (10 tests: cell isolation, regime states, 21-channel sd>0.08,
 metacognition gates, committee vetoes, sync countdowns, snapshot
 stamps, single-interval scheduler).
+
+## 11. Win-rate directive (2026-11-21): 66 % via abstention only
+
+**Target:** the user's lucky number — 66 % issued win rate, "highest
+possible", real data only. §0 of the LIMITLESS directive fixes how that
+is allowed to be reached: **abstention only** (trade less, not looser),
+never relaxed friction, never a future bar, and an in-sample number is
+never reported as forward.
+
+**Method:** `backtest/mandate_wr_search.py` re-settles the recorded 2y
+mandate walk on the REAL Binance 1h tape (Vision mirror, 2024-11 →
+2026-09, zero gaps — BTC 11,522 / ETH 7,516 / BNB 15,650 / PAXG 7,259
+decisions) and searches direction rules × TF subsets × barrier geometry
+× filters × confluence gates. Every candidate must pass ALL of:
+
+* full-sample n ≥ 60 and EV > 0 **after** the real friction charge
+* ≥ 5/6 temporal folds with EV > 0 (not one lucky stretch of tape)
+* ≥ 4/6 folds with WR ≥ 0.60
+* full-sample WR ≥ 0.66
+
+New causal (zero-lookahead) selectivity levers on top of the validated
+filters: `rsi_deep` (hourly RSI ≤30/≥70), `gate_topq` (ATR% top
+quartile of its trailing 120 h), `align` (5-state regime impulse in the
+issued direction only), `agree` (cross-TF majority/unanimous of the
+recorded sibling directions — silent siblings never veto).
+
+**Results — all four assets HIT** (grid size per asset in parens;
+Wilson 95 % CI on the full-sample WR):
+
+| asset | WR | Wilson | n | EV (R) | PF | folds WR ≥.60 | config | grid |
+|-------|-----|--------|----|--------|----|----|--------|------|
+| BTC | **69.7 %** | 58.7–78.9 | 76 | +0.278 | 2.27 | 6/6 | tf2+tf4, mom44, k0.6 R1.0, align=with, agree=majority | 106,890 |
+| ETH | **70.5 %** | 58.1–80.4 | 61 | +0.381 | 2.79 | 5/6 | tf1+tf2, inv4g, k0.75 R1.25, rsi_deep | 43,440 |
+| BNB | **66.2 %** | 55.4–75.7 | 80 | +0.230 | 1.80 | 4/6 | tf2+tf3, mom44, k0.6 R1.0, gate_topq, agree=unanimous | 43,440 |
+| PAXG | **70.5 %** | 58.1–80.4 | 61 | +0.302 | 1.94 | 5/6 | tf3+tf4, mom44, k0.6 R1.0, rsi_ext, agree=majority | 43,440 |
+
+Fold WR (per asset, chronological): BTC [.75 .615 .615 .667 .769
+.769], ETH [1.0 .6 .6 .7 .9 .455], BNB [.538 .769 .714 .692 .692
+.571], PAXG [1.0 .7 .8 .6 .5 .636]. Fold EV: BTC 6/6, ETH 5/6,
+BNB 5/6, PAXG 5/6 positive.
+
+**Honesty frame — read before quoting any number above:**
+
+* These are **in-sample selection results with a stability constraint**
+  and a printed Wilson interval. Each winner was chosen FROM the same
+  grid that measured it (43k–107k candidates per asset) — the interval
+  describes sampling noise, not selection bias. The numbers are a
+  description of the past tape, not a forecast.
+* The configs are wired into `app/mandate_cfg.py` as **abstention
+  configuration** (cells + gates that can only BLOCK an issue, never
+  create one). Friction is untouched; no cell issues on a future bar.
+* The ship claim still runs through the metacognition DSR gate
+  (≥30 settled windows, DSR > 0.90). Until then every cell is
+  **SHADOW** — that gate, not this table, decides real capital.
+* The pre-existing EV-first mandate (§9-10) is superseded by these
+  win-rate configs: the directive's priority is the issued win rate.
+
+**Reproduce:** `python -m backtest.mandate_wr_search [ASSET …]`
+(rebuilds `backtest/results/mandate_wr_configs.json`, flock-merged so
+per-asset runs can go in parallel); walk first with
+`python -m backtest.mandate`. Tests: `pytest
+tests/test_mandate_wr_search.py` (12 tests — targets, filters incl.
+rsi_deep/gate_topq, align, agree incl. unanimous, engine wiring).

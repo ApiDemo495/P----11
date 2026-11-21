@@ -164,7 +164,7 @@ def test_post_grc_direction_does_not_rewrite_frozen_lock(live_engine):
     engine = live_engine.engine
     frozen = {"symbol": "ETH", "tf": "tf1", "side": 1,
               "confidence": 0.8, "reason": "locked call"}
-    engine.locks[("ETH", "tf1")] = dict(frozen)
+    engine.locks[("ETH", "tf3")] = dict(frozen)
 
     async def no_groq(symbol, res_pack):
         return None
@@ -177,9 +177,9 @@ def test_post_grc_direction_does_not_rewrite_frozen_lock(live_engine):
         "issued": True, "tier": "half", "reason": "new live score",
         "breakdown": {"components": []},
     }
-    asyncio.run(engine._apply_agents("ETH", {"tf1": result}))
-    assert engine.locks[("ETH", "tf1")] == frozen
-    assert engine.prev_cci_dir[("ETH", "tf1")] == -1
+    asyncio.run(engine._apply_agents("ETH", {"tf3": result}))
+    assert engine.locks[("ETH", "tf3")] == frozen
+    assert engine.prev_cci_dir[("ETH", "tf3")] == -1
 
 
 def test_every_asset_timeframe_uses_the_same_valid_frozen_contract(live_engine):

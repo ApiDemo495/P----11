@@ -97,8 +97,10 @@ def _features(bars, i, atr_map):
     trail = [atr_map[j] for j in range(max(14, i - 119), i + 1) if j in atr_map]
     a_top = bool(trail and a >= sorted(trail)[int(len(trail) * 2 / 3)])
     gate = a_top  # same top-tercile rule as the validated policy
+    # additive: top-QUARTILE flag (stricter gate for the win-rate search)
+    a_topq = bool(trail and a >= sorted(trail)[int(len(trail) * 3 / 4)])
     return {"rsi": rsi, "mom": mom, "atr_top": a_top, "gate": gate,
-            "atr": a}
+            "atr": a, "atr_top_q": a_topq}
 
 
 def _filt_ok(name, f) -> bool:

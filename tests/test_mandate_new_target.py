@@ -47,22 +47,24 @@ def test_old_sigma_mean_formula_is_gone():
 
 
 def test_mandate_tiers_follow_measured_cells():
-    """The 2y mandate search (9,000 configs/asset, ≥5/6 folds positive,
-    full-sample EV ≥ +0.070) decides which cells issue — see
-    app/mandate_cfg.py. BTC issues tf1/tf2 (inv4g+RSI flip, +0.257R),
-    ETH tf4 and BNB tf2 (44h momentum, +0.237/+0.091R), PAXG tf3/tf4
-    (momentum recovered gold from the engine's −0.21R to +0.135R);
-    every non-measured cell stays capped watch-only."""
+    """The win-rate directive search (43k–107k configs/asset, n≥60,
+    EV>0 after friction, ≥5/6 folds EV>0, ≥4/6 folds WR≥0.60, full
+    WR≥0.66 — see backtest/mandate_wr_search.py) decides which cells
+    issue — app/mandate_cfg.py. BTC issues tf2/tf4 (mom44+regime+majority
+    agree, WR 69.7%), ETH tf1/tf2 (inv4g+deep RSI, 70.5%), BNB tf2/tf3
+    (mom44+top-quartile gate+unanimous agree, 66.2%), PAXG tf3/tf4
+    (mom44+RSI band+majority agree, 70.5%); every non-measured cell
+    stays capped watch-only."""
     from tests.test_engine import make_engine
     engine, _feed, _ = make_engine()
-    for sym, tf in (("BTC", "tf1"), ("BTC", "tf2"), ("ETH", "tf4"),
-                    ("BNB", "tf2"), ("PAXG", "tf3"), ("PAXG", "tf4")):
+    for sym, tf in (("BTC", "tf2"), ("BTC", "tf4"), ("ETH", "tf1"),
+                    ("ETH", "tf2"), ("BNB", "tf2"), ("BNB", "tf3"),
+                    ("PAXG", "tf3"), ("PAXG", "tf4")):
         out = engine._tier_for(sym, tf, 0.5)     # a huge score
         assert out["tier"] == "full", (sym, tf, out.get("tier_rule"))
-    for sym, tf in (("BTC", "tf3"), ("BTC", "tf4"), ("ETH", "tf1"),
-                    ("ETH", "tf2"), ("ETH", "tf3"), ("BNB", "tf1"),
-                    ("BNB", "tf3"), ("BNB", "tf4"), ("PAXG", "tf1"),
-                    ("PAXG", "tf2")):
+    for sym, tf in (("BTC", "tf1"), ("BTC", "tf3"), ("ETH", "tf3"),
+                    ("ETH", "tf4"), ("BNB", "tf1"), ("BNB", "tf4"),
+                    ("PAXG", "tf1"), ("PAXG", "tf2")):
         out = engine._tier_for(sym, tf, 0.5)
         assert out["tier"] == "watch-only", (sym, tf)
         assert "mandate" in out["tier_rule"]
