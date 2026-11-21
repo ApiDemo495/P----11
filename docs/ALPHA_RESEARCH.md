@@ -754,3 +754,31 @@ validation runs through the metacognition gate below.
   windows (needs ≥30 settled windows per cell) — until it passes,
   every cell is SHADOW and the committee's governor blocks issuance.
   That is the design working, not a gap to paper over.
+
+## Win-rate directive (2026-11-21): 66 % reached the allowed way
+
+The user's directive: raise the issued win rate to 66 % (their lucky
+number), highest possible, real data only. §0 honesty is binding —
+60–80 % is reachable **only through abstention**; friction never
+relaxes; no future bars; in-sample never reported as forward.
+
+`backtest/mandate_wr_search.py` searched the same real 2y walk (Binance
+Vision 1h, 2024-11 → 2026-09) with hard gates on every candidate
+(n ≥ 60, EV > 0 after friction, ≥5/6 folds EV > 0, ≥4/6 folds WR ≥ 0.60,
+full WR ≥ 0.66) and printed the Wilson interval for each winner. All
+four assets cleared the target: **BTC 69.7 % (n=76, EV +0.278R), ETH
+70.5 % (n=61, +0.381R), BNB 66.2 % (n=80, +0.230R), PAXG 70.5 % (n=61,
++0.302R)** — table, folds, configs and the full honesty frame in
+`backtest/REAL_RESULTS.md` §11.
+
+Two statements that must travel with the numbers:
+
+1. **In-sample with selection.** Each config was chosen among 43k–107k
+   candidates on the same tape that scored it. The Wilson interval
+   covers sampling noise, not the look-elsewhere effect. This is a
+   measured description of the past, not a forward claim.
+2. **The ship gate is unchanged.** The configs are wired as pure
+   abstention (filters + regime align + cross-TF agree — gates that can
+   only BLOCK) in `app/mandate_cfg.py`; forward validation still runs
+   through the metacognition DSR gate (≥30 settled windows, DSR > 0.90)
+   and every cell stays SHADOW until it passes.

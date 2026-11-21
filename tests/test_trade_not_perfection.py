@@ -155,19 +155,19 @@ def test_tier_probability_and_floor_share_one_scale():
     eng.hist = type("H", (), {"ring": lambda self, k, n: [],
                               "tf_key": staticmethod(lambda s, t, f: f"{s}|{t}|{f}")})()
     # no history at all: the documented absolute floor (0.02), labelled
-    a = eng._tier_for("BTC", "tf1", 0.005, strength=0.98)
+    a = eng._tier_for("BTC", "tf2", 0.005, strength=0.98)
     assert a["tier"] == "watch-only" and a["p_side"] < 0.6
     assert a["calib_source"].startswith("absolute floor")
     assert "voter agreement 0.98" in a["calib_source"]
     # score at the floor -> quarter band entered only above 1.0x
-    b = eng._tier_for("BTC", "tf1", 0.019, strength=0.98)
+    b = eng._tier_for("BTC", "tf2", 0.019, strength=0.98)
     assert b["tier"] == "watch-only" and b["score_floor_ratio"] < 1.0
     # bands live in floor units: 1.2x quarter, 2x half, 4x full
-    q = eng._tier_for("BTC", "tf1", 0.024, strength=0.98)
+    q = eng._tier_for("BTC", "tf2", 0.024, strength=0.98)
     assert q["tier"] == "quarter" and 1.1 < q["score_floor_ratio"] < 1.4
-    h = eng._tier_for("BTC", "tf1", 0.04, strength=0.98)
+    h = eng._tier_for("BTC", "tf2", 0.04, strength=0.98)
     assert h["tier"] == "half" and 1.9 < h["score_floor_ratio"] < 2.1
-    f = eng._tier_for("BTC", "tf1", 0.08, strength=0.98)
+    f = eng._tier_for("BTC", "tf2", 0.08, strength=0.98)
     assert f["tier"] == "full"
     assert f["p_side"] > h["p_side"] > q["p_side"] > b["p_side"]
 
