@@ -39,19 +39,30 @@ def test_old_sigma_mean_formula_is_gone():
     src = (Path(__file__).resolve().parent.parent
            / "app" / "engine.py").read_text()
     # the structural fix: magnitude comes from the stop, not from σ
-    assert "_mag = _factor * NEW_TARGET_RR * _sl_bps" in src
+    # (rr comes from the per-asset mandate config when set, else the
+    # global NEW_TARGET_RR — the structure is the same)
+    assert "_mag = _factor * _rr_n * _sl_bps" in src
+    assert "_rr_n = _mcfg_c.new_rr(symbol) or NEW_TARGET_RR" in src
     assert "0.65 * min(1.0, abs(float(" in src   # factor kept (tilt)
 
 
-def test_paxg_tier_capped_by_two_sample_mandate():
-    """PAXG: negative holdout EV in both modes × all TFs × both splits
-    (backtest/mandate.py 2y walk) AND the independent prior window
-    (REAL_RESULTS per-TF <50%) — two samples agree: cap the tier."""
+def test_mandate_tiers_follow_measured_cells():
+    """The 2y mandate search (9,000 configs/asset, ≥5/6 folds positive,
+    full-sample EV ≥ +0.070) decides which cells issue — see
+    app/mandate_cfg.py. BTC issues tf1/tf2 (inv4g+RSI flip, +0.257R),
+    ETH tf4 and BNB tf2 (44h momentum, +0.237/+0.091R), PAXG tf3/tf4
+    (momentum recovered gold from the engine's −0.21R to +0.135R);
+    every non-measured cell stays capped watch-only."""
     from tests.test_engine import make_engine
     engine, _feed, _ = make_engine()
-    out = engine._tier_for("PAXG", "tf4", 0.5)   # a huge score
-    assert out["tier"] == "watch-only"
-    assert "mandate" in out["tier_rule"]
-    # BTC keeps its score-band tier untouched
-    btc = engine._tier_for("BTC", "tf4", 0.5)
-    assert btc["tier"] == "full"
+    for sym, tf in (("BTC", "tf1"), ("BTC", "tf2"), ("ETH", "tf4"),
+                    ("BNB", "tf2"), ("PAXG", "tf3"), ("PAXG", "tf4")):
+        out = engine._tier_for(sym, tf, 0.5)     # a huge score
+        assert out["tier"] == "full", (sym, tf, out.get("tier_rule"))
+    for sym, tf in (("BTC", "tf3"), ("BTC", "tf4"), ("ETH", "tf1"),
+                    ("ETH", "tf2"), ("ETH", "tf3"), ("BNB", "tf1"),
+                    ("BNB", "tf3"), ("BNB", "tf4"), ("PAXG", "tf1"),
+                    ("PAXG", "tf2")):
+        out = engine._tier_for(sym, tf, 0.5)
+        assert out["tier"] == "watch-only", (sym, tf)
+        assert "mandate" in out["tier_rule"]

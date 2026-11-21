@@ -161,6 +161,10 @@ def walk_asset(asset: str, smoke: bool = False) -> str:
         if b.t - a.t != 3600:
             raise SystemExit(f"{asset}: gap {a.t}->{b.t} — refetch")
 
+    # the mandate rules (app/mandate_cfg) are DEFINED against the raw
+    # engine — the walk must keep measuring raw, or re-deriving rules
+    # from post-rule directions would be circular
+    os.environ["MANDATE_RAW"] = "1"
     pred = AppPredictor()
     ds = DataSlice(bars)
     friction = FRICTION_BPS.get(asset, 12.0)
