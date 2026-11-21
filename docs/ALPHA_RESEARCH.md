@@ -692,3 +692,65 @@ governance, a clock-watchdog fix, and a cognition trace
 reported the 26-file delta as absorbed and the then-current suite as 733
 passed, 1 skipped. The branch refs currently exist; their latest inspected
 commits and integration caveats are recorded in `INTEGRATION_AUDIT.md`.
+
+---
+
+## LIMITLESS directive verification (2026-11-21)
+
+Architecture + contract verification for the master architectural
+directive. **No forward-performance claim is made for the new
+subsystems** — they are measurement machinery whose statistical
+validation runs through the metacognition gate below.
+
+### Shipped (verified this run)
+- **§1 decoupling:** `_hindsight_last`/`_hindsight_reviewed_n` rekeyed
+  to `(symbol, tf)` (BTC's review no longer stamps other assets'
+  cadence — the bleed root). Every snapshot carries a monotonic
+  `state_version` + `snapshot_ts`; every `analyse_*` event carries
+  `{asset, timeframe, request_id}`; the UI discards out-of-order and
+  superseded payloads atomically. THE one `setInterval` is now the
+  drift-compensated master scheduler (absolute 1 Hz deadlines, measured
+  lag, in-flight lock + latest-wins coalescing). `POST /api/analyse`
+  responds in **9 ms** (target <50 ms); snapshot rebuild **26 ms**
+  (target <200 ms).
+- **§1.3 5-state regime engine** (`app/regime.py`): verified live —
+  BTC IMPULSE_BEAR / ETH MEAN_REVERTING_RANGE / BNB IMPULSE_BULL /
+  PAXG MEAN_REVERTING_RANGE in one sweep (no cross-asset bleed).
+  `RISK_THROTTLE_STATES` gates CHAOTIC_LIQUIDATION_SHOCK only; named
+  low-confidence fallbacks, never a dead band.
+- **§2 16 Θ(a,τ) cells** (`app/cell_registry.py`): per-asset
+  personalities (BTC edge 4.0bps/conf .15 … PAXG 7.0/.20) and
+  per-horizon tilt (tf1 micro 1.25 → tf4 macro 1.25); unknown
+  symbol/tf gets a fresh cell, never a BTC fallback.
+- **§3 E1–E22 rewrite:** 21 behavioral microstructure channels
+  (panic/capitulation, smart-money vs crowd, exhaustion/traps, meta)
+  + E22 `cerc_vectors` (Retail Herd / Smart-Money / Crowd-vs-Smart
+  split with the ≥0.60 contrarian veto). **All 21 channels measured
+  sd > 0.08** on realistic tape (flat-channel test in
+  `tests/test_limitless_directive.py`); contract (21 ids, bounded,
+  abstention text, dominant machinery) preserved; 769+ tests green.
+- **§4 metacognition** (`app/metacognition.py`): pillar
+  dispersion/cosine+KL audit elevates the confidence floor and
+  ABSTAINS on a divided board; per-cell Brier/ECE/Platt bounded
+  ±3 pp/update; bounded Exp3-IX + L2 shrink on settled windows only
+  (weights floored, Σ=1); nested purged walk-forward + locked 20%
+  holdout + Deflated Sharpe Ratio gate (**DSR > 0.90** → CONFIRMED,
+  else SHADOW). **Default state: all 16 cells SHADOW — no capital.**
+- **§5 committee** (`app/agent_committee.py`): flow, lead-lag,
+  contrarian (veto on crowd-vs-smart split ≥0.60), governor (veto on
+  SHADOW cell / risk-throttle regime) — four keyless votes on every
+  prediction; optional LLM overlay only when keys are configured.
+- **§6:** 7-day candle warmup (BACKFILL_BARS 10080 served + gzip),
+  regime chip with yellow sideways caution, 5 header countdowns,
+  P15 JSON leak removed, white typography verified
+  (#FFFFFF/#F1F5F9/#CBD5E1 minimum).
+
+### Status honestly stated
+- Mandate configs (PR #9, `backtest/results/mandate_configs.json`)
+  remain the only **measured** edge: BTC +0.257R / ETH +0.237R /
+  BNB +0.091R / PAXG +0.135R pooled OOF from the nested search —
+  train→holdout transfer weak, so cells stay conservative.
+- The metacognition DSR gate has not yet been run on live-settled
+  windows (needs ≥30 settled windows per cell) — until it passes,
+  every cell is SHADOW and the committee's governor blocks issuance.
+  That is the design working, not a gap to paper over.

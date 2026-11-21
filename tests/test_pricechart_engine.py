@@ -77,8 +77,11 @@ def test_one_price_truth_and_current_bucket():
 
 
 def test_own_chart_keeps_at_least_30_real_candles():
-    assert "&tf=tf1&n=1000" in JS
-    assert "n = max(10, min(1000, n))" in API
+    # §6 warmup: boot asks for the whole 7-day backfill window and the
+    # server serves up to BACKFILL_BARS — the old 1000-bar cap starved
+    # the chart to 16 h (WARMING_UP / n=0 dead states)
+    assert "&tf=tf1&n=10080" in JS
+    assert "n = max(10, min(BACKFILL_BARS, n))" in API
     assert "Math.max(4 * windowMin, 30 * intervalMin" in JS
     assert 'tf === "tf1" ? 90 * intervalMin : 0' in JS
     # the view window is a LOGICAL bar range now: setVisibleRange(frome/to)

@@ -627,3 +627,24 @@ engine to raw for research walks):
 
 Reproduce: walk (`python -m backtest.mandate`, ~50 min) then
 `python -m backtest.mandate_search` → `backtest/results/mandate_configs.json`.
+
+---
+
+## Addendum (2026-11-21) — LIMITLESS directive status
+
+No new backtest numbers in this addendum: the directive's §4 rigor
+(nested purged walk-forward + locked holdout + DSR > 0.90 per cell)
+is implemented in `app/metacognition.py` and gated behind ≥30 settled
+windows per cell, which the live tape has not yet produced. Until a
+cell passes that gate it is SHADOW (no capital), per the directive.
+
+Measured baselines unchanged (PR #9): BTC +0.257R (n=109, PF 2.07),
+ETH +0.237R (n=119, PF 1.54), BNB +0.091R (n=116, PF 1.30),
+PAXG +0.135R (n=243, PF 1.54) — full-sample OOF from
+`python -m backtest.mandate_search`, in-sample caveat as documented
+in `docs/ALPHA_RESEARCH.md`.
+
+Reproduce the verification: `pytest tests/test_limitless_directive.py`
+(10 tests: cell isolation, regime states, 21-channel sd>0.08,
+metacognition gates, committee vetoes, sync countdowns, snapshot
+stamps, single-interval scheduler).
