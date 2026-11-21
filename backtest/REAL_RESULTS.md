@@ -711,3 +711,127 @@ per-asset runs can go in parallel); walk first with
 `python -m backtest.mandate`. Tests: `pytest
 tests/test_mandate_wr_search.py` (12 tests — targets, filters incl.
 rsi_deep/gate_topq, align, agree incl. unanimous, engine wiring).
+
+## 12. Continuous-cycle benchmark (2026-11-20): every window, no abstention
+
+**Directive.** Win rate ≥66 % for each (asset, timeframe), analysed
+CONTINUOUSLY — every window of the live grid (BTC every 22 min, then
+44/130/247), every window counted, **no abstention / filters /
+selectivity** (the rejected path would demand 87–96 %). Harness:
+`backtest/continuous.py` → `backtest/results/continuous_wr.json`.
+
+### Data (real only — everything fetched & verified this session)
+
+| asset | interval | bars | span | source |
+|---|---|---|---|---|
+| BTC, ETH | 5m | 621,797 ea | 2020-11-01 → 2026-09-30 (6 y) | thanhnha39 monthly zips |
+| BTC, ETH, BNB | 1m | 349,920 ea | 2026-01-01 → 2026-08-31 | JienWeng monthly zips |
+| BTC, ETH, BNB | 1h | 24,096 ea | 2024-01-01 → 2026-09-30 | KevinSherry daily zips |
+| PAXG | 1h | 13,262 | 2025-03-27 → 2026-09-30 | KevinSherry daily zips |
+
+Honest gaps: **BNB pre-2024 does not exist** in any reachable mirror
+(three GitHub code searches, 0 hits — Speirsy/TradeTrace are Git-LFS,
+unreachable); PAXG has no sub-hour history anywhere reachable; all
+mirrors stop at 2026-09-30 (2026-10+ disclosed, never fabricated).
+
+**Approximation validation** (`--approx`, exact 1m vs 5m boundaries,
+2026 overlap, n=15,904/7,952/2,691/1,416): sign-flip rate 14.7 %/9.9 %/
+0 %/4.9 % (tf1–tf4) but **aggregate WR error ≤ 0.5 pp** (flips are
+symmetric) — 5m-derived WR numbers carry that error bar.
+
+### Method
+
+Epoch grid `s = floor(t/W)·W`, W ∈ {22,44,130,247} min, step = W
+(non-overlapping, exactly the live cadence); entry = last bar < s,
+exit = last bar ≤ s+W; **strict sign WR** (tie = loss, never skipped).
+Predictors: `up/down`, `mom{15..4320}`, `mom44h` (shipped rule
+replica), `revW` (fade of the previous completed window), `mom_best`
+(train-selected), `lr_oof` (purged yearly walk-forward logistic, 7-day
+purge). Trade sim: first-touch TP=k·SL / SL=m·q80|W-move| (causal,
+trailing), same-bar SL-wins, friction 12 bps/side both ways, geometry
+selected on TRAIN years only, holdout = last year, Wilson CIs.
+
+### Results — strict-sign WR, every window counted
+
+| cell | n | best (rule) | WR | shipped mom44h | lr_oof |
+|---|---:|---|---:|---:|---:|
+| BTC 22min | 141,323 | revW | **52.4 %** [52.1,52.7] | 49.4 % | 52.4 % |
+| BTC 44min | 70,665 | lr/revW | **52.2 %** | 49.3 % | 52.2 % |
+| BTC 130min | 23,922 | revW | **52.6 %** | 48.7 % | 51.9 % |
+| BTC 247min | 12,592 | revW | **53.1 %** [52.2,54.0] | 48.3 % | 52.3 % |
+| ETH 22min | 141,323 | revW | **52.3 %** | 49.4 % | 52.2 % |
+| ETH 44min | 70,665 | lr/revW | **52.5 %** | 49.2 % | 52.5 % |
+| ETH 130min | 23,922 | revW | **52.4 %** | 49.1 % | 51.5 % |
+| ETH 247min | 12,592 | revW | **52.2 %** | 48.9 % | 51.4 % |
+| BNB 22/44/130/247 | 15,904/7,952/2,691/1,416 | revW | **52.0/52.2/51.5/53.9 %** | 49.5/49.8/49.6/49.2 % | — |
+| PAXG 247min | 3,220 | mom4320 | **52.0 %** | 51.4 % | 49.3 % |
+
+PAXG tf1–tf3 are **ungradeable** on 1h bars (boundary age up to 59 min
+> 22/44/130-min windows) — reported as ungradeable, never forced.
+
+`revW` is stable EVERY year (BTC tf1: 51.5–53.7 % in all 7 years;
+Wilson CI excludes 50 % by ~9 σ at tf1). **66 % is not reached by any
+predictor on any cell — the honest best is 51.5–53.9 %.**
+
+### Trade EV after friction — measured impossibility at these horizons
+
+Every (k,m) geometry fails the EV>0-on-train gate at every cell
+(`no_EV>0_geometry_on_train`, with `gross_best_train_ev` recorded):
+best GROSS train EV is **+0.2 … +3.0 bps per window** vs **24 bps**
+round-trip friction → net < 0 everywhere. Physics (mean |window move|
+vs friction, symmetric-barrier break-even WR `0.5 + 12/mean|move|`):
+
+| cell | mean move | EV+ needs WR |
+|---|---:|---:|
+| BTC/BNB 22min | 24/19 bps | **101 % / 114 % (impossible)** |
+| ETH 22min | 31 bps | 89 % (impossible) |
+| *44min* | 27–44 bps | 78–95 % (impossible) |
+| *130min* | 46–76 bps | 66–76 % (at/above reach) |
+| *247min* | 33–106 bps | 61–87 % (only BTC/ETH near-reachable) |
+
+Two independent honest conclusions:
+1. **Continuous sign WR ≥66 % does not exist in real data** — best
+   measured 53.9 %; the 200-path future bootstrap (below) puts
+   P(≥66 %) = 0.00 for every predictor × cell.
+2. **WR ≥66 % AND EV>0 cannot coexist** per-window at 22–130 min:
+   first-touch WR can be inflated with TP<SL (k<1) but that pushes EV
+   down, and friction needs `d·(wr(1+k)−1) > 24 bps`, unachievable
+   once wr is geometry-inflated. §0's EV>0/66 %-claim rules make the
+   per-window-friction model a measured dead end at tf1–tf2.
+
+### What this changed in the shipped app
+
+* **Horizon-mismatch bug found:** the WR-search mandate walk graded
+  22/44/130/247 **bars of 1h data (= 22–247 HOURS)**, but the live
+  grid is 22/44/130/247 **MINUTES**. At live horizons the selected
+  rules measure 48–49.8 % (mom44) — anti-predictive — while `revW`
+  measures 51.5–53.9 % on the exact live windows.
+* **`fade_prev` direction rule wired** (`app/mandate_cfg.py`): side =
+  −sign(close[last bar < s] − close[last bar < s−W]), epoch grid,
+  causally computable at lock time, byte-identical to the benchmark.
+  BTC/ETH/BNB cells switched from mom44/inv4g → `fade_prev`
+  (+2.6…+4.7 pp measured at their own cells); PAXG keeps mom44
+  (measured tie at its only gradeable cell). Tests:
+  `tests/test_fade_prev.py` (4 tests — sign, causality, fallback,
+  wiring).
+* lr_oof is recorded as research evidence (same ~52 % as revW, far
+  more machinery) — not shipped.
+
+### Future 6 years — SIMULATED (for fun, never presented as measured)
+
+`backtest/future_sim.py` → `backtest/results/future_sim.json`:
+200-path day-block bootstrap of the real 6y tape (labelled
+`SIMULATED` in every key). Under the null “future = resampled
+history”: revW median 51.5–52.2 %, **P(any predictor ≥66 %) = 0.00
+on every cell** — the target has zero support even in resampled real
+history, let alone in live data.
+
+### Reproduce
+
+```bash
+.venv/bin/python -m backtest.continuous --interval 5m      # BTC/ETH 6y
+.venv/bin/python -m backtest.continuous                     # BNB 1m, PAXG 1h
+.venv/bin/python -m backtest.continuous --approx            # 5m-vs-1m error bar
+.venv/bin/python -m backtest.future_sim --paths 200         # SIMULATED
+.venv/bin/python -m pytest tests/test_fade_prev.py tests/test_mandate_wr_search.py tests/test_mandate_new_target.py -q
+```

@@ -24,6 +24,10 @@ Semantics wired into the engine (app/engine.py):
                      inv4g        inverse of this pass's TF4 raw side
                      mom44        sign of the 44-HOUR momentum
                      antimom44    its inverse
+                     fade_prev    fade the previous grid window's move
+                                  (−sign of [s−W, s) move; measured
+                                  continuous WR 52–53% vs mom44's 49%
+                                  at the live 22–247 min horizons)
                      rsi          RSI(14) extreme override else raw
                    (tape features are computed on an HOURLY resample
                    of the feed so live semantics match the 1h-bar
@@ -72,7 +76,7 @@ MANDATE: dict[str, dict] = {
     # 44h momentum with the REGIME impulse gate + majority cross-TF
     # agree; folds WR [0.75, .615, .615, .667, .769, .769] (6/6 ≥.60),
     # fold EV 6/6 positive.
-    "BTC": {"tfs": ("tf2", "tf4"), "direction": "mom44", "mode": "old",
+    "BTC": {"tfs": ("tf2", "tf4"), "direction": "fade_prev", "mode": "old",
             "k": 0.6, "R": 1.0, "new_rr": None, "filter": "none",
             "align": "with", "agree": "majority",
             "measured": {"ev": 0.278, "n": 76, "win": 0.697,
@@ -81,7 +85,7 @@ MANDATE: dict[str, dict] = {
                          "target_wr": 0.66}},
     # ETH: WR 70.5 % (Wilson 58.1–80.4) n=61 EV +0.381R PF 2.79 —
     # inv4g + deep RSI (≤30/≥70) abstention, no confluence needed.
-    "ETH": {"tfs": ("tf1", "tf2"), "direction": "inv4g", "mode": "old",
+    "ETH": {"tfs": ("tf1", "tf2"), "direction": "fade_prev", "mode": "old",
             "k": 0.75, "R": 1.25, "new_rr": None, "filter": "rsi_deep",
             "align": "off", "agree": "off",
             "measured": {"ev": 0.381, "n": 61, "win": 0.705,
@@ -90,7 +94,7 @@ MANDATE: dict[str, dict] = {
                          "target_wr": 0.66}},
     # BNB: WR 66.2 % (Wilson 55.4–75.7) n=80 EV +0.230R PF 1.80 —
     # top-ATR-quartile gate + UNANIMOUS cross-TF agree.
-    "BNB": {"tfs": ("tf2", "tf3"), "direction": "mom44", "mode": "old",
+    "BNB": {"tfs": ("tf2", "tf3"), "direction": "fade_prev", "mode": "old",
             "k": 0.6, "R": 1.0, "new_rr": None, "filter": "gate_topq",
             "align": "off", "agree": "unanimous",
             "measured": {"ev": 0.230, "n": 80, "win": 0.662,
@@ -314,6 +318,41 @@ def filter_ok(symbol: str, tf: str, feed) -> tuple[bool, str]:
 
 # ─────────────────────── direction rules ───────────────────────
 
+def _fade_prev_side(feed, symbol: str, tf: str) -> int:
+    """−sign(move of the PREVIOUS completed grid window) — the
+    ``fade_prev`` rule.
+
+    The window grid is epoch-aligned (engine._grid_window): at analysis
+    time ``now`` the current window starts at s = floor(now/W)*W; the
+    previous window [s−W, s) is fully closed, so both reference closes
+    are strictly older than s — causal, and byte-identical to how the
+    continuous benchmark (backtest/continuous.py) graded it:
+    side = −sign(c(last bar < s) − c(last bar < s−W)).
+    Falls back to the ladder's raw side when the tape is too thin.
+    """
+    import bisect
+    from .config import TIMEFRAMES
+    W = TIMEFRAMES[tf]["minutes"] * 60
+    try:
+        st = feed.state(symbol)
+        times = list(st.times)
+        closes = list(st.closes)
+    except Exception:
+        return 0
+    if not times or len(times) != len(closes):
+        return 0
+    now_t = float(times[-1])
+    s = int(now_t) // W * W
+    i2 = bisect.bisect_left(times, s) - 1          # last bar < s
+    i1 = bisect.bisect_left(times, s - W) - 1      # last bar < s−W
+    if i1 < 0 or i2 <= i1:
+        return 0
+    move = closes[i2] - closes[i1]
+    if move == 0.0:
+        return 0
+    return -1 if move > 0.0 else 1
+
+
 def apply_direction(symbol: str, tf: str, raw: int, tf4_raw: int,
                     feed) -> int:
     """Apply this cell's direction rule to the ladder's raw side.
@@ -330,6 +369,9 @@ def apply_direction(symbol: str, tf: str, raw: int, tf4_raw: int,
         return -raw
     if rule == "inv4g":
         return -tf4_raw if tf4_raw else raw
+    if rule == "fade_prev":
+        side = _fade_prev_side(feed, symbol, tf)
+        return side if side else raw
     closes = hourly_closes(feed, symbol)
     if rule == "mom44":
         m = _mom44(closes)

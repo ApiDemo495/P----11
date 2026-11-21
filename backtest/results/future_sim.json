@@ -1,0 +1,576 @@
+{
+ "label": "SIMULATED \u2014 block-bootstrap Monte Carlo over the real tape; not a measurement, not a forecast",
+ "generated_at": "2026-11-21T17:27:36Z",
+ "assets": {
+  "BTC": {
+   "label": "SIMULATED \u2014 block-bootstrap Monte Carlo over the real tape; not a measurement, not a forecast",
+   "method": "200-path day-block bootstrap of the real 5m tape (2160 real days), same epoch windows & strict-sign scoring as backtest/continuous.py",
+   "asset": "BTC",
+   "sim_paths": 200,
+   "sim_seed": 495,
+   "sim_cells": {
+    "22": {
+     "n_windows_per_path": 141325,
+     "sim_wr_down": {
+      "median": 0.4971,
+      "p05": 0.4949,
+      "p95": 0.4991,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom1440": {
+      "median": 0.4964,
+      "p05": 0.4943,
+      "p95": 0.4983,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom15": {
+      "median": 0.4795,
+      "p05": 0.4776,
+      "p95": 0.4817,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom240": {
+      "median": 0.4833,
+      "p05": 0.4811,
+      "p95": 0.4856,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom2640": {
+      "median": 0.4957,
+      "p05": 0.4937,
+      "p95": 0.4976,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom4320": {
+      "median": 0.4958,
+      "p05": 0.4938,
+      "p95": 0.4975,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom44h": {
+      "median": 0.4957,
+      "p05": 0.4937,
+      "p95": 0.4976,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom60": {
+      "median": 0.478,
+      "p05": 0.4763,
+      "p95": 0.4795,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom720": {
+      "median": 0.4944,
+      "p05": 0.4923,
+      "p95": 0.4964,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_revW": {
+      "median": 0.5222,
+      "p05": 0.5198,
+      "p95": 0.5244,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_up": {
+      "median": 0.5025,
+      "p05": 0.5005,
+      "p95": 0.5049,
+      "share_ge_66": 0.0
+     }
+    },
+    "44": {
+     "n_windows_per_path": 70642,
+     "sim_wr_down": {
+      "median": 0.4946,
+      "p05": 0.4922,
+      "p95": 0.4971,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom1440": {
+      "median": 0.4936,
+      "p05": 0.491,
+      "p95": 0.4962,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom15": {
+      "median": 0.4842,
+      "p05": 0.4814,
+      "p95": 0.4873,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom240": {
+      "median": 0.4823,
+      "p05": 0.4791,
+      "p95": 0.485,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom2640": {
+      "median": 0.4931,
+      "p05": 0.4899,
+      "p95": 0.4963,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom4320": {
+      "median": 0.493,
+      "p05": 0.4903,
+      "p95": 0.4959,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom44h": {
+      "median": 0.493,
+      "p05": 0.4899,
+      "p95": 0.4964,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom60": {
+      "median": 0.4804,
+      "p05": 0.4769,
+      "p95": 0.4833,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom720": {
+      "median": 0.4936,
+      "p05": 0.4908,
+      "p95": 0.4964,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_revW": {
+      "median": 0.52,
+      "p05": 0.5173,
+      "p95": 0.5228,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_up": {
+      "median": 0.5052,
+      "p05": 0.5028,
+      "p95": 0.5076,
+      "share_ge_66": 0.0
+     }
+    },
+    "130": {
+     "n_windows_per_path": 23920,
+     "sim_wr_down": {
+      "median": 0.4904,
+      "p05": 0.4848,
+      "p95": 0.4949,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom1440": {
+      "median": 0.4844,
+      "p05": 0.48,
+      "p95": 0.4899,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom15": {
+      "median": 0.4893,
+      "p05": 0.4844,
+      "p95": 0.4937,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom240": {
+      "median": 0.4811,
+      "p05": 0.4756,
+      "p95": 0.4863,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom2640": {
+      "median": 0.484,
+      "p05": 0.4783,
+      "p95": 0.4888,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom4320": {
+      "median": 0.4839,
+      "p05": 0.4791,
+      "p95": 0.4884,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom44h": {
+      "median": 0.4839,
+      "p05": 0.4785,
+      "p95": 0.4889,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom60": {
+      "median": 0.4846,
+      "p05": 0.4791,
+      "p95": 0.4896,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom720": {
+      "median": 0.4934,
+      "p05": 0.4881,
+      "p95": 0.4977,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_revW": {
+      "median": 0.5189,
+      "p05": 0.5137,
+      "p95": 0.5234,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_up": {
+      "median": 0.5095,
+      "p05": 0.505,
+      "p95": 0.5151,
+      "share_ge_66": 0.0
+     }
+    },
+    "247": {
+     "n_windows_per_path": 12587,
+     "sim_wr_down": {
+      "median": 0.4911,
+      "p05": 0.4838,
+      "p95": 0.4967,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom1440": {
+      "median": 0.4706,
+      "p05": 0.4636,
+      "p95": 0.477,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom15": {
+      "median": 0.4926,
+      "p05": 0.4861,
+      "p95": 0.4991,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom240": {
+      "median": 0.485,
+      "p05": 0.4781,
+      "p95": 0.4925,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom2640": {
+      "median": 0.4696,
+      "p05": 0.4613,
+      "p95": 0.4763,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom4320": {
+      "median": 0.4701,
+      "p05": 0.4637,
+      "p95": 0.4774,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom44h": {
+      "median": 0.4699,
+      "p05": 0.4611,
+      "p95": 0.4761,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom60": {
+      "median": 0.4892,
+      "p05": 0.4815,
+      "p95": 0.4952,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom720": {
+      "median": 0.4926,
+      "p05": 0.4858,
+      "p95": 0.5001,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_revW": {
+      "median": 0.5142,
+      "p05": 0.5071,
+      "p95": 0.5218,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_up": {
+      "median": 0.5087,
+      "p05": 0.5032,
+      "p95": 0.5161,
+      "share_ge_66": 0.0
+     }
+    }
+   }
+  },
+  "ETH": {
+   "label": "SIMULATED \u2014 block-bootstrap Monte Carlo over the real tape; not a measurement, not a forecast",
+   "method": "200-path day-block bootstrap of the real 5m tape (2160 real days), same epoch windows & strict-sign scoring as backtest/continuous.py",
+   "asset": "ETH",
+   "sim_paths": 200,
+   "sim_seed": 495,
+   "sim_cells": {
+    "22": {
+     "n_windows_per_path": 141325,
+     "sim_wr_down": {
+      "median": 0.495,
+      "p05": 0.4926,
+      "p95": 0.4967,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom1440": {
+      "median": 0.4966,
+      "p05": 0.4948,
+      "p95": 0.4982,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom15": {
+      "median": 0.4801,
+      "p05": 0.4777,
+      "p95": 0.4823,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom240": {
+      "median": 0.4828,
+      "p05": 0.4809,
+      "p95": 0.4848,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom2640": {
+      "median": 0.496,
+      "p05": 0.4938,
+      "p95": 0.4977,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom4320": {
+      "median": 0.4958,
+      "p05": 0.4941,
+      "p95": 0.4977,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom44h": {
+      "median": 0.4959,
+      "p05": 0.4938,
+      "p95": 0.4979,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom60": {
+      "median": 0.4767,
+      "p05": 0.4745,
+      "p95": 0.4785,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom720": {
+      "median": 0.4939,
+      "p05": 0.4923,
+      "p95": 0.4959,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_revW": {
+      "median": 0.5206,
+      "p05": 0.5186,
+      "p95": 0.5226,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_up": {
+      "median": 0.504,
+      "p05": 0.5023,
+      "p95": 0.5064,
+      "share_ge_66": 0.0
+     }
+    },
+    "44": {
+     "n_windows_per_path": 70642,
+     "sim_wr_down": {
+      "median": 0.4918,
+      "p05": 0.4893,
+      "p95": 0.4945,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom1440": {
+      "median": 0.4933,
+      "p05": 0.4902,
+      "p95": 0.4959,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom15": {
+      "median": 0.4844,
+      "p05": 0.4812,
+      "p95": 0.487,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom240": {
+      "median": 0.4826,
+      "p05": 0.4798,
+      "p95": 0.4853,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom2640": {
+      "median": 0.4926,
+      "p05": 0.4899,
+      "p95": 0.4949,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom4320": {
+      "median": 0.4926,
+      "p05": 0.49,
+      "p95": 0.4957,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom44h": {
+      "median": 0.4925,
+      "p05": 0.4899,
+      "p95": 0.4948,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom60": {
+      "median": 0.4783,
+      "p05": 0.4754,
+      "p95": 0.4816,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom720": {
+      "median": 0.4933,
+      "p05": 0.4902,
+      "p95": 0.4961,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_revW": {
+      "median": 0.52,
+      "p05": 0.5168,
+      "p95": 0.5229,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_up": {
+      "median": 0.5075,
+      "p05": 0.5047,
+      "p95": 0.5099,
+      "share_ge_66": 0.0
+     }
+    },
+    "130": {
+     "n_windows_per_path": 23920,
+     "sim_wr_down": {
+      "median": 0.4896,
+      "p05": 0.485,
+      "p95": 0.4949,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom1440": {
+      "median": 0.483,
+      "p05": 0.4783,
+      "p95": 0.4883,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom15": {
+      "median": 0.4899,
+      "p05": 0.485,
+      "p95": 0.4957,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom240": {
+      "median": 0.4839,
+      "p05": 0.4794,
+      "p95": 0.489,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom2640": {
+      "median": 0.4814,
+      "p05": 0.4771,
+      "p95": 0.4868,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom4320": {
+      "median": 0.4822,
+      "p05": 0.4768,
+      "p95": 0.4873,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom44h": {
+      "median": 0.4814,
+      "p05": 0.4766,
+      "p95": 0.4866,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom60": {
+      "median": 0.4852,
+      "p05": 0.4805,
+      "p95": 0.4909,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom720": {
+      "median": 0.4951,
+      "p05": 0.4898,
+      "p95": 0.4996,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_revW": {
+      "median": 0.5163,
+      "p05": 0.5116,
+      "p95": 0.5218,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_up": {
+      "median": 0.5099,
+      "p05": 0.5046,
+      "p95": 0.5146,
+      "share_ge_66": 0.0
+     }
+    },
+    "247": {
+     "n_windows_per_path": 12587,
+     "sim_wr_down": {
+      "median": 0.4893,
+      "p05": 0.483,
+      "p95": 0.4956,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom1440": {
+      "median": 0.4667,
+      "p05": 0.4607,
+      "p95": 0.4743,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom15": {
+      "median": 0.4938,
+      "p05": 0.4869,
+      "p95": 0.5022,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom240": {
+      "median": 0.491,
+      "p05": 0.4845,
+      "p95": 0.4984,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom2640": {
+      "median": 0.467,
+      "p05": 0.4595,
+      "p95": 0.4732,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom4320": {
+      "median": 0.4678,
+      "p05": 0.4612,
+      "p95": 0.4735,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom44h": {
+      "median": 0.467,
+      "p05": 0.4594,
+      "p95": 0.4731,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom60": {
+      "median": 0.4918,
+      "p05": 0.485,
+      "p95": 0.4985,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_mom720": {
+      "median": 0.4962,
+      "p05": 0.489,
+      "p95": 0.5021,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_revW": {
+      "median": 0.5076,
+      "p05": 0.5018,
+      "p95": 0.5152,
+      "share_ge_66": 0.0
+     },
+     "sim_wr_up": {
+      "median": 0.5105,
+      "p05": 0.5041,
+      "p95": 0.517,
+      "share_ge_66": 0.0
+     }
+    }
+   }
+  }
+ }
+}
