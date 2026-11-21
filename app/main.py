@@ -332,8 +332,11 @@ async def _news_ticker() -> None:
     while True:
         try:
             # ingest pass every tick: sim keeps dripping (rate-aware for
-            # the live source) so the News tab is a continuous stream
-            engine.news.refresh()
+            # the live source) so the News tab is a continuous stream.
+            # OFF the event loop: refresh() may do a blocking httpx.get
+            # (timeout=8s) when a live key is configured — inline it froze
+            # the whole app behind the "ENGINE BUSY" banner (issue 1).
+            await asyncio.to_thread(engine.news.refresh)
             tick: dict[str, Any] = {"type": "NEWS", "ts": time.time(),
                                     "count": len(engine.news.items),
                                     "latest": [{
@@ -380,9 +383,10 @@ async def _hourly_learning_loop() -> None:
             now = time.time()
             lm = engine.learning
             if now - (lm.last_macro_ts or 0.0) >= 3600.0:
-                lm.macro_cycle(engine)
-                lm.maybe_deep(engine)     # wall-clock deep cycle too
-                lm.save(engine)
+                # off the loop: macro/deep cycles walk the whole ledger
+                await asyncio.to_thread(lm.macro_cycle, engine)
+                await asyncio.to_thread(lm.maybe_deep, engine)
+                await asyncio.to_thread(lm.save, engine)
                 log.info("hourly learning safety net fired "
                          "(macro=%d deep=%d)", lm.macro_count, lm.deep_count)
         except Exception:
@@ -764,7 +768,8 @@ async def think_history(symbol: str = "BTC", tf: str = "tf1") -> JSONResponse:
 @app.get("/api/explain/status")
 async def explain_status() -> JSONResponse:
     from . import explainer
-    return JSONResponse({"ok": True, **explainer.status()})
+    # status() pings Ollama with a 2 s sync httpx call — off the loop (issue 1)
+    return JSONResponse({"ok": True, **await asyncio.to_thread(explainer.status)})
 
 
 @app.get("/api/brain/status")
@@ -1008,7 +1013,7 @@ async def brain_activations(symbol: str = "BTC", tf: str = "tf1") -> JSONRespons
 async def news_status() -> JSONResponse:
     """docs11 §3.6/§7 — coverage string, per-source backoff lines,
     per-horizon indices and the emergency audit trail."""
-    engine.news.refresh()
+    await asyncio.to_thread(engine.news.refresh)   # may block 8 s (issue 1)
     return JSONResponse({"ok": True, **engine.news.stats(),
                          **engine.news.status()})
 
@@ -1016,9 +1021,9 @@ async def news_status() -> JSONResponse:
 @app.post("/api/news/poll")
 async def news_poll() -> JSONResponse:
     """docs11 §7 — manual poll NOW (rate-limit aware) + evaluate."""
-    engine.news.refresh()          # one honest ingest pass (rate-aware)
+    await asyncio.to_thread(engine.news.refresh)   # one honest ingest pass
     for sym in SYMBOLS:
-        engine.news.evaluate(sym)
+        await asyncio.to_thread(engine.news.evaluate, sym)
     return JSONResponse({"ok": True, "items": len(engine.news.items),
                          "coverage": engine.news.coverage_string(),
                          "stats": engine.news.stats()})
@@ -1073,7 +1078,7 @@ async def news_feed(symbol: str) -> JSONResponse:
     if symbol not in SYMBOLS:
         return JSONResponse({"ok": False, "error": "unknown symbol"},
                             status_code=400)
-    engine.news.refresh()   # top up the sim stream — never show an empty feed
+    await asyncio.to_thread(engine.news.refresh)   # top up the sim stream
     return JSONResponse({"ok": True, **engine.news.aggregate(symbol)})
 
 
@@ -1306,8 +1311,9 @@ async def learning_state() -> JSONResponse:
 async def learning_macro() -> JSONResponse:
     """Manual/cron trigger for the macro learning cycle (15 GRCs)."""
     try:
-        engine.learning.macro_cycle(engine)
-        engine.learning.save(engine)
+        # off the event loop — the cycle walks every settled row (issue 1)
+        await asyncio.to_thread(engine.learning.macro_cycle, engine)
+        await asyncio.to_thread(engine.learning.save, engine)
     except Exception as e:
         log.exception("macro trigger failed")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -1319,8 +1325,8 @@ async def learning_macro() -> JSONResponse:
 async def learning_deep() -> JSONResponse:
     """Manual trigger for the deep learning cycle (247 minutes)."""
     try:
-        engine.learning.deep_cycle(engine)
-        engine.learning.save(engine)
+        await asyncio.to_thread(engine.learning.deep_cycle, engine)
+        await asyncio.to_thread(engine.learning.save, engine)
     except Exception as e:
         log.exception("deep trigger failed")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -1616,9 +1622,11 @@ async def trading_arm(body: dict) -> JSONResponse:
 
 @app.get("/api/agents/status")
 async def agents_status() -> JSONResponse:
-    ag = engine.agents.status()
+    # agents.status() probes Ollama (sync httpx, 2 s cap) and auditor.status()
+    # pings the daemon — both off the event loop (issue 1)
+    ag = await asyncio.to_thread(engine.agents.status)
     try:
-        ag["auditor"] = engine.auditor.status()   # was None forever:
+        ag["auditor"] = await asyncio.to_thread(engine.auditor.status)
     except Exception:                              # the Agents tab span
         ag["auditor"] = {"available": False,       # on "checking daemon…"
                           "hint": "auditor status unavailable"}
@@ -1676,6 +1684,34 @@ async def analyse_start(symbol: str, tf: str = "tf1") -> JSONResponse:
 async def analyse_status() -> JSONResponse:
     job = engine.analyse_job or {"status": "idle"}
     return JSONResponse({"ok": True, "job": job})
+
+
+@app.get("/api/analyses")
+async def analyses_journal(limit: int = 100) -> JSONResponse:
+    """Issue 3 — durable memory of every analysis run: what was decided,
+    what it learned, what needs to change (ai_correction/hindsight), and
+    the lock id that ties it to settlement."""
+    import json as _json
+    path = __import__("os").environ.get(
+        "ANALYSE_JOURNAL_PATH", "data/analyses.jsonl")
+    rows: list = []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    try:
+                        rows.append(_json.loads(line))
+                    except ValueError:
+                        continue
+    except OSError:
+        pass
+    n = max(1, min(500, int(limit)))
+    return JSONResponse({"ok": True, "records": rows[-n:],
+                         "total": len(rows),
+                         "path": path,
+                         "rule": ("every ANALYSE run is appended here — "
+                                  "success, duplicate, queue or failure")})
 
 
 @app.get("/api/genesis/status")
@@ -1736,6 +1772,9 @@ async def secrets_status() -> JSONResponse:
     except OSError:
         pass
     secrets_file = bool(_os.path.exists(SECRETS_FILE))
+    # keyring probe runs agents.status() (sync Ollama ping) — off the loop
+    keyring = (await asyncio.to_thread(engine.agents.status)).get(
+        "keyring") or {}
     # Git-ignored, owner-only secret store. This is intentional and is NOT
     # "a leak": it is the only way a pasted key survives a restart without
     # putting it in a tracked file.
@@ -1746,7 +1785,7 @@ async def secrets_status() -> JSONResponse:
         "secrets_file": secrets_file,
         "configured": configured,
         "keys_on_disk": on_disk,
-        "keyring": engine.agents.status().get("keyring") or {},
+        "keyring": keyring,
         "rule": ("tracked settings never contain a key; the local store "
                  "data/secrets.json is chmod 600 and git-ignored. "
                  "configured=true means the agent will try that key now."),
@@ -1810,7 +1849,8 @@ async def ledger_api() -> JSONResponse:
 @app.get("/api/auditor/status")
 async def auditor_status() -> JSONResponse:
     """Local Ollama formula auditor (qwen2.5-coder:3b) status + reports."""
-    return JSONResponse({"ok": True, **engine.auditor.status()})
+    return JSONResponse({"ok": True,
+                         **await asyncio.to_thread(engine.auditor.status)})
 
 
 @app.post("/api/agents/triage")

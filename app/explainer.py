@@ -15,6 +15,7 @@ hammers the CPU.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -254,7 +255,9 @@ async def explain(view: str, symbol: str, tf: str,
         "text": fb, "source": "local-fallback", "model": None,
         "cached": False,
     }
-    st = status()
+    # status() pings Ollama with a 2 s sync httpx call — never inline it
+    # in this async path: it froze the event loop behind the busy banner
+    st = await asyncio.to_thread(status)
     if st["available"]:
         try:
             prompt = (f"Tab: {view} | {symbol}/{tf}\nEngine JSON:\n"
