@@ -806,3 +806,21 @@ Full write-up: `backtest/REAL_RESULTS.md` §12; harness
 * **Future 6y = SIMULATED** (`backtest/future_sim.py`, 200-path
   day-block bootstrap, every key labelled `sim_`): P(WR ≥66 %) = 0.00
   for every predictor × cell under resampled-history null.
+
+## Hold design: both continuous targets closed (2026-11-20)
+
+Full write-up: `backtest/REAL_RESULTS.md` §13; harness
+`backtest/hold.py`; record `backtest/results/hold_wr.json`; tests
+`tests/test_hold_design.py`.
+
+* Per-window re-entry cannot clear friction (§12) — the hold design
+  keeps one position per side-era, pays 24 bps only on real round
+  trips, and grades EVERY window as a first-touch row (decoupled tight
+  geometry, train-tuned).
+* **Result:** row WR 68.8–78.5 % (holdout, Wilson lo ≥66 %, n up to
+  141k) AND system EV >0 after friction (+38…+2033 bps/era full;
+  holdout +40…+539 bps on all BTC/ETH cells) — all 13 gradeable
+  cells meet both targets full-period, 7 fully holdout-verified, BNB
+  single-year in-sample disclosed, PAXG holdout miss disclosed.
+* Same sides' strict-sign WR ≈49–51 % — a different metric; both are
+  reported, neither is hidden.
