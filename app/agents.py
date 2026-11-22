@@ -1563,9 +1563,11 @@ class AgentManager:
             "openai_model": "gpt-4o",
             "anthropic_model": "claude-3-5-sonnet-latest",
             "theme": "dark", "haptics": True, "sound": True,
-            # AUTO-PREDICT: the staged analysis re-runs by itself so the
-            # views are always fresh; turn OFF for manual-only ▶ ANALYSE
-            "auto_predict": True,
+            # AUTO-PREDICT: MANUAL IS THE DEFAULT (user directive) —
+            # analysis runs only on ▶ ANALYSE; only the user can turn
+            # auto mode on (and it then sticks: auto_predict_touched)
+            "auto_predict": False,
+            "auto_predict_touched": False,
             # two prediction systems: "old" (TP/SL ladder, default)
             # or "new" (horizon forecast: price at timeframe end IS the
             # target, SL kept). Toggled from the header button.
@@ -1601,6 +1603,13 @@ class AgentManager:
         try:
             with open(SETTINGS_FILE) as fh:
                 self.settings.update(json.load(fh))
+            # MANUAL-DEFAULT migration: settings written by the old
+            # auto-on default are not a user choice — flip them to
+            # manual once.  A user who explicitly toggled (touched) or
+            # re-saved auto mode keeps their value.
+            if (self.settings.get("auto_predict") is True
+                    and not self.settings.get("auto_predict_touched")):
+                self.settings["auto_predict"] = False
         except (OSError, ValueError):
             pass
         # local secret store: the user pastes a key once and it survives a
@@ -1694,6 +1703,10 @@ class AgentManager:
                     continue
             if k in self.settings or k in KEY_FIELDS or k in KEY_ALIASES:
                 self.settings[k] = v
+                if k == "auto_predict":
+                    # the USER moved it — the manual-default migration
+                    # must never undo a deliberate toggle
+                    self.settings["auto_predict_touched"] = True
                 if k in KEY_FIELDS:
                     changed_keys.append(k)
         for k in changed_keys:

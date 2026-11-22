@@ -922,11 +922,11 @@ def system_status() -> JSONResponse:
              "waiting for enough graded windows (n≥8)"),
             "ok" if changes else "idle")
         row("auto-predict",
-            eng.agents.settings.get("auto_predict", True),
-            "on — analysis re-runs itself every ≥45 s"
-            if eng.agents.settings.get("auto_predict", True)
-            else "off — manual ▶ ANALYSE only",
-            "ok" if eng.agents.settings.get("auto_predict", True)
+            eng.agents.settings.get("auto_predict", False),
+            "on — analysis re-runs itself every ≥45 s (user-enabled)"
+            if eng.agents.settings.get("auto_predict", False)
+            else "off — manual ▶ ANALYSE only (default; user-controlled)",
+            "ok" if eng.agents.settings.get("auto_predict", False)
             else "idle")
     except Exception as exc:
         row("hindsight", False, f"error: {exc}", "err")
@@ -1702,6 +1702,30 @@ async def analyse_start(symbol: str, tf: str = "tf1",
 async def analyse_status() -> JSONResponse:
     job = engine.analyse_job or {"status": "idle"}
     return JSONResponse({"ok": True, "job": job})
+
+
+@app.get("/api/cells")
+async def hold_cells() -> JSONResponse:
+    """The certified hold policy's 16 live cells (4 assets × 4 TFs):
+    tier badge (HOLD-OUT VERIFIED / IN-SAMPLE SHADOW / UNGRADEABLE ·
+    WARMUP), measured win rate + Wilson confidence, the per-cell
+    ANALYSE countdown (one click locks THAT cell for its tf minutes —
+    the other cells stay free), the era position with real friction,
+    and the last sealed lock."""
+    from . import hold_policy as _hp
+    cells = engine.hold_cells_block()
+    return JSONResponse({
+        "ok": True,
+        "policy": "certified hold policy (backtest/results/hold_wr.json)",
+        "cells": cells,
+        "count": len(cells),
+        "tiers": _hp.tier_counts(),
+        "manual_default": True,       # only the user can enable auto
+        "auto_predict": bool(engine.agents.settings.get(
+            "auto_predict", False)),
+        "rule": ("one ANALYSE click = one tf-minute lock on that cell "
+                 "only; 4 predictions per asset, 16 total"),
+    })
 
 
 @app.get("/api/analyses")

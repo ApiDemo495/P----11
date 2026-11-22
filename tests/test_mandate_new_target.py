@@ -47,27 +47,45 @@ def test_old_sigma_mean_formula_is_gone():
 
 
 def test_mandate_tiers_follow_measured_cells():
-    """The win-rate directive search (43k–107k configs/asset, n≥60,
-    EV>0 after friction, ≥5/6 folds EV>0, ≥4/6 folds WR≥0.60, full
-    WR≥0.66 — see backtest/mandate_wr_search.py) decides which cells
-    issue — app/mandate_cfg.py. BTC issues tf2/tf4, ETH tf1/tf2,
-    BNB tf2/tf3, PAXG tf3/tf4; every non-measured cell stays capped
-    watch-only. Direction rules were re-pointed by the continuous
-    benchmark (REAL_RESULTS §12): BTC/ETH/BNB now run `fade_prev`
-    (previous-window fade, 51.5–53.9 % at the LIVE 22–247-minute
-    horizons vs mom44's 48–49.8 % — the WR search measured 22–247
-    hourly BARS, a horizon mismatch); PAXG keeps mom44 (measured tie
-    at its only gradeable cell)."""
+    """CERTIFIED HOLD POLICY owns all 16 (asset × tf) cells
+    (backtest/results/hold_wr.json, PR #13): 7 cells are HOLD-OUT
+    VERIFIED, BNB's 4 are IN-SAMPLE SHADOW (single-year), PAXG tf4 is
+    IN-SAMPLE SHADOW · HOLDOUT MISS, PAXG tf1–tf3 are UNGRADEABLE /
+    WARMUP (1 h history) — and every one of them may ISSUE at a huge
+    score: the hold system has NO abstention gates (filters and
+    confluence are skipped for managed cells; the legacy mandate tf
+    cap only applies when hold_wr.json is missing).  The tier_rule
+    carries the hold badge + measured win rate so the UI explains
+    WHY each cell is live."""
+    import os
+
     from tests.test_engine import make_engine
+    from app import hold_policy as hp
     engine, _feed, _ = make_engine()
-    for sym, tf in (("BTC", "tf2"), ("BTC", "tf4"), ("ETH", "tf1"),
-                    ("ETH", "tf2"), ("BNB", "tf2"), ("BNB", "tf3"),
-                    ("PAXG", "tf3"), ("PAXG", "tf4")):
+    for sym, tf in hp.known_cells():
         out = engine._tier_for(sym, tf, 0.5)     # a huge score
         assert out["tier"] == "full", (sym, tf, out.get("tier_rule"))
-    for sym, tf in (("BTC", "tf1"), ("BTC", "tf3"), ("ETH", "tf3"),
-                    ("ETH", "tf4"), ("BNB", "tf1"), ("BNB", "tf4"),
-                    ("PAXG", "tf1"), ("PAXG", "tf2")):
-        out = engine._tier_for(sym, tf, 0.5)
-        assert out["tier"] == "watch-only", (sym, tf)
+        assert "hold policy" in out["tier_rule"], (sym, tf)
+        assert f"[{hp.tier(sym, tf)}]" in out["tier_rule"], (sym, tf)
+    # the certified tier distribution is exact (7 / 1 / 4 / 3 / 1)
+    counts = hp.tier_counts()
+    assert counts["HOLD-OUT VERIFIED"] == 7
+    assert counts["HOLDOUT ROWS · ERA n<3"] == 1
+    assert counts["IN-SAMPLE SHADOW"] == 4
+    assert counts["IN-SAMPLE SHADOW · HOLDOUT MISS"] == 1
+    assert counts["UNGRADEABLE / WARMUP"] == 3
+    # legacy fallback still caps when the hold record is absent
+    import app.hold_policy as _hp
+    old_path = os.environ.get("HOLD_WR_PATH")
+    os.environ["HOLD_WR_PATH"] = "/nonexistent/hold_wr.json"
+    try:
+        _hp.reload("/nonexistent/hold_wr.json")
+        out = engine._tier_for("BTC", "tf1", 0.5)
+        assert out["tier"] == "watch-only", out
         assert "mandate" in out["tier_rule"]
+    finally:
+        if old_path is None:
+            os.environ.pop("HOLD_WR_PATH", None)
+        else:
+            os.environ["HOLD_WR_PATH"] = old_path
+        _hp.reload(old_path)

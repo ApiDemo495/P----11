@@ -87,15 +87,19 @@ def test_auto_predict_setting_default_and_toggle():
     from tests.test_engine import make_engine
 
     engine, _, _ = make_engine()
-    assert engine.agents.settings.get("auto_predict") is True
-    engine.agents.configure(auto_predict=False)
-    assert engine.agents.settings["auto_predict"] is False
+    # MANUAL IS THE DEFAULT (user directive): analysis runs only on
+    # ▶ ANALYSE; only an explicit user toggle turns auto mode on.
+    assert engine.agents.settings.get("auto_predict") is False
     engine.agents.configure(auto_predict=True)
     assert engine.agents.settings["auto_predict"] is True
-    # cadence guard exists and is pytest-safe
+    assert engine.agents.settings.get("auto_predict_touched") is True
+    engine.agents.configure(auto_predict=False)
+    assert engine.agents.settings["auto_predict"] is False
+    # cadence guard exists and is pytest-safe; default in the loop is False
     src = (ROOT / "app" / "engine.py").read_text()
     assert "_last_auto_analyse" in src
     assert 'os.environ.get("PYTEST_CURRENT_TEST")' in src
+    assert 'self.agents.settings.get("auto_predict", False)' in src
 
 
 def test_settings_endpoint_roundtrip():
@@ -114,7 +118,9 @@ def test_settings_endpoint_roundtrip():
             r = c.put("/api/settings", json={"auto_predict": False})
             assert r.json()["settings"]["auto_predict"] is False
         finally:
-            c.put("/api/settings", json={"auto_predict": True})
+            # restore the MANUAL default (the file's engine is shared
+            # with later tests in this session)
+            c.put("/api/settings", json={"auto_predict": False})
         # confidence calibration (stated vs realised). The boot warm-history
         # replay now settles replayed windows, so this is no longer a cold
         # n=0 page: it must be INTERNALLY CONSISTENT — `enough` is exactly
