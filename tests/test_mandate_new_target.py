@@ -67,13 +67,16 @@ def test_mandate_tiers_follow_measured_cells():
         assert out["tier"] == "full", (sym, tf, out.get("tier_rule"))
         assert "hold policy" in out["tier_rule"], (sym, tf)
         assert f"[{hp.tier(sym, tf)}]" in out["tier_rule"], (sym, tf)
-    # the certified tier distribution is exact (7 / 1 / 4 / 3 / 1)
+    # the certified tier distribution is exact — v8 §17 census
+    # (7 HOLD-OUT VERIFIED / 0 rows-only / 0 in-sample / 5 holdout
+    # misses / 4 warmup; the v6-era 7/1/4/3/1 came from the 8-month
+    # BNB extract and single-year labels that the 9-year tape ended)
     counts = hp.tier_counts()
     assert counts["HOLD-OUT VERIFIED"] == 7
-    assert counts["HOLDOUT ROWS · ERA n<3"] == 1
-    assert counts["IN-SAMPLE SHADOW"] == 4
-    assert counts["IN-SAMPLE SHADOW · HOLDOUT MISS"] == 1
-    assert counts["UNGRADEABLE / WARMUP"] == 3
+    assert counts.get("HOLDOUT ROWS · ERA n<3", 0) == 0
+    assert counts.get("IN-SAMPLE SHADOW", 0) == 0
+    assert counts["IN-SAMPLE SHADOW · HOLDOUT MISS"] == 5
+    assert counts["UNGRADEABLE / WARMUP"] == 4
     # legacy fallback still caps when the hold record is absent
     import app.hold_policy as _hp
     old_path = os.environ.get("HOLD_WR_PATH")

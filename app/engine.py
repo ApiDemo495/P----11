@@ -3003,6 +3003,22 @@ class PredictionEngine:
                              "result": None,
                              "error": "exceeded the 175 s budget "
                                       "(3 minute cap)"})
+        except Exception as exc:
+            # a crash used to vanish as an unhandled task exception —
+            # the UI kept "queued" rows forever and the cell stayed
+            # burned behind its timer although NO prediction existed
+            job["status"] = "error"
+            job["error"] = f"analysis failed: {exc!r}"[:300]
+            log.exception("analyse body failed for %s|%s",
+                          job.get("symbol"), job.get("tf"))
+            await self.emit({"type": "analyse_done",
+                             "symbol": job.get("symbol"),
+                             "asset": job.get("symbol"),
+                             "tf": job.get("tf"),
+                             "timeframe": job.get("tf"),
+                             "request_id": job.get("request_id"),
+                             "result": None,
+                             "error": job["error"]})
         finally:
             if job.get("status") == "running":      # defensive: never stuck
                 job["status"] = "done" if job.get("result") else "error"
@@ -3010,6 +3026,15 @@ class PredictionEngine:
                 self._journal_analyse(job)
             except Exception:
                 log.exception("analyse journal write failed")
+            # a FAILED analysis seals nothing — give the cell back
+            # instead of burning its whole window behind a crash
+            # ("it locked my eth for timer" with no usable prediction)
+            if job.get("status") == "error":
+                try:
+                    from . import hold_policy as _hp_rel
+                    _hp_rel.cell_locks().clear(job["symbol"], job["tf"])
+                except Exception:
+                    pass
             self._start_queued_analyse()
 
     def _journal_analyse(self, job: dict) -> None:
@@ -3100,6 +3125,13 @@ class PredictionEngine:
 
             raws, per_tf_ms = await run_pass(_stage_formulas)
             store["raws"] = raws
+            # HARD GUARD (user order): a prediction may never seal
+            # without formulas actually producing readings — the failed
+            # run must fail loudly, not lock a timer on an empty brain
+            if not raws or not any(raws.get(t) for t in TF_ORDER):
+                raise RuntimeError(
+                    "formulas stage produced no readings — refusing to "
+                    "seal a prediction that never used the formulas")
             nz = sum(1 for t in TF_ORDER for v in raws[t].values()
                      if abs(v) > 1e-9)
             total = sum(len(v) for v in raws.values())
@@ -3490,7 +3522,55 @@ class PredictionEngine:
             # The honest verdict: a side can be ISSUED for grading while
             # never clearing the issue floor. The UI and the sealed lock read
             # THIS field, so no panel can advertise "ISSUED" at conf 0.20.
-            final["verdict"] = ("ISSUE" if (final.get("gate_ok")
+            # REGIME CONFLICT (user order): the TF card's own 5-state
+            # chip said IMPULSE_BULL/BEAR opposite to this cell's
+            # certified side ("it said impulse bear but gave bullish").
+            # The window record stays CONTINUOUS — the certified side is
+            # still sealed and graded (no selective skipping) — but the
+            # app must not advertise or route the opposite call:
+            # gate_ok=False → verdict NO CALL, tier watch-only (below)
+            # → no paper/live entry, and the reason names BOTH sides.
+            _conflict: dict | None = None
+            try:
+                from .regime import classify_tape as _ctape
+                _stq = self.feed.state(symbol)
+                _rq = _ctape(list(_stq.closes or []),
+                             highs=list(_stq.highs or []) or None,
+                             lows=list(_stq.lows or []) or None,
+                             volumes=list(getattr(_stq, "volumes", None)
+                                          or []) or None)
+                _want_q = {"IMPULSE_BULL": 1,
+                           "IMPULSE_BEAR": -1}.get(
+                               str(_rq.get("state") or ""), 0)
+                if _want_q and direction and _want_q != direction:
+                    _conflict = {
+                        "state": str(_rq.get("state")),
+                        "label": str(_rq.get("label") or ""),
+                        "regime_conf": _rq.get("confidence"),
+                        "regime_wants": _want_q,
+                        "certified_side": direction,
+                    }
+            except Exception:
+                _conflict = None
+            if _conflict is not None:
+                final["regime_conflict"] = _conflict
+                final["gate_ok"] = False
+                final["execution_eligible"] = False
+                # demote BEFORE the seal so contract_tier is persisted
+                # as watch-only too (a restart must not restore a
+                # tradable band over a regime-conflicted window)
+                if cyc is not None:
+                    cyc.tier = "watch-only"
+                    cyc.execution_eligible = False
+                final["issue_note"] = (
+                    f"REGIME CONFLICT — 5-state regime "
+                    f"{_conflict['state']} (conf "
+                    f"{_conflict.get('regime_conf')}) opposes "
+                    f"{'BUY' if direction > 0 else 'SELL'} "
+                    f"(certified hold side): NO ORDER routed; the sealed "
+                    f"window record keeps the certified side for grading")
+            final["verdict"] = ("NO CALL" if _conflict is not None else
+                                "ISSUE" if (final.get("gate_ok")
                                             and recheck["passed"])
                                 else "WATCH" if final.get("direction")
                                 else "NO CALL")
@@ -3529,6 +3609,12 @@ class PredictionEngine:
                 cyc.verdict = str(final.get("verdict") or "NO CALL")
                 cyc.gate_ok = bool(final.get("gate_ok"))
                 cyc.prediction_lock = dict(final.get("prediction_lock") or {})
+                if _conflict is not None:
+                    # watch-only ⇒ execution_eligible flips False on the
+                    # next tick (paper AND live both check tier) while
+                    # the sealed side stays on the record for grading
+                    cyc.tier = "watch-only"
+                    cyc.execution_eligible = False
             # COGNITION: produce and record the thinking trace for the call
             # that was just made (signature + metacognitive snapshot). Failure
             # here must never cost the user their analysis.
@@ -3606,12 +3692,25 @@ class PredictionEngine:
             '"reason": "one sentence"}. Data:\n'
             + json.dumps(payload, default=str)[:4000]
         )
+        # OFFLINE/SLOW-AGENT BUDGET (user order: "agents mostly,
+        # always or partially offline"): the advisory review gets a
+        # hard 8 s wall — a dead cloud endpoint (12 s transport
+        # timeout each) or a CPU-bound llama must never stall the
+        # analysis for tens of seconds.  Timeout ⇒ honest skip note.
         try:
-            review = await self.agents.review(
-                symbol, tf, store,
-                result={"direction": int(
-                    (self.last_result.get((symbol, tf)) or {}).get("direction")
-                    or 0)})
+            review = await asyncio.wait_for(
+                self.agents.review(
+                    symbol, tf, store,
+                    result={"direction": int(
+                        (self.last_result.get((symbol, tf)) or {}).get(
+                            "direction") or 0)}),
+                timeout=8.0)
+        except (asyncio.TimeoutError, TimeoutError):
+            review = {"available": False, "backend": "",
+                      "note": ("agent review exceeded the 8 s budget — "
+                               "slow/offline backend skipped (deterministic "
+                               "pipeline only)"),
+                      "reviews": {}, "correction": None}
         except Exception as exc:                     # never fail the stage
             log.exception("agent review failed")
             review = {"available": False, "backend": "",
@@ -7761,7 +7860,15 @@ class PredictionEngine:
                 "kind": "safe",
                 "symbol": symbol,
                 "tf": tf,
-                "message": "SAFE — BE CAUTIOUS",
+                # the toast used to read only the message — "SAFE" with
+                # no clue WHICH trade.  The text now names the cell,
+                # the side and the lock id; the raw fields are here too
+                "side": "BUY" if original_direction > 0 else "SELL",
+                "lock_id": str(getattr(cyc, "lock_id", "") or ""),
+                "message": (
+                    f"{symbol} {tf.upper()} — SAFE, BE CAUTIOUS "
+                    f"(SL hit vs {'BUY' if original_direction > 0 else 'SELL'}"
+                    f" · lock {str(getattr(cyc, 'lock_id', '') or '')[:10]})"),
                 "confidence": cyc.confidence,
                 "sl_tighten_pct": round((1.0 - cyc.sl_tighten) * 100, 1),
                 "ts": now,
@@ -7786,7 +7893,14 @@ class PredictionEngine:
                 "kind": "close",
                 "symbol": symbol,
                 "tf": tf,
-                "message": "CLOSE POSITION IMMEDIATELY",
+                # user complaint: "it told me to cancel trade but not
+                # which one" — the toast must identify the position
+                "side": "BUY" if original_direction > 0 else "SELL",
+                "lock_id": str(getattr(cyc, "lock_id", "") or ""),
+                "message": (
+                    f"{symbol} {tf.upper()} — CLOSE POSITION IMMEDIATELY "
+                    f"(SL hit vs {'BUY' if original_direction > 0 else 'SELL'}"
+                    f" · lock {str(getattr(cyc, 'lock_id', '') or '')[:10]})"),
                 "ts": now,
             })
         self._save_cycle_lock_state(cyc)

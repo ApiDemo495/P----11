@@ -1149,3 +1149,112 @@ holdout-risk-aware robustness *into the train-side selection key*
 and re-run once — same criteria, stronger train-only constraint, no
 holdout peeking.  That is a new pre-registration, not a retry of this
 one.
+
+
+---
+
+## §17 · hold v8 — pre-registered (written BEFORE any v8 result exists)
+
+§16 shipped nothing: v7 passed gates (i) and (ii) (+6.18 pts mean row
+WR) but failed (iii) — WR-first selection picked era geometries whose
+*train* era EV was positive yet whose **worst train year** was thin,
+and ETH 44/130/247 + BTC 247 + BNB 44 slipped a few bps negative on
+the holdout.  v8 fixes exactly that, on the train side only.
+
+### Method (selection never consults the holdout)
+
+All v7 levers stay: `K_ROW` 0.15…0.6, the full side set (incl.
+`momMaj`/`momMean` and the lr composites), 24 bps/era friction, purge,
+min-eras, train-only masks.  Only the candidate GATING changes — a
+deterministic train-side robustness ladder, fixed here:
+
+For every era geometry compute train-only stats:
+
+* `worst_year_ev` = min over TRAIN years of (mean era pnl_net);
+* `pf` = Σ positive era pnl / |Σ negative era pnl| over train eras
+  (∞ when there are no losses).
+
+A cell takes candidates from the **first rung with ≥1 feasible
+candidate** (feasible = train row WR ≥ 0.66 with that side's strongest
+row geometry AND the era geometry clears the rung AND train era EV > 0
+AND min-eras):
+
+* **Rung A**: `worst_year_ev > 0` AND `pf ≥ 1.15`;
+* **Rung B**: `worst_year_ev > 0`;
+* **Rung C**: the v7 gate (positive + ≥60 % of train years robust).
+
+Within the chosen rung the selection key is unchanged: lexicographic
+**(train row WR, train era EV)** — WR-first, era EV as tie-break,
+train-only either way.  Single-year cells degrade to A′: era EV > 0 ∧
+pf ≥ 1.15, then EV > 0.
+
+### Ship gates — the same three, evaluated exactly once
+
+1. **(i)** every gradeable cell keeps `full row_wr ≥ 0.66` AND
+   `full era_ev_net > 0` (test_hold_design green);
+2. **(ii)** mean `full row_wr` across gradeable cells **strictly
+   improves on v6's 74.78 %**;
+3. **(iii)** at least **7 cells** hold `HOLD-OUT VERIFIED`.
+
+Fail any gate → restore the v6 artefact (`/tmp/hold_wr_v6.json`,
+still on disk) and report the failure here — no re-tries, no gate
+edits.  Holdout is consulted only for this final evaluation.
+
+### Data & parity
+
+BTC 5m / ETH 5m / PAXG 1h caches as in §15; BNB = parshant 9-year 1m
+tape (§15b).  Sides are unchanged from v7 → `app/hold_policy.py`
+twins stay as shipped; `tests/test_hold_live.py` must keep 0
+mismatches.  Disclosure: the lr-family bugfix, the `loadtxt` loader
+and the numba JIT from §16 are in effect for this run (bit-exact vs
+the Python reference — §16).
+
+Pre-registered 2026-11-22, before any v8 cell was computed.
+
+
+### §17 result (evaluated once, after the single v8 run) — **ALL THREE GATES PASS → v8 SHIPS**
+
+Run: BTC 5m, ETH 5m, PAXG 1h, BNB 1m (parshant 9-year tape), JIT
+cores, no holdout input to selection.  Ladder engagement: **rung A**
+selected for ETH 130min and PAXG 247min; every other cell fell to
+rung C (its pre-registered floor = the v7 gate).
+
+| gate | v8 | bar | verdict |
+|---|---|---|---|
+| (i) every gradeable cell `full row_wr ≥ 0.66` ∧ `full era EV > 0` | 12/12 | same | **PASS** (test_hold_design green) |
+| (ii) mean `full row_wr` over gradeable cells | **80.94 %** (n=12) | > v6's 74.78 % | **PASS (+6.16 pts)** |
+| (iii) HOLD-OUT VERIFIED cells | **7** (BNB 130/247, BTC 22/44/130, ETH 22/130) | ≥ 7 | **PASS** |
+
+Census shipped: **7 HOLD-OUT VERIFIED / 5 IN-SAMPLE SHADOW · HOLDOUT
+MISS / 4 UNGRADEABLE** (PAXG tf1–tf3 + BNB 22min `no_feasible_config`,
+same honest failure as v7).  Holdout misses (disclosed, never hidden):
+BTC 247 −29.3 bps, ETH 44 −52.5 bps, ETH 247 −0.6 bps, BNB 44
+−16.1 bps, PAXG 247 −58.5 bps.
+
+**What the ladder bought:** ETH 130min switched rung A → its train
+worst-year EV was +0.03 % with PF 1.86, and the holdout answered
+**+90.2 bps** (v7's rung-C pick sat at −3 bps — the exact failure §16
+documented).  Cost: −0.25 pt full row WR (83.66 vs 83.9).  PAXG 247
+also took rung A (train looked perfect: worst-year +1.3 %, PF 2.72)
+and still missed on holdout (−58.5 bps) — an honest train/holdout
+divergence on 18 holdout eras, not a code path.
+
+**Data-rebuild disclosure (sandbox reset destroyed the git-ignored
+caches mid-session):** BTC/ETH 5m were rebuilt from the thanhnha39
+raw parquet (same provenance as the original: Binance monthly zips,
+2018-12 → 2026-10-17) and then **trimmed to < 2026-10-01**, because
+§15's caches stopped at 2026-09-30 (documented: "all mirrors stop at
+2026-09-30").  The trim is what makes rung-C cells reproduce §16
+bit-for-bit: BTC 22/44/130/247 = 72.85/79.49/83.92/85.22 and ETH 247
+holdout era EV = −0.6 bps — both exactly the §16 numbers, proving
+data + selection identity.  PAXG 1h = 13,262 rows (KevinSherry,
+2025-03-27 → 2026-09-30) and BNB 1m = 4,737,863 rows (parshant,
+2017-11-06 → 2026-11-14) match their §15/§15b counts exactly.
+
+Live pins that must hold after this run (both were green in the full
+suite): `tests/test_hold_live.py::test_cells_endpoint_serves_policy`
+and `tests/test_mandate_new_target.py` both assert
+`HOLD-OUT VERIFIED == 7`.
+
+v6 remains backed up at `/tmp/hold_wr_v6.json`; no gate, threshold or
+pre-registration line was edited after the results existed.

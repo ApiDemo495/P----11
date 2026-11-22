@@ -212,17 +212,22 @@ def test_row_settlement_parity_vs_simulate(tmp_path, monkeypatch):
 
 # ─────────────────────────── 4) seal geometry ────────────────────────
 def test_engine_seal_uses_certified_row_geometry():
+    # v8 §17: BNB tf1 (22min) is an honest no_feasible_config on the
+    # 9-year tape (no certified row geometry to seal) — the geometry
+    # contract is proven on BNB tf2, which stays gradeable, with the
+    # expectations derived from the shipped summary so the pin tracks
+    # the artifact instead of hard-coding one era's numbers
     from tests.test_engine import make_engine
     eng, feed, _ = make_engine()
     final = {"direction": -1, "entry": 100.0, "confidence": 0.72,
              "gate_ok": True, "recheck": {"passed": True},
              "tps": [], "sl": None, "atr": 50.0, "voters": {},
              "prediction": {}}
-    out = eng._seal_analysis_lock("BNB", "tf1", final, {"raws": {}},
+    out = eng._seal_analysis_lock("BNB", "tf2", final, {"raws": {}},
                                   {"atr": 50.0}, None)
     assert out.get("locked") is True, out
     row = next(r for r in eng.predlocks.rows if r["id"] == out["id"])
-    pol = hp.summary("BNB", "tf1")
+    pol = hp.summary("BNB", "tf2")
     scale = 50.0                       # atr proxy on the thin DummyFeed
     sl_exp = pol["row_m"] * scale
     tp_exp = pol["row_k"] * sl_exp
@@ -230,9 +235,12 @@ def test_engine_seal_uses_certified_row_geometry():
     assert abs(row["tp"] - (100.0 - tp_exp)) < 1e-9
     hold = row["evidence"]["hold_policy"]
     assert hold["hold_rules"] is True
-    assert hold["tier"] == "IN-SAMPLE SHADOW"
+    assert hold["tier"] == hp.tier("BNB", "tf2")
     assert hold["win_rate"] == pol["win_rate"]
-    assert hold["rule"] == "hold:down"
+    # the certified side rule, e.g. hold:mom525600 (v6-era BNB tf1
+    # was the "down" side — the rule string tracks the shipped side)
+    from app.mandate_cfg import direction_rule
+    assert hold["rule"] == direction_rule("BNB", "tf2")
     assert "warmup proxy" in hold["scale_source"]
     # rows carry NO friction — the era accountant owns round trips
     assert row["evidence"]["hold_policy"]["round_trip_friction_bps"] == 24.0
@@ -381,7 +389,9 @@ def test_hold_cells_block_covers_16_cells():
     assert btc1["analyse"]["tf_minutes"] == 22
     assert "era" in btc1 and "friction_rule" in btc1["era"]
     assert block["PAXG|tf1"]["tier"] == "UNGRADEABLE / WARMUP"
-    assert block["BNB|tf4"]["tier"] == "IN-SAMPLE SHADOW"
+    # v8 §17: BNB tf4 earned HOLD-OUT VERIFIED on the 9-year tape
+    # (the v6-era pin expected IN-SAMPLE SHADOW from the 8-month data)
+    assert block["BNB|tf4"]["tier"] == "HOLD-OUT VERIFIED"
 
 
 def test_cells_endpoint_serves_policy():
