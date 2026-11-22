@@ -1373,8 +1373,15 @@ async def history_console() -> JSONResponse:
     except Exception as exc:
         payload["ledger"] = {"error": repr(exc)}
     try:
-        payload["hindsight"] = getattr(engine, "hindsight", None) or \
-            engine.ledger.hindsight_regrade()
+        # engine.hindsight is a METHOD (the §8.3 re-grade builder).  The
+        # old `getattr(engine, "hindsight", None) or …` returned the bound
+        # METHOD object itself — a truthy callable — which is not JSON
+        # serializable, so GET /api/history 500'd for every caller.
+        hz = getattr(engine, "hindsight", None)
+        if callable(hz):
+            payload["hindsight"] = hz()
+        else:
+            payload["hindsight"] = hz or engine.ledger.hindsight_regrade()
     except Exception as exc:
         payload["hindsight"] = {"error": repr(exc)}
     try:
@@ -1387,7 +1394,20 @@ async def history_console() -> JSONResponse:
     except Exception as exc:
         payload["meta"] = {"error": repr(exc)}
     payload["rows"] = sum(len(v) for v in engine.ledger.rows.values())
-    return JSONResponse(payload)
+    # belt & braces: a stray non-JSON leaf (function, bytes, set…) in ANY
+    # section becomes a named placeholder instead of a 500 for the whole
+    # console — panels keep rendering, the placeholder is visible.
+    def _safe(o):
+        if isinstance(o, dict):
+            return {str(k): _safe(v) for k, v in o.items()}
+        if isinstance(o, (list, tuple)):
+            return [_safe(v) for v in o]
+        try:
+            json.dumps(o)
+            return o
+        except (TypeError, ValueError):
+            return f"<{type(o).__name__} not serializable>"
+    return JSONResponse(_safe(payload))
 
 
 @app.get("/api/history/advanced")

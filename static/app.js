@@ -2197,6 +2197,27 @@ async function resyncAnalyse() {
     }
   } catch { /* offline */ }
 }
+function onPredictionSettled(msg) {
+  // the engine sealed + settled locks on the tape — this used to be
+  // emitted and IGNORED, so the book/WR rows stayed stale until a poll
+  const locks = msg.locks || [];
+  S.predStats = msg.stats || S.predStats || null;
+  const won = locks.filter(l => l.outcome === "won").length;
+  const lost = locks.filter(l => l.outcome === "lost").length;
+  if (locks.length) {
+    const last = locks[locks.length - 1];
+    toast(`🎯 settled ${locks.length} lock${locks.length > 1 ? "s" : ""} ` +
+      `(+${won} / −${lost}) · ${last.symbol || ""} ${String(last.tf || "").toUpperCase()} ` +
+      `${String(last.outcome || "").toUpperCase()}${last.bps != null ? " " + (last.bps >= 0 ? "+" : "") + Number(last.bps).toFixed(1) + "bp" : ""}`,
+      won >= lost ? "ok" : "err");
+  }
+  if (S.view === "history") {
+    loadSealedPredictions().catch(() => {});
+    loadAnalyses().catch(() => {});
+  }
+  // rest of the app re-syncs from the next snapshot (single-timer rule)
+}
+
 function onAnalyseStarted(msg) {
   const panel = $("#analyse-panel");
   if (panel) panel.classList.remove("hidden");
@@ -5078,6 +5099,12 @@ function handleMessage(msg) {
   else if (msg.type === "tick") onTick(msg);
   else if (msg.type === "phase") renderBoot({ phase: msg.phase, analysis: msg });
   else if (msg.type === "sl_event") toast(msg.message || msg.kind, msg.kind === "close" ? "err" : "warn");
+  else if (msg.type === "prediction_settled") onPredictionSettled(msg);
+  else if (msg.type === "grc_progress") {
+    // one frame per finished asset — keeps the sync chip alive during GRC
+    S.grcProgress = msg;
+    renderRail();
+  }
   else if (msg.type === "analyse_started") onAnalyseStarted(msg);
   else if (msg.type === "analyse_stage") onAnalyseStage(msg);
   else if (msg.type === "analyse_done") onAnalyseDone(msg);
