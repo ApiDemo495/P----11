@@ -2216,6 +2216,25 @@ class PredictionEngine:
                                               "n_active": 0}
                 self.prev_cci_dir[(symbol, tf)] = _lad
                 self.display_systems[(symbol, tf)] = {
+                    # fields the analysis FINAL writes into results[tf]
+                    # (p_correct / calib_iso / spillover / winrate …)
+                    # used to be dropped by this whitelist, so the hero's
+                    # P(win) calibration row and spillover row rendered
+                    # "insufficient" forever even when calibrated
+                    "p_correct": results[tf].get("p_correct"),
+                    "calib_iso": results[tf].get("calib_iso"),
+                    "spillover": results[tf].get("spillover"),
+                    "winrate": results[tf].get("winrate"),
+                    "winrate_n": results[tf].get("winrate_n", 0),
+                    "issue_note": results[tf].get("issue_note"),
+                    "gate_ok": results[tf].get("gate_ok"),
+                    "issued": results[tf].get("issued"),
+                    "tps": results[tf].get("tps"),
+                    "horizon": results[tf].get("horizon"),
+                    "edge": results[tf].get("edge"),
+                    "sleeves": results[tf].get("sleeves"),
+                    "vol_barriers": results[tf].get("vol_barriers"),
+                    "prediction_lock": results[tf].get("prediction_lock"),
                     "tier": results[tf].get("tier"),
                     "p_side": results[tf].get("p_side"),
                     "raw_score": results[tf].get("raw_score"),
@@ -8607,6 +8626,13 @@ class PredictionEngine:
                 "vote": getattr(self.brains, "last_vote", None),
             })(getattr(self.brains, "fw", None)),
             "agents": self.agents.status(),
+            # cosmetic settings the dashboard needs live (haptics off must
+            # actually stop the vibration). NEVER the secret key fields.
+            "settings": {
+                "haptics": self.agents.settings.get("haptics", True),
+                "sound": self.agents.settings.get("sound", True),
+                "theme": self.agents.settings.get("theme", "dark"),
+            },
             "feed": self.feed.stats(),
             "ledger": self.ledger.api_payload(SYMBOL_ORDER, TF_ORDER),
             "locks": [dict(v) for v in self.locks.values()],

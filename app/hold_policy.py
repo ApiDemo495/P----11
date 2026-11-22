@@ -250,11 +250,46 @@ def side_value(side_name: str, closes: np.ndarray, i_entry: int,
         if r < 0:
             return -1
         return 1                         # flat → up (hold rule)
+    if side_name == "momMaj":
+        from backtest.hold import LONG_MOM_MIN as _LMM
+        votes = []
+        for L in _LMM:
+            lb = max(1, int(round(L / (max(step_s, 1) / 60.0))))
+            if i_entry < lb:
+                votes.append(1)          # warmup leg → +1 (hold rule)
+                continue
+            r = float(closes[i_entry]) / float(closes[i_entry - lb]) - 1.0
+            votes.append(1 if r > 0 else (-1 if r < 0 else 1))
+        tot = sum(votes)
+        return 1 if tot >= 0 else -1
+    if side_name == "momMean":
+        from backtest.hold import LONG_MOM_MIN as _LMM
+        lb_max = max(1, int(round(max(_LMM) / (max(step_s, 1) / 60.0))))
+        if i_entry < lb_max:
+            return 1                      # warmup → +1 (hold rule)
+        acc = 0.0
+        for L in _LMM:
+            lb = max(1, int(round(L / (max(step_s, 1) / 60.0))))
+            if i_entry >= lb:
+                acc += float(closes[i_entry]) / float(closes[i_entry - lb]) - 1.0
+        acc /= float(len(_LMM))
+        if acc > 0:
+            return 1
+        if acc < 0:
+            return -1
+        return 1
+    if side_name in ("revW", "revW3", "revW5") or side_name.startswith("revWh"):
+        # needs absolute timestamps (which window is being faded) —
+        # the feed path uses ``_revw_live``; series use ``_series_for``
+        raise ValueError(f"{side_name} requires timestamps — use _series_for "
+                         f"or _revw_live")
+    if side_name == "lr_revW":
+        raise ValueError("lr_revW needs the full OOF tape — use _series_for")
     if side_name == "mom44h":
         # needs absolute timestamps — the feed path uses
         # ``_mom44h_live``; series paths use ``_series_for``
-        raise ValueError("mom44h requires timestamps — use _series_for "
-                         "or _mom44h_live")
+        raise ValueError(f"mom44h requires timestamps — use _series_for "
+                         f"or _mom44h_live")
     raise ValueError(f"unknown certified side {side_name!r}")
 
 
@@ -302,12 +337,103 @@ def _series_for(side_name: str, bars: tuple, w_min: int) -> np.ndarray:
         L = int(side_name[3:])
         lb = max(1, int(round(L / step_min)))
         s = np.ones(n, dtype=int)
-        good = ok & (i_entry >= lb)
+        # i_entry is ALREADY ok-filtered above; masking with the
+        # pre-filter `ok` crashed whenever any window was invalid
+        # (real BTC 5m tape: 171 such windows) — latent until cache
+        # present made the parity test actually reach this branch
+        good = i_entry >= lb
         r = np.zeros(n)
         idx = np.clip(i_entry, 0, None)
         r[good] = cl[idx[good]] / cl[np.maximum(idx[good] - lb, 0)] - 1.0
         s[good] = np.where(r[good] > 0, 1, np.where(r[good] < 0, -1, 1))
         return s
+    if side_name == "momMaj":
+        from backtest.hold import LONG_MOM_MIN as _LMM
+        stack = np.zeros((len(_LMM), n))
+        for _i, L in enumerate(_LMM):
+            lb = max(1, int(round(L / step_min)))
+            good = i_entry >= lb
+            rr = np.zeros(n)
+            idx = np.clip(i_entry, 0, None)
+            rr[good] = cl[idx[good]] / cl[np.maximum(idx[good] - lb, 0)] - 1.0
+            stack[_i] = np.where(rr > 0, 1, np.where(rr < 0, -1, 1))
+        tot = stack.sum(axis=0)
+        return np.where(tot >= 0, 1, -1).astype(int)
+    if side_name == "momMean":
+        from backtest.hold import LONG_MOM_MIN as _LMM
+        lb_max = max(1, int(round(max(_LMM) / step_min)))
+        good = i_entry >= lb_max
+        rbar = np.zeros(n)
+        idx = np.clip(i_entry, 0, None)
+        for L in _LMM:
+            lb = max(1, int(round(L / step_min)))
+            okL = i_entry >= lb
+            rr = np.zeros(n)
+            rr[okL] = cl[idx[okL]] / cl[np.maximum(idx[okL] - lb, 0)] - 1.0
+            rbar += rr
+        rbar /= float(len(_LMM))
+        out = np.ones(n, dtype=int)
+        out[good] = np.where(rbar[good] > 0, 1, np.where(rbar[good] < 0, -1, 1))
+        return out
+    if side_name in ("revW", "revW3", "revW5") or side_name.startswith("revWh"):
+        lag_windows = {"revW": 1, "revW3": 3, "revW5": 5}.get(side_name)
+        base = np.searchsorted(
+            t, starts - (lag_windows * W if lag_windows else W),
+            side="right") - 1
+        if lag_windows is None:            # revWh* hysteresis state machine
+            from backtest.hold import _scale_at as _h_scale
+            tau = float(side_name[5:])
+            sc0 = _h_scale(t, cl, starts - step_s,
+                           max(2, int(round(w_min / (step_s / 60.0)))))
+            med = float(np.nanmedian(sc0)) if np.isfinite(sc0).any() else 0.0
+            sc_f = np.where(np.isfinite(sc0) & (sc0 > 0), sc0, med)
+            ip = np.searchsorted(t, starts - W, side="right") - 1
+            st_ = 0
+            out = np.ones(n, dtype=int)
+            for i in range(n):
+                b = int(ip[i])
+                ref = 0 if b < 0 else b
+                mv = cl[i_entry[i]] - cl[ref]
+                prop = -1 if mv > 0 else (1 if mv < 0 else 0)
+                if st_ == 0:
+                    st_ = prop if prop else 1
+                elif prop and abs(mv) > tau * sc_f[i] and prop != st_:
+                    st_ = prop
+                out[i] = st_
+            return out
+        out = np.ones(n, dtype=int)        # plain fades
+        for i in range(n):
+            b = int(base[i])
+            if b < 0:
+                b0 = int(i_entry[i]) - 1
+                if b0 < 0:
+                    continue                # first window → +1 (hold rule)
+                ref = 0
+            else:
+                ref = b
+            mv = cl[i_entry[i]] - cl[ref]
+            if mv > 0:
+                out[i] = -1
+            elif mv < 0:
+                out[i] = 1
+        return out
+    if side_name in ("lr_revW", "lrE_revW"):
+        # composite: OOF logistic where it opines, revW fallback —
+        # shares the BENCHMARK's lr_sides_oof/composite_sides (they ARE
+        # the spec; build_sides itself never contains these keys — the
+        # composite is applied AFTER build in grade_cell)
+        from backtest.hold import (lr_sides_oof as _lr_oof,
+                                   composite_sides as _comp)
+        i_exit = np.searchsorted(t, starts + W - step_s, side="right") - 1
+        try:
+            moves = cl[i_exit] - cl[i_entry]
+            lr_s, lr_sc = _lr_oof(t, o, h, l, cl, v, step_s,
+                                  starts, i_entry, moves, w_min)
+        except Exception:
+            lr_s, lr_sc = None, None
+        base_rev = _series_for("revW", bars, w_min)
+        comp = _comp({"revW": base_rev}, lr_s, lr_sc)
+        return comp[side_name] if side_name in comp else base_rev
     if side_name == "mom44h":
         # hold.py rule: hourly resample, d44 = c[i_entry] − h_c[j−44]
         from backtest.continuous import _hourly_final

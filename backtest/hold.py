@@ -36,6 +36,14 @@ import time
 
 import numpy as np
 
+try:                                    # optional JIT — see _era_sim_core
+    from numba import njit
+except Exception:                       # pragma: no cover
+    def njit(*_a, **_k):
+        def deco(f):
+            return f
+        return deco if not (_a and callable(_a[0])) else _a[0]
+
 from .continuous import (CACHE, MOM_GRID, RESULTS, _hourly_final,
                          _scale_at, _simulate, _utc_years, _year_start,
                          build_features, load_bars, logistic_fit_predict,
@@ -46,7 +54,7 @@ from .data import FRICTION_BPS
 # windows actually touch; the first-touch floor 1/(1+k) at k=0.5 is
 # 66.7 % and the real side edge lifts above it. Rows never pay
 # friction (T2 owns the money) — they grade the CALL, not a round trip.
-K_ROW = (0.25, 0.3, 0.4, 0.5, 0.6)
+K_ROW = (0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6)
 M_ROW = (0.15, 0.25, 0.4, 0.55)
 # Era geometry (T2 — the position's REAL TP/SL): wide enough for the
 # held move to pay 24 bps of friction at a positive edge.
@@ -91,6 +99,27 @@ def build_sides(t, o, h, l, c, v, step, starts, i_entry, moves, w_min):
         r[ok] = c[i_entry[ok]] / c[i_entry[ok] - lb] - 1.0
         s[ok] = np.where(r[ok] > 0, 1, np.where(r[ok] < 0, -1, 1))
         sides[f"mom{L}"] = s
+
+    # v7 consensus families over LONG_MOM_MIN (full coverage: warmup
+    # windows follow the same documented +1 fallback as the legs)
+    lm_signs = [sides[f"mom{L}"] for L in LONG_MOM_MIN]
+    maj = np.sign(np.sum(np.stack(lm_signs, axis=0), axis=0)).astype(int)
+    maj[maj == 0] = 1
+    sides["momMaj"] = maj
+    lb_max = max(1, int(round(max(LONG_MOM_MIN) / step_min)))
+    rbar = np.zeros(n)
+    good_m = i_entry >= lb_max
+    for L in LONG_MOM_MIN:
+        lbL = max(1, int(round(L / step_min)))
+        rr = np.zeros(n)
+        okL = i_entry >= lbL
+        rr[okL] = c[i_entry[okL]] / c[i_entry[okL] - lbL] - 1.0
+        rbar += rr
+    rbar /= float(len(LONG_MOM_MIN))
+    sm = np.ones(n)
+    sm[good_m] = np.where(rbar[good_m] > 0, 1,
+                          np.where(rbar[good_m] < 0, -1, 1))
+    sides["momMean"] = sm
 
     # shipped mom44h replica (hourly resample)
     h_ts, h_c = _hourly_final(t, c)
@@ -189,7 +218,12 @@ def lr_sides_oof(t, o, h, l, c, v, step, starts, i_entry, moves,
     prev = np.zeros(len(starts))
     ip = np.searchsorted(t, starts - W, side="right") - 1
     ok = ip >= 0
-    prev[ok] = c[i_entry[ok]] - c[np.clip(ip, 0, None)]
+    # the SECOND operand must be masked with the same `ok` — keeping it
+    # full-length raised a broadcast ValueError whenever any window had
+    # no prior window (EVERY real dataset), the try/except below
+    # swallowed it, and the whole lr_revW/lrE_revW side family silently
+    # never existed in any graded run (lr_oof_error on all 13 cells)
+    prev[ok] = c[i_entry[ok]] - c[np.clip(ip, 0, None)[ok]]
     X = np.column_stack([X, prev])
     years = _utc_years(starts)
     uniq = sorted(set(int(y) for y in years))
@@ -212,12 +246,52 @@ def lr_sides_oof(t, o, h, l, c, v, step, starts, i_entry, moves,
 def era_sim(sides, starts, i_entry, i_exit, entry, scale, t, h, l, c,
             k, m, fr_bps):
     """One position per side-era: TP/SL first-touch on native bars,
-    else exit at the flip boundary. Returns per-era records."""
-    n = len(starts)
+    else exit at the flip boundary. Returns per-era records.
+
+    The loop lives in ``_era_sim_core`` (JIT — line-for-line copy of the
+    original Python; parity-tested against hold_policy's pure-Python
+    twin on real BTC windows).  This wrapper keeps the exact pre-call
+    massaging and the record dicts the suite pins.
+    """
     med = float(np.nanmedian(scale)) if np.isfinite(scale).any() else 0.0
     scale_f = np.where(np.isfinite(scale) & (scale > 0), scale, med)
     fr = fr_bps * 1e-4
+    st, nw, oc, pg, pn = _era_sim_core(
+        np.ascontiguousarray(sides, dtype=np.int64),
+        np.ascontiguousarray(entry, dtype=np.float64),
+        np.ascontiguousarray(scale_f, dtype=np.float64),
+        np.ascontiguousarray(i_entry, dtype=np.int64),
+        np.ascontiguousarray(i_exit, dtype=np.int64),
+        np.ascontiguousarray(c, dtype=np.float64),
+        np.ascontiguousarray(h, dtype=np.float64),
+        np.ascontiguousarray(l, dtype=np.float64),
+        float(k), float(m), float(fr))
     recs = []
+    for i in range(len(st)):
+        recs.append({"start_i": int(st[i]), "n_windows": int(nw[i]),
+                     "outcome": int(oc[i]), "pnl_gross": float(pg[i]),
+                     "pnl_net": float(pn[i])})
+    return recs
+
+
+@njit(cache=True)
+def _era_sim_core(sides, entry, scale_f, i_entry, i_exit, c_close,
+                  h, l, k, m, fr):
+    """Line-for-line JIT copy of the original era_sim loop body.
+
+    Same iteration order, same SL-wins-ties rule, same float ops.
+    Motivation: the `down` side on the 9-year 1m BNB tape is ONE era
+    spanning 4.7M bars — the Python inner bar loop x 25 era geometries
+    x 27 sides was a multi-hour wall per cell.  Returns parallel arrays
+    (start_i, n_windows, outcome, pnl_gross, pnl_net).
+    """
+    n = len(sides)
+    st = np.empty(n, dtype=np.int64)
+    nw = np.empty(n, dtype=np.int64)
+    oc = np.empty(n, dtype=np.int64)
+    pg = np.empty(n)
+    pn = np.empty(n)
+    cnt = 0
     w = 0
     while w < n:
         s = int(sides[w])
@@ -240,17 +314,17 @@ def era_sim(sides, starts, i_entry, i_exit, entry, scale, t, h, l, c,
         b_flip = int(i_entry[w2]) if w2 < n else b_last
         b = min(b_flip, b_last)
         outcome = 0
-        exit_px = None
+        exit_px = 0.0
         if m >= 999.0:                    # no-barrier ride to the flip
             outcome = 2
-            exit_px = float(entry[w2]) if w2 < n else float(c[b_last])
-            # × s: a raw flip/ride exit is a PRICE move — it only
-            # becomes P&L once signed by the held side (short eras
-            # were silently inverted before this fix)
+            exit_px = float(entry[w2]) if w2 < n else float(c_close[b_last])
             pnl_g = (exit_px / e - 1.0) * s
-            recs.append({"start_i": w, "n_windows": w2 - w,
-                         "outcome": outcome, "pnl_gross": pnl_g,
-                         "pnl_net": pnl_g - 2.0 * fr})
+            st[cnt] = w
+            nw[cnt] = w2 - w
+            oc[cnt] = outcome
+            pg[cnt] = pnl_g
+            pn[cnt] = pnl_g - 2.0 * fr
+            cnt += 1
             w = w2
             continue
         for j in range(a, b + 1):
@@ -269,17 +343,19 @@ def era_sim(sides, starts, i_entry, i_exit, entry, scale, t, h, l, c,
                 break
         if outcome == 0:
             # no touch before the flip → exit at the flip boundary price
-            exit_px = float(entry[w2]) if w2 < n else float(c[b_last])
+            exit_px = float(entry[w2]) if w2 < n else float(c_close[b_last])
             outcome = 2                    # 2 = flip exit
         # × s is correct for every outcome: TP/SL prices are already
         # side-adjusted (s² = 1) and raw flip exits get their sign here
         pnl_g = (exit_px / e - 1.0) * s
-        recs.append({"start_i": w, "n_windows": w2 - w, "outcome": outcome,
-                     "pnl_gross": pnl_g,
-                     "pnl_net": pnl_g - 2.0 * fr})
+        st[cnt] = w
+        nw[cnt] = w2 - w
+        oc[cnt] = outcome
+        pg[cnt] = pnl_g
+        pn[cnt] = pnl_g - 2.0 * fr
+        cnt += 1
         w = w2
-    return recs
-
+    return st[:cnt], nw[:cnt], oc[:cnt], pg[:cnt], pn[:cnt]
 
 def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
     t, o, h, l, c, v, step = bars
@@ -416,7 +492,13 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
         if row_win is None or best_era is None:
             continue
         feasible += 1
-        cand = (best_era[0], name, row_k, row_m, best_era[1], best_era[2],
+        # v7 pre-registered rule: the BOTH-target objective is literally
+        # "as much row WR as possible while era EV stays positive and
+        # robust" — the old key maximised train era EV instead, which
+        # left free win-rate on the table.  Train-only either way.
+        wr_tr_sel = float(row_win[tr_w_eff].mean())
+        cand = (wr_tr_sel, best_era[0], name, row_k, row_m,
+                best_era[1], best_era[2],
                 best_era[3], best_era[4], best_era[5], row_win)
         if best is None or cand[:2] > best[:2]:
             best = cand
@@ -430,7 +512,7 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
                        "— honest failure, reported as such")
         return out
 
-    (ev_tr, side_name, kr, mr, ke, me, er, ey, ep, win) = best
+    (wr_tr_sel, ev_tr, side_name, kr, mr, ke, me, er, ey, ep, win) = best
     side = sides[side_name]
 
     def _agg(mask_w, mask_e):
@@ -471,6 +553,12 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
         "full": _agg(np.ones(n, bool), np.ones(len(er), bool)),
         "selection": ("train-only" if not single
                       else "SINGLE-YEAR IN-SAMPLE (disclosed, not forward)"),
+        "selection_rule": (
+            "v7: max TRAIN row WR among candidates with train row WR "
+            f">= {ROW_WR_TARGET} AND positive robust train era EV "
+            "(era EV breaks ties); K_ROW extended to 0.15–0.6; "
+            "train-only — the holdout was never consulted"),
+        "train_row_wr_selected": round(wr_tr_sel, 4),
     }
     v = {}
     if not single:
