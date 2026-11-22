@@ -1780,6 +1780,14 @@ class AgentManager:
             async with httpx.AsyncClient(timeout=self.HTTP_TIMEOUT_S) as client:
                 r = await client.post(url, json=body, headers=headers)
         except Exception as e:
+            # OFFLINE BUDGET: a dead/unreachable endpoint must not be
+            # re-dialled on the very next analysis — cool the slot so
+            # "mostly offline" providers cost one fast failure per
+            # 90 s instead of a 12 s stall on every run
+            kr.update(state="offline",
+                      last_error=e.__class__.__name__,
+                      failures=int(kr.get("failures", 0)) + 1,
+                      cooldown_until=time.time() + 90.0)
             return {"ok": False, "reason": e.__class__.__name__}
         if r.status_code == 429:
             kr.update(state="rate-limited", cooldown_until=time.time() + 60,
@@ -1793,8 +1801,11 @@ class AgentManager:
                       failures=int(kr.get("failures", 0)) + 1)
             return {"ok": False, "reason": f"http {r.status_code}"}
         if r.status_code >= 400:
+            _cool = 60.0 if r.status_code >= 500 else 0.0
             kr.update(state="error", last_error=f"http {r.status_code}",
-                      failures=int(kr.get("failures", 0)) + 1)
+                      failures=int(kr.get("failures", 0)) + 1,
+                      **({"cooldown_until": time.time() + _cool}
+                         if _cool else {}))
             return {"ok": False, "reason": f"http {r.status_code}"}
         rem = r.headers.get("x-ratelimit-remaining")
         if rem is not None:
@@ -1828,7 +1839,16 @@ class AgentManager:
                         "reason": "skipped — event loop busy (advisory only)"}
         except Exception:
             pass
-        res = await _to_thread(self.local.ask, prompt, max_tokens)
+        # the local model is ADVISORY — cap it: a CPU-bound llama on a
+        # starved box must not eat the analysis (paired with the engine
+        # stage's 8 s wall; timeout ⇒ honest "too slow" skip)
+        try:
+            res = await asyncio.wait_for(
+                _to_thread(self.local.ask, prompt, max_tokens), timeout=5.0)
+        except (asyncio.TimeoutError, TimeoutError):
+            res = {"ok": False, "backend": self.local.backend or "local",
+                   "reason": "local review timed out (5 s) — backend too "
+                             "slow or offline"}
         self.last_replies["local"] = {k: v for k, v in res.items()
                                       if k != "text"}
         if not res.get("ok"):
@@ -1968,7 +1988,15 @@ class AgentManager:
             return {"ok": False, "backend": "",
                     "reason": (self.local.error or "no local model loaded")
                     + "; no cloud slot answered"}
-        res = await _to_thread(self.local.ask, prompt, max_tokens)
+        # same 5 s wall as _call_local — a hung llama must not stall
+        # any advisory path either
+        try:
+            res = await asyncio.wait_for(
+                _to_thread(self.local.ask, prompt, max_tokens), timeout=5.0)
+        except (asyncio.TimeoutError, TimeoutError):
+            return {"ok": False, "backend": self.local.backend or "local",
+                    "reason": "local review timed out (5 s) — backend too "
+                              "slow or offline", "text": ""}
         if not res.get("ok"):
             return {"ok": False, "backend": res.get("backend", ""),
                     "reason": res.get("reason", "empty reply"), "text": ""}

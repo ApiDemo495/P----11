@@ -409,6 +409,7 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
     best = None
     feasible = 0
     side_rows: dict[str, dict] = {}
+    pool: dict[str, dict] = {}
     for name, side in sides.items():
         assert np.all(side != 0), name
         flips = int(np.sum(side[1:] != side[:-1]))
@@ -446,7 +447,11 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
                                        if best_row and best_row[3] is not None
                                        else None)
         # ── T2: era system — wide geometry, friction per era ───────
-        best_era = None
+        # v8 (§17 pre-registered): collect every rung-C-passing era
+        # geometry TOGETHER with its train-only robustness stats
+        # (worst train-year EV, train profit factor); the rung pick +
+        # WR-first selection run after all sides are scored.
+        era_cands: list[dict] = []
         era_ev_best = None
         for k in K_ERA:
             for m in M_ERA:
@@ -467,39 +472,77 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
                 ev_tr = float(ep[tr_e].mean())
                 if era_ev_best is None or ev_tr > era_ev_best:
                     era_ev_best = ev_tr
-                # per-train-year robustness: positive in ≥80 % of the
+                # per-train-year robustness: positive in ≥60 % of the
                 # train years (train-only — never looks at holdout)
                 if not single:
                     tr_years = sorted(set(int(y) for y in ey[tr_e]))
+                    year_means: list[float] = []
                     pos_years = 0
                     for yy in tr_years:
                         mask_y = tr_e & (ey == yy)
-                        if mask_y.any() and float(ep[mask_y].mean()) > 0:
-                            pos_years += 1
+                        if mask_y.any():
+                            ym = float(ep[mask_y].mean())
+                            year_means.append(ym)
+                            if ym > 0:
+                                pos_years += 1
                     robust = (len(tr_years) > 0 and
                               pos_years >= math.ceil(0.6 * len(tr_years)))
+                    # §17 rung stats — worst TRAIN year, train PF
+                    worst = min(year_means) if year_means else ev_tr
                 else:
                     robust = True
+                    worst = ev_tr
+                e_tr = ep[tr_e]
+                epos = float(e_tr[e_tr > 0].sum())
+                eneg = float(-e_tr[e_tr < 0].sum())
+                pf = float("inf") if eneg <= 0 else epos / eneg
                 diag["feasible_era_gt0"] += int(ev_tr > 0)
                 if ev_tr <= 0 or not robust:
                     continue
-                if best_era is None or ev_tr > best_era[0]:
-                    best_era = (ev_tr, k, m, er, ey, ep)
+                era_cands.append({"ev": ev_tr, "k": k, "m": m, "er": er,
+                                  "ey": ey, "ep": ep, "worst": worst,
+                                  "pf": pf})
         diag["era_ev_best_train"] = (round(era_ev_best, 6)
                                      if era_ev_best is not None else None)
-        diag["n_eras"] = (len(best_era[3]) if best_era else None)
+        diag["n_eras"] = (len(era_cands[0]["er"]) if era_cands else None)
         side_rows[name] = diag
-        if row_win is None or best_era is None:
+        pool[name] = {
+            "row_win": row_win, "row_k": row_k, "row_m": row_m,
+            "wr_tr": (float(row_win[tr_w_eff].mean())
+                      if row_win is not None else None),
+            "cands": era_cands,
+        }
+
+    # ── v8 pre-registered robustness ladder + WR-first key (§17) ───
+    # Rungs are nested by construction (worst>0 ⇒ every train year
+    # positive ⇒ ≥60 % robust), first rung with ANY feasible candidate
+    # wins; within the rung the key stays lexicographic
+    # (train row WR, train era EV).  Train-only: the holdout is never
+    # consulted here — §17 evaluates it exactly once, after the run.
+    rung = "C"
+    rung_pred = lambda c: True   # default rung C
+    for _r, _p in (("A", lambda c: c["worst"] > 0 and c["pf"] >= 1.15),
+                   ("B", lambda c: c["worst"] > 0),
+                   ("C", lambda c: True)):
+        if any(v["row_win"] is not None
+               and any(_p(c) for c in v["cands"])
+               for v in pool.values()):
+            rung, rung_pred = _r, _p
+            break
+    best = None
+    feasible = 0
+    for name, v in pool.items():
+        if v["row_win"] is None:
             continue
+        cands = [c for c in v["cands"] if rung_pred(c)]
+        if not cands:
+            continue
+        best_era = max(cands, key=lambda c: c["ev"])
         feasible += 1
-        # v7 pre-registered rule: the BOTH-target objective is literally
-        # "as much row WR as possible while era EV stays positive and
-        # robust" — the old key maximised train era EV instead, which
-        # left free win-rate on the table.  Train-only either way.
-        wr_tr_sel = float(row_win[tr_w_eff].mean())
-        cand = (wr_tr_sel, best_era[0], name, row_k, row_m,
-                best_era[1], best_era[2],
-                best_era[3], best_era[4], best_era[5], row_win)
+        cand = (v["wr_tr"], best_era["ev"], name, v["row_k"], v["row_m"],
+                best_era["k"], best_era["m"], best_era["er"],
+                best_era["ey"], best_era["ep"], v["row_win"],
+                best_era["worst"], best_era["pf"])
         if best is None or cand[:2] > best[:2]:
             best = cand
 
@@ -512,7 +555,10 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
                        "— honest failure, reported as such")
         return out
 
-    (wr_tr_sel, ev_tr, side_name, kr, mr, ke, me, er, ey, ep, win) = best
+    (wr_tr_sel, ev_tr, side_name, kr, mr, ke, me, er, ey, ep, win,
+     worst_sel, pf_sel) = best
+    rung_sel = rung
+    side_rows[side_name]["n_eras"] = len(er)
     side = sides[side_name]
 
     def _agg(mask_w, mask_e):
@@ -554,11 +600,16 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
         "selection": ("train-only" if not single
                       else "SINGLE-YEAR IN-SAMPLE (disclosed, not forward)"),
         "selection_rule": (
-            "v7: max TRAIN row WR among candidates with train row WR "
-            f">= {ROW_WR_TARGET} AND positive robust train era EV "
-            "(era EV breaks ties); K_ROW extended to 0.15–0.6; "
-            "train-only — the holdout was never consulted"),
+            f"v8 §17: robustness rung {rung_sel} (train-only ladder: "
+            "A = worst train-year EV>0 & PF>=1.15, B = worst train-year "
+            "EV>0, C = 60% train-years robust); within the rung max "
+            "TRAIN row WR (era EV breaks ties); train-only — the "
+            "holdout was never consulted"),
         "train_row_wr_selected": round(wr_tr_sel, 4),
+        "selection_rung": rung_sel,
+        "train_worst_year_ev": (round(worst_sel, 6)
+                                if math.isfinite(worst_sel) else "inf"),
+        "train_pf": (round(pf_sel, 4) if math.isfinite(pf_sel) else "inf"),
     }
     v = {}
     if not single:

@@ -2186,11 +2186,12 @@ async function resyncAnalyse() {
       if (panel) panel.classList.remove("hidden");
       $("#an-title").textContent = `ANALYSING ${job.symbol} · ${(job.tf || "tf1").toUpperCase()}`;
       if (!$("#an-stages")?.children.length) {
-        $("#an-stages").innerHTML = (job.stages || []).map((name, i) =>
-          `<div class="an-row" id="anr-${name}">
-             <span class="dim">${i + 1}</span><span class="an-name">${String(name).replace("_", " ")}</span>
+        $("#an-stages").innerHTML = (job.stages || []).map((st, i) => {
+          const name = typeof st === "object" ? String(st?.stage || "?") : String(st);
+          return `<div class="an-row" id="anr-${name}">
+             <span class="dim">${i + 1}</span><span class="an-name">${name.replace("_", " ")}</span>
              <span class="an-ms">…</span><span class="an-at">—</span>
-             <span class="an-sum dim">…</span></div>`).join("");
+             <span class="an-sum dim">…</span></div>`; }).join("");
       }
       (job.stages || []).forEach(onAnalyseStage);
       startAnalysePoll();
@@ -2234,14 +2235,26 @@ function onAnalyseStarted(msg) {
   startAnalysePoll();
 }
 function onAnalyseStage(msg) {
-  const st = msg.stage; if (!st) return;
+  // THREE shapes reach this handler and the old code only understood
+  // the first: (1) the WS wrapper {stage: entry}; (2) the bare entry
+  // itself — the resync/replay paths pass job.stages entries straight
+  // through, so msg.stage was the STRING "formulas", st.stage was
+  // undefined, and the row sat on "queued" forever ("it didn't use
+  // formulas"); (3) a calculation_period entry {stage, at, ms}.
+  let st = null;
+  if (msg && typeof msg.stage === "object" && msg.stage) st = msg.stage;
+  else if (msg && typeof msg.stage === "string") st = msg;
+  if (!st || typeof st.stage !== "string") return;
   const row = $("#anr-" + st.stage);
   if (!row) return;
   row.className = "an-row " + (st.status || "done");
-  $(".an-ms", row).textContent = st.duration_ms + " ms";
-  $(".an-at", row).textContent = new Date(st.t_start_ms).toISOString().slice(11, 23) + "Z";
-  $(".an-sum", row).textContent = st.summary || "";
-  row.title = st.summary || "";
+  const ms = st.duration_ms != null ? st.duration_ms : st.ms;
+  const at = st.t_start_ms != null ? st.t_start_ms : st.at;
+  if (ms != null) $(".an-ms", row).textContent = ms + " ms";
+  if (at != null) $(".an-at", row).textContent = new Date(at).toISOString().slice(11, 23) + "Z";
+  const sum = st.summary || "";
+  $(".an-sum", row).textContent = sum;
+  row.title = sum;
 }
 function onAnalyseDone(msg) {
   stopAnalysePoll();
@@ -2260,10 +2273,24 @@ function onAnalyseDone(msg) {
   if (sub) sub.textContent = finAt
     ? `finished ${new Date(finAt * 1000).toISOString().slice(11, 23)}Z · total ${r.elapsed_ms} ms`
     : `finished · total ${r.elapsed_ms || "—"} ms`;
+  // HEAL rows whose live WS event was missed (reconnect, backgrounded
+  // tab): the final calculation_period carries every stage's real
+  // timing — a row still reading "queued" at done gets filled here,
+  // never overwritten (only untouched rows are healed)
+  (r.calculation_period?.stages || []).forEach(c => {
+    const row = c && c.stage ? $("#anr-" + c.stage) : null;
+    if (row && row.className.trim() === "an-row") onAnalyseStage({ stage: c });
+  });
   const box = $("#an-result");
   if (!box) return;
   box.classList.remove("hidden");
   const dirCls = r.signal === "BUY" ? "buy" : r.signal === "SELL" ? "sell" : "flat";
+  // REGIME CONFLICT: the sealed record keeps the certified side but
+  // the BOX must never read as a trade — big word becomes NO CALL
+  const bigWord = r.regime_conflict ? "NO CALL" : r.signal;
+  const conflictBanner = r.regime_conflict
+    ? `<div class="conf acc-warn">⚠ REGIME CONFLICT — 5-state regime ${esc(r.regime_conflict.state)} (conf ${Number(r.regime_conflict.regime_conf ?? 0).toFixed(2)}) opposes the certified ${r.signal}: NO ORDER routed · window record kept for grading</div>`
+    : "";
   const ai = r.ai || {};
   // The review object now always carries available/backend/note, so the
   // panel can say WHICH brain answered and why it did not — "keyless" was
@@ -2284,7 +2311,8 @@ function onAnalyseDone(msg) {
     `${c.stage} ${Math.round(c.ms)}ms`).join(" → ");
   box.innerHTML = `<div class="an-box">
     <div class="an-signal ${dirCls}">
-      <div class="big">${r.signal}</div>
+      <div class="big">${bigWord}</div>
+      ${conflictBanner}
       <div class="conf">confidence ${fx(r.confidence, 3)} · ${r.verdict === "ISSUE" ? "ISSUED" : (r.verdict || (r.gate_ok ? "WATCH" : "NO CALL"))}${r.issue_note ? ` · ${esc(r.issue_note)}` : ""}</div>
       ${r.prediction_lock?.locked ? `<div class="conf acc-up">🔒 LOCKED ${esc(r.prediction_lock.side)} · ${esc(String(r.prediction_lock.id || "").slice(-10))} · TP ${px(r.prediction_lock.tp)} / SL ${px(r.prediction_lock.sl)} · saved to history</div>` : `<div class="conf acc-warn">lock refused: ${esc((r.prediction_lock?.why || ["no finite ladder"]).join("; "))}</div>`}
       <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? Number(r.ratio).toFixed(2) + ":1" : "—"} · ${esc(r.levels_source || "preview only")}</div>
@@ -2294,6 +2322,11 @@ function onAnalyseDone(msg) {
         const hd = pol.era_ev_net != null ? ` · era EV ${(pol.era_ev_net * 100).toFixed(2)}%/era net after ${(pol.round_trip_friction_bps || 24)}bp RT friction` : "";
         return `<div class="conf acc-up">🎯 HOLD POLICY [${esc(pol.tier || "?")}] ${esc(pol.rule || pol.side || "")} · certified WR ${wr}${lo}${hd}</div>` +
           (pol.scale_source ? `<div class="conf">row geometry k=${pol.row_k} m=${pol.row_m} · ${esc(String(pol.scale_source).slice(0, 90))}</div>` : ""); })()}
+      ${(() => { const ev = r.prediction_lock?.evidence; if (!ev) return "";
+        const fs = Object.entries(ev.formula_signs || {}).slice(0, 8)
+          .map(([k, v]) => `F${k}${Number(v) > 0 ? "+" : "−"}`).join(" ");
+        const bs = (ev.brain_signals || []).slice(0, 8);
+        return `<div class="conf">🧮 formulas used: ${fs || "—"} · 🧠 brain signals: ${bs.length ? bs.map(x => Number(x) > 0 ? "▲" : Number(x) < 0 ? "▼" : "●").join("") : "—"}</div>`; })()}
       ${r.committee ? `<div class="conf">🧠 committee: ${esc(r.committee.effect || "—")}${r.committee.agree_share != null ? ` · agree ${(r.committee.agree_share * 100).toFixed(0)}%` : ""}${r.committee.consensus != null ? ` · consensus ${r.committee.consensus >= 0 ? "+" : ""}${Number(r.committee.consensus).toFixed(2)}` : ""} · conf ${fx(r.committee.confidence_before, 3)}→${fx(r.committee.confidence_after, 3)}${r.committee.direction_held ? " · side held (certified)" : ""}${(r.committee.vetoes || []).length ? ` · ⚠ ${esc(r.committee.vetoes[0])}` : ""}</div>` : ""}
       ${(r.committee.votes || []).length ? `<div class="conf">votes: ${r.committee.votes.map(v => `${esc(v.agent)} <b>${v.direction > 0.05 ? "▲" : v.direction < -0.05 ? "▼" : "●"}</b> ${Math.round(v.confidence * 100)}%${v.veto ? " ⚠" : ""} <i>${esc(String(v.reason || "").slice(0, 64))}</i>`).join(" · ")}</div>` : ""}
       ${r.metacog ? (() => { const mc = r.metacog; const nst = Object.keys(mc.statuses || {}).length;
@@ -5098,7 +5131,13 @@ function handleMessage(msg) {
   else if (msg.type === "snapshot") applySnapshot(msg);
   else if (msg.type === "tick") onTick(msg);
   else if (msg.type === "phase") renderBoot({ phase: msg.phase, analysis: msg });
-  else if (msg.type === "sl_event") toast(msg.message || msg.kind, msg.kind === "close" ? "err" : "warn");
+  else if (msg.type === "sl_event") {
+    // the toast must always say WHICH trade: server messages now carry
+    // it; the fallback composes it from the event fields
+    const who = [msg.symbol, msg.tf && String(msg.tf).toUpperCase()]
+      .filter(Boolean).join(" ");
+    toast(msg.message || `${who} — ${msg.kind}`, msg.kind === "close" ? "err" : "warn");
+  }
   else if (msg.type === "prediction_settled") onPredictionSettled(msg);
   else if (msg.type === "grc_progress") {
     // one frame per finished asset — keeps the sync chip alive during GRC
