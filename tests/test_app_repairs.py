@@ -21,18 +21,16 @@ import re
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _one_client():
-    """ONE lifespan per file — a second `with TestClient(app)` runs the
-    lifespan twice and the app's own tests document the breakage."""
+def test_history_console_serves_json():
+    # NO lifespan context: test_ux_sync.py owns the file's only
+    # `with TestClient(app)` — a second lifespan in the same process
+    # shuts the shared engine's loop down and blows up in feed.stop().
+    # /api/history serves fine from the plain ASGI app (no boot needed).
     from fastapi.testclient import TestClient
     from app.main import app
-    return TestClient(app)
-
-
-def test_history_console_serves_json():
-    with _one_client() as c:
-        r = c.get("/api/history")
-        snap = c.get("/api/snapshot").json()
+    c = TestClient(app)
+    r = c.get("/api/history")
+    snap = c.get("/api/snapshot").json()
     _check_history(r)
     _check_snapshot(snap)
 

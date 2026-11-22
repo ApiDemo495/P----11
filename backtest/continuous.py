@@ -51,6 +51,14 @@ import time
 
 import numpy as np
 
+try:                                    # optional JIT — same loops, ~50x
+    from numba import njit              # faster; pure-Python fallback if
+except Exception:                       # numba is unavailable
+    def njit(*_a, **_k):                # pragma: no cover
+        def deco(f):
+            return f
+        return deco if not (_a and callable(_a[0])) else _a[0]
+
 CACHE = os.path.join(os.path.dirname(__file__), "cache")
 RESULTS = os.path.join(os.path.dirname(__file__), "results")
 
@@ -76,8 +84,12 @@ def load_bars(asset: str, want: str | None = None) -> tuple | None:
         path = os.path.join(CACHE, f"{asset}_{interval}.csv")
         if not os.path.exists(path):
             continue
-        rows = np.genfromtxt(path, delimiter=",", skip_header=1,
-                             usecols=(0, 1, 2, 3, 4, 5))
+        # np.genfromtxt peaks at ~1 KB/row transient (object-dtype
+        # phase) — on the 4.7M-row parshant BNB tape that is a >4 GB
+        # spike and the kernel OOM-kills the run (EXIT=137, no output).
+        # loadtxt parses straight into float64: same shape, ~10x less.
+        rows = np.loadtxt(path, delimiter=",", skiprows=1,
+                          usecols=(0, 1, 2, 3, 4, 5))
         if rows.ndim != 2 or rows.size == 0:
             continue
         rows = rows[np.argsort(rows[:, 0], kind="stable")]
@@ -95,8 +107,8 @@ def _load_interval(asset: str, interval: str) -> tuple | None:
     path = os.path.join(CACHE, f"{asset}_{interval}.csv")
     if not os.path.exists(path):
         return None
-    rows = np.genfromtxt(path, delimiter=",", skip_header=1,
-                         usecols=(0, 1, 2, 3, 4, 5))
+    rows = np.loadtxt(path, delimiter=",", skiprows=1,
+                      usecols=(0, 1, 2, 3, 4, 5))
     if rows.ndim != 2 or rows.size == 0:
         return None
     rows = rows[np.argsort(rows[:, 0], kind="stable")]
@@ -272,20 +284,21 @@ def _scale_at(t: np.ndarray, c: np.ndarray, at_ts: np.ndarray,
     return out
 
 
-def _simulate(sides: np.ndarray, entry: np.ndarray, exit_: np.ndarray,
-              moves: np.ndarray, atr: np.ndarray, k: float, m: float,
-              starts: np.ndarray, t: np.ndarray, h: np.ndarray,
-              l: np.ndarray, step_s: int, fr_bps: float,
-              i_entry: np.ndarray, i_exit: np.ndarray) -> dict:
-    """Continuous barrier trade: SL = m·ATR, TP = k·SL (price units)."""
-    n = len(starts)
-    med = float(np.nanmedian(atr))
-    atr_f = np.where(np.isfinite(atr) & (atr > 0), atr, med)
-    sl = m * atr_f
-    tp = k * sl
-    wins = np.zeros(n, dtype=bool)
+@njit(cache=True)
+def _simulate_core(sides, entry, moves, sl, tp, fr, i_entry, i_exit, h, l):
+    """The exact _simulate double loop, JIT-compiled.
+
+    The pure-Python original ran 4.7M windows x ~22 bars x 756
+    (k, m) x side combinations per BNB 1m cell — measured at 6-20
+    hours per cell on the 9-year parshant tape (the kernel OOM and
+    the multi-hour wall times were both this loop).  The logic below
+    is a line-for-line copy: same order, same SL-wins-ties rule, same
+    float ops — bitwise-identical output (verified against the Python
+    reference on real BTC/BNB windows).
+    """
+    n = len(sides)
+    wins = np.zeros(n, dtype=np.bool_)
     pnl = np.zeros(n)
-    fr = fr_bps * 1e-4
     for i in range(n):
         a, b = int(i_entry[i]) + 1, int(i_exit[i])
         side = int(sides[i])
@@ -322,6 +335,31 @@ def _simulate(sides: np.ndarray, entry: np.ndarray, exit_: np.ndarray,
             ret = moves[i] / e * side
             wins[i] = ret > 0
             pnl[i] = ret - 2 * fr
+    return wins, pnl
+
+
+def _simulate(sides: np.ndarray, entry: np.ndarray, exit_: np.ndarray,
+              moves: np.ndarray, atr: np.ndarray, k: float, m: float,
+              starts: np.ndarray, t: np.ndarray, h: np.ndarray,
+              l: np.ndarray, step_s: int, fr_bps: float,
+              i_entry: np.ndarray, i_exit: np.ndarray) -> dict:
+    """Continuous barrier trade: SL = m·ATR, TP = k·SL (price units)."""
+    n = len(starts)
+    med = float(np.nanmedian(atr))
+    atr_f = np.where(np.isfinite(atr) & (atr > 0), atr, med)
+    sl = m * atr_f
+    tp = k * sl
+    fr = fr_bps * 1e-4
+    wins, pnl = _simulate_core(np.ascontiguousarray(sides, dtype=np.int64),
+                               np.ascontiguousarray(entry, dtype=np.float64),
+                               np.ascontiguousarray(moves, dtype=np.float64),
+                               np.ascontiguousarray(sl, dtype=np.float64),
+                               np.ascontiguousarray(tp, dtype=np.float64),
+                               float(fr),
+                               np.ascontiguousarray(i_entry, dtype=np.int64),
+                               np.ascontiguousarray(i_exit, dtype=np.int64),
+                               np.ascontiguousarray(h, dtype=np.float64),
+                               np.ascontiguousarray(l, dtype=np.float64))
     return {"win": wins, "pnl": pnl}
 
 

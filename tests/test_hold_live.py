@@ -72,13 +72,22 @@ def big_bars():
 @pytest.mark.parametrize("side_name", [
     "up", "down", "mom15", "mom1440", "mom43200",
     "mom129600", "mom259200", "mom525600", "mom44h",
+    "momMaj", "momMean", "revW", "revW3", "revW5",
+    "revWh0.25", "revWh0.5", "revWh0.75", "lr_revW",
 ])
 def test_side_parity_zero_mismatches(big_bars, side_name):
     t, o, h, l, c, v, step = big_bars
     starts, i_entry, i_exit = _windows(big_bars, 22)
     moves = c[i_exit] - c[i_entry]
-    ref = bh.build_sides(t, o, h, l, c, v, step, starts, i_entry,
-                         moves, 22)[side_name]
+    sides = bh.build_sides(t, o, h, l, c, v, step, starts, i_entry,
+                           moves, 22)
+    if side_name in ("lr_revW", "lrE_revW"):
+        # composites live OUTSIDE build_sides — grade_cell applies them
+        # after the OOF logistic runs (same functions, same order)
+        lr_s, lr_sc = bh.lr_sides_oof(t, o, h, l, c, v, step, starts,
+                                      i_entry, moves, 22)
+        sides = bh.composite_sides(sides, lr_s, lr_sc)
+    ref = sides[side_name]
     got = hp._series_for(side_name, big_bars, 22)
     assert len(got) == len(ref)
     mism = int(np.sum(got != ref))
@@ -93,9 +102,11 @@ def test_certified_sides_all_reachable(big_bars):
         "backtest", "results", "hold_wr.json")))
     names = {c["selected"]["side"] for c in doc.values()
              if isinstance(c, dict) and c.get("status") == "ok"}
-    assert names <= {"up", "down"} | {
+    assert names <= {"up", "down", "mom44h", "momMaj", "momMean",
+                     "revW", "revW3", "revW5", "lr_revW", "lrE_revW"} | {
         f"mom{m}" for m in (7200, 10080, 14400, 43200,
-                            129600, 259200, 525600)}
+                            129600, 259200, 525600)} | {
+        f"revWh{t}" for t in (0.25, 0.5, 0.75)}
     for n in names:
         s = hp._series_for(n, big_bars, 247)
         assert np.all(np.isin(s, (-1, 1))), n

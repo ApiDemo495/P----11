@@ -994,3 +994,158 @@ conf 0.246 → 0.246 (split band) · direction held
 .venv/bin/python -m uvicorn app.main:app --port 8000           # live board
 curl -s localhost:8000/api/cells | python -m json.tool | head
 ```
+
+---
+
+## §15 · Win-rate uplift v7 + app-repair pass (pre-registered)
+
+Two work streams, both on real data only (nothing simulated as
+measured); criteria fixed BEFORE the v7 results were computed.
+
+### (a) Hold selection v7 — "as much row WR as possible, EV still > 0"
+
+v6 maximised **train era EV** among candidates that already satisfied
+both targets; that left free win-rate on the table.  v7 changes ONLY
+the selection key and the tight-geometry grid:
+
+1. `K_ROW` extended **0.15, 0.2** below the old 0.25 floor (TP closer
+   than SL ⇒ more first-touch wins; rows are the scoring rule, T2
+   eras keep paying the money);
+2. two new full-coverage side families over the long-horizon
+   momentum grid: `momMaj` (majority sign across 5d…365d legs) and
+   `momMean` (sign of the mean long-horizon return);
+3. selection key = **(train row WR, train era EV)** among candidates
+   that pass the SAME gates as v6 (train row WR ≥ 0.66 AND positive,
+   60 %-robust train era EV after 24 bps/era friction, min-eras).
+   Train-only; the holdout is never consulted.
+
+**Pre-registered ship criteria** (all three must hold; otherwise the
+v6 artefact stays and this section reports the failure):
+
+* (i) every gradeable cell keeps `full row_wr ≥ 0.66` and
+  `full era_ev_net > 0` (test_hold_design must stay green);
+* (ii) mean `full row_wr` across gradeable cells improves vs v6;
+* (iii) at least the same 7 cells keep `HOLD-OUT VERIFIED`.
+
+Parity: the live twins (`app/hold_policy._series_for` / `side_value`)
+were extended in lock-step — all 25 side families × 187,094 BTC 5m
+windows: **0 mismatches**, pointwise spot-checks 0/300.
+
+### (b) BNB data upgrade (v6's biggest honest weakness)
+
+v6 graded BNB from an 8-month 2026 extract (single year ⇒ everything
+IN-SAMPLE SHADOW).  The cross-checked `parshant231234-eng` spot-1m
+mirror now supplies **2017-11-06 → 2026-11-14** (4,737,863 bars); the
+349,920-bar overlap with the old extract agrees within 2 % on
+**349,920 / 349,920 bars** (0 divergences).  Same 1m interval, same
+rules — but BNB finally gets a real year split (train 2017-2025,
+holdout 2026) and can honestly earn a holdout label.
+
+### (c) App-code repairs (other sessions' breakage, found by a live
+endpoint + payload-contract sweep)
+
+| # | broken | root cause | fix |
+|---|---|---|---|
+| 1 | `GET /api/history` **500** | handler stored the bound **method** `engine.hindsight` (truthy) instead of calling it; JSONResponse outside all try/except | call it; defensive `_safe()` serializer so one bad leaf can never kill the console |
+| 2 | hero **P(win)/calibration + spillover rows dead** ("insufficient" even when calibrated) | `display_systems` whitelist dropped `p_correct`/`calib_iso`/`spillover`/`winrate`/`issue_note`/… that the analysis final writes | whitelist extended (same fields `results[tf]` already carried) |
+| 3 | **`prediction_settled` WS event emitted, never handled** — books/WR stale until a poll | no dispatcher branch | `onPredictionSettled()` — toast (+won/lost), stash `S.predStats`, refresh sealed-prediction table |
+| 4 | `haptic()` read `S.snap.settings` — never present; "haptics off" unreachable | snapshot had no `settings` | cosmetic whitelist (`haptics`/`sound`/`theme`, never keys) in the snapshot |
+
+Pinned by `tests/test_app_repairs.py`.
+
+
+### 15.0a Mid-run repair: the dead `lr_revW` side family (silent since v6)
+
+The first v7 run showed `lr_oof_error` on every cell. Root cause is a
+one-line broadcast bug in `backtest/hold.py::lr_sides_oof` — the `prev`
+feature line masked the LEFT side with `ok` but not the second operand:
+
+```
+prev[ok] = c[i_entry[ok]] - c[np.clip(ip, 0, None)]        # crashes
+prev[ok] = c[i_entry[ok]] - c[np.clip(ip, 0, None)[ok]]     # fixed
+```
+
+Every real dataset has windows with no prior window → ValueError → the
+`grade_cell` try/except swallowed it → `lr_s = None` →
+`composite_sides` skipped → **`lr_revW` / `lrE_revW` never existed in
+any graded cell of v6 or the aborted v7 run** (all 13 v6 cells carry
+`lr_oof_error`). The fix was applied BEFORE the shipped rerun so the
+family participates for every asset; the aborted run's numbers are
+discarded, and this disclosure precedes the final results.
+
+
+---
+
+## §16 · v7 result — FAILED gate (iii), v6 stays (reported as pre-registered)
+
+The v7 run completed for all four assets (BTC 5m, ETH 5m, BNB 1m on the
+full parshant tape, PAXG 1h), then the three §15 criteria were evaluated
+against the artefact.  Outcomes:
+
+* **(i) PASS** — every gradeable cell (12 of 13; BNB 22min returned
+  `no_feasible_config`, see below) has `full row_wr ≥ 0.66` and
+  `full era_ev_net > 0`.  `test_hold_design` green.
+* **(ii) PASS** — mean `full row_wr` across gradeable cells
+  **74.78 % → 80.96 % (+6.18 pts)** vs the v6 artefact:
+
+  | cell | v6 | v7 | Δ | cell | v6 | v7 | Δ |
+  |---|---|---|---|---|---|---|---|
+  | BTC 22 | 69.4 | **72.9** | +3.5 | ETH 22 | 70.2 | **74.2** | +4.0 |
+  | BTC 44 | 74.2 | **79.5** | +5.3 | ETH 44 | 74.9 | **80.3** | +5.4 |
+  | BTC 130 | 76.6 | **83.9** | +7.3 | ETH 130 | 77.1 | **83.9** | +6.8 |
+  | BTC 247 | 77.7 | **85.2** | +7.5 | ETH 247 | 78.1 | **85.0** | +6.9 |
+  | BNB 22 | 74.5 | *no_feasible* | — | BNB 44 | 75.9 | **83.2** | +7.3 |
+  | BNB 130 | 77.3 | **85.3** | +8.0 | BNB 247 | 78.1 | **85.4** | +7.3 |
+  | PAXG 247 | 68.2 | **72.7** | +4.5 | | | | |
+
+* **(iii) FAIL** — only **6** cells hold `HOLD-OUT VERIFIED`
+  (BTC 22/44/130, ETH 22, BNB 130/247); the pre-registered gate is
+  *"at least the same 7 cells keep HOLD-OUT VERIFIED"*.  The WR-first
+  selection key bought +6 pts of row win rate but spent it on
+  holdout-era robustness: ETH 44/130/247 and BTC 247 keep rows
+  verified at 80–85 % while their **holdout era EV** lands at
+  −52 bps / −3 bps / −0.6 bps / −29 bps (v6 held these positive).
+  BNB 44's holdout era EV is −16 bps as well.
+
+**Ship decision per the pre-registration: the v6 artefact stays.**
+`backtest/results/hold_wr.json` was restored from the `/tmp` backup
+taken before any v7 byte was written (census back to
+7 · 1 · 4 · 3 · 1, exact pins).  The v7 numbers above are disclosed
+in full, were never used to adjust the criteria, and the holdout was
+consulted only for this final gate — no iterate-and-retry loop was run.
+
+### What the failed run still proved (kept, artefact-independent)
+
+1. **The method works where it matters** — +3.5 to +8.0 pts row WR on
+   every gradeable cell, full-period BOTH-targets green everywhere,
+   train-only selection, real data only.
+2. **Two latent engine bugs found and fixed** (they do not alter the
+   restored v6 artefact):
+   * the dead `lr_revW`/`lrE_revW` family (§15.0a) — v6 and the first
+     v7 pass never graded it;
+   * `np.genfromtxt` loading the 220 MB BNB tape peaked at ~1 KB/row
+     and was OOM-killed (EXIT=137); `load_bars`/`_load_interval` now
+     use `np.loadtxt` (same array, ~10× less peak memory).
+3. **The sim hot loops are now JIT** (`numba`, with a pure-Python
+   fallback): `_simulate_core` and `_era_sim_core` are line-for-line
+   copies of the original loops — bit-exact against the reference on
+   823,963 real BTC 5m windows (row + era, 3/3 geometries each) and
+   500× faster (4M-window row sim 0.13 s; 4M-bar era 0.08 s).  This is
+   what made a real 9-year BNB grade possible at all; `numba==0.68.1`
+   is pinned in `requirements.txt`.
+4. **BNB 22min is an honest `no_feasible_config` on 9 years of data** —
+   on the old 8-month extract it shadowed 74.5 %; with train 2017-2025
+   no side simultaneously held train row WR ≥ 0.66 and positive train
+   era EV after 24 bps friction.  Reported as a failure, not hidden.
+
+### Where a v8 would pick up (not run — one shot per pre-registration)
+
+The failure mode is precise: selection maximises **train row WR** with
+train era EV only as a tie-break, so era geometry rides the thinnest
+positive train EV that still clears the gate, and three holdout era
+periods go a few bps negative.  A v8 pre-registration would put
+holdout-risk-aware robustness *into the train-side selection key*
+(e.g. require era EV positive in every train year, not 60 % of them)
+and re-run once — same criteria, stronger train-only constraint, no
+holdout peeking.  That is a new pre-registration, not a retry of this
+one.
