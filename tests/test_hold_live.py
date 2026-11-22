@@ -211,12 +211,15 @@ def test_row_settlement_parity_vs_simulate(tmp_path, monkeypatch):
 
 
 # ─────────────────────────── 4) seal geometry ────────────────────────
-def test_engine_seal_uses_certified_row_geometry():
-    # v8 §17: BNB tf1 (22min) is an honest no_feasible_config on the
-    # 9-year tape (no certified row geometry to seal) — the geometry
-    # contract is proven on BNB tf2, which stays gradeable, with the
-    # expectations derived from the shipped summary so the pin tracks
-    # the artifact instead of hard-coding one era's numbers
+def test_engine_seal_uses_certified_era_ride_geometry():
+    # §18: the live lock is the GUARDED ERA RIDE (SL = m_era·scale,
+    # TP = k_era·SL, settles at TP/SL/side-flip/max-hold — never at
+    # the window boundary).  BNB tf1 (22min) is an honest
+    # no_feasible_config on the 9-year tape (nothing certified to
+    # seal); BNB tf2 stays gradeable.  Expectations derive from the
+    # shipped summary so the pin tracks the artifact, and a legacy
+    # m=999 cell (v8 ride) must fall back to the ROW ladder + window
+    # settlement instead of sealing an unbounded stop.
     from tests.test_engine import make_engine
     eng, feed, _ = make_engine()
     final = {"direction": -1, "entry": 100.0, "confidence": 0.72,
@@ -229,8 +232,19 @@ def test_engine_seal_uses_certified_row_geometry():
     row = next(r for r in eng.predlocks.rows if r["id"] == out["id"])
     pol = hp.summary("BNB", "tf2")
     scale = 50.0                       # atr proxy on the thin DummyFeed
-    sl_exp = pol["row_m"] * scale
-    tp_exp = pol["row_k"] * sl_exp
+    era_m = float(pol["era_m"] or 0)
+    if 0 < era_m < 999.0:
+        # guarded era → era-ride seal, barriers capped inside the
+        # price (warmup ATR proxies can be fat)
+        sl_exp = min(era_m * scale, 100.0 * 0.9)
+        tp_exp = min(float(pol["era_k"]) * sl_exp, 100.0 * 0.9)
+        assert row.get("settle_mode") == "era_ride"
+        assert row.get("max_hold_s") == hp.ERA_MAX_HOLD_S
+    else:
+        # legacy v8 ride (m=999, unbounded) → ROW ladder, window mode
+        sl_exp = min(pol["row_m"] * scale, 100.0 * 0.9)
+        tp_exp = min(pol["row_k"] * sl_exp, 100.0 * 0.9)
+        assert row.get("settle_mode") == "window"
     assert abs(row["sl"] - (100.0 + sl_exp)) < 1e-9      # side −1
     assert abs(row["tp"] - (100.0 - tp_exp)) < 1e-9
     hold = row["evidence"]["hold_policy"]
@@ -242,8 +256,10 @@ def test_engine_seal_uses_certified_row_geometry():
     from app.mandate_cfg import direction_rule
     assert hold["rule"] == direction_rule("BNB", "tf2")
     assert "warmup proxy" in hold["scale_source"]
-    # rows carry NO friction — the era accountant owns round trips
-    assert row["evidence"]["hold_policy"]["round_trip_friction_bps"] == 24.0
+    # the round trip shown on the seal tracks the SHIPPED artifact's
+    # cost stack (§18.1 once v9 ships; 24.0 while v8 is shipped)
+    assert (row["evidence"]["hold_policy"]["round_trip_friction_bps"]
+            == pol["round_trip_bps"])
 
 
 # ─────────────────────────── 5) cell timers ──────────────────────────

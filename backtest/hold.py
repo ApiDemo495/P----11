@@ -1,28 +1,31 @@
 """Hold-design continuous benchmark — BOTH targets on real data, no abstention.
 
-  T1  every-window first-touch row win rate ≥ 66 %
-      (every window counted, tie = loss, causal k/m geometry)
-  T2  system EV > 0 after REAL friction — 12/18 bps per side, charged
-      only on actual round trips (side flips), never relaxed
+  T1  every-window first-touch row win rate ≥ 66 % (gross contract)
+      plus the REAL win rate row_wr_net = P(gross pnl > full RT)
+  T2  guarded-era system EV > 0 after the FULL Binance round trip
+      (§18.1: commission 10 + slippage + half-Roll spread per side →
+      28.9 / 29.8 / 31.0 / 37.4 bps round trip), charged only on
+      actual round trips (side flips), never relaxed
 
 Why a new design: the per-window re-entry model (continuous.py,
-REAL_RESULTS §12) must pay 24 bps every window against ~19–106 bps
-windows — measured impossible. The mandate allows changing the trade
-structure, so this harness holds ONE position per side-era:
+REAL_RESULTS §12) must pay every window against ~19–106 bps windows —
+measured impossible. The mandate allows changing the trade structure,
+so this harness holds ONE position per side-era:
 
 * side recomputed every window (no skipped analyses, ever),
 * position enters at era start (side flip), TP/SL first-touch on the
   native bars (SL wins same-bar ties), otherwise exits at the flip,
+* GUARDED era stops only (m ≤ 3, §18.2 — no no-stop rides),
 * friction = one round trip per era (the only real trades),
 * rows (T1) graded exactly like continuous.py: first-touch TP/SL
-  inside the window, else window-end sign settle — via _simulate with
-  friction 0 (friction never changes a row's sign outcome; T2 owns
-  the money).
+  inside the window, else window-end sign settle — simulated gross,
+  with the net (cost-paying) outcome recorded alongside.
 
 Selection is causal: (side, k, m) chosen on TRAIN years subject to
-row_WR_train ≥ 0.66 AND era_EV_net_train > 0 (≥30 eras), then
-reported on the HOLDOUT year. Single-year assets (BNB) select
-in-sample and are labelled as such — never presented as forward.
+row_WR_train ≥ 0.66 AND guarded-era_EV_net_train > 0 (≥15 eras),
+maximizing train row_wr_net first, then reported on the HOLDOUT
+year. Single-year assets (BNB) select in-sample and are labelled as
+such — never presented as forward.
 
 Run:  .venv/bin/python -m backtest.hold [--asset BTC ...] [--interval 5m]
 """
@@ -50,18 +53,19 @@ from .continuous import (CACHE, MOM_GRID, RESULTS, _hourly_final,
                          wilson)
 from .data import FRICTION_BPS
 
-# Row geometry (T1 — the every-window scoring rule): tight so most
-# windows actually touch; the first-touch floor 1/(1+k) at k=0.5 is
-# 66.7 % and the real side edge lifts above it. Rows never pay
-# friction (T2 owns the money) — they grade the CALL, not a round trip.
+# Row geometry (T1 — the every-window scoring rule): the first-touch
+# floor 1/(1+k) at k=0.5 is 66.7 % and the real side edge lifts above
+# it.  Rows simulate gross (friction 0) but §18 records the REAL win
+# rate P(gross pnl > full RT) from the same walk — gate (ii) is a net
+# gate, so selection targets it while the 0.66 gross contract holds.
 K_ROW = (0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6)
-M_ROW = (0.15, 0.25, 0.4, 0.55)
+M_ROW = (0.15, 0.25, 0.4, 0.55, 0.75, 1.0, 1.5, 2.0, 3.0)
 # Era geometry (T2 — the position's REAL TP/SL): wide enough for the
-# held move to pay 24 bps of friction at a positive edge.
+# held move to pay the FULL Binance round trip (28.9–37.4 bps, §18.1)
+# at a positive edge.  Guarded stops only — the m = 999 no-stop ride
+# is retired (unbounded risk is not a user trade).
 K_ERA = (0.6, 0.75, 1.0, 1.25, 1.5, 2.0)
-# m = 999 → NO barriers: ride the era to the flip (the trend-capture
-# geometry; barriers can only truncate a positive-drift era)
-M_ERA = (0.5, 1.0, 2.0, 3.0, 999.0)
+M_ERA = (0.5, 1.0, 2.0, 3.0)
 LONG_MOM_MIN = (7200, 10080, 14400, 43200, 129600, 259200,
                 525600)                                  # 5d..365d
 ROW_WR_TARGET = 0.66
@@ -389,6 +393,7 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
     years, uniq_years, tr_w, te_w, single = _year_split_mask(starts)
     fr_bps = FRICTION_BPS.get(asset, 12.0)
     out["friction_bps_per_side"] = fr_bps
+    out["round_trip_bps"] = round(2.0 * fr_bps, 3)
     out["single_year"] = bool(single)
     scale = _scale_at(t, c, starts - step_s,
                       max(2, int(round(w_min / (step_s / 60.0)))))
@@ -418,8 +423,10 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
         # ── T1: rows — every window, tight first-touch geometry ────
         best_row = None
         row_win = None
+        row_pnl = None
         row_k = row_m = None
         row_wr_feas = -1.0
+        row_nwr_feas = -1.0
         tr_w_eff = np.ones(n, dtype=bool) if single else tr_w
         for k in K_ROW:
             for m in M_ROW:
@@ -429,16 +436,26 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
                 win = res["win"]
                 wr_tr = float(win[tr_w_eff].mean())
                 wr_te = (float(win[te_w].mean()) if te_w.any() else None)
+                # §18: REAL win rate = P(gross pnl > full RT).  fr0 is
+                # 0.0 here, so pnl is gross; RT = 2 x per-side friction.
+                rt = 2.0 * fr_bps * 1e-4
+                nwr_tr = float((res["pnl"][tr_w_eff] > rt).mean())
                 if wr_tr is not None:
                     if best_row is None or wr_tr > best_row[0]:
                         best_row = (wr_tr, k, m, wr_te)
                     if wr_tr >= ROW_WR_TARGET:
                         diag["feasible_row_ge_66"] += 1
-                        # keep the STRONGEST train row among the
-                        # feasible geometries (best holdout prospects)
-                        if wr_tr > row_wr_feas:
+                        # §18: among contract-feasible rows keep the
+                        # one with the best REAL (net) win rate on
+                        # train, gross WR as the tie-break — gate (ii)
+                        # is a net gate, so selection targets it.
+                        key = (nwr_tr, wr_tr)
+                        if (row_win is None
+                                or key > (row_nwr_feas, row_wr_feas)):
                             row_wr_feas = wr_tr
+                            row_nwr_feas = nwr_tr
                             row_win, row_k, row_m = win, k, m
+                            row_pnl = res["pnl"]
         diag["row_wr_best_train"] = (round(best_row[0], 4)
                                      if best_row else None)
         diag["row_wr_best_k"] = best_row[1] if best_row else None
@@ -446,11 +463,13 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
         diag["row_wr_best_holdout"] = (round(best_row[3], 4)
                                        if best_row and best_row[3] is not None
                                        else None)
+        diag["row_net_best_train"] = (round(row_nwr_feas, 4)
+                                      if row_win is not None else None)
         # ── T2: era system — wide geometry, friction per era ───────
         # v8 (§17 pre-registered): collect every rung-C-passing era
         # geometry TOGETHER with its train-only robustness stats
         # (worst train-year EV, train profit factor); the rung pick +
-        # WR-first selection run after all sides are scored.
+        # net-WR-first selection run after all sides are scored.
         era_cands: list[dict] = []
         era_ev_best = None
         for k in K_ERA:
@@ -507,18 +526,22 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
         diag["n_eras"] = (len(era_cands[0]["er"]) if era_cands else None)
         side_rows[name] = diag
         pool[name] = {
-            "row_win": row_win, "row_k": row_k, "row_m": row_m,
+            "row_win": row_win, "row_pnl": row_pnl,
+            "row_k": row_k, "row_m": row_m,
             "wr_tr": (float(row_win[tr_w_eff].mean())
                       if row_win is not None else None),
+            "nwr_tr": (row_nwr_feas if row_win is not None else None),
             "cands": era_cands,
         }
 
-    # ── v8 pre-registered robustness ladder + WR-first key (§17) ───
+    # ── §18 v9 robustness ladder + REAL-win-rate-first key ─────────
     # Rungs are nested by construction (worst>0 ⇒ every train year
     # positive ⇒ ≥60 % robust), first rung with ANY feasible candidate
-    # wins; within the rung the key stays lexicographic
-    # (train row WR, train era EV).  Train-only: the holdout is never
-    # consulted here — §17 evaluates it exactly once, after the run.
+    # wins; within the rung the key is lexicographic
+    # (train row WR_NET, train row WR, train era EV) — gate (ii) is a
+    # net gate, so selection maximizes the real win rate first.
+    # Train-only: the holdout is never consulted here — §18 evaluates
+    # it exactly once, after the run.
     rung = "C"
     rung_pred = lambda c: True   # default rung C
     for _r, _p in (("A", lambda c: c["worst"] > 0 and c["pf"] >= 1.15),
@@ -539,35 +562,44 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
             continue
         best_era = max(cands, key=lambda c: c["ev"])
         feasible += 1
-        cand = (v["wr_tr"], best_era["ev"], name, v["row_k"], v["row_m"],
+        cand = (v["nwr_tr"] or 0.0, v["wr_tr"], best_era["ev"], name,
+                v["row_k"], v["row_m"],
                 best_era["k"], best_era["m"], best_era["er"],
                 best_era["ey"], best_era["ep"], v["row_win"],
-                best_era["worst"], best_era["pf"])
-        if best is None or cand[:2] > best[:2]:
+                v["row_pnl"], best_era["worst"], best_era["pf"])
+        if best is None or cand[:3] > best[:3]:
             best = cand
 
     out["sides"] = side_rows
     out["n_feasible_train"] = feasible
     if best is None:
         out["status"] = "no_feasible_config"
-        out["note"] = ("no side reached row WR ≥ 0.66 (tight rows) AND "
-                       "positive train era-EV (wide eras) after friction "
+        out["note"] = ("no side reached row WR ≥ 0.66 (row contract) AND "
+                       "a GUARDED era (m ≤ 3, §18) with positive train "
+                       "era-EV after the FULL Binance round trip "
                        "— honest failure, reported as such")
         return out
 
-    (wr_tr_sel, ev_tr, side_name, kr, mr, ke, me, er, ey, ep, win,
-     worst_sel, pf_sel) = best
+    (nwr_tr_sel, wr_tr_sel, ev_tr, side_name, kr, mr, ke, me, er, ey,
+     ep, win, pnl, worst_sel, pf_sel) = best
     rung_sel = rung
     side_rows[side_name]["n_eras"] = len(er)
     side = sides[side_name]
+    _RT = 2.0 * fr_bps * 1e-4          # §18 full round trip (gross pnl)
 
     def _agg(mask_w, mask_e):
         w_ = win[mask_w]
         lo, hi = wilson(int(w_.sum()), int(len(w_)))
+        nwin_ = int((pnl[mask_w] > _RT).sum())
+        nlo, nhi = wilson(nwin_, int(len(w_)))
         e_ = ep[mask_e]
         d: dict = {
             "row_n": int(len(w_)), "row_wr": round(float(w_.mean()), 4),
             "row_wilson": [round(lo, 4), round(hi, 4)],
+            # §18: REAL win rate — P(gross pnl > full RT), the share
+            # of windows that are still winners after ALL Binance costs
+            "row_wr_net": round(nwin_ / max(1, len(w_)), 4),
+            "row_wr_net_wilson": [round(nlo, 4), round(nhi, 4)],
             "era_n": int(len(e_)),
             "era_wr": (round(float((e_ > 0).mean()), 4)
                        if len(e_) else None),
@@ -600,12 +632,14 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
         "selection": ("train-only" if not single
                       else "SINGLE-YEAR IN-SAMPLE (disclosed, not forward)"),
         "selection_rule": (
-            f"v8 §17: robustness rung {rung_sel} (train-only ladder: "
+            f"v9 §18: robustness rung {rung_sel} (train-only ladder: "
             "A = worst train-year EV>0 & PF>=1.15, B = worst train-year "
             "EV>0, C = 60% train-years robust); within the rung max "
-            "TRAIN row WR (era EV breaks ties); train-only — the "
-            "holdout was never consulted"),
+            "TRAIN row WR_NET = P(gross > full RT) first, then gross "
+            "row WR, then train era EV; train-only — the holdout was "
+            "never consulted"),
         "train_row_wr_selected": round(wr_tr_sel, 4),
+        "train_row_wr_net_selected": round(float(nwr_tr_sel), 4),
         "selection_rung": rung_sel,
         "train_worst_year_ev": (round(worst_sel, 6)
                                 if math.isfinite(worst_sel) else "inf"),
@@ -658,6 +692,7 @@ def run(assets, smoke=False, interval=None) -> dict:
                       f"rowWR train={s['train']['row_wr']} "
                       f"hold={s['holdout'].get('row_wr')} "
                       f"full={s['full']['row_wr']} | "
+                      f"rowWRnet full={s['full'].get('row_wr_net')} | "
                       f"eraEVnet full={s['full']['era_ev_net']} "
                       f"hold={s['holdout'].get('era_ev_net')} | "
                       f"eraWR full={s['full']['era_wr']} | "

@@ -119,8 +119,14 @@ class PredictionJournal:
              reason: str = "", evidence: dict | None = None,
              target: str = "measured TP/SL ladder",
              source: str = "analyse", system_mode: str = "old",
-             cycle_id: str | None = None, lock_id: str | None = None) -> dict:
-        """Seal one prediction, or refuse with every failing check named."""
+             cycle_id: str | None = None, lock_id: str | None = None,
+             max_hold_s: float | None = None) -> dict:
+        """Seal one prediction, or refuse with every failing check named.
+
+        ``max_hold_s`` seals an **era ride** (§18): the lock no longer
+        dies at the window boundary — it lives until TP, SL, the
+        certified side flipping (the era exit), or this maximum hold.
+        """
         now = float(created_at if created_at is not None else time.time())
         if symbol not in SYMBOL_ORDER:
             return self._refuse(["unknown symbol " + str(symbol)])
@@ -141,8 +147,18 @@ class PredictionJournal:
         if checks:
             return self._refuse(checks)
 
-        # one lock per window: the window is anchored on creation time
+        # one lock per window: the window is anchored on creation time.
+        # An OPEN era ride owns the (symbol, tf) until it settles — no
+        # stacking across windows (§18: the ride IS the position).
         window = int(now // max(60, W * 60))
+        for row in reversed(self.rows):
+            if (row.get("symbol") == symbol and row.get("tf") == tf
+                    and row.get("status") == "open"
+                    and row.get("settle_mode") == "era_ride"):
+                return {**self._public(row), "locked": True, "already": True,
+                        "why": ["an era ride is already open for this "
+                                "symbol/timeframe — it settles at TP/SL/"
+                                "side-flip before a new one can seal"]}
         for row in reversed(self.rows):
             if (row.get("symbol") == symbol and row.get("tf") == tf
                     and row.get("window") == window
@@ -166,7 +182,13 @@ class PredictionJournal:
             "window": window,
             "minutes": W,
             "created_at": now,
-            "expires_at": now + W * 60.0,
+            # §18 era ride: expires_at becomes the MAXIMUM HOLD (the
+            # ride exits earlier at TP, SL or the certified side
+            # flipping); a plain window lock keeps the window horizon.
+            "expires_at": (now + float(max_hold_s)
+                           if max_hold_s else now + W * 60.0),
+            "settle_mode": ("era_ride" if max_hold_s else "window"),
+            "max_hold_s": (float(max_hold_s) if max_hold_s else None),
             "direction": int(direction),
             "side": "BUY" if int(direction) > 0 else "SELL",
             "entry": round(entry_f, 8),
@@ -212,7 +234,8 @@ class PredictionJournal:
     def settle(self, symbol: str, tf: str, price: float, *,
                high: float | None = None, low: float | None = None,
                now: float | None = None,
-               series: list | None = None) -> list[dict]:
+               series: list | None = None,
+               side_now: int | None = None) -> list[dict]:
         """Settle every open lock for (symbol, tf) that has resolved.
 
         ``series`` — optional ``[(ts, high, low), …]`` of closed bars
@@ -221,6 +244,12 @@ class PredictionJournal:
         exactly like ``backtest.continuous._simulate`` (0 parity
         mismatches); without it the aggregate sample falls back to the
         documented hold tie rules.
+
+        ``side_now`` — the CURRENT certified side (±1).  An open
+        **era ride** (§18, settle_mode ``era_ride``) exits at market
+        when that side no longer matches the lock's direction: the
+        flip IS the era exit.  First-touch (TP/SL) grades before the
+        flip, matching era_sim's barrier-before-boundary order.
         """
         now = float(now if now is not None else time.time())
         p = _finite(price)
@@ -293,6 +322,26 @@ class PredictionJournal:
                 result, reason = "won", "TP touched before SL"
             elif result is None and hit_sl:
                 result, reason = "lost", "SL touched before TP"
+            elif (result is None
+                    and row.get("settle_mode") == "era_ride"
+                    and side_now is not None
+                    and int(side_now) != 0 and int(side_now) != d):
+                # §18 era ride: the certified side flipped — exit at
+                # market now (the era exit), grade by strict sign.
+                move = p - entry
+                if move > 1e-12:
+                    result = "won" if d > 0 else "lost"
+                elif move < -1e-12:
+                    result = "lost" if d > 0 else "won"
+                elif hold_rules:
+                    result = "lost"
+                    reason = ("flat settle at side flip = loss "
+                              "(hold policy — every ride counted)")
+                else:
+                    result = "push"
+                if reason is None:
+                    reason = ("certified side flipped — era ride exit "
+                              "at market (§18)")
             elif result is None and expired:
                 # strict sign at the horizon: a tie is a push, not a win
                 move = p - entry
@@ -321,8 +370,13 @@ class PredictionJournal:
             row["settle_reason"] = reason
             # realised bps at the barrier that decided it, not at whatever
             # tick happened to be sampled when the touch was noticed
-            _ref = (tp if result == "won" else
-                    sl if result == "lost" else p)
+            # realised bps at the DECIDING price: the barrier that
+            # touched, or the market price for a flip/expiry settle
+            # (a ride exited at 103 must not report the TP at 110)
+            _touch = bool(reason) and any(
+                w in reason for w in ("touch", "before", "same-bar",
+                                      "same-window"))
+            _ref = ((tp if result == "won" else sl) if _touch else p)
             row["bps"] = (round(d * (_ref / entry - 1.0) * 1e4, 2)
                           if entry else None)
             row["graded"] = result in ("won", "lost")
@@ -336,7 +390,9 @@ class PredictionJournal:
     def settle_all(self, prices: dict[str, float], *,
                    extremes: dict[str, tuple[float, float]] | None = None,
                    now: float | None = None,
-                   series: dict[str, list] | None = None) -> list[dict]:
+                   series: dict[str, list] | None = None,
+                   sides_now: dict[tuple[str, str], int] | None = None
+                   ) -> list[dict]:
         out: list[dict] = []
         for symbol in SYMBOL_ORDER:
             p = _finite(prices.get(symbol))
@@ -347,8 +403,10 @@ class PredictionJournal:
                 hi, lo = extremes[symbol]
             sym_series = (series or {}).get(symbol)
             for tf in TF_ORDER:
+                sn = (sides_now or {}).get((symbol, tf))
                 out.extend(self.settle(symbol, tf, p, high=hi, low=lo,
-                                       now=now, series=sym_series))
+                                       now=now, series=sym_series,
+                                       side_now=sn))
         return out
 
     def mark_learned(self, lock_id: str) -> None:

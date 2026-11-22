@@ -27,8 +27,17 @@ class Bar:
 SYMBOLS = {"BTC": "BTC/USDT", "ETH": "ETH/USDT",
            "BNB": "BNB/USDT", "PAXG": "PAXG/USDT"}
 
-# per-asset round-trip friction in bps of entry (fee + slippage)
-FRICTION_BPS = {"BTC": 12.0, "ETH": 12.0, "BNB": 12.0, "PAXG": 18.0}
+# §18.1 REAL per-side friction in bps of entry, charged once per side
+# (era accounting charges 2x this per era = the full round trip).
+# Stack = Binance spot taker commission 10 (VIP0; the 0.075% BNB
+# discount is disclosed, not used) + slippage (BTC/ETH 1, BNB 2,
+# PAXG 5) + half the Roll(1984) effective spread measured on each
+# full cache (Roll: BTC 6.87, ETH 7.81, BNB 6.96, PAXG 7.40 bps).
+FRICTION_BPS = {"BTC": 14.436, "ETH": 14.904, "BNB": 15.482,
+                "PAXG": 18.700}
+# full round trip per asset (bps) — the real "cost of a trade"
+ROUND_TRIP_BPS = {"BTC": 28.872, "ETH": 29.808, "BNB": 30.963,
+                  "PAXG": 37.400}
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 

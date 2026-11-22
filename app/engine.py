@@ -1545,8 +1545,10 @@ class PredictionEngine:
             # uncapped 1.20 multiplier put ETH's bar at 0.42 while the
             # calibrated confidence distribution lives in 0.15–0.45, so
             # nothing could ever issue (the "always NO TRADE" report).
-            _fm = min(1.10, max(0.90, float(_prof.get("floor_mult") or 1.0)))
-            fin["asset_floor"] = round(CONFIDENCE_FLOOR * _fm, 4)
+            # §18.2.5: clamp keeps the asset prior from starving a
+            # high-bar profile; ISSUE_BAR raises every bar uniformly
+            from .config import asset_issue_floor as _issue_floor
+            fin["asset_floor"] = _issue_floor(symbol)
             fin["asset_nature"] = _prof["nature"]
             if float(fin["confidence"]) <= fin["asset_floor"]:
                 fin["issued"] = False
@@ -1691,12 +1693,15 @@ class PredictionEngine:
                 _atr_lane = 0.0
             try:
                 from .barriers import vol_scaled as _vol_barriers
+                from .horizon import asset_rt as _asset_rt
+                # §18.1: the real Binance round trip (28.9–37.4 bps) —
+                # every friction check below charges the SAME number
+                _hz_rt = _asset_rt(symbol)
                 _px = float(price or 0.0)
                 _atr = _atr_lane
                 _sig_bps = (_atr / _px * 1e4) if (_px > 0 and _atr > 0) else None
                 fin["vol_barriers"] = _vol_barriers(
-                    _sig_bps, tf=tf,
-                    friction_bps=18.0 if symbol == "PAXG" else 12.0)
+                    _sig_bps, tf=tf, friction_bps=_hz_rt)
             except Exception:
                 fin["vol_barriers"] = None
             # ── MICROSTRUCTURE + HORIZON VIABILITY (deep overhaul) ────
@@ -1726,8 +1731,10 @@ class PredictionEngine:
                 _sig_bps = ((_atr_lane / float(price or 1.0) * 1e4)
                             if price else None)
                 _fr = _mic.get("friction_bps")
-                fin["horizon"] = _lane_state(
-                    _sig_bps, _fr if isinstance(_fr, float) else None)
+                # §18.1: the lane gate charges the CERTIFIED round
+                # trip (the micro λ stays informational on the card)
+                from .horizon import asset_rt as _asset_rt2
+                fin["horizon"] = _lane_state(_sig_bps, _asset_rt2(symbol))
                 # ── COST GATE: does the *measured* edge clear friction? ──
                 # The horizon check asks whether σ is wide enough to be
                 # worth trading at all; this asks whether the out-of-fold
@@ -1739,8 +1746,10 @@ class PredictionEngine:
                 # "tf1".. so every lane read 60.0. Use the real window.)
                 _hz_min = float((TIMEFRAMES.get(tf) or {}).get("minutes")
                                 or 22.0)
-                _fric = (_fr if isinstance(_fr, float)
-                         else (18.0 if symbol == "PAXG" else 12.0))
+                # §18.1: the cost gate charges the certified Binance
+                # round trip (micro λ is shown, never billed)
+                from .horizon import asset_rt as _asset_rt3
+                _fric = _asset_rt3(symbol)
                 fin["edge"] = _edge_gate(symbol, _edge_bucket(_hz_min), _fric)
                 # ── EVENT SLEEVES (multi-year derivatives programme) ──
                 # Measured out-of-fold sleeves that trade this asset, with
@@ -1922,6 +1931,26 @@ class PredictionEngine:
             ) + (f" Trauma index RTP {em['rtp']:.2f} > 0.6 — confidence suppressed."
                  if em["rtp"] > 0.6 else "")
 
+            # §18.2.5 CERTAINTY: what the user sees next to the stated
+            # confidence is the certified cell's Wilson lower bound on
+            # its MEASURED win rate (with n) — a statistic, never a
+            # formula score.  Absent until the cell is certified.
+            _cell_cert: dict = {}
+            try:
+                from . import hold_policy as _hp_c
+                _hs = _hp_c.summary(symbol, tf)
+                if _hs.get("status") == "ok":
+                    _wil = _hs.get("win_rate_wilson") or [None, None]
+                    _cell_cert = {
+                        "cell_certainty": _wil[0],
+                        "cell_certainty_n": _hs.get("n_windows"),
+                        "cell_win_rate": _hs.get("win_rate"),
+                        "cell_win_rate_net": _hs.get("win_rate_net"),
+                        "cell_round_trip_bps": _hs.get("round_trip_bps"),
+                        "cell_tier": _hs.get("tier"),
+                    }
+            except Exception:
+                _cell_cert = {}
             results[tf] = {
                 "raw": raws[tf],
                 "adj": adj[tf],
@@ -1965,6 +1994,7 @@ class PredictionEngine:
                 "calib_provisional": fin.get("calib_provisional"),
                 "asset_floor": fin.get("asset_floor"),
                 "asset_nature": fin.get("asset_nature"),
+                **_cell_cert,
                 "behavior": fin.get("behavior"),
                 "drhe": drhe,
                 "pcv": pcv,
@@ -5565,19 +5595,35 @@ class PredictionEngine:
                 if not _scale or _scale <= 0:
                     _scale = float(final.get("atr") or 0.0)
                     _scale_src = "engine ATR warmup proxy (q80 not yet estimable)"
-                _bars_pair = (_hp_s.build_row_bars(
-                    symbol, tf, entry_hold,
-                    int(final.get("direction") or 0), _scale)
-                    if _scale else None)
+                # §18: the live lock is the ERA RIDE when the cell
+                # carries guarded era stops (m < 999 — every v9 cell);
+                # a legacy v9-less artifact (v8 m=999 ride, unbounded)
+                # falls back to the ROW ladder + window settlement so
+                # the old shipped file keeps working unchanged.
+                _sum = _hp_s.summary(symbol, tf)
+                _era_m = float(_sum.get("era_m") or 0.0)
+                _use_era = bool(_scale and _scale > 0 and _era_m
+                                and 0 < _era_m < 999.0)
+                _bars_pair = (
+                    _hp_s.build_era_bars(
+                        symbol, tf, entry_hold,
+                        int(final.get("direction") or 0), _scale)
+                    if _use_era else
+                    (_hp_s.build_row_bars(
+                        symbol, tf, entry_hold,
+                        int(final.get("direction") or 0), _scale)
+                     if _scale else None))
                 if _bars_pair:
                     tp, sl = float(_bars_pair[0]), float(_bars_pair[1])
-                _sum = _hp_s.summary(symbol, tf)
                 hold_block = {
                     **_sum,
                     "hold_rules": True,
                     "scale": _scale,
                     "scale_source": _scale_src,
                     "row_tp": tp, "row_sl": sl,
+                    "era_ride": _use_era,
+                    "era_max_hold_s": (_hp_s.ERA_MAX_HOLD_S
+                                       if _use_era else None),
                     "settle_rules": _hp_s.row_settle_rules(symbol, tf),
                     "era_geometry": {"k": _sum.get("era_k"),
                                      "m": _sum.get("era_m"),
@@ -5633,6 +5679,10 @@ class PredictionEngine:
             system_mode=str(self.agents.settings.get("system_mode", "old")),
             cycle_id=(getattr(cyc, "cycle_id", None) if cyc else None),
             lock_id=(getattr(cyc, "lock_id", None) if cyc else None),
+            # §18 era ride: the lock outlives the window (TP, SL or
+            # the certified side flipping settle it first)
+            max_hold_s=(float(hold_block.get("era_max_hold_s"))
+                        if (hold_block or {}).get("era_ride") else None),
         )
 
     # ==================================================================
@@ -5915,9 +5965,20 @@ class PredictionEngine:
                              float(lows[j]))
                             for j in range(lo_i, len(times))
                         ]
+            # §18: the CURRENT certified side per (symbol, tf) — an
+            # open era ride exits at market when it no longer matches
+            # (the flip IS the era exit)
+            sides_now = {}
+            for (sym, tfn), cyc in (self.cycles or {}).items():
+                try:
+                    sides_now[(sym, tfn)] = int(
+                        getattr(cyc, "direction", 0) or 0)
+                except Exception:
+                    continue
             rows = self.predlocks.settle_all(prices, extremes=extremes,
                                               now=now,
-                                              series=series_by_sym)
+                                              series=series_by_sym,
+                                              sides_now=sides_now)
             for row in rows:
                 self.learn_from_prediction_lock(row)
             return rows

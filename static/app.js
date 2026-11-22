@@ -1485,7 +1485,8 @@ function renderHero() {
   if (stats) {
     stats.innerHTML = `
       <div class="kv"><span>call</span><b class="${dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat"}">${dir > 0 ? "▲ BULL" : dir < 0 ? "▼ BEAR" : "● FLAT"}${weak && dir ? "*" : ""}</b></div>
-      <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} · ${verdict}${res.issue_note ? ` <span class="dim" style="font-size:11px">${esc(res.issue_note)}</span>` : ""}</b></div>
+      <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} · ${verdict}${res.issue_note ? ` <span class="dim" style="font-size:11px">${esc(res.issue_note)}</span>` : ""}${res.cell_certainty != null ? ` <span class="dim" style="font-size:11px">· certainty ${fx(res.cell_certainty, 3)} (n=${res.cell_certainty_n ?? "?"})</span>` : ""}</b></div>
+      ${res.cell_win_rate_net != null ? `<div class="kv"><span>real win rate</span><b>${fx(res.cell_win_rate_net * 100, 1)}% after ${fx(res.cell_round_trip_bps ?? 0, 1)} bps RT <span class="dim" style="font-size:11px">(gross ${fx((res.cell_win_rate ?? 0) * 100, 1)}%)</span></b></div>` : ""}
       <div class="kv"><span>prediction lock</span><b class="${cyc?.prediction_lock?.locked ? "acc-up" : "dim"}">${cyc?.prediction_lock?.locked ? `🔒 ${esc(cyc.prediction_lock.side || "")} · ${esc(String(cyc.prediction_lock.id || "").slice(-8))}` : "not sealed yet"}</b></div>
       ${_pWinRow(res)}
       <div class="kv"><span>strength (voter agreement)</span><b>${fx(cyc?.strength ?? res.strength ?? 0, 2)}</b></div>
@@ -2313,7 +2314,8 @@ function onAnalyseDone(msg) {
     <div class="an-signal ${dirCls}">
       <div class="big">${bigWord}</div>
       ${conflictBanner}
-      <div class="conf">confidence ${fx(r.confidence, 3)} · ${r.verdict === "ISSUE" ? "ISSUED" : (r.verdict || (r.gate_ok ? "WATCH" : "NO CALL"))}${r.issue_note ? ` · ${esc(r.issue_note)}` : ""}</div>
+      <div class="conf">confidence ${fx(r.confidence, 3)} · ${r.verdict === "ISSUE" ? "ISSUED" : (r.verdict || (r.gate_ok ? "WATCH" : "NO CALL"))}${r.issue_note ? ` · ${esc(r.issue_note)}` : ""}${r.cell_certainty != null ? ` · certainty ${fx(r.cell_certainty, 3)} (n=${r.cell_certainty_n ?? "?"})` : ""}</div>
+      ${r.cell_win_rate_net != null ? `<div class="conf">real win rate ${fx(r.cell_win_rate_net * 100, 1)}% after ${fx(r.cell_round_trip_bps ?? 0, 1)} bps round trip · gross ${fx((r.cell_win_rate ?? 0) * 100, 1)}%</div>` : ""}
       ${r.prediction_lock?.locked ? `<div class="conf acc-up">🔒 LOCKED ${esc(r.prediction_lock.side)} · ${esc(String(r.prediction_lock.id || "").slice(-10))} · TP ${px(r.prediction_lock.tp)} / SL ${px(r.prediction_lock.sl)} · saved to history</div>` : `<div class="conf acc-warn">lock refused: ${esc((r.prediction_lock?.why || ["no finite ladder"]).join("; "))}</div>`}
       <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? Number(r.ratio).toFixed(2) + ":1" : "—"} · ${esc(r.levels_source || "preview only")}</div>
       ${(() => { const pol = r.prediction_lock?.evidence?.hold_policy; if (!pol) return "";
