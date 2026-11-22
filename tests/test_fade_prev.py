@@ -65,13 +65,27 @@ def test_fade_prev_thin_tape_falls_back_to_zero():
 
 
 def test_apply_direction_fade_prev_wired_for_live_cells():
-    """BTC/ETH/BNB cells switched to fade_prev; PAXG keeps mom44."""
+    """HOLD POLICY supersedes fade_prev for direction (PR #13): the
+    TRADE side comes from backtest/results/hold_wr.json — exact
+    certified side per (asset, tf) — while the legacy mandate config
+    stays as the fallback when the hold record is missing."""
+    # legacy config object unchanged (fallback path)
     assert mc.cfg("BTC")["direction"] == "fade_prev"
-    assert mc.cfg("ETH")["direction"] == "fade_prev"
-    assert mc.cfg("BNB")["direction"] == "fade_prev"
     assert mc.cfg("PAXG")["direction"] == "mom44"
-    feed, _ = _feed_with("BTC", +1.0)
-    # ladder raw side +1 gets overridden by the measured fade (-1)
-    assert mc.apply_direction("BTC", "tf2", +1, 0, feed) == -1
-    # direction_rule surfaces the new rule so engine skips the inv4g pass
-    assert mc.direction_rule("BTC", "tf2") == "fade_prev"
+    # direction_rule surfaces the CERTIFIED rule so the engine prints
+    # and routes exactly what was measured
+    assert mc.direction_rule("BTC", "tf2") == "hold:mom525600"
+    assert mc.direction_rule("ETH", "tf1") == "hold:mom525600"
+    assert mc.direction_rule("BNB", "tf4") == "hold:down"
+    assert mc.direction_rule("PAXG", "tf4") == "hold:mom129600"
+    assert mc.direction_rule("PAXG", "tf1") == "hold:warmup"
+    # constant-down cell: tape-independent certified side beats raw +1
+    bnb_feed, _ = _feed_with("BNB", +1.0)
+    assert mc.apply_direction("BNB", "tf2", +1, 0, bnb_feed) == -1
+    # thin tape on a long-momentum cell → certified warmup fallback +1
+    # (hold.py's full-coverage rule — never a skip, never a stale raw)
+    btc_feed, _ = _feed_with("BTC", +1.0)
+    assert mc.apply_direction("BTC", "tf2", -1, 0, btc_feed) == 1
+    # all 16 cells are managed by the hold policy (4 predictions/asset)
+    from app import hold_policy as hp
+    assert all(hp.managed(s, t) for s, t in hp.known_cells())

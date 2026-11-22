@@ -179,7 +179,11 @@ def test_post_grc_direction_does_not_rewrite_frozen_lock(live_engine):
     }
     asyncio.run(engine._apply_agents("ETH", {"tf3": result}))
     assert engine.locks[("ETH", "tf3")] == frozen
-    assert engine.prev_cci_dir[("ETH", "tf3")] == -1
+    # HOLD-FIRST MANDATE: the live score direction is owned by the
+    # certified hold cell (ETH tf3 = mom525600 → long), so prev_cci_dir
+    # records the hold side — the old pin (-1, the raw GRC score)
+    # predated the hold policy wiring.
+    assert engine.prev_cci_dir[("ETH", "tf3")] == 1
 
 
 def test_every_asset_timeframe_uses_the_same_valid_frozen_contract(live_engine):

@@ -922,3 +922,75 @@ as-is. The 3 remaining PAXG cells are ungradeable on 1h bars.
 .venv/bin/python -m backtest.hold                  # BNB 1m, PAXG 1h
 .venv/bin/python -m pytest tests/test_hold_design.py -q
 ```
+
+---
+
+## §14 · Live wiring — certified hold policy inside the running app
+
+The v6 hold policy is not a backtest-only artifact: the FastAPI engine,
+its settlement ledger and the dashboard all consume
+`backtest/results/hold_wr.json` directly (no re-derivation, no
+re-selection). Verification against a live uvicorn process
+(`.venv/bin/python -m uvicorn app.main:app --port 8000`):
+
+| Check | Result |
+|---|---|
+| `GET /api/cells` | **16 cells** (4 assets × 4 TFs) with tier · WR · Wilson lo · rule · side · era · ANALYSE timer |
+| Tier census | **7 HOLD-OUT VERIFIED · 1 HOLDOUT ROWS·ERA n<3 · 4 IN-SAMPLE SHADOW · 3 UNGRADEABLE/WARMUP · 1 …·HOLDOUT MISS** — exactly the hold_wr.json derivation |
+| `POST /api/analyse/BTC?tf=tf1` (first click) | **HTTP 200 in 32 ms** (budget < 200 ms) |
+| Second click, same cell | **HTTP 409 `cell_locked` in 34 ms** — `remaining_s: 1319.9`, `minutes_left: 22`, "other cells are unaffected" |
+| BTC tf2 + ETH tf1 while BTC tf1 locked | **HTTP 200** (queued/runs) — no 22-minute bleed across cells or assets |
+| Locked cell re-prediction | impossible until the tf-minute timer expires (server-enforced; UI shows countdown and disables ▶ ANALYSE) |
+| Snapshot `sync` | five live countdowns: NEXT_TICK_PASS · WINDOW_CLOSE_SETTLE (TF1 22m) · BRAIN_METACOG_REWEIGHT · AGENT_COMMITTEE_SYNTHESIS · NEWS_MACRO_POLL |
+| Snapshot `metacog` | **16** per-cell statuses + Exp3 weights; shown in the analysis panel |
+| Snapshot `cells` | 16-cell block mirrors `/api/cells` |
+| Emotion channels | **21 model channels + E22 CERC composite = "22 channels"** (aggregate · cerc · net_emotion · agreement · breadth · dominant all present) |
+| Default mode | `auto_predict: False`, `auto_predict_touched: False` — manual-only; only the user can flip it |
+| Prediction result | lock sealed with `evidence.hold_policy` (tier `HOLD-OUT VERIFIED`, rule `hold:mom525600`, WR 69.35 %, Wilson lo 69.11 %, `hold_rules: true`) |
+
+### §5 committee — real brain contribution (bug fixed)
+
+The four-agent committee module existed but **`COMMITTEE.vote()` had
+never been called once** (snapshot `committee: {vote_count: 0, last:
+null}` for every prediction ever made), and the confidence
+contribution's return value was discarded at the call site. Both are
+wired now: every analysis runs the board on *that run's* market
+bundle, emotion pass, tape regime and cell metacog status, and the
+result carries the bounded ±5 % confidence move (side never flipped).
+
+Live board after wiring (BNB tf1 analysis):
+
+```
+effect: committee split (confidence unchanged)   agree 33%  consensus +0.08  held: True
+vetoes: ['cell is SHADOW — unconfirmed cells run no capital (directive §4)']
+  flow        ▲ +0.33  conf 0.65  ofti +0.03, cmp +0.45, climax +0.11, spread 0.0bp
+  lead_lag    ● +0.02  conf 0.36  leader lag +0.0001 → expected follow (own absorbed -0.0009)
+  contrarian  ▼ -0.37  conf 0.53  retail_herd +0.11, smart +0.44, chase +0.41, panic 0.02
+  governor    ▲ +0.30  conf 0.20  VETO — cell is SHADOW …            (may_issue: False)
+conf 0.246 → 0.246 (split band) · direction held
+```
+
+### Parity regression pins (new in this change)
+
+`tests/test_hold_live.py` (23 tests) pins live-vs-`hold.py` parity:
+
+* **side parity** — `hold_policy._series_for` ≡ `hold.build_sides` over
+  every (asset, tf) param row of hold_wr.json: **0 mismatches**
+  (9 sides × ~260 k bars);
+* **era parity** — `hold_era.track_eras` ≡ `hold.era_sim`: bit-identical
+  (3 param sets);
+* **row settlement parity** — the journal's hold settlement
+  (bar-sequential SL-first walk, flat = loss) ≡ continuous
+  `_simulate`: **0 mismatches over 400 randomised windows**;
+* seal geometry (k_row·m_row·scale, entry = locked price, 24 bps RT),
+  cell-timer semantics (armed at click, others unaffected, pytest
+  default-off), manual-only default, committee ±5 % bound, 16-cell
+  block + endpoint.
+
+### Reproduce
+
+```bash
+.venv/bin/python -m pytest tests/test_hold_live.py -q          # 23 tests
+.venv/bin/python -m uvicorn app.main:app --port 8000           # live board
+curl -s localhost:8000/api/cells | python -m json.tool | head
+```

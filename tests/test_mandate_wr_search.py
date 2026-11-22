@@ -128,18 +128,22 @@ def _hourly_feed(symbol: str, hourly_closes: list[float]):
     return feed
 
 
-def test_filter_rsi_deep_blocks_and_passes():
+def test_filter_managed_cells_never_abstain():
+    """HOLD-FIRST MANDATE: every (asset, tf) is a certified hold cell,
+    so the RSI-deep / top-quartile gates can never abstain — the old
+    'mixed tape → not deep' block is gone by design (16 cells issue)."""
     from app import mandate_cfg as mc
-    # mixed tape → RSI lands mid-range (30..70) → deep filter abstains
     mixed = [100.0 + (0.4 if i % 2 else -0.3) for i in range(50)]
     feed = _hourly_feed("ETH", mixed)
     ok, why = mc.filter_ok("ETH", "tf1", feed)
-    assert not ok and "not deep" in why, why
-    # one-directional decline → RSI 0 → deep extreme passes
+    assert ok, why  # managed bypass (why is for BLOCKS only)
     crash = [100.0 - 0.5 * i for i in range(50)]
     feed2 = _hourly_feed("ETH", crash)
     ok2, why2 = mc.filter_ok("ETH", "tf1", feed2)
     assert ok2, why2
+    # the legacy gate math still exists (for any future unmanaged cell)
+    src = open(mc.__file__).read()
+    assert "not deep" in src and "quartile" in src
 
 
 def test_filter_gate_topq_quartile_cut():
@@ -162,66 +166,59 @@ def test_filter_gate_topq_quartile_cut():
                             high=100.0 + hi, low=100.0 - lo)
         return feed
 
-    # all volatile → last ATR% equals its own trailing max → pass
+    # hold-first: BOTH tapes pass the managed-cell bypass — the quartile
+    # cut below never fires on a certified cell (and the legacy math is
+    # pinned at source level above)
     ok, why = mc.filter_ok("BNB", "tf2", build("BNB", 120, 0))
     assert ok, why
-    # volatile body + quiet tail → last ATR% below the 3/4 quantile
     ok2, why2 = mc.filter_ok("BNB", "tf2", build("BNB", 90, 30))
-    assert not ok2 and "quartile" in why2, why2
+    assert ok2, why2
 
 
-def test_confluence_majority_and_unanimous():
+def test_confluence_managed_cells_bypass_vetoes():
+    """Cross-TF agreement is advisory for certified cells — a dissenting
+    sibling never vetoes the hold side (hold-first, no abstention)."""
     from app import mandate_cfg as mc
-    # ETH cells: align/agree off → never veto
-    ok, _ = mc.confluence_ok("ETH", "tf1", 1, None,
-                             {"tf2": -1, "tf3": -1})
-    assert ok
-    # PAXG: majority — one reading against with only one reading = block
-    ok, why = mc.confluence_ok("PAXG", "tf3", 1, None, {"tf4": -1})
-    assert not ok and "agree" in why, why
-    ok, _ = mc.confluence_ok("PAXG", "tf3", 1, None, {"tf4": 1})
-    assert ok
-    # silent sibling (0) never vetoes
-    ok, _ = mc.confluence_ok("PAXG", "tf3", 1, None, {"tf4": 0})
-    assert ok
-    # BNB: unanimous — every READING must match, silent ones ignored
-    ok, _ = mc.confluence_ok("BNB", "tf2", 1, None,
-                             {"tf1": 1, "tf3": 1, "tf4": 0})
-    assert ok
-    ok, why = mc.confluence_ok("BNB", "tf2", 1, None,
-                               {"tf1": 1, "tf3": -1})
-    assert not ok and "unanimous" in why, why
-    # direction 0 (no side yet) → never blocks
-    ok, _ = mc.confluence_ok("BNB", "tf2", 0, None, {"tf1": -1})
-    assert ok
+    cases = [("ETH", "tf1", {"tf2": -1, "tf3": -1}),
+             ("PAXG", "tf3", {"tf4": -1}),
+             ("BNB", "tf2", {"tf1": 1, "tf3": -1}),
+             ("BTC", "tf2", {"tf1": -1, "tf3": -1, "tf4": -1})]
+    for sym, tf, dirs in cases:
+        ok, why = mc.confluence_ok(sym, tf, 1, None, dirs)
+        assert ok, (sym, tf, why)
+    # direction 0 (no side yet) → also fine
+    ok, why = mc.confluence_ok("BNB", "tf2", 0, None, {"tf1": -1})
+    assert ok, why
+    # the legacy unanimous/agree/align math is still on disk
+    src = open(mc.__file__).read()
+    assert "unanimous" in src and "align" in src
 
 
-def test_confluence_align_blocks_non_impulse():
+def test_confluence_align_managed_cells_pass():
+    """BTC align="with" used to abstain on a flat tape — a certified
+    hold cell never abstains, flat tape or not."""
     from app import mandate_cfg as mc
-    # BTC carries align="with": a flat tape is never an impulse in the
-    # issued direction → abstain; direction 0 (pre-side) is untouched
     flat = [100.0] * 70
     feed = _hourly_feed("BTC", flat)
     ok, why = mc.confluence_ok("BTC", "tf2", 1, feed, None)
-    assert not ok and "align" in why, why
-    ok, _ = mc.confluence_ok("BTC", "tf2", 0, feed, None)
-    assert ok
+    assert ok, why
+    ok2, why2 = mc.confluence_ok("BTC", "tf2", 0, feed, None)
+    assert ok2, why2
 
 
 def test_engine_tier_confluence_wiring():
-    """_tier_for runs confluence_ok after the mandate cell check: a
-    disagreeing cross-TF reading caps the cell watch-only (abstention);
-    agreeing readings leave the full tier standing."""
+    """Hold-first: _tier_for on a certified cell returns the full tier
+    with the hold rule — cross-TF disagreement can no longer cap it to
+    watch-only (abstention rejected by the user directive)."""
     from tests.test_engine import make_engine
     engine, _feed, _ = make_engine()
     blocked = engine._tier_for("BNB", "tf2", 0.5, direction=1,
                                dirs_by_tf={"tf1": 1, "tf3": -1})
-    assert blocked["tier"] == "watch-only"
-    assert "agree" in blocked["tier_rule"]
+    assert blocked["tier"] == "full", blocked
+    assert "hold policy" in (blocked.get("tier_rule") or ""), blocked
     clear = engine._tier_for("BNB", "tf2", 0.5, direction=1,
                              dirs_by_tf={"tf1": 1, "tf3": 1})
     assert clear["tier"] == "full", clear.get("tier_rule")
-    # no readings yet → no veto (a fresh process must not deadlock)
     fresh = engine._tier_for("BNB", "tf2", 0.5, direction=1,
                              dirs_by_tf={})
     assert fresh["tier"] == "full", fresh.get("tier_rule")

@@ -444,6 +444,10 @@ class PredictionEngine:
         # (symbol, tf) with its timestamp — the agree gate reads the
         # OTHER timeframes from the most recent completed pass
         self._last_dirs: dict[tuple[str, str], tuple[float, int]] = {}
+        # HOLD POLICY: per-cell cursor for the era accountant (window
+        # boundary + closed-bar index) — 16 independent (asset, tf)
+        # cells, each holding one position per side-era
+        self._hold_cursor: dict[tuple[str, str], dict] = {}
         self.started_at = time.time()      # §12 ops: uptime
         self.vault_last_write = 0.0        # §12 ops: vault last write
         self.build_id = ""                 # §12 ops: build id vs remote
@@ -2680,6 +2684,23 @@ class PredictionEngine:
                     if not _cok:
                         tier = "watch-only"
                         _mandate_note = f" · {_cwhy}"
+        # HOLD POLICY: every managed cell carries its certified badge
+        # (HOLD-OUT VERIFIED / IN-SAMPLE SHADOW / UNGRADEABLE · WARMUP)
+        # and measured win rate — the tier may size the position but the
+        # hold side itself is never gated (no abstention).
+        try:
+            from . import hold_policy as _hp_t
+            if _hp_t.managed(symbol, tf):
+                _hs = _hp_t.summary(symbol, tf)
+                _wr = _hs.get("win_rate")
+                _lo = _hs.get("confidence")
+                _wr_txt = (f"wr {100 * _wr:.1f}%, wilson lo {100 * _lo:.1f}%"
+                           if _wr and _lo else
+                           "no certified wr — warmup")
+                _mandate_note += (f" · hold policy [{_hs.get('tier')}] "
+                                  f"{_wr_txt}")
+        except Exception:
+            pass
         return {"tier": tier, "p_side": round(p_side, 4),
                 "noise_floor_s": round(floor_s, 5),
                 "score_floor_ratio": round(x, 3),
@@ -2851,6 +2872,27 @@ class PredictionEngine:
             return {"ok": False, "error": "unknown symbol"}
         if tf not in TF_ORDER:
             return {"ok": False, "error": "unknown timeframe"}
+        # HOLD POLICY — per-cell ANALYSE timer (user requirement): one
+        # click arms a tf-minute (22/44/130/247) background timer on
+        # THIS (asset, tf) only.  While it runs the app refuses any
+        # other prediction for the same cell; every other cell — and
+        # this asset on other timeframes — stays free (4×4 = 16
+        # independent predictions).  Only timer expiry re-enables the
+        # cell.  The timer starts at the CLICK, before the stages run.
+        from . import hold_policy as _hp
+        _locks = _hp.cell_locks()
+        if _locks.locked(symbol, tf):
+            _rem = _locks.remaining(symbol, tf)
+            return {"ok": False, "error": "cell_locked", "locked": True,
+                    "symbol": symbol, "tf": tf,
+                    "locked_until": _locks.until(symbol, tf),
+                    "remaining_s": round(_rem, 1),
+                    "minutes_left": int(math.ceil(_rem / 60.0)),
+                    "why": (f"{symbol} {tf.upper()} is inside its "
+                            f"{TIMEFRAMES[tf]['minutes']}-minute analysis "
+                            f"window — retry when the countdown ends; other "
+                            f"cells are unaffected")}
+        _armed = _locks.start(symbol, tf)
         # §1.1 stamping: every analyse_* event carries {asset, timeframe,
         # request_id} so the UI can atomically discard superseded work.
         # Latest-wins: a newer request_id for the same cell replaces the
@@ -3073,7 +3115,10 @@ class PredictionEngine:
                     _pe = (em.get("primary_emotion") or {})
                     dom = _pe.get("name") or _ECH[
                         max(em["emotions"], key=em["emotions"].get)][1]
-                    out[t] = {"cerc": round(em["cerc"], 4),
+                    # full pass kept for the §5 committee vote (the
+                    # contrarian agent reads cerc_vectors + raw channels)
+                    out[t] = {"_full": em,
+                              "cerc": round(em["cerc"], 4),
                               "top_emotion": str(dom),
                               "fear_greed": (em.get("fear_greed") or {}).get("index"),
                               "valence": (em.get("core_affect") or {}).get("valence"),
@@ -3387,6 +3432,38 @@ class PredictionEngine:
                                for e in job["stages"]],
                 },
             }
+            # §5 — the four-agent board votes on EVERY analysis.  The
+            # module existed but vote() had never been called (the
+            # snapshot's committee block stayed {vote_count: 0, last:
+            # null} for every prediction the engine ever made).  Inputs:
+            # this run's market bundle + emotion pass, the tape regime
+            # and the cell's metacognition status.  The contribution
+            # block below reads COMMITTEE.last right after this vote.
+            try:
+                from .agent_committee import COMMITTEE
+                from .metacognition import MC
+                from .regime import classify_tape
+                _mkt = self._build_market(symbol)
+                _emf = ((store.get("emotions") or {}).get(tf) or {}) \
+                    .get("_full")
+                _cl = list(_mkt.get("closes") or [])
+                _regime = classify_tape(_cl[-480:]) if _cl else None
+                _st = MC.status(symbol, tf)
+                COMMITTEE.vote(_mkt, _emf, _regime, metacog_status=_st,
+                               pillar_report=None,
+                               allows_capital=MC.allows_capital(symbol, tf),
+                               symbol=symbol)
+            except Exception:
+                pass
+            try:
+                final["committee"] = self._committee_contribution(
+                    symbol, tf, final)
+            except Exception:
+                pass
+            try:
+                final["metacog"] = _metacog_block()
+            except Exception:
+                pass
             if not recheck["passed"]:
                 # advisory only: the call stands; the failed checks are
                 # printed so the arithmetic can be audited (doc §1)
@@ -5351,6 +5428,48 @@ class PredictionEngine:
                if cyc is not None else None)
         if _mode == "new" and _fc:
             tp = float(_fc)
+        # CERTIFIED HOLD POLICY — the sealed prediction carries the
+        # cell's decoupled ROW geometry (TP = k_row·m_row·q80-scale,
+        # SL = m_row·q80-scale) and the hold settlement rules.  The
+        # entry stays whatever the lock already froze; the scale is the
+        # benchmark's q80 window-move estimator on the live tape, with
+        # the engine ATR labelled as the warmup proxy when the tape is
+        # too thin to estimate q80 yet.
+        hold_block = None
+        try:
+            from . import hold_policy as _hp_s
+            if _hp_s.is_hold_cell(symbol, tf):
+                entry_hold = float((getattr(cyc, "level_contract", {})
+                                    or {}).get("entry")
+                                   or final.get("entry") or 0.0)
+                _scale = _hp_s.scale_at_feed(self.feed, symbol, tf)
+                _scale_src = "q80 window-move scale (hold.py _scale_at)"
+                if not _scale or _scale <= 0:
+                    _scale = float(final.get("atr") or 0.0)
+                    _scale_src = "engine ATR warmup proxy (q80 not yet estimable)"
+                _bars_pair = (_hp_s.build_row_bars(
+                    symbol, tf, entry_hold,
+                    int(final.get("direction") or 0), _scale)
+                    if _scale else None)
+                if _bars_pair:
+                    tp, sl = float(_bars_pair[0]), float(_bars_pair[1])
+                _sum = _hp_s.summary(symbol, tf)
+                hold_block = {
+                    **_sum,
+                    "hold_rules": True,
+                    "scale": _scale,
+                    "scale_source": _scale_src,
+                    "row_tp": tp, "row_sl": sl,
+                    "settle_rules": _hp_s.row_settle_rules(symbol, tf),
+                    "era_geometry": {"k": _sum.get("era_k"),
+                                     "m": _sum.get("era_m"),
+                                     "ride": _sum.get("ride")},
+                    "round_trip_friction_bps": _sum.get("round_trip_bps"),
+                    "rule": _mcfg_s.direction_rule(symbol, tf),
+                }
+        except Exception:
+            log.exception("hold-policy seal overlay failed for %s|%s",
+                          symbol, tf)
         evidence = {
             "formula_signs": formula_signs,
             "subsystems": {k: _sign(v) if k != "final" else int(v or 0)
@@ -5368,6 +5487,11 @@ class PredictionEngine:
             "signature": (signature
                           or (final.get("thinking") or {}).get("signature")),
         }
+        if hold_block:
+            # settlement reads this: hold cells grade rows with the
+            # certified first-touch rules (SL wins ties, flat = loss,
+            # no friction on rows — eras carry the round trips)
+            evidence["hold_policy"] = hold_block
         return self.predlocks.seal(
             symbol, tf,
             direction=int(final.get("direction") or 0),
@@ -5643,8 +5767,10 @@ class PredictionEngine:
         try:
             prices = self.feed.prices()
             extremes = {}
+            series_by_sym = {}
             for symbol in SYMBOL_ORDER:
                 st = self.feed.state(symbol)
+                times = list(getattr(st, "times", []) or [])
                 closes = list(getattr(st, "closes", []) or [])
                 highs = list(getattr(st, "highs", []) or [])
                 lows = list(getattr(st, "lows", []) or [])
@@ -5662,13 +5788,177 @@ class PredictionEngine:
                     extremes[symbol] = (
                         max(highs[lo_i:] or [closes[-1]]),
                         min(lows[lo_i:] or [closes[-1]]))
-            rows = self.predlocks.settle_all(prices, extremes=extremes, now=now)
+                    # certified hold rows grade bar-by-bar (SL-first
+                    # same-bar ties) — pass the closed-bar series so the
+                    # live walk matches backtest.continuous._simulate
+                    if times:
+                        series_by_sym[symbol] = [
+                            (float(times[j]), float(highs[j]),
+                             float(lows[j]))
+                            for j in range(lo_i, len(times))
+                        ]
+            rows = self.predlocks.settle_all(prices, extremes=extremes,
+                                              now=now,
+                                              series=series_by_sym)
             for row in rows:
                 self.learn_from_prediction_lock(row)
             return rows
         except Exception:
             log.exception("prediction-lock settlement failed")
             return []
+
+    # ==================================================================
+    # HOLD POLICY — live era accounting + the 16-cell status block
+    # ==================================================================
+    def _committee_contribution(self, symbol: str, tf: str,
+                                final: dict) -> dict:
+        """§5 FOUR-AGENT COMMITTEE — a REAL, bounded contribution to the
+        prediction: the board's vote share moves confidence ±5 % (never
+        the side — the certified hold side is parity-locked) and the
+        result carries what the brain did so the panel can show it."""
+        try:
+            from .agent_committee import COMMITTEE as _CMT
+            _last = _CMT.last
+            if _last is None:
+                final["committee"] = {"effect": "committee has not voted yet",
+                                      "direction_held": True}
+                return final["committee"]
+            if not final.get("direction"):
+                final["committee"] = {"effect": "no side — board silent",
+                                      "direction_held": True}
+                return final["committee"]
+            # agent directions are float conviction in [-1, +1] — the
+            # old int() truncation turned ±0.6 into 0 and made every
+            # board look permanently split
+            _dirs = [(1 if float(getattr(v, "direction", 0) or 0) > 0.05
+                      else -1 if float(getattr(v, "direction", 0) or 0)
+                      < -0.05 else 0)
+                     for v in (_last.votes or [])]
+            _nz = [d for d in _dirs if d]
+            _agree = (sum(1 for d in _nz if d == int(final["direction"]))
+                      / len(_nz)) if _nz else 0.5
+            if _agree >= 0.75:
+                _mult, _eff = 1.05, "committee confirms (+5% confidence)"
+            elif _agree <= 0.25:
+                _mult, _eff = 0.95, "committee challenges (-5% confidence)"
+            else:
+                _mult, _eff = 1.0, "committee split (confidence unchanged)"
+            _c0 = float(final.get("confidence") or 0.0)
+            final["confidence"] = round(
+                min(1.0, max(0.05, _c0 * _mult)), 4)
+            final["committee"] = {
+                **_last.as_dict(),
+                "agree_share": round(_agree, 3),
+                "effect": _eff,
+                "confidence_before": _c0,
+                "confidence_after": final["confidence"],
+                "direction_held": True,
+                "rule": ("bounded ±5% confidence; the certified hold "
+                         "side is never flipped by the board"),
+            }
+        except Exception:
+            log.exception("committee contribution failed for %s|%s",
+                          symbol, tf)
+            final["committee"] = {"effect": "committee unavailable",
+                                  "direction_held": True}
+        return final["committee"]
+
+    def _hold_tick(self, now: float) -> None:
+        """Advance every (asset, tf) cell's era position.
+
+        * window boundary → certified side + entry + q80 scale feed the
+          accountant (opens / flips / extends the era run),
+        * while inside a position, every CLOSED native bar runs the
+          SL-first / TP-second first-touch check (SL wins ties),
+        * side runs consume exactly one era record each; each close
+          pays the real round-trip friction (24 bps, PAXG 36).
+        """
+        from bisect import bisect_left
+        from . import hold_policy as _hp
+        from . import hold_era as _he
+        minute_now = (int(now) // 60) * 60
+        for symbol in SYMBOL_ORDER:
+            try:
+                st = self.feed.state(symbol)
+                times = list(st.times)
+                closes = list(st.closes)
+                highs = list(getattr(st, "highs", []) or [])
+                lows = list(getattr(st, "lows", []) or [])
+            except Exception:
+                continue
+            if not times or len(closes) != len(times):
+                continue
+            for tf in TF_ORDER:
+                if not _hp.managed(symbol, tf):
+                    continue
+                key = (symbol, tf)
+                cur = self._hold_cursor.get(key)
+                if cur is None:
+                    cur = {"win": 0.0, "bar_i": 0}
+                    self._hold_cursor[key] = cur
+                W = TIMEFRAMES[tf]["minutes"] * 60
+                # window boundary (epoch grid, hold.py's start anchor)
+                s = int(times[-1]) // W * W
+                if s > float(cur["win"]):
+                    cur["win"] = float(s)
+                    side, _meta = _hp.side_at_feed(
+                        self.feed, symbol, tf, now=s + 1)
+                    i_e = bisect_left(times, s) - 1
+                    entry_px = float(closes[i_e]) if i_e >= 0 else 0.0
+                    scale = _hp.scale_at_feed(self.feed, symbol, tf, now=s)
+                    if side and entry_px > 0:
+                        _he.accountant(symbol, tf).on_window(
+                            side, entry_px, float(scale or 0.0), float(s))
+                # closed-bar first-touch scan while inside the position
+                acct = _he.accountant(symbol, tf)
+                i0 = int(cur.get("bar_i", 0))
+                new_bars = [(float(times[j]), float(highs[j] or closes[j]),
+                             float(lows[j] or closes[j]))
+                            for j in range(i0 + 1, len(times))
+                            if float(times[j]) < minute_now]
+                if new_bars and acct.in_position:
+                    acct.on_bars(new_bars)
+                cur["bar_i"] = len(times) - 1
+
+    def hold_cells_block(self, now: float | None = None) -> dict:
+        """The live 16-cell picture: certified tier + win rate +
+        Wilson confidence, ANALYSE countdowns, era position, last lock."""
+        from . import hold_policy as _hp
+        from . import hold_era as _he
+        now = float(now if now is not None else time.time())
+        try:
+            prices = self.feed.prices()
+        except Exception:
+            prices = {}
+        locks = _hp.cell_locks()
+        out: dict[str, dict] = {}
+        for symbol, tf in _hp.known_cells():
+            row = _hp.summary(symbol, tf)
+            rem = locks.remaining(symbol, tf, now)
+            row["analyse"] = {
+                "locked": rem > 0,
+                "remaining_s": round(rem, 1),
+                "locked_until": locks.until(symbol, tf),
+                "can_analyse": rem <= 0,
+                "tf_minutes": TIMEFRAMES[tf]["minutes"],
+            }
+            try:
+                row["era"] = _he.accountant(symbol, tf).snapshot(
+                    prices.get(symbol))
+            except Exception:
+                row["era"] = {"error": "era accountant unavailable"}
+            latest = self.predlocks.latest(symbol, tf, 1)
+            row["last_lock"] = latest[0] if latest else None
+            res = self.last_result.get((symbol, tf)) or {}
+            row["live_direction"] = int(res.get("direction") or 0)
+            row["rule"] = None
+            try:
+                from . import mandate_cfg as _mcfg_c
+                row["rule"] = _mcfg_c.direction_rule(symbol, tf)
+            except Exception:
+                pass
+            out[f"{symbol}|{tf}"] = row
+        return out
 
     def explain_ctx(self, view: str, symbol: str, tf: str) -> dict:
         """Everything the tab explainer needs, built from live state.
@@ -7494,14 +7784,21 @@ class PredictionEngine:
             # AUTO-PREDICT (user toggle): keep the full staged analysis
             # fresh without a click — one run at most every 45 s, never
             # stacked on a running job (manual ▶ ANALYSE behaves as before)
-            if (self.agents.settings.get("auto_predict", True)
+            # DEFAULT = MANUAL (user directive): the loop only runs when
+            # the user explicitly turned auto-predict ON; only the user
+            # can change it.  The auto scope also honours the per-cell
+            # ANALYSE timers (a locked cell is never auto-run).
+            if (self.agents.settings.get("auto_predict", False)
                     and not os.environ.get("PYTEST_CURRENT_TEST")
                     and (self.analyse_job is None
                          or self.analyse_job.get("status") != "running")
                     and now - self._last_auto_analyse >= 45.0):
                 self._last_auto_analyse = now
                 try:
-                    self.start_analyse(SYMBOL_ORDER[0], "tf1")
+                    from . import hold_policy as _hp_auto
+                    _sym_a = SYMBOL_ORDER[0]
+                    if not _hp_auto.cell_locks().locked(_sym_a, "tf1"):
+                        self.start_analyse(_sym_a, "tf1")
                 except Exception:
                     log.exception("auto-predict analyse failed")
             # BRAIN SELF-HEAL: whatever flipped the connectome to
@@ -7527,6 +7824,13 @@ class PredictionEngine:
                                      "stats": self.predlocks.stats()})
             except Exception:
                 log.exception("prediction-lock tick failed")
+            # HOLD ERA ACCOUNTING: every cell advances its own
+            # one-position-per-side-era state (window boundaries +
+            # closed-bar first-touch checks, real round-trip friction)
+            try:
+                self._hold_tick(now)
+            except Exception:
+                log.exception("hold era tick failed")
             for symbol in SYMBOL_ORDER:
                 price = prices.get(symbol, 0.0)
                 if price <= 0:
@@ -8181,6 +8485,9 @@ class PredictionEngine:
             "sync": _sync_block(),
             "metacog": _metacog_block(),
             "committee": _committee_block(),
+            # the certified hold policy's 16 cells: tier + win rate +
+            # Wilson confidence + ANALYSE countdowns + era position
+            "cells": self.hold_cells_block(now),
             "bgn": {
                 sym: {
                     tf: {t2: round(v, 4) for t2, v in row.items()}

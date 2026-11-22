@@ -125,7 +125,17 @@ def cfg(symbol: str) -> dict | None:
 
 
 def allows(symbol: str, tf: str) -> bool:
-    """False → this (asset, tf) may not issue (tier is capped watch-only)."""
+    """False → this (asset, tf) may not issue (tier is capped watch-only).
+
+    The CERTIFIED HOLD POLICY owns every (asset, tf) cell (4×4 = 16) —
+    the legacy mandate tf-subset cap only applies when hold_wr.json is
+    missing."""
+    try:
+        from .hold_policy import managed as _hp_managed
+        if _hp_managed(symbol, tf):
+            return True
+    except Exception:
+        pass
     c = cfg(symbol)
     if c is None:
         return True
@@ -280,7 +290,17 @@ def _gate_ok(cs: list[float], hs: list[float], ls: list[float],
 
 
 def filter_ok(symbol: str, tf: str, feed) -> tuple[bool, str]:
-    """Issuance filter for a mandate cell → (pass?, reason-if-blocked)."""
+    """Issuance filter for a mandate cell → (pass?, reason-if-blocked).
+
+    HOLD POLICY: certified cells never abstain (every window counts —
+    the certified selection had no filter), so the legacy filter is
+    skipped whenever hold_wr.json manages the cell."""
+    try:
+        from .hold_policy import managed as _hp_managed
+        if _hp_managed(symbol, tf):
+            return True, ""
+    except Exception:
+        pass
     c = cfg(symbol)
     if not c or tf not in c["tfs"]:
         return True, ""
@@ -358,7 +378,21 @@ def apply_direction(symbol: str, tf: str, raw: int, tf4_raw: int,
     """Apply this cell's direction rule to the ladder's raw side.
 
     ``raw`` is the ladder output for THIS tf, ``tf4_raw`` the same
-    pass's TF4 raw side (inv4g). Tape rules read the hourly resample."""
+    pass's TF4 raw side (inv4g). Tape rules read the hourly resample.
+
+    HOLD POLICY first: when hold_wr.json manages the cell the TRADE
+    side is the certified rule's value (mom grid / down / …) — the
+    ladder raw side is kept for display but never traded.  Warmup
+    cells (PAXG tf1–tf3: no certified measurement) fall through to the
+    legacy rule below."""
+    try:
+        from .hold_policy import managed as _hp_m, side_at_feed as _hp_side
+        if _hp_m(symbol, tf):
+            _s, _meta = _hp_side(feed, symbol, tf)
+            if _s:
+                return int(_s)
+    except Exception:
+        pass
     c = cfg(symbol)
     if not c or tf not in c["tfs"]:
         return raw
@@ -390,6 +424,18 @@ def apply_direction(symbol: str, tf: str, raw: int, tf4_raw: int,
 
 
 def direction_rule(symbol: str, tf: str) -> str:
+    """The rule this cell trades — hold policy surfaces its exact
+    certified side name (``hold:mom525600`` …) or ``hold:warmup`` for
+    the ungradeable cells; legacy mandate rules follow otherwise."""
+    try:
+        from .hold_policy import managed as _hp_m, summary as _hp_sum
+        if _hp_m(symbol, tf):
+            _s = _hp_sum(symbol, tf)
+            if _s.get("certified"):
+                return f"hold:{_s.get('side')}"
+            return "hold:warmup"
+    except Exception:
+        pass
     c = cfg(symbol)
     if not c or tf not in c["tfs"]:
         return "base"
@@ -413,7 +459,16 @@ def confluence_ok(symbol: str, tf: str, direction: int, feed,
     ``dirs_by_tf`` maps sibling timeframe -> latest direction (may be
     incomplete — a missing sibling never vetoes, matching the search's
     'no other TF reading → no veto' rule).
+
+    HOLD POLICY: managed cells never confluence-abstain — the
+    certified system trades its side every window (no skips).
     """
+    try:
+        from .hold_policy import managed as _hp_managed
+        if _hp_managed(symbol, tf):
+            return True, ""
+    except Exception:
+        pass
     c = cfg(symbol)
     if not c or tf not in c["tfs"] or not direction:
         return True, ""

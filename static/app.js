@@ -140,7 +140,17 @@ async function api(path, opts) {
   const to = setTimeout(() => ctl.abort(), 10000);
   try {
     const r = await fetch(path, { ...(opts || {}), signal: ctl.signal });
-    if (!r.ok) throw new Error(`${path} → ${r.status}`);
+    if (!r.ok) {
+      // keep the server's JSON body (cell_locked countdowns, refusal
+      // reasons) reachable for callers — the status line alone loses it
+      let body = null;
+      try { body = await r.json(); } catch { /* non-JSON error */ }
+      const err = new Error((body && (body.why || body.error))
+        ? String(body.why || body.error) : `${path} → ${r.status}`);
+      err.status = r.status;
+      err.body = body;
+      throw err;
+    }
     return await r.json();
   } catch (e) {
     // A timeout means the engine is BUSY, not absent. The engine's event loop
@@ -1858,28 +1868,31 @@ function renderQuads(opts = {}) {
 async function loadAutoPredict() {
   try {
     const st = await api("/api/settings");
-    const on = st?.settings?.auto_predict !== false;
+    // MANUAL IS THE DEFAULT (user directive): auto only when the
+    // server says the user explicitly enabled it — undefined/off
+    // renders OFF.  Only the user flips this chip.
+    const on = st?.settings?.auto_predict === true;
     S.autoPredict = on;
     const chip = $("#auto-chip");
     if (chip) {
       chip.textContent = on ? "AUTO: ON" : "AUTO: OFF";
       chip.className = "btn-analyse btn-auto " + (on ? "auto-on" : "auto-off");
       chip.title = on
-        ? "AUTO-PREDICT on — analysis re-runs by itself every ~45 s; every tab is always fresh. Click for MANUAL mode (▶ ANALYSE only)."
-        : "MANUAL mode — press ▶ ANALYSE on the dashboard for a fresh full analysis. Click for AUTO.";
+        ? "AUTO-PREDICT on (you enabled it) — analysis re-runs by itself every ~45 s. Click for MANUAL mode (▶ ANALYSE only)."
+        : "MANUAL mode (default) — press ▶ ANALYSE on the dashboard for a fresh full analysis. Only you can turn AUTO on.";
     }
     const row = $("#st-auto");
-    if (row) row.textContent = on ? "ON — analysis runs itself (click to toggle)" : "OFF — manual ▶ ANALYSE only (click to toggle)";
+    if (row) row.textContent = on ? "ON — analysis runs itself (click to toggle)" : "OFF — manual ▶ ANALYSE only (default, click to toggle)";
   } catch { /* offline */ }
 }
 function bindAutoChip() {
   const chip = $("#auto-chip");
   if (chip) chip.addEventListener("click", async () => {
-    const next = !(S.autoPredict !== false);
+    const next = !(S.autoPredict === true);
     try {
       await api("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" },
                                    body: JSON.stringify({ auto_predict: next }) });
-      toast(next ? "AUTO-PREDICT on — analysis runs itself" : "MANUAL — press ▶ ANALYSE for a fresh run", "ok");
+      toast(next ? "AUTO-PREDICT on — analysis runs itself (user-enabled)" : "MANUAL — press ▶ ANALYSE for a fresh run", "ok");
     } catch (e) { toast("toggle: " + e.message, "err"); }
     loadAutoPredict();
   });
@@ -2010,10 +2023,125 @@ function bindAnalyse() {
       // REST fallback: if analyse_done never arrives (WS blip), the poll
       // below still completes the panel
       startAnalysePoll();
-    } catch (e) { toast("analyse: " + e.message, "err"); }
-    b.disabled = false;
+      loadCells();                         // this cell just armed its timer
+      return;                              // stay disabled while it runs
+    } catch (e) {
+      if (e && e.body && e.body.error === "cell_locked") {
+        // per-cell ANALYSE timer: THIS cell sleeps, others stay free
+        const m = Math.floor((e.body.remaining_s || 0) / 60);
+        const ss = Math.floor((e.body.remaining_s || 0) % 60);
+        toast(`⏳ ${sym} ${S.focusTf.toUpperCase()} locked — ${m}m ${ss}s left on its ${e.body.minutes_left || m + 1}-min timer. Other cells still analyse.`, "err");
+        loadCells();                       // re-render keeps it disabled
+        return;                            // until the countdown expires
+      }
+      toast("analyse: " + e.message, "err");
+    }
+    b.disabled = false;                    // hard errors re-enable at once
   });
 }
+
+/* ═══════ HOLD POLICY cells: 16-card grid + per-cell timers ═══════ */
+async function loadCells() {
+  try {
+    const d = await api("/api/cells");
+    S.cells = d;
+    renderCells();
+  } catch { /* offline — keep last render */ }
+}
+function _tierCls(tier) {
+  if (tier === "HOLD-OUT VERIFIED") return "tier-hold";
+  if (tier === "HOLDOUT ROWS · ERA n<3") return "tier-rows";
+  if (tier === "UNGRADEABLE / WARMUP") return "tier-warm";
+  return "tier-shadow";
+}
+function _cdText(ms) {
+  if (ms <= 0) return null;
+  const s = Math.ceil(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+function renderCells() {
+  const box = $("#cells-cards");
+  if (!box || !S.cells) return;
+  const cells = S.cells.cells || {};
+  const now = Date.now() + (S.serverOffset || 0);
+  $("#cells-meta").textContent =
+    `${Object.keys(cells).length} cells · tiers: ` +
+    Object.entries(S.cells.tiers || {}).map(([k, v]) => `${k} ×${v}`).join(" · ");
+  box.innerHTML = Object.entries(cells).map(([key, c]) => {
+    const [sym, tf] = key.split("|");
+    const a = c.analyse || {};
+    const untilMs = (a.locked_until || 0) * 1000;
+    const left = untilMs - now;
+    const locked = left > 0;
+    const active = sym === S.symbol && tf === S.focusTf;
+    const wr = c.win_rate != null ? `${(c.win_rate * 100).toFixed(1)}%` :
+      (c.certified ? "—" : "n/a");
+    const conf = c.confidence != null ? `wilson lo ${(c.confidence * 100).toFixed(1)}%` :
+      (c.tier === "UNGRADEABLE / WARMUP" ? "warmup — no certified WR" : "");
+    const dir = c.live_direction > 0 ? `<span class="buy">▲ BUY</span>` :
+      c.live_direction < 0 ? `<span class="sell">▼ SELL</span>` : `<span class="dim">● no live side</span>`;
+    const era = c.era || {};
+    const eraTxt = era.error ? "" :
+      era.side ? `${era.in_position ? "IN" : "flat"} ${era.side > 0 ? "+" : "−"}${era.ride ? " ride" : ""}` +
+        (era.unrealised_net != null ? ` · unreal ${(era.unrealised_net * 100).toFixed(2)}%` : "") +
+        ` · eras ${era.totals?.eras || 0} net ${((era.totals?.net || 0) * 100).toFixed(2)}%`
+      : "era — waiting first window";
+    const lock = c.last_lock && c.last_lock.outcome
+      ? `last: ${c.last_lock.outcome} ${c.last_lock.bps != null ? (c.last_lock.bps >= 0 ? "+" : "") + c.last_lock.bps + "bp" : ""}`
+      : "no sealed lock yet";
+    return `<div class="hcell ${active ? "active" : ""}" data-cell="${key}" title="${esc(key)} — ${esc(c.rule || c.tier || "")}">
+      <div class="hc-top"><span class="hc-sym">${sym} ${tf.toUpperCase()} · ${(a.tf_minutes || c.minutes)}m</span>
+        <span class="hc-tier ${_tierCls(c.tier)}">${esc(c.tier)}</span></div>
+      <div class="hc-wr">${wr} <span class="hc-conf">WR${conf ? " · " + conf : ""}</span></div>
+      <div class="hc-side">${dir} · ${esc(c.rule || (c.certified ? "" : "no rule"))}</div>
+      <div class="hc-era">${esc(eraTxt)}</div>
+      <div class="hc-lock">${esc(lock)}</div>
+      <div class="hc-timer">${locked
+        ? `<span>⏱ ANALYSE locked</span><span class="cd" data-until="${untilMs}">⏳ ${_cdText(left) || "0:00"}</span>`
+        : `<span>▶ ready</span><span class="free">free — click ANALYSE</span>`}</div>
+    </div>`;
+  }).join("");
+  // per-card click = switch asset+tf (then the ANALYSE button targets it)
+  box.querySelectorAll(".hcell").forEach(el => el.addEventListener("click", () => {
+    const [sym, tf] = (el.dataset.cell || "").split("|");
+    if (!sym) return;
+    const ab = $("#seg-assets")?.querySelector(`[data-sym="${sym}"]`);
+    if (ab) ab.click();
+    const tb = $("#seg-tf")?.querySelector(`[data-tf="${tf}"]`);
+    if (tb) tb.click();
+    loadCells();
+  }));
+  // ANALYSE button state for the FOCUS cell: disabled while its timer runs
+  const cur = cells[`${S.symbol}|${S.focusTf}`];
+  const btn = $("#btn-analyse");
+  if (btn && cur && !btn.dataset.busy) {
+    const a = cur.analyse || {};
+    const left2 = (a.locked_until || 0) * 1000 - now;
+    if (left2 > 0) {
+      btn.disabled = true;
+      btn.title = `${S.symbol} ${S.focusTf.toUpperCase()} is inside its ${(a.tf_minutes || 22)}-minute analysis window — ${Math.ceil(left2 / 60000)} min left. Pick another cell or wait; timers are independent.`;
+    } else {
+      btn.disabled = false;
+      btn.title = "Run the staged analysis for this asset+timeframe (arms this cell's timer only)";
+    }
+  }
+}
+/* 1 s countdown updater — runs inside THE one master setInterval */
+function updateCellsTick() {
+  if (!S.cells) return;
+  const now = Date.now() + (S.serverOffset || 0);
+  let expired = false;
+  document.querySelectorAll(".hcell .cd[data-until]").forEach(el => {
+    const left = Number(el.dataset.until) - now;
+    if (left <= 0) { expired = true; return; }
+    el.textContent = "⏳ " + _cdText(left);
+  });
+  if (expired && !S._cellsReload) {
+    S._cellsReload = true;
+    loadCells().finally(() => { S._cellsReload = false; });
+  }
+}
+
 /* issue 3 — REST reconciliation for missed analyse events.
    Driven by THE one master setInterval (advice H-2) via a deadline flag —
    a second interval here would violate the single-timer contract. */
@@ -2139,6 +2267,20 @@ function onAnalyseDone(msg) {
       <div class="conf">confidence ${fx(r.confidence, 3)} · ${r.verdict === "ISSUE" ? "ISSUED" : (r.verdict || (r.gate_ok ? "WATCH" : "NO CALL"))}${r.issue_note ? ` · ${esc(r.issue_note)}` : ""}</div>
       ${r.prediction_lock?.locked ? `<div class="conf acc-up">🔒 LOCKED ${esc(r.prediction_lock.side)} · ${esc(String(r.prediction_lock.id || "").slice(-10))} · TP ${px(r.prediction_lock.tp)} / SL ${px(r.prediction_lock.sl)} · saved to history</div>` : `<div class="conf acc-warn">lock refused: ${esc((r.prediction_lock?.why || ["no finite ladder"]).join("; "))}</div>`}
       <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? Number(r.ratio).toFixed(2) + ":1" : "—"} · ${esc(r.levels_source || "preview only")}</div>
+      ${(() => { const pol = r.prediction_lock?.evidence?.hold_policy; if (!pol) return "";
+        const wr = pol.win_rate != null ? `${(pol.win_rate * 100).toFixed(1)}%` : "—";
+        const lo = pol.confidence != null ? ` · wilson lo ${(pol.confidence * 100).toFixed(1)}%` : "";
+        const hd = pol.era_ev_net != null ? ` · era EV ${(pol.era_ev_net * 100).toFixed(2)}%/era net after ${(pol.round_trip_friction_bps || 24)}bp RT friction` : "";
+        return `<div class="conf acc-up">🎯 HOLD POLICY [${esc(pol.tier || "?")}] ${esc(pol.rule || pol.side || "")} · certified WR ${wr}${lo}${hd}</div>` +
+          (pol.scale_source ? `<div class="conf">row geometry k=${pol.row_k} m=${pol.row_m} · ${esc(String(pol.scale_source).slice(0, 90))}</div>` : ""); })()}
+      ${r.committee ? `<div class="conf">🧠 committee: ${esc(r.committee.effect || "—")}${r.committee.agree_share != null ? ` · agree ${(r.committee.agree_share * 100).toFixed(0)}%` : ""}${r.committee.consensus != null ? ` · consensus ${r.committee.consensus >= 0 ? "+" : ""}${Number(r.committee.consensus).toFixed(2)}` : ""} · conf ${fx(r.committee.confidence_before, 3)}→${fx(r.committee.confidence_after, 3)}${r.committee.direction_held ? " · side held (certified)" : ""}${(r.committee.vetoes || []).length ? ` · ⚠ ${esc(r.committee.vetoes[0])}` : ""}</div>` : ""}
+      ${(r.committee.votes || []).length ? `<div class="conf">votes: ${r.committee.votes.map(v => `${esc(v.agent)} <b>${v.direction > 0.05 ? "▲" : v.direction < -0.05 ? "▼" : "●"}</b> ${Math.round(v.confidence * 100)}%${v.veto ? " ⚠" : ""} <i>${esc(String(v.reason || "").slice(0, 64))}</i>`).join(" · ")}</div>` : ""}
+      ${r.metacog ? (() => { const mc = r.metacog; const nst = Object.keys(mc.statuses || {}).length;
+        const sym = msg.symbol || S.symbol;
+        const mine = Object.entries(mc.statuses || {}).filter(([k]) => k.startsWith(sym + "|"));
+        const w = Object.entries(mc.weights || {}).find(([k]) => k.startsWith(sym + "|"));
+        const stTxt = mine.map(([k, v]) => `${k.split("|")[1].toUpperCase()} <b>${esc(String(v))}</b>`).join(" · ");
+        return `<div class="conf">🧠 online meta-cognition: ${nst} cells live${stTxt ? " · " + stTxt : ""}${w ? ` · exp3 w ${esc(JSON.stringify(w[1]).slice(0, 60))}` : ""}</div>`; })() : ""}
       ${(r.signal === "BUY" || r.signal === "SELL") ? chopChip(msg.tf || S.focusTf) : ""}
       <div class="conf">${r.contract_state === "locked" ? `LOCKED CONTRACT ${esc((r.contract_id || "").slice(0, 16))}` : "PREVIEW ONLY — NO LOCKED CONTRACT"} · ${r.execution_eligible ? "EXECUTION ELIGIBLE" : (r.recheck?.passed ? "PAPER ONLY — signal produced, orders not routed (tape: " + esc((r.tape_mode || (S.snap?.feed?.source) || "sim")) + ")" : "NOT EXECUTION-ELIGIBLE")}</div>
     </div>
@@ -2165,6 +2307,7 @@ function onAnalyseDone(msg) {
   // SYNC: the analysis recomputes every subsystem — refetch whatever view
   // is open so formulas/emotion/physics/brain/news all show the same run
   refreshActiveView(true);
+  loadCells();                             // the cell's timer is armed now
   toast("analysis complete — all views synced", "ok");
 }
 function renderRail() {
@@ -4645,6 +4788,10 @@ setInterval(() => {
   // must stay current or the charts drift from the tape again —
   // coalesced so a slow reload never stacks on the next due tick
   if (_tickN % 30 === 0) schedRun("candles", loadCandles);
+  // HOLD POLICY cells: countdowns tick every second; the 16-cell state
+  // refetches every ~15 s (and immediately on analyse/lock events)
+  if (_tickN % 15 === 7) { loadCells().catch(() => {}); }
+  updateCellsTick();
   // connection honesty on the chip while the socket is silent.
   // A dead websocket with a healthy REST poll is NORMAL behind the
   // Codespaces/mobile proxy — say "polling", don't accuse the engine.
@@ -5139,7 +5286,7 @@ window.addEventListener("unhandledrejection", e => {
     const tf = localStorage.getItem("focusTf");
     if (tf && TF.includes(tf)) S.focusTf = tf;
   } catch (e) { /* private mode */ }
-  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); bindChartSrc(); bindTrading(); bindRiskCalc(); syncAnalyseButton(); bindAllTf(); renderDashboardMode();
+  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); loadCells(); bindChartSrc(); bindTrading(); bindRiskCalc(); syncAnalyseButton(); bindAllTf(); renderDashboardMode();
   connectWS();
   api("/api/snapshot").then(applySnapshot).catch(() => {});
   // REST safety net lives in the single master setInterval below (H-2)

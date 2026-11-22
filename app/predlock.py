@@ -211,8 +211,17 @@ class PredictionJournal:
     # ------------------------------------------------------------- settle
     def settle(self, symbol: str, tf: str, price: float, *,
                high: float | None = None, low: float | None = None,
-               now: float | None = None) -> list[dict]:
-        """Settle every open lock for (symbol, tf) that has resolved."""
+               now: float | None = None,
+               series: list | None = None) -> list[dict]:
+        """Settle every open lock for (symbol, tf) that has resolved.
+
+        ``series`` — optional ``[(ts, high, low), …]`` of closed bars
+        for this asset.  Certified hold rows use it to grade the
+        window BAR-BY-BAR in time order with SL winning same-bar ties,
+        exactly like ``backtest.continuous._simulate`` (0 parity
+        mismatches); without it the aggregate sample falls back to the
+        documented hold tie rules.
+        """
         now = float(now if now is not None else time.time())
         p = _finite(price)
         if p is None or p <= 0:
@@ -231,26 +240,76 @@ class PredictionJournal:
             hit_tp = (hi >= tp) if d > 0 else (lo <= tp)
             hit_sl = (lo <= sl) if d > 0 else (hi >= sl)
             expired = now >= float(row.get("expires_at") or 0.0)
+            # CERTIFIED HOLD POLICY rows grade every window with the
+            # benchmark's rules: SL wins same-window ties (a both-
+            # touch is a LOSS, never an excluded "ambiguous") and a
+            # flat settle at expiry is a LOSS (tie = loss — no row
+            # ever escapes the denominator).  Legacy locks keep the
+            # original semantics untouched.
+            hold = (row.get("evidence") or {}).get("hold_policy") or {}
+            hold_rules = bool(hold.get("hold_rules"))
             result = None
             reason = None
-            if hit_tp and hit_sl:
-                result = "ambiguous"
-                reason = "both barriers were crossed inside one sample"
-            elif hit_tp:
+            if hold_rules and series:
+                # BAR-BY-BAR in time order, SL first inside each bar —
+                # the identical walk backtest.continuous._simulate
+                # performs over the window's native bars (this is the
+                # zero-parity path; the aggregate below is only the
+                # fallback when no bar series is available).
+                created = float(row.get("created_at") or 0.0)
+                horizon = float(row.get("expires_at") or now)
+                for ts, bhi, blo in series:
+                    ts = float(ts)
+                    if not (created < ts < horizon):
+                        continue
+                    bhi, blo = _finite(bhi), _finite(blo)
+                    if bhi is None or blo is None:
+                        continue
+                    if d > 0:
+                        sl_hit = blo <= sl
+                        tp_hit = bhi >= tp
+                    else:
+                        sl_hit = bhi >= sl
+                        tp_hit = blo <= tp
+                    if sl_hit:
+                        result = "lost"
+                        reason = ("SL wins same-bar ties (hold policy — "
+                                  "sequential bar grade)")
+                        break
+                    if tp_hit:
+                        result = "won"
+                        reason = ("TP touched before SL (hold policy — "
+                                  "sequential bar grade)")
+                        break
+            if result is None and hit_tp and hit_sl:
+                if hold_rules:
+                    result = "lost"
+                    reason = ("SL wins same-window ties (hold policy — "
+                              "both barriers inside the window)")
+                else:
+                    result = "ambiguous"
+                    reason = "both barriers were crossed inside one sample"
+            elif result is None and hit_tp:
                 result, reason = "won", "TP touched before SL"
-            elif hit_sl:
+            elif result is None and hit_sl:
                 result, reason = "lost", "SL touched before TP"
-            elif expired:
+            elif result is None and expired:
                 # strict sign at the horizon: a tie is a push, not a win
                 move = p - entry
                 if move > 1e-12:
                     result = "won" if d > 0 else "lost"
                 elif move < -1e-12:
                     result = "lost" if d > 0 else "won"
+                elif hold_rules:
+                    result = "lost"
+                    reason = ("flat settle at expiry = loss (hold policy "
+                              "— every window counted, tie loses)")
                 else:
                     result = "push"
-                reason = (f"window expired at the {row.get('minutes')}-minute "
-                          f"mark: price {p:g} vs entry {entry:g}")
+                if reason is None:
+                    reason = (f"window expired at the "
+                              f"{row.get('minutes')}-minute mark: price "
+                              f"{p:g} vs entry {entry:g}")
             if result is None:
                 continue
             row["status"] = {"won": "won", "lost": "lost",
@@ -276,7 +335,8 @@ class PredictionJournal:
 
     def settle_all(self, prices: dict[str, float], *,
                    extremes: dict[str, tuple[float, float]] | None = None,
-                   now: float | None = None) -> list[dict]:
+                   now: float | None = None,
+                   series: dict[str, list] | None = None) -> list[dict]:
         out: list[dict] = []
         for symbol in SYMBOL_ORDER:
             p = _finite(prices.get(symbol))
@@ -285,8 +345,10 @@ class PredictionJournal:
             hi = lo = None
             if extremes and symbol in extremes:
                 hi, lo = extremes[symbol]
+            sym_series = (series or {}).get(symbol)
             for tf in TF_ORDER:
-                out.extend(self.settle(symbol, tf, p, high=hi, low=lo, now=now))
+                out.extend(self.settle(symbol, tf, p, high=hi, low=lo,
+                                       now=now, series=sym_series))
         return out
 
     def mark_learned(self, lock_id: str) -> None:
