@@ -7,8 +7,11 @@ and exposes, per (asset, timeframe) cell:
   * the decoupled TP/SL geometries — tight ROW geometry for the
     every-window first-touch grade and wide ERA geometry for the
     held position,
-  * real per-side friction (12 bps → 24 bps per round trip, 18 PAXG),
-  * honest tier labels: ``HOLD-OUT VERIFIED`` (7 BTC/ETH cells),
+  * real per-side friction — §18.1 full Binance stack (commission 10
+    + slippage + half-Roll spread per side → 28.9 / 29.8 / 31.0 /
+    37.4 bps round trip; the artifact carries the exact numbers),
+  * honest tier labels: ``HOLD-OUT VERIFIED`` (count from the shipped
+    artifact),
     ``HOLDOUT ROWS · ERA n<3`` (BTC 247min, rows verified but a single
     holdout era), ``IN-SAMPLE SHADOW`` (BNB, single-year) / its
     ``HOLDOUT MISS`` variant (PAXG 247min), ``UNGRADEABLE / WARMUP``
@@ -184,8 +187,14 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
         win_rate=full.get("row_wr"),
         win_rate_wilson=wil,
         confidence=wil[0],                    # Wilson lower bound
+        # §18 REAL win rate: share of windows still winners after the
+        # full Binance round trip (the honest "win rate on real
+        # conditions"); informational — the trade itself is the era.
+        win_rate_net=full.get("row_wr_net"),
+        win_rate_net_wilson=full.get("row_wr_net_wilson"),
         holdout_win_rate=(hold.get("row_wr")
                           if hold.get("row_n") else None),
+        holdout_win_rate_net=hold.get("row_wr_net"),
         n_windows=c.get("n_windows"),
         era_ev_net=full.get("era_ev_net"),
         era_ev_holdout=hold.get("era_ev_net"),
@@ -205,6 +214,12 @@ def friction_bps(symbol: str) -> float:
     """Per-side real friction (one round trip = 2× this)."""
     from backtest.data import FRICTION_BPS
     return float(FRICTION_BPS.get(symbol, 12.0))
+
+
+# §18: an era ride is a POSITION, not a window — the maximum hold is
+# a safety net (the normal exit is TP, SL or the certified side
+# flipping), never the routine settlement horizon.
+ERA_MAX_HOLD_S = 7 * 24 * 3600.0
 
 
 def row_geometry(symbol: str, tf: str) -> tuple[float, float] | None:
@@ -563,8 +578,28 @@ def build_row_bars(symbol: str, tf: str, entry: float, side: int,
     if g is None or entry <= 0 or scale_px <= 0 or not side:
         return None
     k, m = g
-    sl = m * float(scale_px)
-    tp = k * sl
+    # keep both barriers inside the price (a fat warmup ATR proxy must
+    # never push a SELL's TP below zero — the seal refuses that)
+    sl = min(m * float(scale_px), entry * 0.9)
+    tp = min(k * sl, entry * 0.9)
+    return entry + tp * side, entry - sl * side
+
+
+def build_era_bars(symbol: str, tf: str, entry: float, side: int,
+                   scale_px: float) -> tuple[float, float] | None:
+    """(tp_px, sl_px) for an **era-ride** lock (§18): SL = m_era·scale
+    (guaranteed stop, m ≤ 3), TP = k_era·SL.  The ride itself exits at
+    TP, SL, the certified side flipping, or the maximum hold — never at
+    the window boundary (a window-end settle is the −RT trade the §18
+    probes measured)."""
+    g = era_geometry(symbol, tf)
+    if g is None or entry <= 0 or scale_px <= 0 or not side:
+        return None
+    k, m = g
+    # both barriers must stay inside the price (a fat warmup ATR proxy
+    # would otherwise push a SELL's TP below zero and refuse the seal)
+    sl = min(m * float(scale_px), entry * 0.9)
+    tp = min(k * sl, entry * 0.9)
     return entry + tp * side, entry - sl * side
 
 

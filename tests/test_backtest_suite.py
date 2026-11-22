@@ -25,9 +25,10 @@ def test_settle_sl_wins_tie_and_friction_in_r():
     future = [Bar(1, 100, 103, 98, 101, 1)]           # hits BOTH -> SL
     tr = settle("BTC", sig, future[0], future)
     assert tr.exit_reason == "SL" and tr.r_gross == -1.0
-    # friction 12 bps of 100 = 0.12 quote = 0.12R (risk 1.0)
-    assert abs(tr.r_net - (-1.12)) < 1e-9
-    assert abs(tr.pnl - (-1.12)) < 1e-9
+    # §18.1 real BTC friction 14.436 bps of 100 = 0.14436 quote =
+    # 0.14436R (risk 1.0)
+    assert abs(tr.r_net - (-1.1444)) < 1e-9   # Trade rounds r_net to 4 dp
+    assert abs(tr.pnl - (-1.1444)) < 1e-9
 
 
 def test_settle_tp_and_paxg_friction_higher():

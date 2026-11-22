@@ -30,7 +30,20 @@ import math
 
 GATE_MULT = 3.0        # σ must clear 3× the round trip
 MARGINAL_MULT = 2.0
-DEFAULT_FRICTION_BPS = 12.0
+# §18.1 REAL round trip per asset (commission 10 + slippage +
+# half-Roll spread, both sides) — the tradability gate charges the
+# actual Binance cost, not a legacy 12/18 placeholder.
+ASSET_RT_BPS = {"BTC": 28.872, "ETH": 29.808, "BNB": 30.963,
+                "PAXG": 37.400}
+DEFAULT_FRICTION_BPS = 28.872          # BTC RT — legacy fallback only
+
+
+def asset_rt(symbol: str) -> float:
+    """The asset's full round trip (bps) — §18.1 cost stack."""
+    try:
+        return float(ASSET_RT_BPS.get(symbol, DEFAULT_FRICTION_BPS))
+    except (TypeError, ValueError):
+        return DEFAULT_FRICTION_BPS
 
 
 def classify(sigma_bps: float | None, friction_bps: float | None = None,

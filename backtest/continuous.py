@@ -64,7 +64,9 @@ RESULTS = os.path.join(os.path.dirname(__file__), "results")
 
 TF_W = {"tf1": 22, "tf2": 44, "tf3": 130, "tf4": 247}   # minutes
 W_MIN = list(TF_W.values())
-FRICTION_BPS = {"BTC": 12.0, "ETH": 12.0, "BNB": 12.0, "PAXG": 18.0}
+# §18.1 real per-side friction — MUST match backtest/data.py
+FRICTION_BPS = {"BTC": 14.436, "ETH": 14.904, "BNB": 15.482,
+                "PAXG": 18.700}
 
 RET_L = (15, 60, 240, 720, 1440, 2640, 4320)           # feature lookbacks
 MOM_GRID = (15, 60, 240, 720, 1440, 2640, 4320)        # momentum candidates

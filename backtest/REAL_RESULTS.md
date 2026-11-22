@@ -1258,3 +1258,205 @@ and `tests/test_mandate_new_target.py` both assert
 
 v6 remains backed up at `/tmp/hold_wr_v6.json`; no gate, threshold or
 pre-registration line was edited after the results existed.
+
+---
+
+## §18 — REAL-CONDITIONS v9 (pre-registered 2026-11-20, BEFORE the run)
+
+The user rejected the previous certified numbers as simulated and
+ordered (verbatim): *"increase predictions confidence, increase win
+rate on real conditions those were simulated conditions … this time
+also count all type of costs that a user get in Binance. Also I want
+you to analyse each file."* This section fixes the v9 design, the
+real cost stack and the ship gates **before any v9 backtest ran**.
+Train-only probes (below) set the bars; they read no holdout.
+
+### 18.1 — The full Binance cost stack (spot, counted per side)
+
+Commission **10 bps** per side (spot taker, VIP0 tier: 0.10%; the
+0.075% BNB-discount rate is disclosed in the report as an alternative,
+not used) + **slippage** (BTC 1 / ETH 1 / BNB 2 / PAXG 5 bps, §13b
+taker-depth note) + **half the Roll(1984) effective spread** measured
+on each asset's full cache (bps): BTC 6.87, ETH 7.81, BNB 6.96,
+PAXG 7.40 → per side = 14.44 / 14.90 / 15.48 / 18.70 →
+**round trip RT = 28.9 / 29.8 / 31.0 / 37.4 bps** (v8 charged
+24 / 24 / 24 / 36). Funding and withdrawal are not spot costs and are
+disclosed as N/A for spot (a perpetual alternative would add ~5 bps
+taker per side plus ~1 bp per 8h of funding).
+
+**Train probes that drove the design (holdout untouched):**
+
+* probe1/1b — the single-window TP/SL ladder has mean GROSS
+  expectancy ≈ 0 bps at every side × geometry tested; after the real
+  stack its E[net] ≈ −RT (−28.9 bps at best). The high gross win
+  rates are a geometry artifact (tight TP / deep losses), exactly the
+  user's complaint.
+* probe4 — the ladder's **real win rate** P(gross pnl > RT) at v8's
+  shipped geometry: **0.000–0.023** on every cell (BTC22 0.000,
+  BTC247 0.011, ETH44 0.001, ETH130 0.010, BNB247 0.023, PAXG 0.000).
+* probe2/3 — the **era ride** (hold until the certified side flips,
+  with a bounded stop) under the real stack, train eras:
+  guarded (m ≤ 3) EV > 0 exists for **BTC TF247 (+186 bps/era at
+  k=2, m=3), ETH TF130 (+15), BNB TF130 (+24), BNB TF247 (+34…+173)**;
+  BTC TF22, ETH TF44 and PAXG TF247 are negative at EVERY guarded
+  geometry (best: −21.7 / −19.8 / −8.7 bps) — short windows and PAXG
+  cannot pay full costs, structurally.
+
+### 18.2 — What v9 certifies (design changes)
+
+1. `FRICTION_BPS` becomes the 18.1 stack (per side). Era accounting
+   (`era_sim`) charges it exactly once per side of every era.
+2. **Era stops are bounded**: `M_ERA = (0.5, 1.0, 2.0, 3.0)` — the
+   m = 999 "ride with no stop" geometry is retired from selection
+   (unbounded risk is not a user trade). A cell is era-feasible only
+   if a guarded era has train EV > 0 (and full EV > 0 at gate (i)).
+3. **The live lock becomes the era ride**: seal TP/SL from the
+   certified era geometry (SL = m·scale ≤ 3σ, TP = k·SL, k ≥ 0.6) and
+   settle at the first of TP touch, SL touch, **certified-side flip**
+   (the era exit), or a 7-day maximum hold. Window expiry no longer
+   closes a certified lock — a window-boundary settle is precisely
+   the −RT trade probe1 measured.
+4. Rows keep the direction contract (train gross row WR ≥ 0.66) and
+   now also record **`row_wr_net` = P(gross pnl > RT)** — the REAL
+   win rate. `M_ROW` extends to m ≤ 3.0 (probe5: at m ≤ 0.55 no row
+   on any cell clears costs even once), and **selection maximizes
+   train `row_wr_net` first** (gross WR, then era EV break ties) so
+   gate (ii) is optimized directly. The ladder itself is *not*
+   claimed as a money trade (probe1: E[net] ≈ −RT at every geometry)
+   — the money trade is the guarded era ride; the row WR remains the
+   direction-quality contract and the net WR the real-conditions
+   win rate.
+5. Confidence: the issue bar tightens to `CONFIDENCE_FLOOR × clamp
+   (asset floor_mult, 0.95, 1.05) × 1.10` → issued floors in
+   **[0.366, 0.404]** (was [0.315, 0.385]) — fewer, higher-conviction
+   issues; every issue and the issue box now show the Wilson
+   lower-bound **certainty** with n. No confidence number is inflated.
+6. The horizon tradability gate charges the real RT per asset
+   (28.9 / 29.8 / 31.0 / 37.4) instead of the old 12/18 defaults.
+
+### 18.3 — v9 ship gates (evaluated once, train selection only)
+
+Same honesty rules as §17: selection on train only; one run; the
+previous shipped version stays if any gate fails.
+
+* **(i) REAL-TRADE VIABILITY (every gradeable cell, full period):**
+  train-selected side keeps **gross row WR ≥ 0.66** (direction
+  contract) **and the guarded era EV > 0 under the full 18.1 stack**
+  over the FULL period. Cells that cannot pay costs are
+  `no_feasible` (honest no-trade — the app's horizon gate says the
+  same in production).
+* **(ii) REAL WIN RATE IMPROVEMENT:** mean full-period **row_wr_net**
+  across gradeable cells must **exceed v8's mean row_wr_net computed
+  on the identical stack and identical metric**. The v8 reference was
+  computed BEFORE the v9 run (deterministic re-grade of the shipped
+  v8 geometry, no selection): **0.0080 (0.80 %) over the 12 v8
+  gradeable cells** — `backtest/results/v8_net_reference.json`.
+  Gross WR is additionally reported; the §17 mean-74.78 % direction
+  benchmark is reported for continuity but the money gate is the net
+  one.
+* **(iii) HOLD-OUT PROOF: ≥ 4 cells HOLD-OUT VERIFIED** —
+  train-selected side and guarded era both positive on the holdout
+  under the real stack. The bar is 4 (not §17's 7) because train
+  physics caps the population: probes show guarded-era-positive cells
+  can only come from the TF130/TF247 lanes of BTC/ETH/BNB (short
+  lanes and PAXG are structurally negative — disclosed above), i.e.
+  at most 7 candidates of which probe-positive are 4 today. The
+  holdout decides; the count was set from train evidence only.
+* Fallback: any failed gate → v8 stays shipped (`v8` in git at
+  `b9d72ce`); every pin (24 bps, census, floors) re-syncs to the
+  shipped file.
+
+### 18.4 — File audit (this pass)
+
+All 78 app / 30 backtest / 84 test / 9 static / 10 docs / 5 script
+files inventoried; zero TODO/FIXME markers; zero stale census pins
+except intentional "v6-era" citations in `test_mandate_new_target.py`
+and `test_hold_live.py`; no `"NO TRADE"` literal in `static/`; no
+`/api/emotion` route anywhere (tests guard both); every FastAPI route
+reachable (83 routes probed live, POST-only routes answer 422);
+docstrings coherent with shipped behaviour; README carries no WR or
+census claims. Changes made in this pass: the §18.2 items above, the
+confidence bars/certainty display, and test-pin refreshes that follow
+from them — no other file needed a change to meet the request.
+
+---
+
+## §19 — v9 REAL-CONDITIONS RUN: GATES FAIL — v8 STAYS (2026-11-20)
+
+The single pre-registered v9 run (§18) completed and
+`backtest/gates18.py` evaluated the three gates ONCE. Result:
+**(i) FAIL · (ii) PASS · (iii) FAIL → V9 SHIP = FAIL.** Per §18's
+own fallback rule the shipped artifact stays **v8**
+(`backtest/results/hold_wr.json`, git `b9d72ce`); the rejected v9
+file is kept for audit at `backtest/results/hold_wr_v9_rejected.json`
+and is not read by the app. No gate, threshold or pre-registration
+line was edited after the results existed.
+
+### 19.1 The run (what the real stack actually produces)
+
+16 cells, full tape, `FRICTION_BPS` = the §18.1 Binance stack,
+`M_ERA` guarded (no m=999 rides), selection maximizing train
+`row_wr_net`:
+
+| cell | outcome |
+|---|---|
+| BTC tf1 / tf2, ETH tf1 / tf2, ETH tf3, BNB tf1–tf4, PAXG tf4 | `no_feasible_config` — no side clears row WR ≥ 0.66 AND a guarded era with positive TRAIN era-EV after the full round trip (10 cells — honest no-trade) |
+| PAXG tf1–tf3 | `ungradeable` (1 h bars, as always) |
+| **BTC tf3** | ok: mom525600, row(k=0.2, m=2.0), era(k=0.6, m=3.0). Full row WR 0.6616, full row_wr_net **0.3069**, full era EV **−0.00013** |
+| **BTC tf4** | ok: mom525600, row(k=0.2, m=2.0), era(k=0.75, m=2.0). Full row WR 0.6633, full row_wr_net **0.4897**, full era EV **+0.000826** |
+| **ETH tf4** | ok: mom259200, row(k=0.15, m=2.0), era(k=2.0, m=3.0). Full row WR 0.7065, full row_wr_net **0.5569**, full era EV **+0.007479** |
+
+Every selected row landed on the DEEP-STOP geometries the train
+probes predicted (m = 2–3, k = 0.15–0.2) — the ladder that can
+actually clear costs — and the real (after-all-costs) win rate per
+selected ladder is **30.7 % / 49.0 % / 55.7 %** (gross 66–71 %).
+
+### 19.2 The gates
+
+* **(i) REAL-TRADE VIABILITY — FAIL.** BTC tf3's full-period guarded
+  era EV is −1.3 bps/era (breakeven-minus); every gradeable cell had
+  to be positive. BTC tf4 and ETH tf4 passed individually.
+* **(ii) REAL WIN RATE IMPROVEMENT — PASS.** Mean full `row_wr_net`
+  over gradeable cells = **0.4512 (45.1 %)** vs the pre-registered
+  v8 reference **0.0080 (0.80 %)** — the user's complaint is
+  quantified exactly: v8's shipped ladders pay full Binance costs on
+  **0.8 %** of windows; v9's cost-aware ladders on **45.1 %**.
+* **(iii) HOLD-OUT PROOF — FAIL (0 ≥ 4 required).** All three
+  gradeable cells missed the holdout: BTC tf3 hold row 0.652 +
+  hold era EV −0.0064; BTC tf4 hold era EV −0.0053 (n=6); ETH tf4
+  hold era EV −0.0046 (n=4). The guarded era did not prove itself
+  out-of-sample under the full stack.
+
+### 19.3 What ships in this PR (and what does not)
+
+**Ships:** the §18.1 cost stack in the harness
+(`FRICTION_BPS` 14.436/14.904/15.482/18.700, `ROUND_TRIP_BPS`,
+edge_scan copy), guarded-era grid + net-WR selection machinery
+(dormant while v8 ships — the app reads only `hold_wr.json`), the
+era-ride lock path with its v8 fallback (v8's m=999 cells keep
+window settlement byte-for-byte; BNB tf2 — the one v8 cell whose era
+is guarded (m=3) — rides properly), real-RT horizon/edge/vol-barrier
+gates (28.9–37.4 bps), the §18.2.5 issue bar (floors
+0.3657–0.4042), Wilson certainty + round-trip line in the issue box,
+`row_wr_net` fields whenever an artifact carries them, gates18.py,
+the v8 net reference, and tests for all of it (suite 856 passed /
+1 skipped / 0 failed at this tree, alone).
+
+**Does not ship:** the v9 artifact (gates failed) — v8's certified
+census (7 HOLD-OUT VERIFIED / 5 HOLDOUT MISS / 4 WARMUP) and its
+24 bps-era pins remain the source of truth, exactly as §18's
+fallback demands. `tests/test_hold_live.py` and the census pins
+therefore still assert v8 numbers.
+
+### 19.4 What the run proves for the next iteration
+
+Under ALL real costs the direction ladders can reach ~45 % real
+win rates (gates (ii) easy), but the guarded era's out-of-sample
+proof is the binding constraint (0/3 holdout passes, 0/4 needed):
+the honest next hypothesis must either (a) strengthen era robustness
+selection (per-year guards) without touching holdout, or (b) accept
+that after full costs the ride edge is train-sample-bound. Until a
+pre-registered run passes all three gates, v8 stays and the app
+keeps showing v8's numbers as the certified ones — now alongside the
+honest cost stack, the real-RT tradability gate and the Wilson
+certainty the user asked for.

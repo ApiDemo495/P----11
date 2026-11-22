@@ -57,6 +57,23 @@ LEARNING_RATE_ETA = 0.02
 WEIGHT_MIN = 0.005
 WEIGHT_MAX = 0.15
 CONFIDENCE_FLOOR = 0.35           # below -> NO TRADE
+# §18.2.5: the ISSUE bar tightens the global floor by this factor on
+# the asset-adjusted side — issued calls must clear
+# CONFIDENCE_FLOOR × clamp(floor_mult, 0.95, 1.05) × ISSUE_BAR
+# (floors land in [0.366, 0.404]: fewer, higher-conviction issues).
+ISSUE_BAR = 1.10
+
+
+def asset_issue_floor(symbol: str) -> float:
+    """The confidence an asset's call must CLEAR to be issued (§18.2.5).
+
+    clamp keeps an aggressive profile multiplier from starving the
+    distribution (ETH 1.20 → 1.05), ISSUE_BAR raises every bar
+    uniformly.  Pure function — the engine only displays it.
+    """
+    prof = ASSET_PROFILES.get(symbol, ASSET_PROFILES["BTC"])
+    fm = min(1.05, max(0.95, float(prof.get("floor_mult") or 1.0)))
+    return round(CONFIDENCE_FLOOR * fm * float(ISSUE_BAR), 4)
 # Analysis recheck: the weighted opinion score a call must clear. Opinion
 # checks are weighted (consensus .30, ratio .20, confidence .30,
 # expectancy .15, lock agreement .05); data correctness is hard and
