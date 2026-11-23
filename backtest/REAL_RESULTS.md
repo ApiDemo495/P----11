@@ -1881,3 +1881,126 @@ python scripts/fetch_binance_mirror.py --source zips --interval 5m --symbols BTC
 .venv/bin/python -m backtest.wr_audit      # train-selected geometry, OOS
 .venv/bin/python -m backtest.gates18       # the ship gate on the artifact
 ```
+
+---
+
+## §24 — THE 66 % WIN RATE IS REACHABLE; SURVIVING IT IS NOT (2026-11-23)
+
+Three years of real 5m tape (BTC and ETH, 2023-11-01 → 2026-08-31,
+298,080 bars each, zero gaps, round trip 28.9 / 29.8 bps). Four harnesses,
+each one built to kill the previous one's result.
+
+### 24.1 The lever the earlier work never pulled: cost / stop
+
+Earlier harnesses fixed the stop in **absolute** bps (36 / 1444 …), which
+for a 22-minute window made a 29 bps round trip **80 % of the entire
+stop** — unpayable by construction, whatever the edge. Two things were
+wrong with that framing:
+
+* the stop does not have to be reachable inside one window. The user's
+  cycle is about *non-overlapping entries*, not about the stop expiring;
+* the decisive quantity is `RT/SL`, and it can be made small by widening
+  the stop.
+
+`backtest/wr_scale.py` separated window length from stop distance and set
+the stop at a measured quantile of the adverse excursion. Time-exit
+(trade the window open→close, no barrier) win rates were **6.0 % at 22 m
+and 23.9 % at 130 m**, EV pinned at −29 bps. Confirmed: short horizons
+cannot pay the cost.
+
+### 24.2 Win rate is a function of holding period
+
+`backtest/wr_horizon.py`, always-long, contiguous, no abstention:
+
+| hold | BTC WR | BTC EV | ETH WR | ETH EV |
+|---|---|---|---|---|
+| 0.5 d | 40.5 % | −23.2 bps | 43.6 % | −24.7 bps |
+| 3 d | 47.8 % | +5.8 bps | 49.3 % | −0.3 bps |
+| 7 d | 51.7 % | +43.7 bps | 48.3 % | +33.1 bps |
+| 30 d | **66.7 %** | +248.3 bps | 60.6 % | +193.3 bps |
+
+BTC crosses 66 % at a 30-day hold — but on **n = 33** windows, whose 95 %
+Wilson interval is **[49.6 %, 80.2 %]**. The CI lower bound never reaches
+66 % at any horizon, on either asset. A 66 % point estimate at n=33 is a
+coin landing 22 times; it is drift, not skill.
+
+### 24.3 A 66 % net win rate with positive EV DOES exist
+
+`backtest/wr_tail.py` dropped the time cap (trade runs until target or
+stop) and simulated the always-in-market book the user asked for —
+re-entry the bar after every exit, no gaps, no cash. Result: **24
+(asset, geometry) pairs clear WR ≥ 66 % AND EV > 0**, and not marginally:
+
+| asset | TP×RT | SL×RT | WR | EV | worst trade | compounded |
+|---|---|---|---|---|---|---|
+| BTC | 1.5 | 200 | 99.6 % | +0.5 bps | −3793 bps | −8.1 % |
+| BTC | 3 | 200 | 99.3 % | +30.5 bps | −3761 bps | +38.9 % |
+| BTC | 10 | 200 | 97.9 % | +175.4 bps | −3793 bps | +107.3 % |
+| BTC | 10 | 100 | 93.8 % | +91.8 bps | −2916 bps | +81.1 % |
+| BTC | 10 | 50 | 87.0 % | +42.1 bps | −1472 bps | +50.6 % |
+| ETH | 10 | 100 | 92.2 % | +33.1 bps | −3011 bps | −12.4 % |
+
+So the literal request is satisfiable. **The win rate is real.** It is
+bought by pushing the stop so far away it is almost never touched, which
+converts a stream of small wins into one catastrophic loss: the best tail
+in the whole set is −14.7 % in a single trade, and most are −26 % to −59 %.
+
+### 24.4 …and it does not survive being tested
+
+`backtest/wr_stress.py` chose the geometry on the first 65 % only and
+applied it unchanged to the last 35 %:
+
+| | BTC | ETH |
+|---|---|---|
+| train WR | 96.0 % | 93.9 % |
+| **holdout WR** | 82.6 % **[63, 93]** | 86.2 % **[69, 94]** |
+| **holdout EV** | **−172.9 bps** | **−91.2 bps** |
+| worst single trade | −29.2 % | −30.1 % |
+| max drawdown | −55.2 % | −69.4 % |
+| 2025 EV → 2026 EV | +109 → **−79 bps** | −5 → **−7 bps** |
+
+Both fail. The win rate holds up (>66 %) but **EV turns negative out of
+sample** and the tail is unsurvivable. `backtest/wr_survivable.py` then
+searched 268 geometries under fixed survival caps (single loss > −15 %,
+drawdown > −35 %, EV > 0 under 2× friction, holdout WR ≥ 66 %): **0 of
+268 admissible, on either asset.**
+
+### 24.5 Where the money actually goes, stated exactly
+
+With the stop bounded (the only survivable configuration), required and
+achieved win rates are:
+
+| tail cap | stop | target required | required WR | market offers | shortfall |
+|---|---|---|---|---|---|
+| 5 % | 500 bps | 302 bps (10.4× RT) | 66 % | 62.4 % | **+3.6 pp** |
+| 10 % | 1000 bps | 559 bps (19.3× RT) | 66 % | 64.1 % | **+1.9 pp** |
+| 15 % | 1500 bps | 817 bps (28.2× RT) | 66 % | 64.7 % | **+1.3 pp** |
+| 20 % | 2000 bps | 1074 bps (37.0× RT) | 66 % | 65.1 % | **+0.9 pp** |
+
+A survivable 66 % book needs a directional edge of 1–4 percentage points
+— modest, but **1–4 pp is precisely what this tape does not have**:
+measured directional accuracy is ~52 % pooled (`edge_hunt`, prior run),
+which is ≈2 pp, and it decays to nothing by tf4. The two independent
+measurements agree: the requirement sits just above the supply.
+
+### 24.6 The honest answer
+
+**A 66 % net win rate, no abstention, continuous cycle, is achievable —
+but only with a stop so far away that one loss erases dozens of wins, and
+it fails walk-forward.** A *survivable* 66 % is short by 1–4 pp of real
+edge that neither the barrier sweep, the horizon study, the order-flow
+model, nor the walk-forward stress test can find on 3 years of tape.
+
+What ships is the harness, not a claim: every number above is printed next
+to its confidence interval, its worst trade and its drawdown, and the
+target is labelled unreachable-without-tail-risk rather than quoted as a
+headline.
+
+Reproduce:
+```
+.venv/bin/python -m backtest.wr_scale        # cost/stop ratio, time exits
+.venv/bin/python -m backtest.wr_horizon      # win rate vs holding period
+.venv/bin/python -m backtest.wr_tail         # 24 geometries at 66%+ and EV>0
+.venv/bin/python -m backtest.wr_stress       # walk-forward + year split
+.venv/bin/python -m backtest.wr_survivable   # 268 geometries vs survival caps
+```

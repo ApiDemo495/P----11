@@ -1,0 +1,598 @@
+[
+ {
+  "asset": "BTC",
+  "status": "ok",
+  "rt_bps": 28.87,
+  "span": [
+   1698796800,
+   1788220500
+  ],
+  "bars": 298080,
+  "total_return_pct": 127.1,
+  "rows": [
+   {
+    "hold_days": 0.125,
+    "n": 8280,
+    "wins": 2483,
+    "win_rate": 0.2999,
+    "ci95": [
+     0.2901,
+     0.3098
+    ],
+    "ev_bps": -27.53,
+    "median_bps": -27.41,
+    "ev_R_proxy": -0.3234,
+    "train_wr": 0.3133,
+    "holdout_wr": 0.275,
+    "holdout_n": 2898,
+    "holdout_ev_bps": -29.55,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 0.25,
+    "n": 4140,
+    "wins": 1455,
+    "win_rate": 0.3514,
+    "ci95": [
+     0.337,
+     0.3661
+    ],
+    "ev_bps": -26.01,
+    "median_bps": -26.14,
+    "ev_R_proxy": -0.2153,
+    "train_wr": 0.3627,
+    "holdout_wr": 0.3306,
+    "holdout_n": 1449,
+    "holdout_ev_bps": -30.15,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 0.5,
+    "n": 2070,
+    "wins": 838,
+    "win_rate": 0.4048,
+    "ci95": [
+     0.3839,
+     0.4261
+    ],
+    "ev_bps": -23.16,
+    "median_bps": -23.74,
+    "ev_R_proxy": -0.1335,
+    "train_wr": 0.4193,
+    "holdout_wr": 0.3779,
+    "holdout_n": 725,
+    "holdout_ev_bps": -31.81,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 1,
+    "n": 1035,
+    "wins": 457,
+    "win_rate": 0.4415,
+    "ci95": [
+     0.4116,
+     0.472
+    ],
+    "ev_bps": -17.27,
+    "median_bps": -25.09,
+    "ev_R_proxy": -0.07,
+    "train_wr": 0.4524,
+    "holdout_wr": 0.4215,
+    "holdout_n": 363,
+    "holdout_ev_bps": -35.34,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 2,
+    "n": 517,
+    "wins": 242,
+    "win_rate": 0.4681,
+    "ci95": [
+     0.4255,
+     0.5112
+    ],
+    "ev_bps": -6.59,
+    "median_bps": -22.24,
+    "ev_R_proxy": -0.0195,
+    "train_wr": 0.4643,
+    "holdout_wr": 0.4751,
+    "holdout_n": 181,
+    "holdout_ev_bps": -42.04,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 3,
+    "n": 345,
+    "wins": 165,
+    "win_rate": 0.4783,
+    "ci95": [
+     0.4261,
+     0.5309
+    ],
+    "ev_bps": 5.79,
+    "median_bps": -28.21,
+    "ev_R_proxy": 0.0131,
+    "train_wr": 0.4866,
+    "holdout_wr": 0.4628,
+    "holdout_n": 121,
+    "holdout_ev_bps": -45.48,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 5,
+    "n": 206,
+    "wins": 103,
+    "win_rate": 0.5,
+    "ci95": [
+     0.4323,
+     0.5677
+    ],
+    "ev_bps": 26.14,
+    "median_bps": 1.03,
+    "ev_R_proxy": 0.0476,
+    "train_wr": 0.5188,
+    "holdout_wr": 0.4658,
+    "holdout_n": 73,
+    "holdout_ev_bps": -57.21,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 7,
+    "n": 147,
+    "wins": 76,
+    "win_rate": 0.517,
+    "ci95": [
+     0.4368,
+     0.5963
+    ],
+    "ev_bps": 43.7,
+    "median_bps": 10.78,
+    "ev_R_proxy": 0.0702,
+    "train_wr": 0.5474,
+    "holdout_wr": 0.4615,
+    "holdout_n": 52,
+    "holdout_ev_bps": -78.44,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 10,
+    "n": 102,
+    "wins": 54,
+    "win_rate": 0.5294,
+    "ci95": [
+     0.4332,
+     0.6234
+    ],
+    "ev_bps": 83.83,
+    "median_bps": 67.74,
+    "ev_R_proxy": 0.1013,
+    "train_wr": 0.5606,
+    "holdout_wr": 0.4722,
+    "holdout_n": 36,
+    "holdout_ev_bps": -67.22,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 14,
+    "n": 73,
+    "wins": 38,
+    "win_rate": 0.5205,
+    "ci95": [
+     0.4078,
+     0.6312
+    ],
+    "ev_bps": 123.27,
+    "median_bps": 42.81,
+    "ev_R_proxy": 0.1328,
+    "train_wr": 0.5532,
+    "holdout_wr": 0.4615,
+    "holdout_n": 26,
+    "holdout_ev_bps": -111.26,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 21,
+    "n": 48,
+    "wins": 27,
+    "win_rate": 0.5625,
+    "ci95": [
+     0.4227,
+     0.693
+    ],
+    "ev_bps": 159.84,
+    "median_bps": 195.2,
+    "ev_R_proxy": 0.1407,
+    "train_wr": 0.5806,
+    "holdout_wr": 0.5294,
+    "holdout_n": 17,
+    "holdout_ev_bps": -253.23,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 30,
+    "n": 33,
+    "wins": 22,
+    "win_rate": 0.6667,
+    "ci95": [
+     0.4961,
+     0.8025
+    ],
+    "ev_bps": 248.3,
+    "median_bps": 207.06,
+    "ev_R_proxy": 0.1704,
+    "train_wr": 0.7143,
+    "holdout_wr": 0.5833,
+    "holdout_n": 12,
+    "holdout_ev_bps": -393.66,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 45,
+    "n": 22,
+    "wins": 12,
+    "win_rate": 0.5455,
+    "ci95": [
+     0.3466,
+     0.7308
+    ],
+    "ev_bps": 430.29,
+    "median_bps": 154.07,
+    "ev_R_proxy": 0.2189,
+    "train_wr": 0.7143,
+    "holdout_wr": 0.25,
+    "holdout_n": 8,
+    "holdout_ev_bps": -661.68,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 60,
+    "n": 16,
+    "wins": 7,
+    "win_rate": 0.4375,
+    "ci95": [
+     0.231,
+     0.6682
+    ],
+    "ev_bps": 546.37,
+    "median_bps": -243.31,
+    "ev_R_proxy": 0.2409,
+    "train_wr": 0.6,
+    "holdout_wr": 0.1667,
+    "holdout_n": 6,
+    "holdout_ev_bps": -852.94,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 90,
+    "n": 10,
+    "wins": 4,
+    "win_rate": 0.4,
+    "ci95": [
+     0.1682,
+     0.6873
+    ],
+    "ev_bps": 736.94,
+    "median_bps": -611.62,
+    "ev_R_proxy": 0.2355,
+    "train_wr": 0.5,
+    "holdout_wr": 0.25,
+    "holdout_n": 4,
+    "holdout_ev_bps": -1345.18,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   }
+  ]
+ },
+ {
+  "asset": "ETH",
+  "status": "ok",
+  "rt_bps": 29.81,
+  "span": [
+   1698796800,
+   1788220500
+  ],
+  "bars": 298080,
+  "total_return_pct": 36.1,
+  "rows": [
+   {
+    "hold_days": 0.125,
+    "n": 8280,
+    "wins": 2822,
+    "win_rate": 0.3408,
+    "ci95": [
+     0.3307,
+     0.3511
+    ],
+    "ev_bps": -28.59,
+    "median_bps": -28.03,
+    "ev_R_proxy": -0.2406,
+    "train_wr": 0.3575,
+    "holdout_wr": 0.3099,
+    "holdout_n": 2898,
+    "holdout_ev_bps": -30.79,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 0.25,
+    "n": 4140,
+    "wins": 1606,
+    "win_rate": 0.3879,
+    "ci95": [
+     0.3732,
+     0.4029
+    ],
+    "ev_bps": -27.02,
+    "median_bps": -27.47,
+    "ev_R_proxy": -0.1584,
+    "train_wr": 0.3999,
+    "holdout_wr": 0.3658,
+    "holdout_n": 1449,
+    "holdout_ev_bps": -31.38,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 0.5,
+    "n": 2070,
+    "wins": 903,
+    "win_rate": 0.4362,
+    "ci95": [
+     0.415,
+     0.4577
+    ],
+    "ev_bps": -24.67,
+    "median_bps": -23.04,
+    "ev_R_proxy": -0.0992,
+    "train_wr": 0.4528,
+    "holdout_wr": 0.4055,
+    "holdout_n": 725,
+    "holdout_ev_bps": -33.68,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 1,
+    "n": 1035,
+    "wins": 469,
+    "win_rate": 0.4531,
+    "ci95": [
+     0.423,
+     0.4836
+    ],
+    "ev_bps": -19.77,
+    "median_bps": -22.89,
+    "ev_R_proxy": -0.0557,
+    "train_wr": 0.4658,
+    "holdout_wr": 0.4298,
+    "holdout_n": 363,
+    "holdout_ev_bps": -38.62,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 2,
+    "n": 517,
+    "wins": 249,
+    "win_rate": 0.4816,
+    "ci95": [
+     0.4388,
+     0.5247
+    ],
+    "ev_bps": -10.24,
+    "median_bps": -20.33,
+    "ev_R_proxy": -0.02,
+    "train_wr": 0.4881,
+    "holdout_wr": 0.4696,
+    "holdout_n": 181,
+    "holdout_ev_bps": -47.61,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 3,
+    "n": 345,
+    "wins": 170,
+    "win_rate": 0.4928,
+    "ci95": [
+     0.4404,
+     0.5453
+    ],
+    "ev_bps": -0.26,
+    "median_bps": -10.11,
+    "ev_R_proxy": -0.0004,
+    "train_wr": 0.5179,
+    "holdout_wr": 0.4463,
+    "holdout_n": 121,
+    "holdout_ev_bps": -53.01,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 5,
+    "n": 206,
+    "wins": 104,
+    "win_rate": 0.5049,
+    "ci95": [
+     0.4371,
+     0.5724
+    ],
+    "ev_bps": 17.6,
+    "median_bps": 7.98,
+    "ev_R_proxy": 0.0216,
+    "train_wr": 0.5564,
+    "holdout_wr": 0.411,
+    "holdout_n": 73,
+    "holdout_ev_bps": -78.5,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 7,
+    "n": 147,
+    "wins": 71,
+    "win_rate": 0.483,
+    "ci95": [
+     0.4037,
+     0.5632
+    ],
+    "ev_bps": 33.14,
+    "median_bps": -20.53,
+    "ev_R_proxy": 0.0355,
+    "train_wr": 0.4737,
+    "holdout_wr": 0.5,
+    "holdout_n": 52,
+    "holdout_ev_bps": -107.69,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 10,
+    "n": 102,
+    "wins": 53,
+    "win_rate": 0.5196,
+    "ci95": [
+     0.4237,
+     0.6141
+    ],
+    "ev_bps": 72.06,
+    "median_bps": 65.2,
+    "ev_R_proxy": 0.0589,
+    "train_wr": 0.5455,
+    "holdout_wr": 0.4722,
+    "holdout_n": 36,
+    "holdout_ev_bps": -103.3,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 14,
+    "n": 73,
+    "wins": 36,
+    "win_rate": 0.4932,
+    "ci95": [
+     0.3817,
+     0.6053
+    ],
+    "ev_bps": 97.65,
+    "median_bps": -25.76,
+    "ev_R_proxy": 0.0726,
+    "train_wr": 0.5532,
+    "holdout_wr": 0.3846,
+    "holdout_n": 26,
+    "holdout_ev_bps": -164.17,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 21,
+    "n": 48,
+    "wins": 23,
+    "win_rate": 0.4792,
+    "ci95": [
+     0.3447,
+     0.6167
+    ],
+    "ev_bps": 116.33,
+    "median_bps": -9.2,
+    "ev_R_proxy": 0.071,
+    "train_wr": 0.5161,
+    "holdout_wr": 0.4118,
+    "holdout_n": 17,
+    "holdout_ev_bps": -331.77,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 30,
+    "n": 33,
+    "wins": 20,
+    "win_rate": 0.6061,
+    "ci95": [
+     0.4368,
+     0.7532
+    ],
+    "ev_bps": 193.3,
+    "median_bps": 435.8,
+    "ev_R_proxy": 0.0886,
+    "train_wr": 0.5714,
+    "holdout_wr": 0.6667,
+    "holdout_n": 12,
+    "holdout_ev_bps": -486.97,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 45,
+    "n": 22,
+    "wins": 11,
+    "win_rate": 0.5,
+    "ci95": [
+     0.3072,
+     0.6928
+    ],
+    "ev_bps": 359.7,
+    "median_bps": 46.43,
+    "ev_R_proxy": 0.1282,
+    "train_wr": 0.5714,
+    "holdout_wr": 0.375,
+    "holdout_n": 8,
+    "holdout_ev_bps": -614.7,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 60,
+    "n": 16,
+    "wins": 9,
+    "win_rate": 0.5625,
+    "ci95": [
+     0.3318,
+     0.769
+    ],
+    "ev_bps": 345.86,
+    "median_bps": 878.09,
+    "ev_R_proxy": 0.1195,
+    "train_wr": 0.7,
+    "holdout_wr": 0.3333,
+    "holdout_n": 6,
+    "holdout_ev_bps": -416.46,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   },
+   {
+    "hold_days": 90,
+    "n": 10,
+    "wins": 4,
+    "win_rate": 0.4,
+    "ci95": [
+     0.1682,
+     0.6873
+    ],
+    "ev_bps": 523.67,
+    "median_bps": -1106.95,
+    "ev_R_proxy": 0.1218,
+    "train_wr": 0.5,
+    "holdout_wr": 0.25,
+    "holdout_n": 4,
+    "holdout_ev_bps": -820.39,
+    "lower_bound_below_66": true,
+    "time_in_market": "100 % (contiguous, no abstention)"
+   }
+  ]
+ }
+]

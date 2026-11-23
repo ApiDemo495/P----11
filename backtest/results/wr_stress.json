@@ -1,0 +1,192 @@
+[
+ {
+  "asset": "BTC",
+  "status": "ok",
+  "rt_bps": 28.87,
+  "chosen_geometry": {
+   "tp_bps": 288.7,
+   "sl_bps": 2887.2,
+   "tp_over_rt": 10.0,
+   "sl_over_rt": 100.0
+  },
+  "train": {
+   "win_rate": 0.9595,
+   "ev_bps": 159.04,
+   "n": 74
+  },
+  "holdout": {
+   "n": 23,
+   "wins": 19,
+   "win_rate": 0.8261,
+   "ci95": [
+    0.6286,
+    0.9302
+   ],
+   "ev_bps": -172.89,
+   "worst_trade_bps": -2916.1,
+   "max_drawdown_pct": -41.47,
+   "longest_loss_streak": 1,
+   "compounded_pct": -43.1
+  },
+  "full": {
+   "n": 97,
+   "wins": 91,
+   "win_rate": 0.9381,
+   "ci95": [
+    0.8716,
+    0.9713
+   ],
+   "ev_bps": 91.74,
+   "worst_trade_bps": -2916.1,
+   "max_drawdown_pct": -55.22,
+   "longest_loss_streak": 1,
+   "compounded_pct": 81.1
+  },
+  "years": {
+   "2023": {
+    "trades": 10,
+    "win_rate": 1.0,
+    "ev_bps": 259.83
+   },
+   "2024": {
+    "trades": 46,
+    "win_rate": 0.9565,
+    "ev_bps": 121.75
+   },
+   "2025": {
+    "trades": 21,
+    "win_rate": 0.9524,
+    "ev_bps": 108.59
+   },
+   "2026": {
+    "trades": 20,
+    "win_rate": 0.85,
+    "ev_bps": -79.0
+   }
+  },
+  "cost_stress": {
+   "1x": {
+    "win_rate": 0.9381,
+    "ev_bps": 91.74,
+    "worst_trade_bps": -2916.1
+   },
+   "2x": {
+    "win_rate": 0.9381,
+    "ev_bps": 62.87,
+    "worst_trade_bps": -2944.9
+   },
+   "3x": {
+    "win_rate": 0.9381,
+    "ev_bps": 34.0,
+    "worst_trade_bps": -2973.8
+   }
+  },
+  "checks": {
+   "holdout_wr>=66": true,
+   "holdout_ev>0": false,
+   "years_ok>=2": true,
+   "survives_2x_cost": true,
+   "worst_trade_survivable": false
+  },
+  "certified": false,
+  "reasons_failed": [
+   "holdout_ev>0",
+   "worst_trade_survivable"
+  ]
+ },
+ {
+  "asset": "ETH",
+  "status": "ok",
+  "rt_bps": 29.81,
+  "chosen_geometry": {
+   "tp_bps": 298.1,
+   "sl_bps": 2980.8,
+   "tp_over_rt": 10.0,
+   "sl_over_rt": 100.0
+  },
+  "train": {
+   "win_rate": 0.9394,
+   "ev_bps": 91.18,
+   "n": 99
+  },
+  "holdout": {
+   "n": 29,
+   "wins": 25,
+   "win_rate": 0.8621,
+   "ci95": [
+    0.6944,
+    0.945
+   ],
+   "ev_bps": -91.24,
+   "worst_trade_bps": -3010.6,
+   "max_drawdown_pct": -54.31,
+   "longest_loss_streak": 2,
+   "compounded_pct": -35.9
+  },
+  "full": {
+   "n": 128,
+   "wins": 118,
+   "win_rate": 0.9219,
+   "ci95": [
+    0.8622,
+    0.957
+   ],
+   "ev_bps": 33.14,
+   "worst_trade_bps": -3010.6,
+   "max_drawdown_pct": -69.43,
+   "longest_loss_streak": 2,
+   "compounded_pct": -12.4
+  },
+  "years": {
+   "2023": {
+    "trades": 11,
+    "win_rate": 1.0,
+    "ev_bps": 268.29
+   },
+   "2024": {
+    "trades": 43,
+    "win_rate": 0.9302,
+    "ev_bps": 39.53
+   },
+   "2025": {
+    "trades": 48,
+    "win_rate": 0.9167,
+    "ev_bps": -4.95
+   },
+   "2026": {
+    "trades": 26,
+    "win_rate": 0.8846,
+    "ev_bps": -6.61
+   }
+  },
+  "cost_stress": {
+   "1x": {
+    "win_rate": 0.9219,
+    "ev_bps": 33.14,
+    "worst_trade_bps": -3010.6
+   },
+   "2x": {
+    "win_rate": 0.9219,
+    "ev_bps": 3.33,
+    "worst_trade_bps": -3040.4
+   },
+   "3x": {
+    "win_rate": 0.9219,
+    "ev_bps": -26.48,
+    "worst_trade_bps": -3070.2
+   }
+  },
+  "checks": {
+   "holdout_wr>=66": true,
+   "holdout_ev>0": false,
+   "years_ok>=2": true,
+   "survives_2x_cost": true,
+   "worst_trade_survivable": false
+  },
+  "certified": false,
+  "reasons_failed": [
+   "holdout_ev>0",
+   "worst_trade_survivable"
+  ]
+ }
+]

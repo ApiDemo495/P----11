@@ -1,0 +1,33 @@
+{
+  "generated": "2026-11-23",
+  "tape": "Binance Vision mirror, 5m, 2023-11-01 -> 2026-08-31, 298080 bars",
+  "headline": "66%+ net win rate with EV>0 exists; it is tail-risky and fails walk-forward",
+  "certified": false,
+  "recommended_book": {
+    "asset": "BTC",
+    "tp_bps": 289,
+    "sl_bps": 1444,
+    "tp_over_rt": 10.0,
+    "sl_over_rt": 50.0,
+    "timeout_bars": null,
+    "win_rate_full": 0.870,
+    "win_rate_ci95": [0.81, 0.91],
+    "win_rate_holdout": 0.763,
+    "ev_bps_full": 42.1,
+    "ev_bps_holdout": -116.0,
+    "worst_trade_bps": -1472,
+    "max_drawdown_pct": -54.5,
+    "compounded_pct": 50.6,
+    "n_trades": 169,
+    "warning": "HOLDOUT EV IS NEGATIVE. This geometry prints 87% net and still loses money after 2024. Do not trade without out-of-sample confirmation, which this data does not provide."
+  },
+  "best_possible_wr": {"value": 0.996, "tp_over_rt": 1.5, "sl_over_rt": 200,
+                       "ev_bps": 0.5, "worst_trade_bps": -3790,
+                       "note": "99.6% is attainable and worthless: +0.5 bps per trade against a -37.9% tail"},
+  "shortfall_analysis": {
+    "survivable_tail_5pct": {"required_wr": 0.66, "market_offers": 0.624, "gap_pp": 3.6},
+    "survivable_tail_10pct": {"required_wr": 0.66, "market_offers": 0.641, "gap_pp": 1.9},
+    "measured_edge_pp": 2.0,
+    "verdict": "requirement sits 1-4pp above supply"
+  }
+}
