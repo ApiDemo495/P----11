@@ -1,0 +1,2885 @@
+{
+  "method": "fixed v8 side/geometry; exact app PA opposition predicate; next_bar open; closed OHLC; ambiguous excluded; fixed 24 bps RT",
+  "holdout": "final UTC calendar year in v8 convention (partial 2026 through 2026-11-20 23:59 UTC), with all later tape rows truncated",
+  "walk_forward": "up to five chronological pre-holdout folds, 7-day + 247-minute purging/embargo; PAXG has one resolvable fold; no PA parameters fitted",
+  "v8_md5": "cee99dc26d359a3de2cbf7c7a2751b8f",
+  "round_trip_bps": 24.0,
+  "cells": {
+    "BTC|tf1": {
+      "status": "measured",
+      "bar_step_s": 60,
+      "v8_rule": "mom525600",
+      "row_geometry": {
+        "k": 0.15,
+        "m": 0.55
+      },
+      "holdout_year": 2026,
+      "baseline": {
+        "issued_n": 221031,
+        "graded_n": 220542,
+        "ambiguous_n": 9,
+        "strict_wr_net": 0.17403,
+        "first_touch_wr": 0.975599,
+        "first_touch_n": 74136,
+        "pf_net": 0.07998,
+        "net_ev_bps": -24.132438,
+        "target_n": 72327,
+        "stop_n": 1809,
+        "holdout_era": {
+          "n": 22,
+          "graded_n": 22,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 139.99572,
+          "win_rate_net": 0.136364
+        },
+        "locked_holdout": {
+          "issued_n": 21206,
+          "graded_n": 21206,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.081345,
+          "first_touch_wr": 0.98798,
+          "first_touch_n": 6489,
+          "pf_net": 0.007787,
+          "net_ev_bps": -24.217269,
+          "target_n": 6411,
+          "stop_n": 78
+        }
+      },
+      "after": {
+        "issued_n": 212313,
+        "graded_n": 211824,
+        "ambiguous_n": 9,
+        "strict_wr_net": 0.175197,
+        "first_touch_wr": 0.975423,
+        "first_touch_n": 71328,
+        "pf_net": 0.08107,
+        "net_ev_bps": -24.171218,
+        "target_n": 69575,
+        "stop_n": 1753,
+        "holdout_era": {
+          "n": 21,
+          "graded_n": 21,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 147.402648,
+          "win_rate_net": 0.142857
+        },
+        "locked_holdout": {
+          "issued_n": 19098,
+          "graded_n": 19098,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.079432,
+          "first_touch_wr": 0.988017,
+          "first_touch_n": 5758,
+          "pf_net": 0.007595,
+          "net_ev_bps": -24.296136,
+          "target_n": 5689,
+          "stop_n": 69
+        }
+      },
+      "folds": [
+        {
+          "fold": 1,
+          "test_years": [
+            2017,
+            2018
+          ],
+          "train_n": 0,
+          "purge_before": "2017-01-01",
+          "baseline": {
+            "issued_n": 32640,
+            "graded_n": 32157,
+            "ambiguous_n": 3,
+            "strict_wr_net": 0.339117,
+            "first_touch_wr": 0.965222,
+            "first_touch_n": 10754,
+            "pf_net": 0.207907,
+            "net_ev_bps": -24.124912,
+            "target_n": 10380,
+            "stop_n": 374
+          },
+          "after": {
+            "issued_n": 32148,
+            "graded_n": 31665,
+            "ambiguous_n": 3,
+            "strict_wr_net": 0.339428,
+            "first_touch_wr": 0.96503,
+            "first_touch_n": 10552,
+            "pf_net": 0.209117,
+            "net_ev_bps": -24.143845,
+            "target_n": 10183,
+            "stop_n": 369
+          }
+        },
+        {
+          "fold": 2,
+          "test_years": [
+            2019,
+            2020
+          ],
+          "train_n": 32171,
+          "purge_before": "2019-01-01",
+          "baseline": {
+            "issued_n": 47714,
+            "graded_n": 47710,
+            "ambiguous_n": 4,
+            "strict_wr_net": 0.137246,
+            "first_touch_wr": 0.965207,
+            "first_touch_n": 17245,
+            "pf_net": 0.053651,
+            "net_ev_bps": -24.066577,
+            "target_n": 16645,
+            "stop_n": 600
+          },
+          "after": {
+            "issued_n": 45961,
+            "graded_n": 45957,
+            "ambiguous_n": 4,
+            "strict_wr_net": 0.13987,
+            "first_touch_wr": 0.96499,
+            "first_touch_n": 16681,
+            "pf_net": 0.054743,
+            "net_ev_bps": -24.11518,
+            "target_n": 16097,
+            "stop_n": 584
+          }
+        },
+        {
+          "fold": 3,
+          "test_years": [
+            2021,
+            2022
+          ],
+          "train_n": 79887,
+          "purge_before": "2021-01-01",
+          "baseline": {
+            "issued_n": 47737,
+            "graded_n": 47736,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.306498,
+            "first_touch_wr": 0.982257,
+            "first_touch_n": 15499,
+            "pf_net": 0.133465,
+            "net_ev_bps": -23.91037,
+            "target_n": 15224,
+            "stop_n": 275
+          },
+          "after": {
+            "issued_n": 44894,
+            "graded_n": 44893,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.309803,
+            "first_touch_wr": 0.982116,
+            "first_touch_n": 14762,
+            "pf_net": 0.13491,
+            "net_ev_bps": -23.965545,
+            "target_n": 14498,
+            "stop_n": 264
+          }
+        },
+        {
+          "fold": 4,
+          "test_years": [
+            2023,
+            2024
+          ],
+          "train_n": 127621,
+          "purge_before": "2023-01-01",
+          "baseline": {
+            "issued_n": 47843,
+            "graded_n": 47842,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.055579,
+            "first_touch_wr": 0.975751,
+            "first_touch_n": 16908,
+            "pf_net": 0.006572,
+            "net_ev_bps": -24.257661,
+            "target_n": 16498,
+            "stop_n": 410
+          },
+          "after": {
+            "issued_n": 46600,
+            "graded_n": 46599,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.056761,
+            "first_touch_wr": 0.975886,
+            "first_touch_n": 16422,
+            "pf_net": 0.006726,
+            "net_ev_bps": -24.279157,
+            "target_n": 16026,
+            "stop_n": 396
+          }
+        },
+        {
+          "fold": 5,
+          "test_years": [
+            2025,
+            2025
+          ],
+          "train_n": 175464,
+          "purge_before": "2025-01-01",
+          "baseline": {
+            "issued_n": 23891,
+            "graded_n": 23891,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.080072,
+            "first_touch_wr": 0.990057,
+            "first_touch_n": 7241,
+            "pf_net": 0.01094,
+            "net_ev_bps": -24.39174,
+            "target_n": 7169,
+            "stop_n": 72
+          },
+          "after": {
+            "issued_n": 23612,
+            "graded_n": 23612,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.078985,
+            "first_touch_wr": 0.990074,
+            "first_touch_n": 7153,
+            "pf_net": 0.010955,
+            "net_ev_bps": -24.393979,
+            "target_n": 7082,
+            "stop_n": 71
+          }
+        }
+      ],
+      "promotion": "TELEMETRY ONLY",
+      "promotion_rule": {
+        "min_holdout_n": 14844,
+        "strict_sign_net_wr_nondecrease": true,
+        "first_touch_wr_nondecrease": true,
+        "holdout_era_ev_net_positive": true,
+        "holdout_era_ev_non_decrease": true
+      }
+    },
+    "BTC|tf2": {
+      "status": "measured",
+      "bar_step_s": 60,
+      "v8_rule": "mom525600",
+      "row_geometry": {
+        "k": 0.15,
+        "m": 0.55
+      },
+      "holdout_year": 2026,
+      "baseline": {
+        "issued_n": 110513,
+        "graded_n": 110031,
+        "ambiguous_n": 2,
+        "strict_wr_net": 0.27365,
+        "first_touch_wr": 0.971607,
+        "first_touch_n": 36840,
+        "pf_net": 0.173568,
+        "net_ev_bps": -23.901596,
+        "target_n": 35794,
+        "stop_n": 1046,
+        "holdout_era": {
+          "n": 8,
+          "graded_n": 8,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 436.208859,
+          "win_rate_net": 0.25
+        },
+        "locked_holdout": {
+          "issued_n": 10603,
+          "graded_n": 10603,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.218806,
+          "first_touch_wr": 0.991534,
+          "first_touch_n": 2953,
+          "pf_net": 0.087752,
+          "net_ev_bps": -23.787385,
+          "target_n": 2928,
+          "stop_n": 25
+        }
+      },
+      "after": {
+        "issued_n": 106116,
+        "graded_n": 105634,
+        "ambiguous_n": 2,
+        "strict_wr_net": 0.274022,
+        "first_touch_wr": 0.971246,
+        "first_touch_n": 35612,
+        "pf_net": 0.173844,
+        "net_ev_bps": -23.945886,
+        "target_n": 34588,
+        "stop_n": 1024,
+        "holdout_era": {
+          "n": 8,
+          "graded_n": 8,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 436.208859,
+          "win_rate_net": 0.25
+        },
+        "locked_holdout": {
+          "issued_n": 9523,
+          "graded_n": 9523,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.216528,
+          "first_touch_wr": 0.991241,
+          "first_touch_n": 2626,
+          "pf_net": 0.086894,
+          "net_ev_bps": -23.783377,
+          "target_n": 2603,
+          "stop_n": 23
+        }
+      },
+      "folds": [
+        {
+          "fold": 1,
+          "test_years": [
+            2017,
+            2018
+          ],
+          "train_n": 0,
+          "purge_before": "2017-01-01",
+          "baseline": {
+            "issued_n": 16318,
+            "graded_n": 15838,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.386034,
+            "first_touch_wr": 0.965648,
+            "first_touch_n": 4745,
+            "pf_net": 0.346067,
+            "net_ev_bps": -24.035915,
+            "target_n": 4582,
+            "stop_n": 163
+          },
+          "after": {
+            "issued_n": 16054,
+            "graded_n": 15574,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.385771,
+            "first_touch_wr": 0.965665,
+            "first_touch_n": 4660,
+            "pf_net": 0.346086,
+            "net_ev_bps": -24.035886,
+            "target_n": 4500,
+            "stop_n": 160
+          }
+        },
+        {
+          "fold": 2,
+          "test_years": [
+            2019,
+            2020
+          ],
+          "train_n": 16084,
+          "purge_before": "2019-01-01",
+          "baseline": {
+            "issued_n": 23857,
+            "graded_n": 23857,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.261055,
+            "first_touch_wr": 0.958164,
+            "first_touch_n": 8366,
+            "pf_net": 0.133627,
+            "net_ev_bps": -23.926078,
+            "target_n": 8016,
+            "stop_n": 350
+          },
+          "after": {
+            "issued_n": 22978,
+            "graded_n": 22978,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.261076,
+            "first_touch_wr": 0.957426,
+            "first_touch_n": 8127,
+            "pf_net": 0.134386,
+            "net_ev_bps": -24.033448,
+            "target_n": 7781,
+            "stop_n": 346
+          }
+        },
+        {
+          "fold": 3,
+          "test_years": [
+            2021,
+            2022
+          ],
+          "train_n": 39941,
+          "purge_before": "2021-01-01",
+          "baseline": {
+            "issued_n": 23868,
+            "graded_n": 23866,
+            "ambiguous_n": 2,
+            "strict_wr_net": 0.346769,
+            "first_touch_wr": 0.972389,
+            "first_touch_n": 7678,
+            "pf_net": 0.260299,
+            "net_ev_bps": -23.547523,
+            "target_n": 7466,
+            "stop_n": 212
+          },
+          "after": {
+            "issued_n": 22465,
+            "graded_n": 22463,
+            "ambiguous_n": 2,
+            "strict_wr_net": 0.350577,
+            "first_touch_wr": 0.971641,
+            "first_touch_n": 7405,
+            "pf_net": 0.260648,
+            "net_ev_bps": -23.588727,
+            "target_n": 7195,
+            "stop_n": 210
+          }
+        },
+        {
+          "fold": 4,
+          "test_years": [
+            2023,
+            2024
+          ],
+          "train_n": 63808,
+          "purge_before": "2023-01-01",
+          "baseline": {
+            "issued_n": 23922,
+            "graded_n": 23922,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.179625,
+            "first_touch_wr": 0.973275,
+            "first_touch_n": 9130,
+            "pf_net": 0.04187,
+            "net_ev_bps": -24.095748,
+            "target_n": 8886,
+            "stop_n": 244
+          },
+          "after": {
+            "issued_n": 23288,
+            "graded_n": 23288,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.179148,
+            "first_touch_wr": 0.973622,
+            "first_touch_n": 8871,
+            "pf_net": 0.042247,
+            "net_ev_bps": -24.124021,
+            "target_n": 8637,
+            "stop_n": 234
+          }
+        },
+        {
+          "fold": 5,
+          "test_years": [
+            2025,
+            2025
+          ],
+          "train_n": 87730,
+          "purge_before": "2025-01-01",
+          "baseline": {
+            "issued_n": 11945,
+            "graded_n": 11945,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.240686,
+            "first_touch_wr": 0.986895,
+            "first_touch_n": 3968,
+            "pf_net": 0.051497,
+            "net_ev_bps": -24.0946,
+            "target_n": 3916,
+            "stop_n": 52
+          },
+          "after": {
+            "issued_n": 11808,
+            "graded_n": 11808,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.239668,
+            "first_touch_wr": 0.987,
+            "first_touch_n": 3923,
+            "pf_net": 0.050931,
+            "net_ev_bps": -24.115972,
+            "target_n": 3872,
+            "stop_n": 51
+          }
+        }
+      ],
+      "promotion": "TELEMETRY ONLY",
+      "promotion_rule": {
+        "min_holdout_n": 7422,
+        "strict_sign_net_wr_nondecrease": true,
+        "first_touch_wr_nondecrease": true,
+        "holdout_era_ev_net_positive": true,
+        "holdout_era_ev_non_decrease": true
+      }
+    },
+    "BTC|tf3": {
+      "status": "measured",
+      "bar_step_s": 60,
+      "v8_rule": "mom525600",
+      "row_geometry": {
+        "k": 0.15,
+        "m": 0.55
+      },
+      "holdout_year": 2026,
+      "baseline": {
+        "issued_n": 37394,
+        "graded_n": 36914,
+        "ambiguous_n": 0,
+        "strict_wr_net": 0.396597,
+        "first_touch_wr": 0.96529,
+        "first_touch_n": 12273,
+        "pf_net": 0.372779,
+        "net_ev_bps": -23.891567,
+        "target_n": 11847,
+        "stop_n": 426,
+        "holdout_era": {
+          "n": 10,
+          "graded_n": 10,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 339.778757,
+          "win_rate_net": 0.2
+        },
+        "locked_holdout": {
+          "issued_n": 3588,
+          "graded_n": 3588,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.341695,
+          "first_touch_wr": 0.996802,
+          "first_touch_n": 938,
+          "pf_net": 0.321812,
+          "net_ev_bps": -22.543568,
+          "target_n": 935,
+          "stop_n": 3
+        }
+      },
+      "after": {
+        "issued_n": 35886,
+        "graded_n": 35406,
+        "ambiguous_n": 0,
+        "strict_wr_net": 0.399452,
+        "first_touch_wr": 0.964666,
+        "first_touch_n": 12028,
+        "pf_net": 0.371801,
+        "net_ev_bps": -23.902939,
+        "target_n": 11603,
+        "stop_n": 425,
+        "holdout_era": {
+          "n": 10,
+          "graded_n": 10,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 339.778757,
+          "win_rate_net": 0.2
+        },
+        "locked_holdout": {
+          "issued_n": 3241,
+          "graded_n": 3241,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.335699,
+          "first_touch_wr": 0.996386,
+          "first_touch_n": 830,
+          "pf_net": 0.306904,
+          "net_ev_bps": -23.494838,
+          "target_n": 827,
+          "stop_n": 3
+        }
+      },
+      "folds": [
+        {
+          "fold": 1,
+          "test_years": [
+            2017,
+            2018
+          ],
+          "train_n": 0,
+          "purge_before": "2017-01-01",
+          "baseline": {
+            "issued_n": 5518,
+            "graded_n": 5038,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.433108,
+            "first_touch_wr": 0.961832,
+            "first_touch_n": 1310,
+            "pf_net": 0.543189,
+            "net_ev_bps": -24.277966,
+            "target_n": 1260,
+            "stop_n": 50
+          },
+          "after": {
+            "issued_n": 5442,
+            "graded_n": 4962,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.434905,
+            "first_touch_wr": 0.961744,
+            "first_touch_n": 1307,
+            "pf_net": 0.546327,
+            "net_ev_bps": -24.036551,
+            "target_n": 1257,
+            "stop_n": 50
+          }
+        },
+        {
+          "fold": 2,
+          "test_years": [
+            2019,
+            2020
+          ],
+          "train_n": 5439,
+          "purge_before": "2019-01-01",
+          "baseline": {
+            "issued_n": 8070,
+            "graded_n": 8070,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.380793,
+            "first_touch_wr": 0.967227,
+            "first_touch_n": 2319,
+            "pf_net": 0.373223,
+            "net_ev_bps": -24.729878,
+            "target_n": 2243,
+            "stop_n": 76
+          },
+          "after": {
+            "issued_n": 7755,
+            "graded_n": 7755,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.386589,
+            "first_touch_wr": 0.966827,
+            "first_touch_n": 2291,
+            "pf_net": 0.375343,
+            "net_ev_bps": -24.80574,
+            "target_n": 2215,
+            "stop_n": 76
+          }
+        },
+        {
+          "fold": 3,
+          "test_years": [
+            2021,
+            2022
+          ],
+          "train_n": 13510,
+          "purge_before": "2021-01-01",
+          "baseline": {
+            "issued_n": 8079,
+            "graded_n": 8079,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.405372,
+            "first_touch_wr": 0.941796,
+            "first_touch_n": 3230,
+            "pf_net": 0.415828,
+            "net_ev_bps": -22.986346,
+            "target_n": 3042,
+            "stop_n": 188
+          },
+          "after": {
+            "issued_n": 7591,
+            "graded_n": 7591,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.407851,
+            "first_touch_wr": 0.941102,
+            "first_touch_n": 3175,
+            "pf_net": 0.41495,
+            "net_ev_bps": -22.710655,
+            "target_n": 2988,
+            "stop_n": 187
+          }
+        },
+        {
+          "fold": 4,
+          "test_years": [
+            2023,
+            2024
+          ],
+          "train_n": 21587,
+          "purge_before": "2023-01-01",
+          "baseline": {
+            "issued_n": 8096,
+            "graded_n": 8096,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.402297,
+            "first_touch_wr": 0.971969,
+            "first_touch_n": 2961,
+            "pf_net": 0.242453,
+            "net_ev_bps": -23.669255,
+            "target_n": 2878,
+            "stop_n": 83
+          },
+          "after": {
+            "issued_n": 7865,
+            "graded_n": 7865,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.405976,
+            "first_touch_wr": 0.971643,
+            "first_touch_n": 2927,
+            "pf_net": 0.239098,
+            "net_ev_bps": -23.547487,
+            "target_n": 2844,
+            "stop_n": 83
+          }
+        },
+        {
+          "fold": 5,
+          "test_years": [
+            2025,
+            2025
+          ],
+          "train_n": 29683,
+          "purge_before": "2025-01-01",
+          "baseline": {
+            "issued_n": 4043,
+            "graded_n": 4043,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.402424,
+            "first_touch_wr": 0.982838,
+            "first_touch_n": 1515,
+            "pf_net": 0.215563,
+            "net_ev_bps": -25.187117,
+            "target_n": 1489,
+            "stop_n": 26
+          },
+          "after": {
+            "issued_n": 3992,
+            "graded_n": 3992,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.403307,
+            "first_touch_wr": 0.982644,
+            "first_touch_n": 1498,
+            "pf_net": 0.214038,
+            "net_ev_bps": -25.281871,
+            "target_n": 1472,
+            "stop_n": 26
+          }
+        }
+      ],
+      "promotion": "TELEMETRY ONLY",
+      "promotion_rule": {
+        "min_holdout_n": 2511,
+        "strict_sign_net_wr_nondecrease": true,
+        "first_touch_wr_nondecrease": true,
+        "holdout_era_ev_net_positive": true,
+        "holdout_era_ev_non_decrease": true
+      }
+    },
+    "BTC|tf4": {
+      "status": "measured",
+      "bar_step_s": 60,
+      "v8_rule": "mom7200",
+      "row_geometry": {
+        "k": 0.15,
+        "m": 0.55
+      },
+      "holdout_year": 2026,
+      "baseline": {
+        "issued_n": 19672,
+        "graded_n": 19193,
+        "ambiguous_n": 0,
+        "strict_wr_net": 0.453655,
+        "first_touch_wr": 0.964841,
+        "first_touch_n": 6883,
+        "pf_net": 0.506306,
+        "net_ev_bps": -22.411646,
+        "target_n": 6641,
+        "stop_n": 242,
+        "holdout_era": {
+          "n": 159,
+          "graded_n": 159,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": -23.759951,
+          "win_rate_net": 0.201258
+        },
+        "locked_holdout": {
+          "issued_n": 1888,
+          "graded_n": 1888,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.396186,
+          "first_touch_wr": 0.989601,
+          "first_touch_n": 577,
+          "pf_net": 0.421695,
+          "net_ev_bps": -22.777083,
+          "target_n": 571,
+          "stop_n": 6
+        }
+      },
+      "after": {
+        "issued_n": 18574,
+        "graded_n": 18101,
+        "ambiguous_n": 0,
+        "strict_wr_net": 0.452019,
+        "first_touch_wr": 0.965358,
+        "first_touch_n": 6495,
+        "pf_net": 0.499644,
+        "net_ev_bps": -22.691788,
+        "target_n": 6270,
+        "stop_n": 225,
+        "holdout_era": {
+          "n": 158,
+          "graded_n": 158,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": -23.766451,
+          "win_rate_net": 0.202532
+        },
+        "locked_holdout": {
+          "issued_n": 1794,
+          "graded_n": 1794,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.391304,
+          "first_touch_wr": 0.988909,
+          "first_touch_n": 541,
+          "pf_net": 0.407775,
+          "net_ev_bps": -23.776842,
+          "target_n": 535,
+          "stop_n": 6
+        }
+      },
+      "folds": [
+        {
+          "fold": 1,
+          "test_years": [
+            2017,
+            2018
+          ],
+          "train_n": 0,
+          "purge_before": "2017-01-01",
+          "baseline": {
+            "issued_n": 2901,
+            "graded_n": 2422,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.43559,
+            "first_touch_wr": 0.977011,
+            "first_touch_n": 522,
+            "pf_net": 0.715201,
+            "net_ev_bps": -20.022713,
+            "target_n": 510,
+            "stop_n": 12
+          },
+          "after": {
+            "issued_n": 2700,
+            "graded_n": 2227,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.429726,
+            "first_touch_wr": 0.976695,
+            "first_touch_n": 472,
+            "pf_net": 0.691475,
+            "net_ev_bps": -21.832367,
+            "target_n": 461,
+            "stop_n": 11
+          }
+        },
+        {
+          "fold": 2,
+          "test_years": [
+            2019,
+            2020
+          ],
+          "train_n": 2859,
+          "purge_before": "2019-01-01",
+          "baseline": {
+            "issued_n": 4245,
+            "graded_n": 4245,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.429211,
+            "first_touch_wr": 0.985637,
+            "first_touch_n": 1114,
+            "pf_net": 0.577205,
+            "net_ev_bps": -19.835507,
+            "target_n": 1098,
+            "stop_n": 16
+          },
+          "after": {
+            "issued_n": 4011,
+            "graded_n": 4011,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.428571,
+            "first_touch_wr": 0.984934,
+            "first_touch_n": 1062,
+            "pf_net": 0.570564,
+            "net_ev_bps": -20.333083,
+            "target_n": 1046,
+            "stop_n": 16
+          }
+        },
+        {
+          "fold": 3,
+          "test_years": [
+            2021,
+            2022
+          ],
+          "train_n": 7105,
+          "purge_before": "2021-01-01",
+          "baseline": {
+            "issued_n": 4250,
+            "graded_n": 4250,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.518353,
+            "first_touch_wr": 0.928073,
+            "first_touch_n": 2294,
+            "pf_net": 0.429372,
+            "net_ev_bps": -25.41826,
+            "target_n": 2129,
+            "stop_n": 165
+          },
+          "after": {
+            "issued_n": 3965,
+            "graded_n": 3965,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.518285,
+            "first_touch_wr": 0.929702,
+            "first_touch_n": 2148,
+            "pf_net": 0.432941,
+            "net_ev_bps": -25.00738,
+            "target_n": 1997,
+            "stop_n": 151
+          }
+        },
+        {
+          "fold": 4,
+          "test_years": [
+            2023,
+            2024
+          ],
+          "train_n": 11354,
+          "purge_before": "2023-01-01",
+          "baseline": {
+            "issued_n": 4261,
+            "graded_n": 4261,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.410232,
+            "first_touch_wr": 0.981875,
+            "first_touch_n": 1269,
+            "pf_net": 0.424279,
+            "net_ev_bps": -22.893274,
+            "target_n": 1246,
+            "stop_n": 23
+          },
+          "after": {
+            "issued_n": 4071,
+            "graded_n": 4071,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.40899,
+            "first_touch_wr": 0.981023,
+            "first_touch_n": 1212,
+            "pf_net": 0.423891,
+            "net_ev_bps": -22.94125,
+            "target_n": 1189,
+            "stop_n": 23
+          }
+        },
+        {
+          "fold": 5,
+          "test_years": [
+            2025,
+            2025
+          ],
+          "train_n": 15615,
+          "purge_before": "2025-01-01",
+          "baseline": {
+            "issued_n": 2127,
+            "graded_n": 2127,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.531735,
+            "first_touch_wr": 0.981933,
+            "first_touch_n": 1107,
+            "pf_net": 0.289021,
+            "net_ev_bps": -22.976489,
+            "target_n": 1087,
+            "stop_n": 20
+          },
+          "after": {
+            "issued_n": 2033,
+            "graded_n": 2033,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.533202,
+            "first_touch_wr": 0.983019,
+            "first_touch_n": 1060,
+            "pf_net": 0.295652,
+            "net_ev_bps": -22.313639,
+            "target_n": 1042,
+            "stop_n": 18
+          }
+        }
+      ],
+      "promotion": "TELEMETRY ONLY",
+      "promotion_rule": {
+        "min_holdout_n": 1321,
+        "strict_sign_net_wr_nondecrease": true,
+        "first_touch_wr_nondecrease": true,
+        "holdout_era_ev_net_positive": true,
+        "holdout_era_ev_non_decrease": true
+      }
+    },
+    "ETH|tf1": {
+      "status": "measured",
+      "bar_step_s": 60,
+      "v8_rule": "mom43200",
+      "row_geometry": {
+        "k": 0.15,
+        "m": 0.55
+      },
+      "holdout_year": 2026,
+      "baseline": {
+        "issued_n": 221031,
+        "graded_n": 220539,
+        "ambiguous_n": 12,
+        "strict_wr_net": 0.270202,
+        "first_touch_wr": 0.977755,
+        "first_touch_n": 71523,
+        "pf_net": 0.150627,
+        "net_ev_bps": -24.13666,
+        "target_n": 69932,
+        "stop_n": 1591,
+        "holdout_era": {
+          "n": 203,
+          "graded_n": 203,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 12.234831,
+          "win_rate_net": 0.137931
+        },
+        "locked_holdout": {
+          "issued_n": 21206,
+          "graded_n": 21205,
+          "ambiguous_n": 1,
+          "strict_wr_net": 0.169818,
+          "first_touch_wr": 0.988315,
+          "first_touch_n": 5905,
+          "pf_net": 0.070286,
+          "net_ev_bps": -24.352268,
+          "target_n": 5836,
+          "stop_n": 69
+        }
+      },
+      "after": {
+        "issued_n": 208709,
+        "graded_n": 208217,
+        "ambiguous_n": 12,
+        "strict_wr_net": 0.26908,
+        "first_touch_wr": 0.977214,
+        "first_touch_n": 68508,
+        "pf_net": 0.147802,
+        "net_ev_bps": -24.166646,
+        "target_n": 66947,
+        "stop_n": 1561,
+        "holdout_era": {
+          "n": 200,
+          "graded_n": 200,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 13.235408,
+          "win_rate_net": 0.145
+        },
+        "locked_holdout": {
+          "issued_n": 20123,
+          "graded_n": 20122,
+          "ambiguous_n": 1,
+          "strict_wr_net": 0.165043,
+          "first_touch_wr": 0.988218,
+          "first_touch_n": 5602,
+          "pf_net": 0.067536,
+          "net_ev_bps": -24.408706,
+          "target_n": 5536,
+          "stop_n": 66
+        }
+      },
+      "folds": [
+        {
+          "fold": 1,
+          "test_years": [
+            2017,
+            2018
+          ],
+          "train_n": 0,
+          "purge_before": "2017-01-01",
+          "baseline": {
+            "issued_n": 32640,
+            "graded_n": 32158,
+            "ambiguous_n": 2,
+            "strict_wr_net": 0.381149,
+            "first_touch_wr": 0.968784,
+            "first_touch_n": 10091,
+            "pf_net": 0.307248,
+            "net_ev_bps": -23.405348,
+            "target_n": 9776,
+            "stop_n": 315
+          },
+          "after": {
+            "issued_n": 30252,
+            "graded_n": 29770,
+            "ambiguous_n": 2,
+            "strict_wr_net": 0.386765,
+            "first_touch_wr": 0.967578,
+            "first_touch_n": 9654,
+            "pf_net": 0.306205,
+            "net_ev_bps": -23.492494,
+            "target_n": 9341,
+            "stop_n": 313
+          }
+        },
+        {
+          "fold": 2,
+          "test_years": [
+            2019,
+            2020
+          ],
+          "train_n": 32171,
+          "purge_before": "2019-01-01",
+          "baseline": {
+            "issued_n": 47714,
+            "graded_n": 47712,
+            "ambiguous_n": 2,
+            "strict_wr_net": 0.277289,
+            "first_touch_wr": 0.973994,
+            "first_touch_n": 16496,
+            "pf_net": 0.117979,
+            "net_ev_bps": -24.21511,
+            "target_n": 16067,
+            "stop_n": 429
+          },
+          "after": {
+            "issued_n": 45829,
+            "graded_n": 45827,
+            "ambiguous_n": 2,
+            "strict_wr_net": 0.276344,
+            "first_touch_wr": 0.973689,
+            "first_touch_n": 16039,
+            "pf_net": 0.116234,
+            "net_ev_bps": -24.226439,
+            "target_n": 15617,
+            "stop_n": 422
+          }
+        },
+        {
+          "fold": 3,
+          "test_years": [
+            2021,
+            2022
+          ],
+          "train_n": 79887,
+          "purge_before": "2021-01-01",
+          "baseline": {
+            "issued_n": 47737,
+            "graded_n": 47732,
+            "ambiguous_n": 5,
+            "strict_wr_net": 0.359067,
+            "first_touch_wr": 0.977955,
+            "first_touch_n": 15922,
+            "pf_net": 0.211916,
+            "net_ev_bps": -24.044234,
+            "target_n": 15571,
+            "stop_n": 351
+          },
+          "after": {
+            "issued_n": 44681,
+            "graded_n": 44676,
+            "ambiguous_n": 5,
+            "strict_wr_net": 0.36082,
+            "first_touch_wr": 0.977052,
+            "first_touch_n": 15165,
+            "pf_net": 0.208926,
+            "net_ev_bps": -24.135773,
+            "target_n": 14817,
+            "stop_n": 348
+          }
+        },
+        {
+          "fold": 4,
+          "test_years": [
+            2023,
+            2024
+          ],
+          "train_n": 127621,
+          "purge_before": "2023-01-01",
+          "baseline": {
+            "issued_n": 47843,
+            "graded_n": 47842,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.12698,
+            "first_touch_wr": 0.977581,
+            "first_touch_n": 16013,
+            "pf_net": 0.023336,
+            "net_ev_bps": -24.611458,
+            "target_n": 15654,
+            "stop_n": 359
+          },
+          "after": {
+            "issued_n": 45732,
+            "graded_n": 45731,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.123483,
+            "first_touch_wr": 0.97747,
+            "first_touch_n": 15402,
+            "pf_net": 0.022311,
+            "net_ev_bps": -24.56028,
+            "target_n": 15055,
+            "stop_n": 347
+          }
+        },
+        {
+          "fold": 5,
+          "test_years": [
+            2025,
+            2025
+          ],
+          "train_n": 175464,
+          "purge_before": "2025-01-01",
+          "baseline": {
+            "issued_n": 23891,
+            "graded_n": 23890,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.305065,
+            "first_touch_wr": 0.990417,
+            "first_touch_n": 7096,
+            "pf_net": 0.122206,
+            "net_ev_bps": -24.006855,
+            "target_n": 7028,
+            "stop_n": 68
+          },
+          "after": {
+            "issued_n": 22092,
+            "graded_n": 22091,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.306052,
+            "first_touch_wr": 0.99022,
+            "first_touch_n": 6646,
+            "pf_net": 0.119726,
+            "net_ev_bps": -23.978178,
+            "target_n": 6581,
+            "stop_n": 65
+          }
+        }
+      ],
+      "promotion": "TELEMETRY ONLY",
+      "promotion_rule": {
+        "min_holdout_n": 14844,
+        "strict_sign_net_wr_nondecrease": true,
+        "first_touch_wr_nondecrease": true,
+        "holdout_era_ev_net_positive": true,
+        "holdout_era_ev_non_decrease": true
+      }
+    },
+    "ETH|tf2": {
+      "status": "measured",
+      "bar_step_s": 60,
+      "v8_rule": "mom129600",
+      "row_geometry": {
+        "k": 0.15,
+        "m": 0.55
+      },
+      "holdout_year": 2026,
+      "baseline": {
+        "issued_n": 110513,
+        "graded_n": 110030,
+        "ambiguous_n": 3,
+        "strict_wr_net": 0.363083,
+        "first_touch_wr": 0.969609,
+        "first_touch_n": 36228,
+        "pf_net": 0.267832,
+        "net_ev_bps": -24.282174,
+        "target_n": 35127,
+        "stop_n": 1101,
+        "holdout_era": {
+          "n": 36,
+          "graded_n": 36,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": -129.479572,
+          "win_rate_net": 0.222222
+        },
+        "locked_holdout": {
+          "issued_n": 10603,
+          "graded_n": 10602,
+          "ambiguous_n": 1,
+          "strict_wr_net": 0.283814,
+          "first_touch_wr": 0.985004,
+          "first_touch_n": 2534,
+          "pf_net": 0.187827,
+          "net_ev_bps": -24.450176,
+          "target_n": 2496,
+          "stop_n": 38
+        }
+      },
+      "after": {
+        "issued_n": 104529,
+        "graded_n": 104046,
+        "ambiguous_n": 3,
+        "strict_wr_net": 0.365127,
+        "first_touch_wr": 0.968861,
+        "first_touch_n": 35036,
+        "pf_net": 0.264022,
+        "net_ev_bps": -24.340257,
+        "target_n": 33945,
+        "stop_n": 1091,
+        "holdout_era": {
+          "n": 36,
+          "graded_n": 36,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": -129.479572,
+          "win_rate_net": 0.222222
+        },
+        "locked_holdout": {
+          "issued_n": 9782,
+          "graded_n": 9781,
+          "ambiguous_n": 1,
+          "strict_wr_net": 0.284633,
+          "first_touch_wr": 0.984861,
+          "first_touch_n": 2378,
+          "pf_net": 0.182575,
+          "net_ev_bps": -24.506733,
+          "target_n": 2342,
+          "stop_n": 36
+        }
+      },
+      "folds": [
+        {
+          "fold": 1,
+          "test_years": [
+            2017,
+            2018
+          ],
+          "train_n": 0,
+          "purge_before": "2017-01-01",
+          "baseline": {
+            "issued_n": 16318,
+            "graded_n": 15837,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.421418,
+            "first_touch_wr": 0.950725,
+            "first_touch_n": 4485,
+            "pf_net": 0.43885,
+            "net_ev_bps": -23.447675,
+            "target_n": 4264,
+            "stop_n": 221
+          },
+          "after": {
+            "issued_n": 15125,
+            "graded_n": 14644,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.426455,
+            "first_touch_wr": 0.94932,
+            "first_touch_n": 4341,
+            "pf_net": 0.436487,
+            "net_ev_bps": -23.646866,
+            "target_n": 4121,
+            "stop_n": 220
+          }
+        },
+        {
+          "fold": 2,
+          "test_years": [
+            2019,
+            2020
+          ],
+          "train_n": 16084,
+          "purge_before": "2019-01-01",
+          "baseline": {
+            "issued_n": 23857,
+            "graded_n": 23856,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.407151,
+            "first_touch_wr": 0.966444,
+            "first_touch_n": 8523,
+            "pf_net": 0.240361,
+            "net_ev_bps": -24.254977,
+            "target_n": 8237,
+            "stop_n": 286
+          },
+          "after": {
+            "issued_n": 22892,
+            "graded_n": 22891,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.410423,
+            "first_touch_wr": 0.965778,
+            "first_touch_n": 8328,
+            "pf_net": 0.239021,
+            "net_ev_bps": -24.24438,
+            "target_n": 8043,
+            "stop_n": 285
+          }
+        },
+        {
+          "fold": 3,
+          "test_years": [
+            2021,
+            2022
+          ],
+          "train_n": 39941,
+          "purge_before": "2021-01-01",
+          "baseline": {
+            "issued_n": 23868,
+            "graded_n": 23868,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.410592,
+            "first_touch_wr": 0.964587,
+            "first_touch_n": 8528,
+            "pf_net": 0.324665,
+            "net_ev_bps": -24.707795,
+            "target_n": 8226,
+            "stop_n": 302
+          },
+          "after": {
+            "issued_n": 22381,
+            "graded_n": 22381,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.414548,
+            "first_touch_wr": 0.963473,
+            "first_touch_n": 8213,
+            "pf_net": 0.320824,
+            "net_ev_bps": -24.805528,
+            "target_n": 7913,
+            "stop_n": 300
+          }
+        },
+        {
+          "fold": 4,
+          "test_years": [
+            2023,
+            2024
+          ],
+          "train_n": 63808,
+          "purge_before": "2023-01-01",
+          "baseline": {
+            "issued_n": 23922,
+            "graded_n": 23922,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.259176,
+            "first_touch_wr": 0.975161,
+            "first_touch_n": 8213,
+            "pf_net": 0.104541,
+            "net_ev_bps": -24.531995,
+            "target_n": 8009,
+            "stop_n": 204
+          },
+          "after": {
+            "issued_n": 23100,
+            "graded_n": 23100,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.258442,
+            "first_touch_wr": 0.974862,
+            "first_touch_n": 7996,
+            "pf_net": 0.102609,
+            "net_ev_bps": -24.572411,
+            "target_n": 7795,
+            "stop_n": 201
+          }
+        },
+        {
+          "fold": 5,
+          "test_years": [
+            2025,
+            2025
+          ],
+          "train_n": 87730,
+          "purge_before": "2025-01-01",
+          "baseline": {
+            "issued_n": 11945,
+            "graded_n": 11945,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.381247,
+            "first_touch_wr": 0.987326,
+            "first_touch_n": 3945,
+            "pf_net": 0.243151,
+            "net_ev_bps": -23.943011,
+            "target_n": 3895,
+            "stop_n": 50
+          },
+          "after": {
+            "issued_n": 11249,
+            "graded_n": 11249,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.383856,
+            "first_touch_wr": 0.987037,
+            "first_touch_n": 3780,
+            "pf_net": 0.240872,
+            "net_ev_bps": -23.890835,
+            "target_n": 3731,
+            "stop_n": 49
+          }
+        }
+      ],
+      "promotion": "TELEMETRY ONLY",
+      "promotion_rule": {
+        "min_holdout_n": 7422,
+        "strict_sign_net_wr_nondecrease": true,
+        "first_touch_wr_nondecrease": true,
+        "holdout_era_ev_net_positive": true,
+        "holdout_era_ev_non_decrease": true
+      }
+    },
+    "ETH|tf3": {
+      "status": "measured",
+      "bar_step_s": 60,
+      "v8_rule": "mom43200",
+      "row_geometry": {
+        "k": 0.15,
+        "m": 0.55
+      },
+      "holdout_year": 2026,
+      "baseline": {
+        "issued_n": 37394,
+        "graded_n": 36914,
+        "ambiguous_n": 0,
+        "strict_wr_net": 0.437124,
+        "first_touch_wr": 0.960957,
+        "first_touch_n": 12294,
+        "pf_net": 0.484601,
+        "net_ev_bps": -22.86999,
+        "target_n": 11814,
+        "stop_n": 480,
+        "holdout_era": {
+          "n": 77,
+          "graded_n": 77,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 78.600926,
+          "win_rate_net": 0.246753
+        },
+        "locked_holdout": {
+          "issued_n": 3588,
+          "graded_n": 3588,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.346154,
+          "first_touch_wr": 0.998285,
+          "first_touch_n": 583,
+          "pf_net": 0.449816,
+          "net_ev_bps": -22.103158,
+          "target_n": 582,
+          "stop_n": 1
+        }
+      },
+      "after": {
+        "issued_n": 35289,
+        "graded_n": 34810,
+        "ambiguous_n": 0,
+        "strict_wr_net": 0.436656,
+        "first_touch_wr": 0.96024,
+        "first_touch_n": 11670,
+        "pf_net": 0.48275,
+        "net_ev_bps": -22.782892,
+        "target_n": 11206,
+        "stop_n": 464,
+        "holdout_era": {
+          "n": 76,
+          "graded_n": 76,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 80.32888,
+          "win_rate_net": 0.25
+        },
+        "locked_holdout": {
+          "issued_n": 3401,
+          "graded_n": 3401,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.342252,
+          "first_touch_wr": 0.998145,
+          "first_touch_n": 539,
+          "pf_net": 0.441743,
+          "net_ev_bps": -22.384275,
+          "target_n": 538,
+          "stop_n": 1
+        }
+      },
+      "folds": [
+        {
+          "fold": 1,
+          "test_years": [
+            2017,
+            2018
+          ],
+          "train_n": 0,
+          "purge_before": "2017-01-01",
+          "baseline": {
+            "issued_n": 5518,
+            "graded_n": 5038,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.495435,
+            "first_touch_wr": 0.952586,
+            "first_touch_n": 1624,
+            "pf_net": 0.623801,
+            "net_ev_bps": -21.909085,
+            "target_n": 1547,
+            "stop_n": 77
+          },
+          "after": {
+            "issued_n": 5118,
+            "graded_n": 4639,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.496874,
+            "first_touch_wr": 0.949968,
+            "first_touch_n": 1539,
+            "pf_net": 0.614846,
+            "net_ev_bps": -22.454642,
+            "target_n": 1462,
+            "stop_n": 77
+          }
+        },
+        {
+          "fold": 2,
+          "test_years": [
+            2019,
+            2020
+          ],
+          "train_n": 5439,
+          "purge_before": "2019-01-01",
+          "baseline": {
+            "issued_n": 8070,
+            "graded_n": 8070,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.436803,
+            "first_touch_wr": 0.97288,
+            "first_touch_n": 2028,
+            "pf_net": 0.523473,
+            "net_ev_bps": -22.376705,
+            "target_n": 1973,
+            "stop_n": 55
+          },
+          "after": {
+            "issued_n": 7741,
+            "graded_n": 7741,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.438315,
+            "first_touch_wr": 0.972533,
+            "first_touch_n": 1966,
+            "pf_net": 0.530108,
+            "net_ev_bps": -21.855457,
+            "target_n": 1912,
+            "stop_n": 54
+          }
+        },
+        {
+          "fold": 3,
+          "test_years": [
+            2021,
+            2022
+          ],
+          "train_n": 13510,
+          "purge_before": "2021-01-01",
+          "baseline": {
+            "issued_n": 8079,
+            "graded_n": 8079,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.45872,
+            "first_touch_wr": 0.931624,
+            "first_touch_n": 3978,
+            "pf_net": 0.475405,
+            "net_ev_bps": -23.029535,
+            "target_n": 3706,
+            "stop_n": 272
+          },
+          "after": {
+            "issued_n": 7520,
+            "graded_n": 7520,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.456649,
+            "first_touch_wr": 0.930925,
+            "first_touch_n": 3764,
+            "pf_net": 0.472663,
+            "net_ev_bps": -22.832458,
+            "target_n": 3504,
+            "stop_n": 260
+          }
+        },
+        {
+          "fold": 4,
+          "test_years": [
+            2023,
+            2024
+          ],
+          "train_n": 21587,
+          "purge_before": "2023-01-01",
+          "baseline": {
+            "issued_n": 8096,
+            "graded_n": 8096,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.410697,
+            "first_touch_wr": 0.976282,
+            "first_touch_n": 2614,
+            "pf_net": 0.32689,
+            "net_ev_bps": -24.204722,
+            "target_n": 2552,
+            "stop_n": 62
+          },
+          "after": {
+            "issued_n": 7746,
+            "graded_n": 7746,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.410405,
+            "first_touch_wr": 0.975884,
+            "first_touch_n": 2488,
+            "pf_net": 0.325863,
+            "net_ev_bps": -24.29425,
+            "target_n": 2428,
+            "stop_n": 60
+          }
+        },
+        {
+          "fold": 5,
+          "test_years": [
+            2025,
+            2025
+          ],
+          "train_n": 29683,
+          "purge_before": "2025-01-01",
+          "baseline": {
+            "issued_n": 4043,
+            "graded_n": 4043,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.455602,
+            "first_touch_wr": 0.991138,
+            "first_touch_n": 1467,
+            "pf_net": 0.476738,
+            "net_ev_bps": -22.740952,
+            "target_n": 1454,
+            "stop_n": 13
+          },
+          "after": {
+            "issued_n": 3763,
+            "graded_n": 3763,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.458411,
+            "first_touch_wr": 0.991266,
+            "first_touch_n": 1374,
+            "pf_net": 0.482089,
+            "net_ev_bps": -22.245559,
+            "target_n": 1362,
+            "stop_n": 12
+          }
+        }
+      ],
+      "promotion": "TELEMETRY ONLY",
+      "promotion_rule": {
+        "min_holdout_n": 2511,
+        "strict_sign_net_wr_nondecrease": true,
+        "first_touch_wr_nondecrease": true,
+        "holdout_era_ev_net_positive": true,
+        "holdout_era_ev_non_decrease": true
+      }
+    },
+    "ETH|tf4": {
+      "status": "measured",
+      "bar_step_s": 60,
+      "v8_rule": "mom10080",
+      "row_geometry": {
+        "k": 0.15,
+        "m": 0.55
+      },
+      "holdout_year": 2026,
+      "baseline": {
+        "issued_n": 19672,
+        "graded_n": 19193,
+        "ambiguous_n": 0,
+        "strict_wr_net": 0.467045,
+        "first_touch_wr": 0.951587,
+        "first_touch_n": 6176,
+        "pf_net": 0.619373,
+        "net_ev_bps": -21.318554,
+        "target_n": 5877,
+        "stop_n": 299,
+        "holdout_era": {
+          "n": 135,
+          "graded_n": 135,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 4.172971,
+          "win_rate_net": 0.274074
+        },
+        "locked_holdout": {
+          "issued_n": 1888,
+          "graded_n": 1888,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.386123,
+          "first_touch_wr": 0.994429,
+          "first_touch_n": 359,
+          "pf_net": 0.538316,
+          "net_ev_bps": -23.677655,
+          "target_n": 357,
+          "stop_n": 2
+        }
+      },
+      "after": {
+        "issued_n": 18586,
+        "graded_n": 18113,
+        "ambiguous_n": 0,
+        "strict_wr_net": 0.46508,
+        "first_touch_wr": 0.952299,
+        "first_touch_n": 5807,
+        "pf_net": 0.614483,
+        "net_ev_bps": -21.515424,
+        "target_n": 5530,
+        "stop_n": 277,
+        "holdout_era": {
+          "n": 134,
+          "graded_n": 134,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 3.761988,
+          "win_rate_net": 0.283582
+        },
+        "locked_holdout": {
+          "issued_n": 1766,
+          "graded_n": 1766,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.381653,
+          "first_touch_wr": 0.993921,
+          "first_touch_n": 329,
+          "pf_net": 0.523391,
+          "net_ev_bps": -24.659854,
+          "target_n": 327,
+          "stop_n": 2
+        }
+      },
+      "folds": [
+        {
+          "fold": 1,
+          "test_years": [
+            2017,
+            2018
+          ],
+          "train_n": 0,
+          "purge_before": "2017-01-01",
+          "baseline": {
+            "issued_n": 2901,
+            "graded_n": 2422,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.52147,
+            "first_touch_wr": 0.94868,
+            "first_touch_n": 682,
+            "pf_net": 0.814075,
+            "net_ev_bps": -14.358267,
+            "target_n": 647,
+            "stop_n": 35
+          },
+          "after": {
+            "issued_n": 2722,
+            "graded_n": 2249,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.516229,
+            "first_touch_wr": 0.949606,
+            "first_touch_n": 635,
+            "pf_net": 0.796421,
+            "net_ev_bps": -15.629869,
+            "target_n": 603,
+            "stop_n": 32
+          }
+        },
+        {
+          "fold": 2,
+          "test_years": [
+            2019,
+            2020
+          ],
+          "train_n": 2859,
+          "purge_before": "2019-01-01",
+          "baseline": {
+            "issued_n": 4245,
+            "graded_n": 4245,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.432509,
+            "first_touch_wr": 0.982987,
+            "first_touch_n": 529,
+            "pf_net": 0.711016,
+            "net_ev_bps": -18.304106,
+            "target_n": 520,
+            "stop_n": 9
+          },
+          "after": {
+            "issued_n": 4068,
+            "graded_n": 4068,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.43117,
+            "first_touch_wr": 0.982318,
+            "first_touch_n": 509,
+            "pf_net": 0.703318,
+            "net_ev_bps": -18.911543,
+            "target_n": 500,
+            "stop_n": 9
+          }
+        },
+        {
+          "fold": 3,
+          "test_years": [
+            2021,
+            2022
+          ],
+          "train_n": 7105,
+          "purge_before": "2021-01-01",
+          "baseline": {
+            "issued_n": 4250,
+            "graded_n": 4250,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.549647,
+            "first_touch_wr": 0.913407,
+            "first_touch_n": 2633,
+            "pf_net": 0.508527,
+            "net_ev_bps": -23.314114,
+            "target_n": 2405,
+            "stop_n": 228
+          },
+          "after": {
+            "issued_n": 3992,
+            "graded_n": 3992,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.544088,
+            "first_touch_wr": 0.915282,
+            "first_touch_n": 2467,
+            "pf_net": 0.502954,
+            "net_ev_bps": -23.338241,
+            "target_n": 2258,
+            "stop_n": 209
+          }
+        },
+        {
+          "fold": 4,
+          "test_years": [
+            2023,
+            2024
+          ],
+          "train_n": 11354,
+          "purge_before": "2023-01-01",
+          "baseline": {
+            "issued_n": 4261,
+            "graded_n": 4261,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.39357,
+            "first_touch_wr": 0.989806,
+            "first_touch_n": 981,
+            "pf_net": 0.497197,
+            "net_ev_bps": -24.489084,
+            "target_n": 971,
+            "stop_n": 10
+          },
+          "after": {
+            "issued_n": 4048,
+            "graded_n": 4048,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.39748,
+            "first_touch_wr": 0.989328,
+            "first_touch_n": 937,
+            "pf_net": 0.506666,
+            "net_ev_bps": -23.76425,
+            "target_n": 927,
+            "stop_n": 10
+          }
+        },
+        {
+          "fold": 5,
+          "test_years": [
+            2025,
+            2025
+          ],
+          "train_n": 15615,
+          "purge_before": "2025-01-01",
+          "baseline": {
+            "issued_n": 2127,
+            "graded_n": 2127,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.527974,
+            "first_touch_wr": 0.984879,
+            "first_touch_n": 992,
+            "pf_net": 0.570687,
+            "net_ev_bps": -22.827442,
+            "target_n": 977,
+            "stop_n": 15
+          },
+          "after": {
+            "issued_n": 1990,
+            "graded_n": 1990,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.529648,
+            "first_touch_wr": 0.983871,
+            "first_touch_n": 930,
+            "pf_net": 0.574539,
+            "net_ev_bps": -22.468296,
+            "target_n": 915,
+            "stop_n": 15
+          }
+        }
+      ],
+      "promotion": "TELEMETRY ONLY",
+      "promotion_rule": {
+        "min_holdout_n": 1321,
+        "strict_sign_net_wr_nondecrease": true,
+        "first_touch_wr_nondecrease": true,
+        "holdout_era_ev_net_positive": true,
+        "holdout_era_ev_non_decrease": true
+      }
+    },
+    "BNB|tf1": {
+      "status": "NO CERTIFIED V8 ROW",
+      "baseline": null,
+      "after": null
+    },
+    "BNB|tf2": {
+      "status": "measured",
+      "bar_step_s": 60,
+      "v8_rule": "mom525600",
+      "row_geometry": {
+        "k": 0.15,
+        "m": 0.55
+      },
+      "holdout_year": 2026,
+      "baseline": {
+        "issued_n": 107871,
+        "graded_n": 107347,
+        "ambiguous_n": 44,
+        "strict_wr_net": 0.339171,
+        "first_touch_wr": 0.96766,
+        "first_touch_n": 38497,
+        "pf_net": 0.249156,
+        "net_ev_bps": -24.595494,
+        "target_n": 37252,
+        "stop_n": 1245,
+        "holdout_era": {
+          "n": 107,
+          "graded_n": 107,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": -41.30653,
+          "win_rate_net": 0.17757
+        },
+        "locked_holdout": {
+          "issued_n": 10603,
+          "graded_n": 10603,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.201169,
+          "first_touch_wr": 0.986975,
+          "first_touch_n": 2764,
+          "pf_net": 0.093315,
+          "net_ev_bps": -24.674469,
+          "target_n": 2728,
+          "stop_n": 36
+        }
+      },
+      "after": {
+        "issued_n": 105167,
+        "graded_n": 104643,
+        "ambiguous_n": 44,
+        "strict_wr_net": 0.339899,
+        "first_touch_wr": 0.967253,
+        "first_touch_n": 37591,
+        "pf_net": 0.249737,
+        "net_ev_bps": -24.622748,
+        "target_n": 36360,
+        "stop_n": 1231,
+        "holdout_era": {
+          "n": 106,
+          "graded_n": 106,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": -41.473006,
+          "win_rate_net": 0.179245
+        },
+        "locked_holdout": {
+          "issued_n": 9860,
+          "graded_n": 9860,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.200507,
+          "first_touch_wr": 0.986373,
+          "first_touch_n": 2495,
+          "pf_net": 0.0938,
+          "net_ev_bps": -24.879786,
+          "target_n": 2461,
+          "stop_n": 34
+        }
+      },
+      "folds": [
+        {
+          "fold": 1,
+          "test_years": [
+            2017,
+            2018
+          ],
+          "train_n": 0,
+          "purge_before": "2017-01-01",
+          "baseline": {
+            "issued_n": 13676,
+            "graded_n": 13193,
+            "ambiguous_n": 3,
+            "strict_wr_net": 0.421587,
+            "first_touch_wr": 0.963021,
+            "first_touch_n": 3813,
+            "pf_net": 0.48328,
+            "net_ev_bps": -25.031282,
+            "target_n": 3672,
+            "stop_n": 141
+          },
+          "after": {
+            "issued_n": 13652,
+            "graded_n": 13169,
+            "ambiguous_n": 3,
+            "strict_wr_net": 0.421596,
+            "first_touch_wr": 0.962943,
+            "first_touch_n": 3805,
+            "pf_net": 0.483074,
+            "net_ev_bps": -25.053402,
+            "target_n": 3664,
+            "stop_n": 141
+          }
+        },
+        {
+          "fold": 2,
+          "test_years": [
+            2019,
+            2020
+          ],
+          "train_n": 13442,
+          "purge_before": "2019-01-01",
+          "baseline": {
+            "issued_n": 23857,
+            "graded_n": 23857,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.440416,
+            "first_touch_wr": 0.9723,
+            "first_touch_n": 9314,
+            "pf_net": 0.268447,
+            "net_ev_bps": -24.627824,
+            "target_n": 9056,
+            "stop_n": 258
+          },
+          "after": {
+            "issued_n": 22972,
+            "graded_n": 22972,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.442539,
+            "first_touch_wr": 0.971976,
+            "first_touch_n": 9028,
+            "pf_net": 0.266314,
+            "net_ev_bps": -24.687119,
+            "target_n": 8775,
+            "stop_n": 253
+          }
+        },
+        {
+          "fold": 3,
+          "test_years": [
+            2021,
+            2022
+          ],
+          "train_n": 37299,
+          "purge_before": "2021-01-01",
+          "baseline": {
+            "issued_n": 23868,
+            "graded_n": 23830,
+            "ambiguous_n": 38,
+            "strict_wr_net": 0.372807,
+            "first_touch_wr": 0.950282,
+            "first_touch_n": 9212,
+            "pf_net": 0.296349,
+            "net_ev_bps": -24.469808,
+            "target_n": 8754,
+            "stop_n": 458
+          },
+          "after": {
+            "issued_n": 23396,
+            "graded_n": 23358,
+            "ambiguous_n": 38,
+            "strict_wr_net": 0.37302,
+            "first_touch_wr": 0.94995,
+            "first_touch_n": 9071,
+            "pf_net": 0.296726,
+            "net_ev_bps": -24.406279,
+            "target_n": 8617,
+            "stop_n": 454
+          }
+        },
+        {
+          "fold": 4,
+          "test_years": [
+            2023,
+            2024
+          ],
+          "train_n": 61166,
+          "purge_before": "2023-01-01",
+          "baseline": {
+            "issued_n": 23922,
+            "graded_n": 23920,
+            "ambiguous_n": 2,
+            "strict_wr_net": 0.257567,
+            "first_touch_wr": 0.971621,
+            "first_touch_n": 8915,
+            "pf_net": 0.085146,
+            "net_ev_bps": -24.359604,
+            "target_n": 8662,
+            "stop_n": 253
+          },
+          "after": {
+            "issued_n": 23411,
+            "graded_n": 23409,
+            "ambiguous_n": 2,
+            "strict_wr_net": 0.256995,
+            "first_touch_wr": 0.97136,
+            "first_touch_n": 8729,
+            "pf_net": 0.084767,
+            "net_ev_bps": -24.389406,
+            "target_n": 8479,
+            "stop_n": 250
+          }
+        },
+        {
+          "fold": 5,
+          "test_years": [
+            2025,
+            2025
+          ],
+          "train_n": 85088,
+          "purge_before": "2025-01-01",
+          "baseline": {
+            "issued_n": 11945,
+            "graded_n": 11944,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.264735,
+            "first_touch_wr": 0.977897,
+            "first_touch_n": 4479,
+            "pf_net": 0.07788,
+            "net_ev_bps": -24.702621,
+            "target_n": 4380,
+            "stop_n": 99
+          },
+          "after": {
+            "issued_n": 11876,
+            "graded_n": 11875,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.264758,
+            "first_touch_wr": 0.977818,
+            "first_touch_n": 4463,
+            "pf_net": 0.077661,
+            "net_ev_bps": -24.692992,
+            "target_n": 4364,
+            "stop_n": 99
+          }
+        }
+      ],
+      "promotion": "TELEMETRY ONLY",
+      "promotion_rule": {
+        "min_holdout_n": 7422,
+        "strict_sign_net_wr_nondecrease": true,
+        "first_touch_wr_nondecrease": true,
+        "holdout_era_ev_net_positive": true,
+        "holdout_era_ev_non_decrease": true
+      }
+    },
+    "BNB|tf3": {
+      "status": "measured",
+      "bar_step_s": 60,
+      "v8_rule": "mom43200",
+      "row_geometry": {
+        "k": 0.15,
+        "m": 0.55
+      },
+      "holdout_year": 2026,
+      "baseline": {
+        "issued_n": 36500,
+        "graded_n": 36001,
+        "ambiguous_n": 22,
+        "strict_wr_net": 0.437155,
+        "first_touch_wr": 0.959556,
+        "first_touch_n": 13327,
+        "pf_net": 0.445247,
+        "net_ev_bps": -24.277085,
+        "target_n": 12788,
+        "stop_n": 539,
+        "holdout_era": {
+          "n": 85,
+          "graded_n": 85,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 17.158248,
+          "win_rate_net": 0.223529
+        },
+        "locked_holdout": {
+          "issued_n": 3588,
+          "graded_n": 3588,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.360647,
+          "first_touch_wr": 0.995776,
+          "first_touch_n": 947,
+          "pf_net": 0.303868,
+          "net_ev_bps": -23.588676,
+          "target_n": 943,
+          "stop_n": 4
+        }
+      },
+      "after": {
+        "issued_n": 35035,
+        "graded_n": 34536,
+        "ambiguous_n": 22,
+        "strict_wr_net": 0.436733,
+        "first_touch_wr": 0.959133,
+        "first_touch_n": 12773,
+        "pf_net": 0.441696,
+        "net_ev_bps": -24.406255,
+        "target_n": 12251,
+        "stop_n": 522,
+        "holdout_era": {
+          "n": 84,
+          "graded_n": 84,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 17.883308,
+          "win_rate_net": 0.214286
+        },
+        "locked_holdout": {
+          "issued_n": 3401,
+          "graded_n": 3401,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.356366,
+          "first_touch_wr": 0.99548,
+          "first_touch_n": 885,
+          "pf_net": 0.293707,
+          "net_ev_bps": -24.095163,
+          "target_n": 881,
+          "stop_n": 4
+        }
+      },
+      "folds": [
+        {
+          "fold": 1,
+          "test_years": [
+            2017,
+            2018
+          ],
+          "train_n": 0,
+          "purge_before": "2017-01-01",
+          "baseline": {
+            "issued_n": 4624,
+            "graded_n": 4147,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.446588,
+            "first_touch_wr": 0.962,
+            "first_touch_n": 1000,
+            "pf_net": 0.61845,
+            "net_ev_bps": -28.684912,
+            "target_n": 962,
+            "stop_n": 38
+          },
+          "after": {
+            "issued_n": 4414,
+            "graded_n": 3937,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.450597,
+            "first_touch_wr": 0.960744,
+            "first_touch_n": 968,
+            "pf_net": 0.615974,
+            "net_ev_bps": -29.02935,
+            "target_n": 930,
+            "stop_n": 38
+          }
+        },
+        {
+          "fold": 2,
+          "test_years": [
+            2019,
+            2020
+          ],
+          "train_n": 4545,
+          "purge_before": "2019-01-01",
+          "baseline": {
+            "issued_n": 8070,
+            "graded_n": 8070,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.487732,
+            "first_touch_wr": 0.979,
+            "first_touch_n": 3000,
+            "pf_net": 0.538864,
+            "net_ev_bps": -21.804855,
+            "target_n": 2937,
+            "stop_n": 63
+          },
+          "after": {
+            "issued_n": 7727,
+            "graded_n": 7727,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.487252,
+            "first_touch_wr": 0.977964,
+            "first_touch_n": 2859,
+            "pf_net": 0.535017,
+            "net_ev_bps": -21.926009,
+            "target_n": 2796,
+            "stop_n": 63
+          }
+        },
+        {
+          "fold": 3,
+          "test_years": [
+            2021,
+            2022
+          ],
+          "train_n": 12616,
+          "purge_before": "2021-01-01",
+          "baseline": {
+            "issued_n": 8079,
+            "graded_n": 8057,
+            "ambiguous_n": 22,
+            "strict_wr_net": 0.403748,
+            "first_touch_wr": 0.91618,
+            "first_touch_n": 3770,
+            "pf_net": 0.423567,
+            "net_ev_bps": -24.948243,
+            "target_n": 3454,
+            "stop_n": 316
+          },
+          "after": {
+            "issued_n": 7731,
+            "graded_n": 7709,
+            "ambiguous_n": 22,
+            "strict_wr_net": 0.401609,
+            "first_touch_wr": 0.916018,
+            "first_touch_n": 3596,
+            "pf_net": 0.420828,
+            "net_ev_bps": -24.991332,
+            "target_n": 3294,
+            "stop_n": 302
+          }
+        },
+        {
+          "fold": 4,
+          "test_years": [
+            2023,
+            2024
+          ],
+          "train_n": 20693,
+          "purge_before": "2023-01-01",
+          "baseline": {
+            "issued_n": 8096,
+            "graded_n": 8096,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.43503,
+            "first_touch_wr": 0.971498,
+            "first_touch_n": 2877,
+            "pf_net": 0.283178,
+            "net_ev_bps": -24.6051,
+            "target_n": 2795,
+            "stop_n": 82
+          },
+          "after": {
+            "issued_n": 7912,
+            "graded_n": 7912,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.435415,
+            "first_touch_wr": 0.971561,
+            "first_touch_n": 2813,
+            "pf_net": 0.283704,
+            "net_ev_bps": -24.585332,
+            "target_n": 2733,
+            "stop_n": 80
+          }
+        },
+        {
+          "fold": 5,
+          "test_years": [
+            2025,
+            2025
+          ],
+          "train_n": 28789,
+          "purge_before": "2025-01-01",
+          "baseline": {
+            "issued_n": 4043,
+            "graded_n": 4043,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.465249,
+            "first_touch_wr": 0.979227,
+            "first_touch_n": 1733,
+            "pf_net": 0.296393,
+            "net_ev_bps": -23.307141,
+            "target_n": 1697,
+            "stop_n": 36
+          },
+          "after": {
+            "issued_n": 3850,
+            "graded_n": 3850,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.465195,
+            "first_touch_wr": 0.978814,
+            "first_touch_n": 1652,
+            "pf_net": 0.293879,
+            "net_ev_bps": -23.391853,
+            "target_n": 1617,
+            "stop_n": 35
+          }
+        }
+      ],
+      "promotion": "TELEMETRY ONLY",
+      "promotion_rule": {
+        "min_holdout_n": 2511,
+        "strict_sign_net_wr_nondecrease": true,
+        "first_touch_wr_nondecrease": true,
+        "holdout_era_ev_net_positive": true,
+        "holdout_era_ev_non_decrease": true
+      }
+    },
+    "BNB|tf4": {
+      "status": "measured",
+      "bar_step_s": 60,
+      "v8_rule": "mom43200",
+      "row_geometry": {
+        "k": 0.15,
+        "m": 0.4
+      },
+      "holdout_year": 2026,
+      "baseline": {
+        "issued_n": 19202,
+        "graded_n": 18706,
+        "ambiguous_n": 19,
+        "strict_wr_net": 0.490591,
+        "first_touch_wr": 0.945935,
+        "first_touch_n": 9470,
+        "pf_net": 0.49233,
+        "net_ev_bps": -24.439909,
+        "target_n": 8958,
+        "stop_n": 512,
+        "holdout_era": {
+          "n": 55,
+          "graded_n": 55,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 44.578677,
+          "win_rate_net": 0.218182
+        },
+        "locked_holdout": {
+          "issued_n": 1888,
+          "graded_n": 1888,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.481462,
+          "first_touch_wr": 0.98549,
+          "first_touch_n": 827,
+          "pf_net": 0.336499,
+          "net_ev_bps": -24.376621,
+          "target_n": 815,
+          "stop_n": 12
+        }
+      },
+      "after": {
+        "issued_n": 18446,
+        "graded_n": 17951,
+        "ambiguous_n": 18,
+        "strict_wr_net": 0.489945,
+        "first_touch_wr": 0.944701,
+        "first_touch_n": 9096,
+        "pf_net": 0.48846,
+        "net_ev_bps": -24.746611,
+        "target_n": 8593,
+        "stop_n": 503,
+        "holdout_era": {
+          "n": 54,
+          "graded_n": 54,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": 50.337193,
+          "win_rate_net": 0.222222
+        },
+        "locked_holdout": {
+          "issued_n": 1792,
+          "graded_n": 1792,
+          "ambiguous_n": 0,
+          "strict_wr_net": 0.477121,
+          "first_touch_wr": 0.987179,
+          "first_touch_n": 780,
+          "pf_net": 0.330704,
+          "net_ev_bps": -24.632542,
+          "target_n": 770,
+          "stop_n": 10
+        }
+      },
+      "folds": [
+        {
+          "fold": 1,
+          "test_years": [
+            2017,
+            2018
+          ],
+          "train_n": 0,
+          "purge_before": "2017-01-01",
+          "baseline": {
+            "issued_n": 2431,
+            "graded_n": 1954,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.466735,
+            "first_touch_wr": 0.992945,
+            "first_touch_n": 567,
+            "pf_net": 0.692818,
+            "net_ev_bps": -27.831303,
+            "target_n": 563,
+            "stop_n": 4
+          },
+          "after": {
+            "issued_n": 2317,
+            "graded_n": 1840,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.472826,
+            "first_touch_wr": 0.992661,
+            "first_touch_n": 545,
+            "pf_net": 0.694925,
+            "net_ev_bps": -27.868058,
+            "target_n": 541,
+            "stop_n": 4
+          }
+        },
+        {
+          "fold": 2,
+          "test_years": [
+            2019,
+            2020
+          ],
+          "train_n": 2389,
+          "purge_before": "2019-01-01",
+          "baseline": {
+            "issued_n": 4245,
+            "graded_n": 4245,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.566078,
+            "first_touch_wr": 0.957865,
+            "first_touch_n": 2136,
+            "pf_net": 0.590752,
+            "net_ev_bps": -22.633656,
+            "target_n": 2046,
+            "stop_n": 90
+          },
+          "after": {
+            "issued_n": 4062,
+            "graded_n": 4062,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.567454,
+            "first_touch_wr": 0.957157,
+            "first_touch_n": 2054,
+            "pf_net": 0.584876,
+            "net_ev_bps": -23.139954,
+            "target_n": 1966,
+            "stop_n": 88
+          }
+        },
+        {
+          "fold": 3,
+          "test_years": [
+            2021,
+            2022
+          ],
+          "train_n": 6635,
+          "purge_before": "2021-01-01",
+          "baseline": {
+            "issued_n": 4250,
+            "graded_n": 4231,
+            "ambiguous_n": 19,
+            "strict_wr_net": 0.385015,
+            "first_touch_wr": 0.903968,
+            "first_touch_n": 2999,
+            "pf_net": 0.384865,
+            "net_ev_bps": -25.257802,
+            "target_n": 2711,
+            "stop_n": 288
+          },
+          "after": {
+            "issued_n": 4091,
+            "graded_n": 4073,
+            "ambiguous_n": 18,
+            "strict_wr_net": 0.384729,
+            "first_touch_wr": 0.90156,
+            "first_touch_n": 2885,
+            "pf_net": 0.380674,
+            "net_ev_bps": -25.639945,
+            "target_n": 2601,
+            "stop_n": 284
+          }
+        },
+        {
+          "fold": 4,
+          "test_years": [
+            2023,
+            2024
+          ],
+          "train_n": 10884,
+          "purge_before": "2023-01-01",
+          "baseline": {
+            "issued_n": 4261,
+            "graded_n": 4261,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.478761,
+            "first_touch_wr": 0.962049,
+            "first_touch_n": 1581,
+            "pf_net": 0.418237,
+            "net_ev_bps": -24.590246,
+            "target_n": 1521,
+            "stop_n": 60
+          },
+          "after": {
+            "issued_n": 4172,
+            "graded_n": 4172,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.477709,
+            "first_touch_wr": 0.96124,
+            "first_touch_n": 1548,
+            "pf_net": 0.417354,
+            "net_ev_bps": -24.676862,
+            "target_n": 1488,
+            "stop_n": 60
+          }
+        },
+        {
+          "fold": 5,
+          "test_years": [
+            2025,
+            2025
+          ],
+          "train_n": 15145,
+          "purge_before": "2025-01-01",
+          "baseline": {
+            "issued_n": 2127,
+            "graded_n": 2127,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.603667,
+            "first_touch_wr": 0.957353,
+            "first_touch_n": 1360,
+            "pf_net": 0.25157,
+            "net_ev_bps": -23.057282,
+            "target_n": 1302,
+            "stop_n": 58
+          },
+          "after": {
+            "issued_n": 2012,
+            "graded_n": 2012,
+            "ambiguous_n": 0,
+            "strict_wr_net": 0.598907,
+            "first_touch_wr": 0.955607,
+            "first_touch_n": 1284,
+            "pf_net": 0.242749,
+            "net_ev_bps": -23.573465,
+            "target_n": 1227,
+            "stop_n": 57
+          }
+        }
+      ],
+      "promotion": "TELEMETRY ONLY",
+      "promotion_rule": {
+        "min_holdout_n": 1321,
+        "strict_sign_net_wr_nondecrease": true,
+        "first_touch_wr_nondecrease": true,
+        "holdout_era_ev_net_positive": true,
+        "holdout_era_ev_non_decrease": true
+      }
+    },
+    "PAXG|tf1": {
+      "status": "UNGRADEABLE RESOLUTION",
+      "baseline": null,
+      "after": null
+    },
+    "PAXG|tf2": {
+      "status": "UNGRADEABLE RESOLUTION",
+      "baseline": null,
+      "after": null
+    },
+    "PAXG|tf3": {
+      "status": "UNGRADEABLE RESOLUTION",
+      "baseline": null,
+      "after": null
+    },
+    "PAXG|tf4": {
+      "status": "measured",
+      "bar_step_s": 3600,
+      "v8_rule": "mom129600",
+      "row_geometry": {
+        "k": 0.15,
+        "m": 0.55
+      },
+      "holdout_year": 2026,
+      "baseline": {
+        "issued_n": 3220,
+        "graded_n": 2736,
+        "ambiguous_n": 4,
+        "strict_wr_net": 0.283991,
+        "first_touch_wr": 0.981527,
+        "first_touch_n": 812,
+        "pf_net": 0.110723,
+        "net_ev_bps": -23.490598,
+        "target_n": 797,
+        "stop_n": 15,
+        "holdout_era": {
+          "n": 18,
+          "graded_n": 18,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": -53.51386,
+          "win_rate_net": 0.222222
+        },
+        "locked_holdout": {
+          "issued_n": 1591,
+          "graded_n": 1588,
+          "ambiguous_n": 3,
+          "strict_wr_net": 0.339421,
+          "first_touch_wr": 0.984064,
+          "first_touch_n": 502,
+          "pf_net": 0.146125,
+          "net_ev_bps": -23.413847,
+          "target_n": 494,
+          "stop_n": 8
+        }
+      },
+      "after": {
+        "issued_n": 3076,
+        "graded_n": 2592,
+        "ambiguous_n": 4,
+        "strict_wr_net": 0.284336,
+        "first_touch_wr": 0.980645,
+        "first_touch_n": 775,
+        "pf_net": 0.107925,
+        "net_ev_bps": -23.620383,
+        "target_n": 760,
+        "stop_n": 15,
+        "holdout_era": {
+          "n": 18,
+          "graded_n": 18,
+          "ambiguous_n": 0,
+          "data_gap_n": 0,
+          "ev_net_bps": -54.8641,
+          "win_rate_net": 0.222222
+        },
+        "locked_holdout": {
+          "issued_n": 1456,
+          "graded_n": 1453,
+          "ambiguous_n": 3,
+          "strict_wr_net": 0.344116,
+          "first_touch_wr": 0.982869,
+          "first_touch_n": 467,
+          "pf_net": 0.144039,
+          "net_ev_bps": -23.595357,
+          "target_n": 459,
+          "stop_n": 8
+        }
+      },
+      "folds": [
+        {
+          "fold": 1,
+          "test_years": [
+            2025,
+            2025
+          ],
+          "train_n": 0,
+          "purge_before": "2025-01-01",
+          "baseline": {
+            "issued_n": 1629,
+            "graded_n": 1148,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.207317,
+            "first_touch_wr": 0.977419,
+            "first_touch_n": 310,
+            "pf_net": 0.057064,
+            "net_ev_bps": -23.596765,
+            "target_n": 303,
+            "stop_n": 7
+          },
+          "after": {
+            "issued_n": 1620,
+            "graded_n": 1139,
+            "ambiguous_n": 1,
+            "strict_wr_net": 0.208077,
+            "first_touch_wr": 0.977273,
+            "first_touch_n": 308,
+            "pf_net": 0.057309,
+            "net_ev_bps": -23.652308,
+            "target_n": 301,
+            "stop_n": 7
+          }
+        }
+      ],
+      "promotion": "TELEMETRY ONLY",
+      "promotion_rule": {
+        "min_holdout_n": 1113,
+        "strict_sign_net_wr_nondecrease": true,
+        "first_touch_wr_nondecrease": true,
+        "holdout_era_ev_net_positive": true,
+        "holdout_era_ev_non_decrease": true
+      }
+    }
+  }
+}

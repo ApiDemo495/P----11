@@ -4349,6 +4349,7 @@ function renderMindHistory(h) {
 async function loadSealedPredictions() {
   const box = $("#pred-history");
   if (!box) return;
+  loadDemoSync().catch(() => {});
   try {
     const [p, s] = await Promise.all([
       api("/api/predictions?limit=40"),
@@ -4712,10 +4713,83 @@ function bindTrading() {
   });
 }
 
+async function loadDemoSync() {
+  const badge = $("#demo-sync-badge");
+  if (!badge) return;
+  try {
+    const r = await api("/api/demo-sync/status");
+    badge.textContent = r.badge || "APP PREDICTION LOCKS (SIMULATED) — NO TESTNET KEYS LINKED";
+    badge.className = r.linked ? "acc-up" : "acc-warn";
+    if ($("#ds-testnet")) $("#ds-testnet").checked = r.testnet !== false;
+    if ($("#ds-market") && r.market) $("#ds-market").value = r.market;
+    const updated = $("#ds-updated");
+    if (updated) updated.textContent = r.fetched_at
+      ? `${r.cached ? "cached" : "polled"} ${new Date(r.fetched_at * 1000).toLocaleTimeString()} · read-only`
+      : "not polled";
+    const rec = $("#ds-reconcile");
+    const ledgerSync = $("#demo-sync-ledger");
+    if (!r.linked && ledgerSync) ledgerSync.textContent = r.badge || "APP PREDICTION LOCKS (SIMULATED) — NO TESTNET KEYS LINKED";
+    else if (r.linked && ledgerSync) {
+      const mismatches = (r.reconciliation || []).filter(x => String(x.status).includes("MISMATCH") || String(x.status).includes("no matching"));
+      ledgerSync.innerHTML = `<b>${esc(r.badge || "READ-ONLY ACCOUNT LINKED")}</b> · ${r.positions?.length || 0} positions · ${r.fills?.length || 0} recent fills · ${mismatches.length} lock/position warning(s)` +
+        (mismatches.length ? `<div>${mismatches.slice(0, 6).map(x => `${esc(x.asset)} ${esc(x.timeframe)}: ${esc(x.status)}`).join(" · ")}</div>` : "") +
+        `<div class="hint">Heuristic asset/side comparison only; no order ID link to prediction locks.</div>`;
+    }
+    if (rec) {
+      if (!r.linked) rec.textContent = "No external account is linked. Internal prediction locks are local measurements and are not actual fills.";
+      else if (!r.ok) rec.textContent = `Account poll failed: ${r.error || "unknown error"}`;
+      else {
+        const rows = r.reconciliation || [];
+        rec.innerHTML = `<div class="kv-row">${rows.slice(0, 16).map(x =>
+          `<div class="kv"><span>${esc(x.asset)} ${esc(String(x.timeframe || "").toUpperCase())} · lock ${esc(x.lock_side || "—")} / ${esc(x.lock_status || "")}</span><b>${esc(x.status)}${x.account_entry != null ? ` · acct entry ${fmt(x.account_entry, 4)} qty ${fmt(x.account_quantity, 5)}` : ""}</b></div>`
+        ).join("") || `<div class="dim">No internal prediction locks yet.</div>`}</div>
+        <div class="hint">Comparison is asset/side heuristic only; no external order ID is linked to a prediction lock.</div>`;
+      }
+    }
+    const fills = $("#ds-fills");
+    if (fills && r.linked && r.ok) {
+      fills.innerHTML = (r.fills || []).slice(0, 20).map(f =>
+        `<div>${new Date((f.time_ms || 0)).toLocaleString()} · ${esc(f.asset)} ${esc(f.side)} ${fmt(f.quantity, 5)} @ ${fmt(f.price, 5)} · realized ${f.realized_pnl == null ? "n/a (spot endpoint)" : fmt(f.realized_pnl, 4)} · fee ${fmt(f.commission, 6)} ${esc(f.commission_asset || "")}</div>`
+      ).join("") || "No recent fills returned by the exchange.";
+    } else if (fills && !r.linked) fills.textContent = "No keys linked — no account polling performed.";
+  } catch (e) {
+    if (badge) badge.textContent = `DEMO SYNC UNAVAILABLE — ${e.message}`;
+  }
+}
+function bindDemoSync() {
+  const save = $("#ds-save"), refresh = $("#ds-refresh"), clear = $("#ds-clear");
+  if (!save) return;
+  save.addEventListener("click", async () => {
+    try {
+      await api("/api/demo-sync/config", { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: $("#ds-key").value.trim(), api_secret: $("#ds-secret").value.trim(),
+          testnet: $("#ds-testnet").checked, market: $("#ds-market").value }) });
+      $("#ds-key").value = ""; $("#ds-secret").value = "";
+      toast("read-only sync credentials saved locally; no orders can be placed by this module", "ok");
+    } catch (e) { toast("demo sync: " + e.message, "err"); }
+    loadDemoSync();
+  });
+  refresh?.addEventListener("click", async () => {
+    try {
+      await api("/api/demo-sync/config", { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ testnet: $("#ds-testnet").checked, market: $("#ds-market").value }) });
+      await loadDemoSync();
+    } catch (e) { toast("demo sync poll: " + e.message, "err"); }
+  });
+  clear?.addEventListener("click", async () => {
+    try {
+      await api("/api/demo-sync/config", { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clear_keys: true }) });
+      toast("read-only sync keys cleared", "warn"); loadDemoSync();
+    } catch (e) { toast("demo sync: " + e.message, "err"); }
+  });
+}
+
 async function loadSettings() {
   try {
     loadRL().catch(() => {});
     loadTrading().catch(() => {});
+    loadDemoSync().catch(() => {});
     const l = await api("/api/learning");
     const lr = l.learning || {};
     $("#st-eta").textContent = fmt(lr.eta ?? lr.rates?.eta ?? 0.02, 3);
@@ -5359,7 +5433,7 @@ window.addEventListener("unhandledrejection", e => {
     const tf = localStorage.getItem("focusTf");
     if (tf && TF.includes(tf)) S.focusTf = tf;
   } catch (e) { /* private mode */ }
-  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); loadCells(); bindChartSrc(); bindTrading(); bindRiskCalc(); syncAnalyseButton(); bindAllTf(); renderDashboardMode();
+  buildRail(); buildTabs(); buildToolbar(); buildQuads(); bindGlobal(); bindAnalyse(); bindAutoChip(); loadCells(); bindChartSrc(); bindTrading(); bindDemoSync(); bindRiskCalc(); syncAnalyseButton(); bindAllTf(); renderDashboardMode();
   connectWS();
   api("/api/snapshot").then(applySnapshot).catch(() => {});
   // REST safety net lives in the single master setInterval below (H-2)

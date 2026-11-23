@@ -430,14 +430,16 @@
       <div class="panel-h">🔒 SEALED PREDICTIONS — written by ▶ ANALYSE · immutable per window
         <span class="dim" id="pred-meta"></span></div>
       <div id="pred-history"><div class="dim pad">loading…</div></div>
-      <div class="hint">A lock is refused (with its reasons) if the ladder is FLAT, non-finite or on the wrong side. It settles on the first TP/SL touch, otherwise by strict sign at expiry; a push is excluded from the hit-rate. Every settled lock feeds the same learners that grade ordinary windows.</div>
+      <div class="hint">A lock is an internal prediction record, not an external demo order. Completed bars grade single TP/SL touches; if one OHLC candle contains both barriers the result is AMBIGUOUS and excluded from accuracy. Flat exits are pushes. Actual Binance fills appear separately below only when a read-only account is linked.</div>
+      <div class="panel-h" style="margin-top:12px">EXTERNAL ACCOUNT RECONCILIATION</div>
+      <div id="demo-sync-ledger" class="hint">APP PREDICTION LOCKS (SIMULATED) — NO TESTNET KEYS LINKED</div>
       <div class="panel-h" style="margin-top:14px">ANALYSIS JOURNAL — every ▶ ANALYSE run, what it decided and what to change
         <span class="dim" id="an-j-meta"></span></div>
       <div id="an-journal"><div class="dim pad">loading…</div></div>
       <div class="hint">Durable log (data/analyses.jsonl): signal, confidence, verdict, lock id, AI correction and hindsight — success, duplicate, queued or failed runs are all recorded, so nothing analysed is ever forgotten.</div>
     </div>
     <div class="panel">
-      <div class="panel-h">SETTLEMENT LEDGER — strict sign · tie = loss · the only accuracy source
+      <div class="panel-h">SETTLEMENT LEDGER — completed-bar outcomes · ambiguous excluded · realized prediction-lock accuracy
         <span class="dim" id="led-live" style="float:right"></span></div>
       <div id="ledger-panel"><div class="dim">loading…</div></div>
       <div class="panel-h" style="margin-top:14px">HINDSIGHT RE-GRADING · cadence 4h (22/44m) · daily (130/247m)</div>
@@ -503,6 +505,26 @@
       </div>
       <div class="panel-h" style="margin-top:12px">GATE LOG — every decision, fired or refused</div>
       <div id="tr-log" class="hint">—</div>
+    </div>
+    <div class="panel" id="demo-sync-panel">
+      <div class="panel-h">READ-ONLY DEMO / TESTNET SYNC</div>
+      <div class="hint">Separate credentials from execution. This panel uses signed GET requests only: it cannot submit/cancel orders. Futures positions and fills include exchange-reported realized PnL and fees; spot fills show fees, while realized PnL is unavailable from spot myTrades alone. Prediction-lock matching is asset/side reconciliation only—there is no exchange clientOrderId link.</div>
+      <div id="demo-sync-badge" class="acc-warn" style="margin:8px 0">APP PREDICTION LOCKS (SIMULATED) — NO TESTNET KEYS LINKED</div>
+      <div class="kv-row">
+        <label class="kv"><span>sync API key</span><input id="ds-key" type="password" placeholder="read-only Binance key" style="width:190px"></label>
+        <label class="kv"><span>sync API secret</span><input id="ds-secret" type="password" placeholder="stored locally; never returned" style="width:190px"></label>
+        <label class="kv"><span>market</span><select id="ds-market"><option value="futures">USD-M futures</option><option value="spot">spot</option></select></label>
+        <label class="kv"><span>testnet</span><input id="ds-testnet" type="checkbox" checked></label>
+      </div>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" id="ds-save">save read-only sync keys</button>
+        <button class="btn" id="ds-refresh">poll account &amp; reconcile</button>
+        <button class="btn" id="ds-clear">clear sync keys</button>
+        <span class="hint" id="ds-updated">not polled</span>
+      </div>
+      <div id="ds-reconcile" class="hint" style="margin-top:8px">No external account is linked. App prediction locks remain local measurements.</div>
+      <div class="panel-h" style="margin-top:12px">RECENT EXCHANGE FILLS / FEES / REALIZED PNL</div>
+      <div id="ds-fills" class="hint">—</div>
     </div>
     <div class="panel">
       <div class="panel-h">REINFORCEMENT CONSOLE — error-finder · issue bandit · accuracy target
