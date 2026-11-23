@@ -1381,6 +1381,37 @@ from them — no other file needed a change to meet the request.
 
 ---
 
+### 18.5 — Context-gated price-action opposition filter OOS audit (2026-11-20)
+
+#### Protocol and scope
+
+This audit tests the production `price_action.read(...).strong` opposition veto against the immutable v8 certified direction and row geometry (`backtest/results/hold_wr.json`, MD5 `cee99dc26d359a3de2cbf7c7a2751b8f`). A window is issued using the v8 side known at the prior completed bar; entry is the next bar's open. Settlement scans completed OHLC bars through the window end: first-touch stop/target resolves the row, while candles touching both are counted as ambiguous and excluded from WR/PF/EV. Every graded row pays a fixed 24 bps round trip. The veto blocks only a strong PA direction opposite the v8 side; no thresholds, sides, or geometry were fitted to these results.
+
+The locked holdout is the final UTC calendar year available at the preregistered 2026-11-20 cutoff (partial 2026 through 23:59 UTC; later rows are truncated). Up to five chronological pre-holdout folds use a seven-day plus 247-minute purge/embargo; PAXG's shorter tape supports only one fold. `n` is issued count; ambiguous counts are shown separately. Strict-sign WR means net PnL > 0 after friction. First-touch WR is target/(target+stop), irrespective of whether the net result clears fees. PF and EV are net of 24 bps. The locked-holdout columns show the last UTC year row metrics; holdout-era EV is separately measured on v8 era positions.
+
+#### Results (baseline → opposition veto)
+
+| Cell | Issued n / ambiguous n | Strict-sign WR | First-touch WR | PF net | Net EV (bps) | Locked holdout n / strict WR / first-touch WR | Holdout-era EV (bps) | Folds | Decision |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| BTC tf1 | 221031 / 9 → 212313 / 9 | 0.17403 → 0.175197 | 0.975599 → 0.975423 | 0.07998 → 0.08107 | -24.132438 → -24.171218 | 21206 / 0.081345 / 0.98798 → 19098 / 0.079432 / 0.988017 | 139.99572 → 147.402648 | 5 | telemetry only |
+| BTC tf2 | 110513 / 2 → 106116 / 2 | 0.27365 → 0.274022 | 0.971607 → 0.971246 | 0.173568 → 0.173844 | -23.901596 → -23.945886 | 10603 / 0.218806 / 0.991534 → 9523 / 0.216528 / 0.991241 | 436.208859 → 436.208859 | 5 | telemetry only |
+| BTC tf3 | 37394 / 0 → 35886 / 0 | 0.396597 → 0.399452 | 0.96529 → 0.964666 | 0.372779 → 0.371801 | -23.891567 → -23.902939 | 3588 / 0.341695 / 0.996802 → 3241 / 0.335699 / 0.996386 | 339.778757 → 339.778757 | 5 | telemetry only |
+| BTC tf4 | 19672 / 0 → 18574 / 0 | 0.453655 → 0.452019 | 0.964841 → 0.965358 | 0.506306 → 0.499644 | -22.411646 → -22.691788 | 1888 / 0.396186 / 0.989601 → 1794 / 0.391304 / 0.988909 | -23.759951 → -23.766451 | 5 | telemetry only |
+| ETH tf1 | 221031 / 12 → 208709 / 12 | 0.270202 → 0.26908 | 0.977755 → 0.977214 | 0.150627 → 0.147802 | -24.13666 → -24.166646 | 21206 / 0.169818 / 0.988315 → 20123 / 0.165043 / 0.988218 | 12.234831 → 13.235408 | 5 | telemetry only |
+| ETH tf2 | 110513 / 3 → 104529 / 3 | 0.363083 → 0.365127 | 0.969609 → 0.968861 | 0.267832 → 0.264022 | -24.282174 → -24.340257 | 10603 / 0.283814 / 0.985004 → 9782 / 0.284633 / 0.984861 | -129.479572 → -129.479572 | 5 | telemetry only |
+| ETH tf3 | 37394 / 0 → 35289 / 0 | 0.437124 → 0.436656 | 0.960957 → 0.96024 | 0.484601 → 0.48275 | -22.86999 → -22.782892 | 3588 / 0.346154 / 0.998285 → 3401 / 0.342252 / 0.998145 | 78.600926 → 80.32888 | 5 | telemetry only |
+| ETH tf4 | 19672 / 0 → 18586 / 0 | 0.467045 → 0.46508 | 0.951587 → 0.952299 | 0.619373 → 0.614483 | -21.318554 → -21.515424 | 1888 / 0.386123 / 0.994429 → 1766 / 0.381653 / 0.993921 | 4.172971 → 3.761988 | 5 | telemetry only |
+| BNB tf1 | — | — | — | — | — | — | — | — | no certified v8 row |
+| BNB tf2 | 107871 / 44 → 105167 / 44 | 0.339171 → 0.339899 | 0.96766 → 0.967253 | 0.249156 → 0.249737 | -24.595494 → -24.622748 | 10603 / 0.201169 / 0.986975 → 9860 / 0.200507 / 0.986373 | -41.30653 → -41.473006 | 5 | telemetry only |
+| BNB tf3 | 36500 / 22 → 35035 / 22 | 0.437155 → 0.436733 | 0.959556 → 0.959133 | 0.445247 → 0.441696 | -24.277085 → -24.406255 | 3588 / 0.360647 / 0.995776 → 3401 / 0.356366 / 0.99548 | 17.158248 → 17.883308 | 5 | telemetry only |
+| BNB tf4 | 19202 / 19 → 18446 / 18 | 0.490591 → 0.489945 | 0.945935 → 0.944701 | 0.49233 → 0.48846 | -24.439909 → -24.746611 | 1888 / 0.481462 / 0.98549 → 1792 / 0.477121 / 0.987179 | 44.578677 → 50.337193 | 5 | telemetry only |
+| PAXG tf1 | — | — | — | — | — | — | — | — | ungradeable resolution |
+| PAXG tf2 | — | — | — | — | — | — | — | — | ungradeable resolution |
+| PAXG tf3 | — | — | — | — | — | — | — | — | ungradeable resolution |
+| PAXG tf4 | 3220 / 4 → 3076 / 4 | 0.283991 → 0.284336 | 0.981527 → 0.980645 | 0.110723 → 0.107925 | -23.490598 → -23.620383 | 1591 / 0.339421 / 0.984064 → 1456 / 0.344116 / 0.982869 | -53.51386 → -54.8641 | 1 | telemetry only |
+
+**Promotion: none.** All measured cells remain telemetry-only. Several cells improve one statistic but regress another; the veto does not meet the preregistered per-cell holdout evidence, and every measured full-row net EV remains negative. Missing certified rows and insufficiently resolved PAXG windows are not inferred or promoted. The full machine-readable audit, including fold-by-fold metrics and ambiguous counts, is `backtest/results/price_action_oos.json`; a concise generated summary is `backtest/results/price_action_oos.md`.
+
 ## §19 — v9 REAL-CONDITIONS RUN: GATES FAIL — v8 STAYS (2026-11-20)
 
 The single pre-registered v9 run (§18) completed and

@@ -1615,6 +1615,51 @@ async def prediction_one(lock_id: str) -> JSONResponse:
     return JSONResponse({"ok": False, "error": "unknown lock"}, status_code=404)
 
 
+@app.get("/api/demo-sync/status")
+async def demo_sync_status() -> JSONResponse:
+    """Read-only account-link status; no-key mode is explicit and offline."""
+    from . import demo_sync as _ds
+    cfg = _ds.config()
+    if not cfg.get("has_keys"):
+        return JSONResponse(_ds.SERVICE.status())
+    try:
+        snapshot = await asyncio.to_thread(_ds.SERVICE.status)
+        internal = engine.predlocks.latest(limit=100)
+        snapshot["reconciliation"] = _ds.reconcile(internal, snapshot)
+        snapshot["internal_locks"] = internal
+        snapshot["read_only"] = True
+        snapshot["badge"] = ("READ-ONLY BINANCE "
+                             + ("TESTNET" if cfg["testnet"] else "MAINNET")
+                             + f" {cfg['market'].upper()} LINKED")
+        snapshot["orders_today"] = engine.trader.status().get("orders_today", 0)
+        return JSONResponse(snapshot)
+    except Exception as exc:
+        # Avoid returning request URLs, signed query strings, or credentials.
+        return JSONResponse({"ok": False, "linked": True,
+                             "read_only": True, "market": cfg["market"],
+                             "testnet": cfg["testnet"],
+                             "error": f"account read failed: {type(exc).__name__}",
+                             "reconciliation": []}, status_code=502)
+
+
+@app.put("/api/demo-sync/config")
+async def demo_sync_config(body: dict) -> JSONResponse:
+    """Save separate, read-only sync credentials; never arms execution."""
+    from .demo_sync import save_config, SERVICE
+    try:
+        result = save_config(
+            api_key=str(body.get("api_key") or ""),
+            api_secret=str(body.get("api_secret") or ""),
+            testnet=bool(body.get("testnet", True)),
+            market=str(body.get("market") or "futures"),
+            clear_keys=bool(body.get("clear_keys")))
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    SERVICE.reset()
+    return JSONResponse({"ok": True, "config": result,
+                         "note": "GET-only account sync; order placement is not implemented"})
+
+
 @app.get("/api/trading/status")
 async def trading_status() -> JSONResponse:
     return JSONResponse({"ok": True, **engine.trader.status()})

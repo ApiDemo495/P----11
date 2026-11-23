@@ -87,10 +87,10 @@ def _pivots(highs: list[float], lows: list[float],
         window_h = highs[i - left:i + right + 1]
         window_l = lows[i - left:i + right + 1]
         if highs[i] >= max(window_h) and highs[i] > max(
-                highs[i - left:i], highs[i + 1:i + right + 1]):
+                max(highs[i - left:i]), max(highs[i + 1:i + right + 1])):
             hi_p.append(i)
         if lows[i] <= min(window_l) and lows[i] < min(
-                lows[i - left:i], lows[i + 1:i + right + 1]):
+                min(lows[i - left:i]), min(lows[i + 1:i + right + 1])):
             lo_p.append(i)
     return hi_p, lo_p
 
