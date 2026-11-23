@@ -410,15 +410,38 @@ def test_hold_cells_block_covers_16_cells():
     block = eng.hold_cells_block()
     assert len(block) == 16
     btc1 = block["BTC|tf1"]
-    assert btc1["tier"] in (hp.TIER_HOLDOUT, hp.TIER_ROWS_ONLY)
+    assert btc1["tier"] in (hp.TIER_HOLDOUT, hp.TIER_ROWS_ONLY,
+                            hp.TIER_SHIPGATE)
     assert btc1["win_rate"] and btc1["win_rate"] >= 0.66
     assert btc1["confidence"] and btc1["confidence"] >= 0.66
     assert btc1["analyse"]["tf_minutes"] == 22
     assert "era" in btc1 and "friction_rule" in btc1["era"]
     assert block["PAXG|tf1"]["tier"] == "UNGRADEABLE / WARMUP"
-    # v8 §17: BNB tf4 earned HOLD-OUT VERIFIED on the 9-year tape
-    # (the v6-era pin expected IN-SAMPLE SHADOW from the 8-month data)
-    assert block["BNB|tf4"]["tier"] == "HOLD-OUT VERIFIED"
+    # The certified artifact's own ship gates FAIL (gate (ii): it
+    # records no REAL post-cost win rate at all), so no cell may wear
+    # HOLD-OUT VERIFIED while that artifact is the one shipped.
+    ship = hp.artifact_ship_verdict()
+    assert ship["checked"] is True
+    assert ship["gate_ii_pass"] is False
+    assert block["BNB|tf4"]["tier"] == hp.TIER_SHIPGATE
+    # and every tradeable cell still carries its GROSS label + cost floor
+    assert btc1["win_rate_label"].startswith("gross")
+    assert btc1["min_tp_bps"] > btc1["round_trip_bps"]
+    assert "round trip" in btc1["cost_note"]
+
+
+def test_tier_restores_holdout_badge_when_artifact_passes_gates(monkeypatch):
+    """A failing artifact must not overclaim — and a passing one must
+    still earn the badge.  (Guards both directions of the rule.)"""
+    from app import hold_policy as _hp
+    monkeypatch.setattr(_hp, "_SHIP_CACHE", None)
+    monkeypatch.setattr(_hp, "artifact_ship_verdict",
+                        lambda: {"checked": True, "gate_ii_pass": True})
+    assert _hp.tier("BNB", "tf4") == _hp.TIER_HOLDOUT
+    monkeypatch.setattr(_hp, "_SHIP_CACHE", None)
+    monkeypatch.setattr(_hp, "artifact_ship_verdict",
+                        lambda: {"checked": True, "gate_ii_pass": False})
+    assert _hp.tier("BNB", "tf4") == _hp.TIER_SHIPGATE
 
 
 def test_cells_endpoint_serves_policy():
@@ -432,6 +455,9 @@ def test_cells_endpoint_serves_policy():
     body = json.loads(resp.body)
     assert body["ok"] is True
     assert body["count"] == 16
-    assert body["tiers"]["HOLD-OUT VERIFIED"] == 7
+    # the shipped artifact fails its own gate (ii), so those 7 cells are
+    # reported as rows-verified-but-not-shipped rather than HOLDOUT VERIFIED
+    assert body["tiers"].get("HOLD-OUT VERIFIED", 0) == 0
+    assert body["tiers"]["ROWS VERIFIED · SHIP GATE FAIL"] == 7
     assert body["manual_default"] is True
     assert body["rule"].startswith("one ANALYSE click")

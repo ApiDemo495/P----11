@@ -1794,3 +1794,90 @@ wording rather than the prohibited NO TRADE label.
 * Certified v8 result remains `backtest/results/hold_wr.json`, md5
   `cee99dc26d359a3de2cbf7c7a2751b8f`. §18 gates remain the acceptance
   bar; no higher real win rate is certified by this code-only change.
+
+## §23 — WIN-RATE vs COST AUDIT (2026-11-23): the 73–85 % number is a gross hit rate
+
+Question asked: *"increase my win rate."* Before changing anything, the
+certified number was measured against money. Finding: **the shipped
+win rate and the shipped P&L are describing different things.**
+
+### 23.1 What the certified number actually is
+
+`backtest/results/hold_wr.json` (md5 `cee99dc26d359a3de2cbf7c7a2751b8f`,
+the certified v8 pin) reports `row_wr` 72.9–85.4 % for 12 cells. That is
+the **gross first-touch hit rate** of a target placed at
+`k_row × m_row × q80(window move)` with `k_row = 0.15` on **every** cell.
+A target at 0.15 × the stop is touched very often by construction. It is
+a legitimate *hit-rate* measurement and a meaningless *money* number:
+
+* the same artifact has **`row_wr_net: null` on all 16 cells** — the
+  REAL (post-cost) win rate was never recorded;
+* `backtest/gates18.py` run on that exact artifact: gate (ii) **FAIL**
+  (mean `row_wr_net` = 0.0000 vs the v8 reference 0.0080), ship verdict
+  **FAIL** — yet the app ships the artifact and the cells wear
+  `HOLD-OUT VERIFIED`.
+
+### 23.2 Re-graded at the resolution it was measured on
+
+`backtest/wr_rereg.py` re-runs the shipped (side, k, m) on 5-minute
+Binance tape (2025-10-01 → 2026-09-30, zero gaps) and charges the full
+§18.1 round trip. Win = the window clears the round trip.
+
+| cell | TP bps | RT bps | gross hit | **REAL win** | net bps/window |
+|---|---|---|---|---|---|
+| BTC\|22 | 22.9 | 28.9 | 54.1 % | **1.0 %** | −29.3 |
+| BTC\|44 | 36.9 | 28.9 | 52.9 % | **19.6 %** | −29.5 |
+| BTC\|130 | 76.1 | 28.9 | 51.8 % | **28.4 %** | −29.4 |
+| BTC\|247 | 72.3 | 28.9 | 55.3 % | **38.2 %** | −28.9 |
+| ETH\|22 | 34.7 | 29.8 | 53.5 % | **16.5 %** | −30.0 |
+| ETH\|44 | 55.2 | 29.8 | 52.7 % | **22.1 %** | −30.0 |
+| ETH\|247 | 147.5 | 29.8 | 50.3 % | **35.1 %** | −30.2 |
+| PAXG\|247 | 31.3 | 37.4 | 58.7 % | **0.2 %** | −37.8 |
+
+The certified sides themselves are close to coin-flips on this tape
+(BTC 52–55 %, ETH 49–53 %, PAXG 47.7 %); the barrier geometry converts
+that into a ~52–59 % gross hit rate, and the round trip then removes
+**~29–38 bps per trade** — which is essentially the entire edge.
+
+### 23.3 Why more geometry search does not fix it
+
+Across 42 (k, m) combinations per cell the net EV moves by only
+**+0.13 … +0.44 R** — a barrier rule reshapes the win/loss distribution
+(the first-touch floor `1/(1+k)`), it cannot create expectancy. Once
+costs are charged, a geometry closer than ~1.5× the round trip cannot
+beat the cost, and a geometry wide enough to pay has a hit rate near
+the coin-flip the side actually has. On 11 cells, re-selecting on TRAIN
+for REAL win rate subject to `TP ≥ 1.2 × RT` held a little more of it
+out-of-sample (pooled ~63 % on 1 h tape) at **zero or negative net EV**
+per trade.
+
+### 23.4 What shipped (correctness, not a profit claim)
+
+1. **`app/hold_policy.MIN_TP_OVER_RT = 1.5`** — every live lock now
+   runs through `_cost_aware`: a target closer than 1.5× the full
+   round trip is widened to that floor (widening can only *lower* the
+   hit rate, never flatter it). The stop is untouched.
+2. **Honest labelling** — the cell summary now carries
+   `win_rate_label`, `round_trip_bps`, `min_tp_bps` and `cost_note`;
+   the API (`cell_win_rate_label`, `cell_min_tp_bps`, `cell_cost_note`)
+   and both UI surfaces print the gross label and the cost floor next
+   to the number, and the live seal records `cost_floor`.
+3. **Tier stop-overclaiming** — `HOLD-OUT VERIFIED` now additionally
+   requires the artifact to pass its own gate (ii). On the shipped
+   artifact that reverses 7 badges to `ROWS VERIFIED · SHIP GATE FAIL`.
+4. **Round-trip source of truth** — the cost verdict uses
+   `backtest.data.FRICTION_BPS` (28.9–37.4 bps), not the artifact's
+   stale 12 bps/side constant; it takes the max of the two, so the
+   verdict can only be conservative.
+
+**No claim is made that win rate or EV improved.** This section records
+that the previously reported win rate was not a money outcome, and that
+the app now says so.
+
+Reproduce:
+```
+python scripts/fetch_binance_mirror.py --source zips --interval 5m --symbols BTC ETH BNB PAXG
+.venv/bin/python -m backtest.wr_rereg      # shipped geometry, real coordinates
+.venv/bin/python -m backtest.wr_audit      # train-selected geometry, OOS
+.venv/bin/python -m backtest.gates18       # the ship gate on the artifact
+```

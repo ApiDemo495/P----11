@@ -110,6 +110,106 @@ TIER_ROWS_ONLY = "HOLDOUT ROWS · ERA n<3"
 TIER_INSAMPLE = "IN-SAMPLE SHADOW"
 TIER_MISS = "IN-SAMPLE SHADOW · HOLDOUT MISS"
 TIER_WARMUP = "UNGRADEABLE / WARMUP"
+# A cell whose available geometry cannot pay the round trip is NOT
+# tradeable, however good its gross hit rate looks.
+TIER_UNECONOMIC = "UNECONOMIC · BELOW ROUND TRIP"
+# Rows held up out-of-fold, but the artifact the cell came from has
+# NOT passed its own ship gates (gate (ii): no REAL post-cost win rate
+# recorded, so it cannot beat the v8 reference).  Honest intermediate:
+# the measurement is real, the ship claim is not earned.
+TIER_SHIPGATE = "ROWS VERIFIED · SHIP GATE FAIL"
+
+# ────────────── cost-aware "is a win actually a win?" ────────────────
+# The certified artifact's headline number is the GROSS row win rate
+# (first touch of a k=0.15 x SL take-profit wins ~73-85 % of windows).
+# That number says nothing about money: the target it measures sits
+# INSIDE the Binance round trip, so the app can book an 85 % "win rate"
+# while every winning window loses money.  THE rule enforced here:
+#
+#     a win must pay more than the cost of getting in and out.
+#
+# MIN_TP_OVER_RT is that floor (target distance >= 1.5x the full round
+# trip, i.e. a win nets at least a third of the gross move).  It is a
+# cost floor, not a fitted parameter: it holds for any tape, and it is
+# what makes a reported win rate comparable to money.
+MIN_TP_OVER_RT = 1.5
+
+
+def round_trip_bps(symbol: str) -> float:
+    """Full-stack round trip (both sides) in bps for one asset."""
+    try:
+        from backtest.data import FRICTION_BPS
+        return 2.0 * float(FRICTION_BPS.get(symbol, 12.0))
+    except Exception:                                   # pragma: no cover
+        return 24.0
+
+
+def tp_pays_rt(symbol: str, tp_bps: float | None) -> bool | None:
+    """Does a target ``tp_bps`` away clear the round trip?
+
+    ``None`` when the distance is unknown — never guessed true.
+    """
+    if tp_bps is None:
+        return None
+    rt = round_trip_bps(symbol)
+    if rt <= 0:
+        return None
+    return bool(float(tp_bps) >= MIN_TP_OVER_RT * rt)
+
+
+_SHIP_CACHE: dict[str, Any] | None = None
+
+
+def artifact_ship_verdict() -> dict[str, Any]:
+    """Did the shipped artifact pass its own pre-registered ship gates?
+
+    ``backtest/gates18.py`` is the acceptance bar these tiers were
+    defined against (gate (i) row+era viability, gate (ii) mean REAL
+    win rate beating the v8 reference, gate (iii) >= 4 holdout-verified
+    cells).  The tiers below used to be granted from the per-cell
+    ``targets`` flags alone, which let a FAILING artifact keep handing
+    out ``HOLD-OUT VERIFIED`` badges.  Cached: the artifact is a file
+    on disk, read once per process.
+    """
+    global _SHIP_CACHE
+    with _lock:
+        if _SHIP_CACHE is not None:
+            return _SHIP_CACHE
+        doc = _load_doc()
+        out: dict[str, Any] = {"checked": False}
+        if doc:
+            # gate (ii): mean recorded REAL win rate vs the v8 reference
+            nets = [float((c.get("selected") or {}).get("full", {})
+                          .get("row_wr_net"))
+                    for c in doc.values()
+                    if isinstance(c, dict)
+                    and (c.get("selected") or {}).get("full", {})
+                    .get("row_wr_net") is not None]
+            ref = None
+            try:
+                ref_path = os.path.join(
+                    os.path.dirname(os.path.dirname(
+                        os.path.abspath(__file__))),
+                    "backtest", "results", "v8_net_reference.json")
+                ref = float(json.load(open(ref_path))["mean_row_wr_net"])
+            except Exception:
+                ref = None
+            mean_net = (sum(nets) / len(nets)) if nets else None
+            out = {
+                "checked": True,
+                "mean_row_wr_net": (round(mean_net, 6)
+                                    if mean_net is not None else None),
+                "v8_reference": ref,
+                "gate_ii_pass": (bool(nets) and ref is not None
+                                 and mean_net > ref),
+                "note": ("artifact does not carry a REAL (post-cost) win "
+                         "rate for any cell, so gate (ii) fails and no "
+                         "higher real win rate is certified by this file"
+                         if not nets else
+                         "artifact carries REAL win rates"),
+            }
+        _SHIP_CACHE = out
+        return out
 
 
 def tier(symbol: str, tf: str) -> str:
@@ -121,10 +221,17 @@ def tier(symbol: str, tf: str) -> str:
     t = c.get("targets") or {}
     if c.get("single_year"):
         return TIER_INSAMPLE
-    if (t.get("holdout_row_wr_ge_66")
-            and t.get("holdout_row_wilson_lo_ge_66")
-            and t.get("holdout_era_ev_net_gt_0")):
+    # A cell may only wear HOLD-OUT VERIFIED while the artifact it came
+    # from still passes its own ship gates.  On a failing artifact the
+    # rows are honest measurements but the ship claim is not earned.
+    ship = artifact_ship_verdict()
+    rows_ok = (t.get("holdout_row_wr_ge_66")
+               and t.get("holdout_row_wilson_lo_ge_66")
+               and t.get("holdout_era_ev_net_gt_0"))
+    if rows_ok and (not ship.get("checked") or ship.get("gate_ii_pass")):
         return TIER_HOLDOUT
+    if rows_ok and not ship.get("gate_ii_pass"):
+        return TIER_SHIPGATE
     if t.get("holdout_row_wr_ge_66") and t.get("full_era_ev_net_gt_0"):
         # rows verified out-of-fold but the holdout has < 3 eras to
         # judge system EV (BTC 247min: n=1) — say exactly that
@@ -185,6 +292,8 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
         era_k=sel.get("era_k"), era_m=sel.get("era_m"),
         ride=bool(float(sel.get("era_m") or 0) >= 999.0),
         win_rate=full.get("row_wr"),
+        win_rate_label=("gross first-touch hit rate (does NOT include "
+                        "costs)"),
         win_rate_wilson=wil,
         confidence=wil[0],                    # Wilson lower bound
         # §18 REAL win rate: share of windows still winners after the
@@ -207,7 +316,60 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
         selection=sel.get("selection"),
         targets=c.get("targets"),
     )
+    # COST VERDICT — the honest pairing for the number above.  The
+    # headline win_rate is a gross first-touch hit rate; if the target
+    # the certified geometry aims at sits inside the round trip, that
+    # hit rate cannot be booked as profit.
+    #
+    # The round trip used here is the AUTHORITATIVE full-stack figure
+    # (backtest.data.FRICTION_BPS, §18.1: commission 10 + slippage +
+    # half-Roll spread per side).  Some shipped artifacts still carry
+    # the older 12 bps/side constant; taking the max means the cost
+    # verdict can only be conservative, never flattering.
+    rt = max(2.0 * float(c.get("friction_bps_per_side") or 0.0),
+             round_trip_bps(symbol))
+    base["round_trip_bps"] = round(rt, 3)
+    base["min_tp_bps"] = round(MIN_TP_OVER_RT * rt, 3)
+    base["win_rate_is_money"] = None
+    base["cost_note"] = (
+        "win_rate is the gross first-touch hit rate; the target must be "
+        f">= {MIN_TP_OVER_RT}x the {rt:.1f} bps round trip before a win "
+        "pays. Live locks enforce that floor (see geometry_cost_check).")
     return base
+
+
+def geometry_cost_check(symbol: str, tf: str) -> dict[str, Any]:
+    """Does the certified target for this cell clear the round trip?
+
+    Uses the artifact's own selected geometry (k, m) and the grader's
+    recorded median barrier scale where present, so the answer is
+    derived from the shipped numbers — not from a fresh guess.  When
+    the scale is not in the artifact the verdict is ``None`` (unknown),
+    never a silent True.
+    """
+    c = cell(symbol, tf)
+    if not c or c.get("status") != "ok":
+        return {"pays_round_trip": None, "why": "no certified cell"}
+    sel = c.get("selected") or {}
+    full = sel.get("full") or {}
+    rt = 2.0 * float(c.get("friction_bps_per_side") or 0.0)
+    # the row target in bps, from the grader's own median stop distance
+    sl_bps = full.get("row_sl_bps_median")
+    k = sel.get("row_k")
+    tp_bps = (float(sl_bps) * float(k)
+              if sl_bps is not None and k is not None else None)
+    floor = MIN_TP_OVER_RT * rt
+    return {
+        "rt_bps": round(rt, 3),
+        "min_tp_bps": round(floor, 3),
+        "tp_bps": (round(float(tp_bps), 3) if tp_bps is not None else None),
+        "pays_round_trip": (None if tp_bps is None
+                            else bool(float(tp_bps) >= floor)),
+        "why": ("target inside the round trip — every 'win' still loses "
+                "money" if tp_bps is not None and float(tp_bps) < floor
+                else "target clears the round trip" if tp_bps is not None
+                else "artifact carries no median stop distance"),
+    }
 
 
 def friction_bps(symbol: str) -> float:
@@ -585,20 +747,65 @@ def row_settle_rules(symbol: str, tf: str) -> dict[str, Any]:
     }
 
 
+def _cost_aware(symbol: str, entry: float, side: int, scale_px: float,
+                k: float, m: float) -> tuple[float, float, dict[str, Any]]:
+    """(tp_px, sl_px, meta) with the round-trip floor enforced.
+
+    The certified gross geometry (k=0.15, m≈0.55) deliberately aims the
+    target at a fraction of the measured window move, because a tight
+    target maximises the FIRST-TOUCH hit rate.  That is a hit-rate
+    metric, not a money metric: on BTC tf1 the target is ~23 bps while
+    the Binance round trip is ~29 bps, so 86 % of windows "win" and the
+    book still bleeds ~29 bps per trade (measured 2024-2026, see
+    ``backtest/results/wr_audit_independent.json``).
+
+    The floor: a target closer than ``MIN_TP_OVER_RT`` x round trip is
+    widened to exactly that floor, keeping the stop where the certified
+    rule put it.  Widening a target can only LOWER the hit rate, never
+    raise it — so the reported win rate becomes attainable rather than
+    decorative.
+    """
+    # CERTIFIED GEOMETRY, unchanged: stop = m x scale, target = k x stop,
+    # both kept inside the price (a fat warmup ATR proxy must never push
+    # a SELL's TP below zero — the seal refuses that).
+    sl_px = min(m * float(scale_px), entry * 0.9)
+    tp_px = min(k * sl_px, entry * 0.9)
+    rt_bps = round_trip_bps(symbol)
+    tp_bps = (tp_px / entry * 1e4) if entry > 0 else 0.0
+    floor_bps = MIN_TP_OVER_RT * rt_bps
+    widened = bool(tp_bps > 0 and floor_bps > 0 and tp_bps < floor_bps
+                   and entry > 0)
+    if widened:
+        # floor the TARGET only; the certified stop is left untouched
+        tp_px = min(floor_bps * 1e-4 * entry, entry * 0.9)
+    meta = {
+        "rt_bps": round(rt_bps, 3),
+        "tp_bps_certified": round(tp_bps, 3),
+        "tp_bps_used": (round(min(tp_px / entry, 0.9) * 1e4, 3)
+                        if entry else 0.0),
+        "min_tp_bps": round(floor_bps, 3),
+        "tp_widened_for_cost": widened,
+        "tp_pays_round_trip": bool(tp_bps >= floor_bps) if tp_bps else None,
+        "note": ("certified target sits inside the round trip — widened to "
+                 f"{MIN_TP_OVER_RT}x RT so a win actually pays"
+                 if widened else
+                 "certified target clears the round trip"),
+    }
+    return entry + tp_px * side, entry - sl_px * side, meta
+
+
 def build_row_bars(symbol: str, tf: str, entry: float, side: int,
                    scale_px: float) -> tuple[float, float] | None:
     """(tp_px, sl_px) for an EVERY-WINDOW row lock from the certified
     decoupled row geometry.  ``scale_px`` = q80 window-move scale at the
-    entry (``_scale_at`` semantics, price units)."""
+    entry (``_scale_at`` semantics, price units).  Cost-aware: see
+    ``_cost_aware``."""
     g = row_geometry(symbol, tf)
     if g is None or entry <= 0 or scale_px <= 0 or not side:
         return None
     k, m = g
-    # keep both barriers inside the price (a fat warmup ATR proxy must
-    # never push a SELL's TP below zero — the seal refuses that)
-    sl = min(m * float(scale_px), entry * 0.9)
-    tp = min(k * sl, entry * 0.9)
-    return entry + tp * side, entry - sl * side
+    tp, sl, _meta = _cost_aware(symbol, entry, side, scale_px, k, m)
+    return tp, sl
 
 
 def build_era_bars(symbol: str, tf: str, entry: float, side: int,
@@ -607,16 +814,43 @@ def build_era_bars(symbol: str, tf: str, entry: float, side: int,
     (guaranteed stop, m ≤ 3), TP = k_era·SL.  The ride itself exits at
     TP, SL, the certified side flipping, or the maximum hold — never at
     the window boundary (a window-end settle is the −RT trade the §18
-    probes measured)."""
+    probes measured).  Cost-aware: see ``_cost_aware``."""
     g = era_geometry(symbol, tf)
     if g is None or entry <= 0 or scale_px <= 0 or not side:
         return None
     k, m = g
-    # both barriers must stay inside the price (a fat warmup ATR proxy
-    # would otherwise push a SELL's TP below zero and refuse the seal)
-    sl = min(m * float(scale_px), entry * 0.9)
-    tp = min(k * sl, entry * 0.9)
-    return entry + tp * side, entry - sl * side
+    tp, sl, _meta = _cost_aware(symbol, entry, side, scale_px, k, m)
+    return tp, sl
+
+
+def geometry_for_live(symbol: str, tf: str) -> dict[str, Any]:
+    """Which certified geometry the live trade uses, and does it pay?
+
+    Mirrors the engine's selection rule (guarded era geometry when the
+    artifact has ``0 < era_m < 999``; the row ladder otherwise) and adds
+    the cost verdict the seal needs to stay honest.
+    """
+    pol = summary(symbol, tf)
+    if not pol.get("managed") or pol.get("status") != "ok":
+        return {"geometry": None, "pays_round_trip": None,
+                "why": "no certified geometry for this cell"}
+    era_m = float(pol.get("era_m") or 0.0)
+    guarded = 0 < era_m < 999.0
+    k = float(pol.get("era_k") if guarded else pol.get("row_k") or 0.0)
+    m = float(era_m if guarded else pol.get("row_m") or 0.0)
+    rt = round_trip_bps(symbol)
+    # the artifact's TP distance is k*m x the q80 window move; expressed
+    # as a multiple of the round trip it is what the floor tests
+    return {
+        "geometry": "guarded_era" if guarded else "row",
+        "k": k, "m": m,
+        "rt_bps": round(rt, 3),
+        "min_tp_bps": round(MIN_TP_OVER_RT * rt, 3),
+        "pays_round_trip": None,   # needs the live scale — see seal
+        "rule": f"target must be >= {MIN_TP_OVER_RT}x round trip "
+                f"({MIN_TP_OVER_RT * rt:.1f} bps); closer targets are "
+                "widened at lock time",
+    }
 
 
 def scale_at_bars(bars: tuple, at_ts, tf: str) -> np.ndarray:
