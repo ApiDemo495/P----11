@@ -1460,3 +1460,235 @@ pre-registered run passes all three gates, v8 stays and the app
 keeps showing v8's numbers as the certified ones — now alongside the
 honest cost stack, the real-RT tradability gate and the Wilson
 certainty the user asked for.
+
+## §20 — v10 RAISE-THE-REAL-WIN-RATE (pre-registered 2026-11-20, BEFORE the run)
+
+### 20.1 Task and research basis
+
+User instruction: *"increase this real win rate — research whole
+internet"* — raise the win rate measured AFTER all Binance costs,
+starting from published evidence.  Design choices below cite what the
+sweep found (train-side only; the holdout year was never read while
+designing):
+
+* **Time-series momentum / absolute-momentum gates.**  Moskowitz,
+  Ooi & Pedersen (2012), *Time Series Momentum* (JFE): sign of the
+  trailing past return across 58 markets; strongest at the 12-month
+  horizon, weaker at 1–3 months.  Crypto confirmations (Liu &
+  Tsyvinski; dual-momentum implementations) show the same family:
+  a **regime filter that goes flat when the slow trend disagrees**
+  is what kept those systems alive through 2022.  JPM's momentum
+  survey notes 1-day absolute momentum is UNVIABLE after 5 bps of
+  cost while longer horizons stay robust — our gates are 180/365
+  days for exactly that reason.  Momentum's documented failure mode
+  is the *crash* after declines + sharp rebounds (Daniel &
+  Moskowitz) — a slow-trend disagreement gate is the standard
+  defense.
+* **Trend filters are the highest-value single component** in the
+  published comparisons (MA200 / 50-200 cross "cuts max drawdown
+  roughly doubles without it"; Donchian breakouts on BTC improve
+  from ~49 % → 56 % win rate with a 55-period trend gate; ATR
+  volatility regime filters in SSRN 6272239).  We implement the
+  same idea at the ERA level: a run whose side trades against the
+  slow trend never opens.
+* **Costs.**  Binance spot VIP0 = 0.10 % maker/taker (0.075 % paid
+  in BNB) — the certified stack (commission 10 bps + spread + 1.1σ
+  slip, §18.1) sits inside the published majors range (slippage
+  0.1–0.3 %).  Published practice: costs should consume < 15 % of
+  gross edge, ≥ 100 trades for significance, a 70/30 split chosen
+  BEFORE analysis, and a **doubled-cost stress test** — if the edge
+  vanishes at 2× costs it is too fragile to trust.  §20 therefore
+  reports `row_wr_net_2x` (P(gross > 2·RT)) as a disclosure (never
+  a gate).
+* **Overfitting control.**  Bailey/López de Prado PBO & DSR
+  guidance: prefer worst-case (maximin) robustness over mean
+  optimization, keep the number of tried variants visible, keep one
+  untouched holdout, and treat post-test adjustments as invalidating
+  the holdout.  Concretely: era geometry is picked by **best worst
+  train-year EV** (mean only as a tie-break), every candidate must
+  clear a positive train margin, and the holdout is evaluated
+  exactly once after the single official run.
+
+### 20.2 Design — what changed vs §18/§19 (all train-only)
+
+1. **TSMOM era gate** (`ERA_GATES = (0, 259200, 525600)` minutes =
+   off / 180 d / 365 d, train-selected per cell like any other
+   causal geometry).  At each era run START: `r = entry[w] /
+   entry[w−lb_w] − 1` (window-entry prices, `lb_w = round(L/W)`);
+   the run is **skipped** (no record, position never opens) iff
+   `side · r < 0`.  Warmup (`w < lb_w`) → take (full-coverage
+   fallback, never a silent skip).  Start-only: an open run is
+   never dropped mid-run.  Batch + live parity: `era_sim` /
+   `track_eras` twins share the rule, `EraAccountant.on_window`
+   takes `gate_ok` (skip persists for the whole run; a gated flip
+   still closes an open era at the flip-boundary price — batch
+   parity), engine evaluates the same formula on the native feed at
+   the window boundary.  `hold_policy.era_gate()` reads
+   `selected.era_gate_l` from the artifact; v8 artifacts predate
+   the field → 0 → live behaviour unchanged.
+2. **Row-contract buffer** `ROW_WR_BUF = {22: 0.665, 44: 0.670,
+   130: 0.676, 247: 0.690}` + train Wilson lo ≥ 0.66.  Derivation
+   (calendar-known, no returns needed): holdout year 2026 holds
+   ≈ 24k/12k/4k/2.1k windows for tf1..tf4; solving
+   `p − 1.96·√(p(1−p)/n) ≥ 0.66` per tf gives the floors above, so
+   a selectable row can still clear gate (iii)'s Wilson condition
+   on the holdout sample.  Selection among qualifying rows stays
+   max train `row_wr_net` (gate (ii) is a net gate).
+3. **Era train margin** `ERA_MARGIN = 0.0005` — every era candidate
+   must earn ≥ 5 bps/train-era on TRAIN.  §19's gate-(i) miss
+   (BTC130 full −0.01 bps) came from a train mean of only ~+3 bps;
+   5 bps is the pre-registered floor that keeps the FULL-period sign
+   after the holdout contributes.
+4. **Maximin era pick** within the §17 robustness rung: key
+   `(worst train-year EV, mean train EV)` instead of mean alone
+   (§19.4(a): per-year guards without touching holdout).  Cross-side
+   key becomes `(train row_wr_net, train row WR, era worst-year EV)`.
+5. Unchanged: side families, K/M grids, rung ladder A/B/C, one
+   position per side-era, full RT friction (28.9–37.4 bps),
+   MIN_ERA_TRAIN/HOLDOUT, `ROW_WR_TARGET = 0.66` for all *reported*
+   contract checks, no abstention.
+
+### 20.3 Train probe (evidence; holdout never printed)
+
+`probe_v10_train.py` ran `grade_cell` on all 16 cells and printed
+train aggregates only.  Result: **6 gradeable cells** (v9 had 3) —
+
+| cell | side | row(k,m) | era(k,m,gate) | train row WR | train row WR_net | train era EV | eras | worst yr | PF |
+|---|---|---|---|---|---|---|---|---|---|
+| BTC\|130 | mom525600 | 0.15/2.0 | 0.6/3.0/off | 0.7215 | 0.2125 | +0.136 % | 42 | −0.42 % | 1.18 |
+| BTC\|247 | mom525600 | 0.15/2.0 | 0.75/2.0/365d | 0.7215 | 0.4183 | +0.415 % | 26 | −1.00 % | 1.44 |
+| ETH\|130 | mom525600 | 0.15/2.0 | 1.0/3.0/180d | 0.7106 | 0.3707 | +0.513 % | 74 | −0.97 % | 1.39 |
+| ETH\|247 | mom43200 | 0.15/2.0 | 1.0/3.0/180d | 0.7081 | 0.5715 | +0.081 % | 237 | −0.65 % | 1.08 |
+| BNB\|130 | mom259200 | 0.15/2.0 | 2.0/3.0/365d | 0.7116 | 0.3568 | +5.23 % | 183 | −1.47 % | 5.61 |
+| BNB\|247 | mom525600 | 0.15/2.0 | 1.5/3.0/365d | 0.7099 | 0.5450 | +8.66 % | 112 | −2.37 % | 6.62 |
+
+Not gradeable (honest): BTC/ETH/BNB tf1+tf2, PAXG tf4 — row bar
+and/or era margin/robustness unmet; PAXG tf1–tf3 ungradeable (1 h
+bars).  The gate was selected on 5 of 6 gradeable cells (only
+BTC|130 keeps gate off).  **Disclosed risks:** every selection sits
+in rung C (worst train year negative — maximin-best, not positive);
+ETH|247's train era margin is thin (+8 bps); BTC|247's slow side
+implies only ~3 expected holdout eras (n < 3 would label it
+HOLDOUT ROWS, not VERIFIED); feasible side pools are narrow (BNB
+tf3/tf4: 1 side).  Tapes were rebuilt after the workspace reset and
+verified against the certified run: all 16 cell window counts match
+`hold_wr.json`/`hold_wr_v9_rejected.json` exactly (BTC/ETH trim
+< 2026-10-01, BNB mirror commit `10d8dd8466` trim < 2026-11-15, PAXG
+perp 1 h) — §19 comparability preserved.
+
+### 20.4 Gates and ship rules (UNCHANGED from §18)
+
+* **(i)** every gradeable cell: full gross row WR ≥ 0.66 AND full
+  guarded-era EV > 0 under the full Binance stack;
+* **(ii)** mean full `row_wr_net` over gradeable cells >
+  `v8_net_reference.json` (0.0080);
+* **(iii)** ≥ 4 cells **HOLD-OUT VERIFIED** (holdout row WR ≥ 0.66
+  ∧ holdout Wilson lo ≥ 0.66 ∧ holdout era EV > 0 with n ≥ 3).
+
+Evaluator: `backtest/gates18.py`, evaluated **ONCE**, after the ONE
+official run (`.venv/bin/python -u -m backtest.hold`).  Exit 0 →
+v10 ships; exit 1 → **v8 stays certified** (§18 fallback), exactly
+as in §19.  Ship bar unchanged: py_compile + `node --check` + full
+suite 0 failed **alone** → PR → merge → push → restart server
+(no `--reload`).  If the artifact changes, artifact-tracking pins
+(`test_fade_prev` sides, `test_mandate_new_target` census) are
+updated to the new certified values in the same PR — the pins track
+the artifact, never the reverse.
+
+### 20.5 Pre-registered expectation
+
+Gate (ii) is expected to pass by a wide margin (train row WR_net
+0.21–0.57 ≫ 0.008 mean floor).  Gate (i) is plausible: train era
+means +0.08 % … +8.7 % with the 5 bps margin.  Gate (iii) remains
+the hard one — §19 scored 0/4 with mean-era selection; §20's bet is
+that maximin + slow-trend gates + margin generalize to the holdout
+year.  6 gradeable cells give 2 cells of slack on the ≥4 bar.  If
+any gate fails, v8 ships nothing and the machinery stays dormant —
+the honest fallback has applied in every failed iteration since §16.
+
+## §21 — v10 RUN: GATES FAIL — v8 STAYS (2026-11-20, one-shot)
+
+### 21.1 Census (official run, `v10-run-20a9f1c4`)
+
+| cell | side | row hold WR (wilson) | row verified | era full EV | era holdout EV (n) | tier |
+|---|---|---|---|---|---|---|
+| BTC\|130 | mom525600 | 0.7086 (≥0.66 ✓) | **yes** | **−0.00013** | −0.006386 (10) | HOLDOUT MISS |
+| BTC\|247 | mom525600 | 0.7184 ✓ | **yes** | +0.002388 | −0.005259 (6) | HOLDOUT MISS |
+| ETH\|130 | mom525600 | 0.7069 ✓ | **yes** | +0.004535 | −0.000328 (9) | HOLDOUT MISS |
+| ETH\|247 | mom43200 | 0.7096 ✓ | **yes** | +0.000149 | −0.006960 (22) | HOLDOUT MISS |
+| BNB\|130 | mom259200 | 0.6941 ✓ | **yes** | +0.047447 | −0.004870 (17) | HOLDOUT MISS |
+| BNB\|247 | mom525600 | 0.6913 ✓ | **yes** | +0.063835 | −0.003356 (38) | HOLDOUT MISS |
+
+Not gradeable: BTC/ETH/BNB tf1+tf2 + PAXG tf4 (`no_feasible_config`),
+PAXG tf1–tf3 ungradeable (1 h bars) — 6 gradeable vs v9's 3.
+
+### 21.2 Gates (evaluated ONCE — `gates18.py` exit 1)
+
+* **(i) FAIL** — BTC|130 full era EV = −0.00013 (train mean was
+  +0.136 %; holdout −0.639 % × 10 eras dragged it under; the other
+  5 cells passed (i) individually);
+* **(ii) PASS** — mean full `row_wr_net` = **0.3916** vs v8 ref
+  0.0080 (49× the certified baseline);
+* **(iii) FAIL** — **0 HOLD-OUT VERIFIED of 6** (need ≥ 4).
+
+**V10 SHIP = FAIL → v8 stays certified** (byte-restored, md5
+`cee99dc…`, census 12 ok / 1 no_feasible / 3 ungradeable, tiers
+7 HOLD-OUT VERIFIED / 5 HOLDOUT MISS / 4 WARMUP — pins unchanged).
+Failed-run artifact preserved at
+`backtest/results/hold_wr_v10_rejected.json` (audit only; the app
+never reads it).
+
+### 21.3 What the second failure establishes
+
+1. **The row rule is genuinely out-of-sample.**  All 6 gradeable
+   cells clear holdout row WR ≥ 0.66 **with Wilson lo ≥ 0.66** at
+   0.69–0.72 holdout WR — after the FULL cost stack, on an unseen
+   year, with the buffer pre-registered from holdout-sample Wilson
+   math.  The T1 contract generalizes.
+2. **The era-ride system does not — twice, under three different
+   selection regimes.**  v9 (net-WR-first) scored 0/3; v10 (maximin
+   worst-year + TSMOM gates + 5 bps margin + row buffer) scores 0/6,
+   holdout era EV −0.03 % … −0.70 % on every cell.  Train era means
+   were +0.08 % … +8.7 % with PF 1.08–6.6 — the train edge is real
+   in-sample and absent in 2026.  Per §16–§19 precedent this is
+   now evidence that the *structure* (one position per side-run,
+   entered at flips) is train-sample-bound, not that the selection
+   needed one more knob.
+3. **Gate inertness on slow sides (design insight):** a TSMOM gate
+   on `mom525600` is nearly a no-op — the side IS the 365 d trend,
+   so run starts almost always agree with it; the gate bit hardest
+   on `mom43200`/`mom259200` (selected on ETH|247/BNB|130).  Gates
+   alone cannot fix an entry structure whose holdout rides lose.
+4. **Real-win-rate accounting (the user's actual question):** v8's
+   certified "73–85 % win rate" is **0.80 % real** (mean
+   `row_wr_net` of the v8 geometries, `v8_net_reference.json`);
+   v10's deep-stop rows reach **39 % real** on train and hold out at
+   0.69–0.72 gross — but no trade structure yet clears OOS EV after
+   all Binance costs, so nothing with a higher real win rate can be
+   honestly certified today.
+
+### 21.4 Ships / does not ship / next hypothesis
+
+**Ships (code, dormant):** the §20 selection stack (row-Wilson
+buffer, 5 bps era margin, maximin pick, `ERA_GATES`), the TSMOM
+gate end-to-end (`era_sim`/`track_eras` parity, `EraAccountant`
+`gate_ok`, engine feed evaluation, `hold_policy.era_gate`), the
+2× cost stress disclosure (`row_wr_net_2x`), §20/§21, the rejected
+artifact, and `tests/test_v10_tsmom_gate.py`.
+
+**Does not ship:** the v10 artifact (gates failed) — v8's census
+and pins remain the source of truth, exactly as §18's fallback
+demands.
+
+**Next hypothesis (for a future §22, not pre-registered here):**
+the certifiable lever is no longer era selection — it is the trade
+structure itself.  Candidate directions, all requiring train probes
+first: (a) certify the *row* rule as the traded unit with an
+entry-frequency/cost gate (the §12 continuous system failed on
+TIGHT rows; deep rows' per-window EV after RT is the number to
+probe); (b) hybrid: per-window guarded trades taken only inside
+trend-aligned windows (entry gating, not ride extension); or
+(c) accept that after full costs the honest product reports the
+verified row win rate (0.69–0.72 gross, ~0.39 net) as *measurement*
+while the live system keeps v8's certified era policy — until a
+structure clears (iii) on its own pre-registered shot.

@@ -72,6 +72,25 @@ ROW_WR_TARGET = 0.66
 PURGE_DAYS = 7
 MIN_ERA_TRAIN = 15
 MIN_ERA_HOLDOUT = 3
+# ── §20 (train-only selection, research-backed) ──────────────────────
+# Row-contract BUFFER: the tier needs holdout row WR ≥ 0.66 WITH a
+# Wilson lower bound ≥ 0.66, and holdout n is calendar-known (2026
+# windows: ~24k/12k/4k/2.1k for tf1..tf4).  Solving
+# p − 1.96·√(p(1−p)/n) ≥ 0.66 for each tf gives the train floors
+# below — train WR must clear the holdout-Wilson bar with margin, or
+# the cell can never verify no matter how good the train looks.
+ROW_WR_BUF = {22: 0.665, 44: 0.670, 130: 0.676, 247: 0.690}
+# Era mean-margin: a selected era must earn ≥ 5 bps/train-window-era
+# on TRAIN.  §19's gate-(i) miss (BTC130 full era −0.01 bps) came from
+# a train mean of only ~+3 bps — too thin to keep the FULL-period sign
+# once the holdout contributes.  5 bps is the pre-registered floor.
+ERA_MARGIN = 0.0005
+# TSMOM absolute-momentum gate candidates (minutes of slow-trend
+# lookback; 0 = gate off).  An era run is SKIPPED when its side trades
+# against the slow trend (sign(entry_w / entry_w−L) ≠ side) — the
+# Moskowitz–Ooi–Pedersen / regime-filter family, train-selected per
+# cell like any other causal geometry.  Warmup (no L history) → take.
+ERA_GATES = (0, 259200, 525600)          # off, 180 d, 365 d
 # single-year assets (BNB 2026-only) have no earlier year to prove a
 # direction on — one era is still one honest (disclosed) in-sample bet
 MIN_ERA_TRAIN_SINGLE = 1
@@ -248,7 +267,7 @@ def lr_sides_oof(t, o, h, l, c, v, step, starts, i_entry, moves,
 
 
 def era_sim(sides, starts, i_entry, i_exit, entry, scale, t, h, l, c,
-            k, m, fr_bps):
+            k, m, fr_bps, gate_l_min=0):
     """One position per side-era: TP/SL first-touch on native bars,
     else exit at the flip boundary. Returns per-era records.
 
@@ -256,10 +275,20 @@ def era_sim(sides, starts, i_entry, i_exit, entry, scale, t, h, l, c,
     original Python; parity-tested against hold_policy's pure-Python
     twin on real BTC windows).  This wrapper keeps the exact pre-call
     massaging and the record dicts the suite pins.
+
+    ``gate_l_min`` (§20): slow-trend lookback in minutes, 0 = off; see
+    ``_era_sim_core`` for the skip rule.  The lookback is measured in
+    WINDOWS (``lb_w = round(L / W)``), i.e. ± one window of the nominal
+    L minutes.
     """
     med = float(np.nanmedian(scale)) if np.isfinite(scale).any() else 0.0
     scale_f = np.where(np.isfinite(scale) & (scale > 0), scale, med)
     fr = fr_bps * 1e-4
+    lb_w = 0
+    if gate_l_min and len(starts) > 1:
+        w_sec = int(starts[1]) - int(starts[0])
+        if w_sec > 0:
+            lb_w = max(1, int(round(gate_l_min * 60.0 / w_sec)))
     st, nw, oc, pg, pn = _era_sim_core(
         np.ascontiguousarray(sides, dtype=np.int64),
         np.ascontiguousarray(entry, dtype=np.float64),
@@ -269,7 +298,7 @@ def era_sim(sides, starts, i_entry, i_exit, entry, scale, t, h, l, c,
         np.ascontiguousarray(c, dtype=np.float64),
         np.ascontiguousarray(h, dtype=np.float64),
         np.ascontiguousarray(l, dtype=np.float64),
-        float(k), float(m), float(fr))
+        float(k), float(m), float(fr), int(lb_w))
     recs = []
     for i in range(len(st)):
         recs.append({"start_i": int(st[i]), "n_windows": int(nw[i]),
@@ -280,7 +309,7 @@ def era_sim(sides, starts, i_entry, i_exit, entry, scale, t, h, l, c,
 
 @njit(cache=True)
 def _era_sim_core(sides, entry, scale_f, i_entry, i_exit, c_close,
-                  h, l, k, m, fr):
+                  h, l, k, m, fr, lb_w):
     """Line-for-line JIT copy of the original era_sim loop body.
 
     Same iteration order, same SL-wins-ties rule, same float ops.
@@ -288,6 +317,13 @@ def _era_sim_core(sides, entry, scale_f, i_entry, i_exit, c_close,
     spanning 4.7M bars — the Python inner bar loop x 25 era geometries
     x 27 sides was a multi-hour wall per cell.  Returns parallel arrays
     (start_i, n_windows, outcome, pnl_gross, pnl_net).
+
+    §20 TSMOM gate: ``lb_w > 0`` evaluates the slow-trend check at each
+    era START — ``r = entry[w] / entry[w − lb_w] − 1``; the era is
+    skipped (no record, position never opens) when ``side · r < 0``
+    (trading against the slow trend).  ``w < lb_w`` (warmup) → take,
+    the documented full-coverage fallback.  The check is start-only: a
+    run already open is never dropped mid-run.
     """
     n = len(sides)
     st = np.empty(n, dtype=np.int64)
@@ -305,6 +341,11 @@ def _era_sim_core(sides, entry, scale_f, i_entry, i_exit, c_close,
         w2 = w + 1
         while w2 < n and int(sides[w2]) == s:
             w2 += 1
+        if lb_w > 0 and w >= lb_w:
+            r = float(entry[w]) / float(entry[w - lb_w]) - 1.0
+            if s * r < 0.0:
+                w = w2
+                continue
         e = float(entry[w])
         sl = m * float(scale_f[w])
         if not np.isfinite(sl) or sl <= 0 or e <= 0:
@@ -445,10 +486,15 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
                         best_row = (wr_tr, k, m, wr_te)
                     if wr_tr >= ROW_WR_TARGET:
                         diag["feasible_row_ge_66"] += 1
-                        # §18: among contract-feasible rows keep the
-                        # one with the best REAL (net) win rate on
-                        # train, gross WR as the tie-break — gate (ii)
-                        # is a net gate, so selection targets it.
+                    # §20: among rows that can still CLEAR THE HOLDOUT
+                    # WILSON BAR (train WR ≥ ROW_WR_BUF[tf] and train
+                    # Wilson lo ≥ 0.66) keep the one with the best REAL
+                    # (net) win rate on train — gate (ii) is a net gate
+                    # and gate (iii) needs the Wilson margin.
+                    buf = ROW_WR_BUF.get(w_min, 0.69)
+                    n_trw = int(tr_w_eff.sum())
+                    wil_lo_tr = wilson(int(win[tr_w_eff].sum()), n_trw)[0]
+                    if wr_tr >= buf and wil_lo_tr >= ROW_WR_TARGET:
                         key = (nwr_tr, wr_tr)
                         if (row_win is None
                                 or key > (row_nwr_feas, row_wr_feas)):
@@ -476,51 +522,57 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
             for m in M_ERA:
                 if m >= 999.0 and k != K_ERA[0]:
                     continue                # ride geometry: one k only
-                er = era_sim(side, starts, i_entry, i_exit, entry, scale,
-                             t, h, l, c, k, m, fr_bps)
-                if not er:
-                    continue
-                ey = np.array([years[r["start_i"]] for r in er])
-                ep = np.array([r["pnl_net"] for r in er])
-                tr_e = (np.ones(len(er), bool) if single
-                        else ey < uniq_years[-1])
-                need_eras = (MIN_ERA_TRAIN_SINGLE if single
-                             else MIN_ERA_TRAIN)
-                if int(tr_e.sum()) < need_eras:
-                    continue
-                ev_tr = float(ep[tr_e].mean())
-                if era_ev_best is None or ev_tr > era_ev_best:
-                    era_ev_best = ev_tr
-                # per-train-year robustness: positive in ≥60 % of the
-                # train years (train-only — never looks at holdout)
-                if not single:
-                    tr_years = sorted(set(int(y) for y in ey[tr_e]))
-                    year_means: list[float] = []
-                    pos_years = 0
-                    for yy in tr_years:
-                        mask_y = tr_e & (ey == yy)
-                        if mask_y.any():
-                            ym = float(ep[mask_y].mean())
-                            year_means.append(ym)
-                            if ym > 0:
-                                pos_years += 1
-                    robust = (len(tr_years) > 0 and
-                              pos_years >= math.ceil(0.6 * len(tr_years)))
-                    # §17 rung stats — worst TRAIN year, train PF
-                    worst = min(year_means) if year_means else ev_tr
-                else:
-                    robust = True
-                    worst = ev_tr
-                e_tr = ep[tr_e]
-                epos = float(e_tr[e_tr > 0].sum())
-                eneg = float(-e_tr[e_tr < 0].sum())
-                pf = float("inf") if eneg <= 0 else epos / eneg
-                diag["feasible_era_gt0"] += int(ev_tr > 0)
-                if ev_tr <= 0 or not robust:
-                    continue
-                era_cands.append({"ev": ev_tr, "k": k, "m": m, "er": er,
-                                  "ey": ey, "ep": ep, "worst": worst,
-                                  "pf": pf})
+                for gate_l in ERA_GATES:
+                    er = era_sim(side, starts, i_entry, i_exit, entry,
+                                 scale, t, h, l, c, k, m, fr_bps,
+                                 gate_l_min=gate_l)
+                    if not er:
+                        continue
+                    ey = np.array([years[r["start_i"]] for r in er])
+                    ep = np.array([r["pnl_net"] for r in er])
+                    tr_e = (np.ones(len(er), bool) if single
+                            else ey < uniq_years[-1])
+                    need_eras = (MIN_ERA_TRAIN_SINGLE if single
+                                 else MIN_ERA_TRAIN)
+                    if int(tr_e.sum()) < need_eras:
+                        continue
+                    ev_tr = float(ep[tr_e].mean())
+                    if era_ev_best is None or ev_tr > era_ev_best:
+                        era_ev_best = ev_tr
+                    # per-train-year robustness: positive in ≥60 % of the
+                    # train years (train-only — never looks at holdout)
+                    if not single:
+                        tr_years = sorted(set(int(y) for y in ey[tr_e]))
+                        year_means: list[float] = []
+                        pos_years = 0
+                        for yy in tr_years:
+                            mask_y = tr_e & (ey == yy)
+                            if mask_y.any():
+                                ym = float(ep[mask_y].mean())
+                                year_means.append(ym)
+                                if ym > 0:
+                                    pos_years += 1
+                        robust = (len(tr_years) > 0 and
+                                  pos_years >= math.ceil(
+                                      0.6 * len(tr_years)))
+                        # §17 rung stats — worst TRAIN year, train PF
+                        worst = min(year_means) if year_means else ev_tr
+                    else:
+                        robust = True
+                        worst = ev_tr
+                    e_tr = ep[tr_e]
+                    epos = float(e_tr[e_tr > 0].sum())
+                    eneg = float(-e_tr[e_tr < 0].sum())
+                    pf = float("inf") if eneg <= 0 else epos / eneg
+                    diag["feasible_era_gt0"] += int(ev_tr > 0)
+                    # §20: train mean must clear ERA_MARGIN (5 bps) —
+                    # §19's gate-(i) miss was a ~3 bps train mean.
+                    if ev_tr < ERA_MARGIN or not robust:
+                        continue
+                    era_cands.append({"ev": ev_tr, "k": k, "m": m,
+                                      "gate": gate_l, "er": er,
+                                      "ey": ey, "ep": ep, "worst": worst,
+                                      "pf": pf})
         diag["era_ev_best_train"] = (round(era_ev_best, 6)
                                      if era_ev_best is not None else None)
         diag["n_eras"] = (len(era_cands[0]["er"]) if era_cands else None)
@@ -560,11 +612,15 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
         cands = [c for c in v["cands"] if rung_pred(c)]
         if not cands:
             continue
-        best_era = max(cands, key=lambda c: c["ev"])
+        # §20: within the rung pick the MAXIMIN era — best worst-train-
+        # year EV first (anti-overfit: a geometry that never had a bad
+        # train year generalizes better), mean train EV as tie-break.
+        best_era = max(cands, key=lambda c: (c["worst"], c["ev"]))
         feasible += 1
-        cand = (v["nwr_tr"] or 0.0, v["wr_tr"], best_era["ev"], name,
+        cand = (v["nwr_tr"] or 0.0, v["wr_tr"], best_era["worst"], name,
                 v["row_k"], v["row_m"],
-                best_era["k"], best_era["m"], best_era["er"],
+                best_era["k"], best_era["m"], best_era["gate"],
+                best_era["er"],
                 best_era["ey"], best_era["ep"], v["row_win"],
                 v["row_pnl"], best_era["worst"], best_era["pf"])
         if best is None or cand[:3] > best[:3]:
@@ -574,13 +630,14 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
     out["n_feasible_train"] = feasible
     if best is None:
         out["status"] = "no_feasible_config"
-        out["note"] = ("no side reached row WR ≥ 0.66 (row contract) AND "
-                       "a GUARDED era (m ≤ 3, §18) with positive train "
-                       "era-EV after the FULL Binance round trip "
+        out["note"] = ("no side reached the §20 row bar (train WR >= "
+                       "ROW_WR_BUF[tf] + train Wilson lo >= 0.66) AND a "
+                       "GUARDED era (m <= 3) with train mean era-EV >= "
+                       "5 bps after the FULL Binance round trip "
                        "— honest failure, reported as such")
         return out
 
-    (nwr_tr_sel, wr_tr_sel, ev_tr, side_name, kr, mr, ke, me, er, ey,
+    (nwr_tr_sel, wr_tr_sel, ev_tr, side_name, kr, mr, ke, me, ge, er, ey,
      ep, win, pnl, worst_sel, pf_sel) = best
     rung_sel = rung
     side_rows[side_name]["n_eras"] = len(er)
@@ -600,6 +657,12 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
             # of windows that are still winners after ALL Binance costs
             "row_wr_net": round(nwin_ / max(1, len(w_)), 4),
             "row_wr_net_wilson": [round(nlo, 4), round(nhi, 4)],
+            # §20 disclosure (NOT a gate): stress test at DOUBLED
+            # costs — if this collapses the edge is cost-fragile
+            # (blofin/backtesting guidance: double the costs and see
+            # whether the edge survives).
+            "row_wr_net_2x": round(
+                float((pnl[mask_w] > 2.0 * _RT).mean()), 4),
             "era_n": int(len(e_)),
             "era_wr": (round(float((e_ > 0).mean()), 4)
                        if len(e_) else None),
@@ -624,6 +687,7 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
         "side": side_name,
         "row_k": kr, "row_m": mr,          # T1 geometry (every window)
         "era_k": ke, "era_m": me,          # T2 geometry (real position)
+        "era_gate_l": int(ge),             # §20 TSMOM gate (min; 0=off)
         "flip_rate": round(float(np.mean(side[1:] != side[:-1])), 4),
         "n_eras": len(er),
         "train": _agg(np.ones(n, bool) if single else tr_w, tr_e),
@@ -632,12 +696,16 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
         "selection": ("train-only" if not single
                       else "SINGLE-YEAR IN-SAMPLE (disclosed, not forward)"),
         "selection_rule": (
-            f"v9 §18: robustness rung {rung_sel} (train-only ladder: "
+            f"v10 §20: robustness rung {rung_sel} (train-only ladder: "
             "A = worst train-year EV>0 & PF>=1.15, B = worst train-year "
-            "EV>0, C = 60% train-years robust); within the rung max "
-            "TRAIN row WR_NET = P(gross > full RT) first, then gross "
-            "row WR, then train era EV; train-only — the holdout was "
-            "never consulted"),
+            "EV>0, C = 60% train-years robust, every candidate also "
+            f"mean>= {ERA_MARGIN} train); within the rung MAXIMIN era "
+            "(best worst-train-year EV, mean tie-break, TSMOM gate "
+            "train-selected from ERA_GATES); cross-side key = TRAIN "
+            "row WR_NET (P(gross > full RT)) subject to train WR >= "
+            f"ROW_WR_BUF[{w_min}] and train Wilson lo >= 0.66, then "
+            "gross row WR, then era worst-year EV; train-only — the "
+            "holdout was never consulted"),
         "train_row_wr_selected": round(wr_tr_sel, 4),
         "train_row_wr_net_selected": round(float(nwr_tr_sel), 4),
         "selection_rung": rung_sel,

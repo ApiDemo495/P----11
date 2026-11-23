@@ -238,6 +238,19 @@ def era_geometry(symbol: str, tf: str) -> tuple[float, float] | None:
     return float(sel["era_k"]), float(sel["era_m"])
 
 
+def era_gate(symbol: str, tf: str) -> int:
+    """§20 TSMOM absolute-momentum gate lookback in minutes; 0 = off.
+
+    Read from the certified artifact's ``selected.era_gate_l`` (written
+    by ``backtest.hold.grade_cell``).  v8-era artifacts predate the
+    field → 0 → live behaviour is byte-identical to before.
+    """
+    c = cell(symbol, tf)
+    if not c or c.get("status") != "ok":
+        return 0
+    return int((c.get("selected") or {}).get("era_gate_l") or 0)
+
+
 # ─────────────────────────── side semantics ──────────────────────────
 def side_value(side_name: str, closes: np.ndarray, i_entry: int,
                step_s: int) -> int:

@@ -6086,8 +6086,24 @@ class PredictionEngine:
                     entry_px = float(closes[i_e]) if i_e >= 0 else 0.0
                     scale = _hp.scale_at_feed(self.feed, symbol, tf, now=s)
                     if side and entry_px > 0:
+                        # §20 TSMOM gate — slow-trend sign vs side at
+                        # the run start (batch parity: window-entry
+                        # returns, warmup → take).  Consulted only by
+                        # the accountant when a NEW run would start.
+                        gate_ok = True
+                        gl = _hp.era_gate(symbol, tf)
+                        if gl > 0:
+                            j = bisect_left(times, float(s) - gl * 60.0)
+                            # last bar at/before s−L (batch uses the
+                            # window-entry bar — ± one window, same
+                            # formula, causal)
+                            if j >= 1:
+                                r = (float(closes[i_e])
+                                     / float(closes[j - 1]) - 1.0)
+                                gate_ok = not (int(side) * r < 0.0)
                         _he.accountant(symbol, tf).on_window(
-                            side, entry_px, float(scale or 0.0), float(s))
+                            side, entry_px, float(scale or 0.0), float(s),
+                            gate_ok=gate_ok)
                 # closed-bar first-touch scan while inside the position
                 acct = _he.accountant(symbol, tf)
                 i0 = int(cur.get("bar_i", 0))
