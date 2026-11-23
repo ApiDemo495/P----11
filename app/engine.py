@@ -153,7 +153,7 @@ def _recheck_prediction(*, direction: int, conf: float, floor: float,
                         ratio, lock_dir: int, tfs_computed: int,
                         exp_bps=None, exp_n: int = 0,
                         exp_bps_all=None, exp_n_all: int = 0,
-                        exp_sd=None) -> dict:
+                        exp_sd=None, pa_conflict: bool = False) -> dict:
     """The analysis RECHECK — correctness is hard, opinion is graded.
 
     It used to be a flat AND of seven checks, so a single soft
@@ -209,6 +209,13 @@ def _recheck_prediction(*, direction: int, conf: float, floor: float,
         + (f" ({', '.join(agreeing)})" if agreeing else "")
         if direction else "no direction to agree with",
         0.45, credit=(min(1.0, n_agree / 4.0) if direction else 0.0))
+    if pa_conflict:
+        add("strong opposing price action", False,
+            "closed-bar structure + level + trigger oppose the proposed side; "
+            "watch-only until the conflict resolves", 0.0, hard=True)
+    else:
+        add("strong opposing price action", True,
+            "no strong context-gated price-action veto", 0.0, hard=True)
 
     ratio_ok = bool(levels_ok and ratio is not None
                     and 1.0 <= float(ratio) <= 4.0)
@@ -269,17 +276,17 @@ def _recheck_prediction(*, direction: int, conf: float, floor: float,
     passed = (not hard_failed) and direction != 0 and score >= RECHECK_PASS_SCORE
     if hard_failed:
         _det = {c["name"]: c["detail"] for c in checks if c["hard"]}
-        verdict = ("NO TRADE — hard rule failed: " + "; ".join(
+        verdict = ("WATCH ONLY — hard rule failed: " + "; ".join(
             f"{n} ({_det.get(n, '')})" for n in hard_failed))
     elif direction == 0:
-        verdict = "NO TRADE — no direction to issue"
+        verdict = "NO CALL — no direction to issue"
     elif passed:
         verdict = (f"RECHECK PASSED — graded score {score:.2f} ≥ "
                    f"{RECHECK_PASS_SCORE:.2f}"
                    + (f" (soft flags: {', '.join(failed)})" if failed
                       else " (every check green)"))
     else:
-        verdict = (f"NO TRADE — graded score {score:.2f} < "
+        verdict = (f"WATCH ONLY — graded score {score:.2f} < "
                    f"{RECHECK_PASS_SCORE:.2f}; weakest: "
                    + ", ".join(c["name"] for c in graded if not c["ok"]))
     return {"passed": bool(passed), "checks": checks, "failed": failed,
@@ -2170,7 +2177,7 @@ class PredictionEngine:
                     + ("Confidence cleared the 0.35 issue floor — signal issued."
                        if fin["issued"] else
                        f"Confidence {fin['confidence']:.3f} below the 0.35 floor — "
-                       "correct call is NO TRADE until signals align.")
+                       "correct action is watch-only until signals align.")
                 )
                 # advice §8.2 direction ladder + §8.1 weighted mass —
                 # printed with the pick so the WHY panel shows WHICH rung
@@ -3373,8 +3380,24 @@ class PredictionEngine:
             # and only then a prediction (user order). The analysis may
             # NOT contradict the locked call, may NOT issue on stale
             # data, broken levels, a split vote, or sub-floor confidence.
+            _pa = {"direction": 0, "score": 0.0, "strong": False,
+                   "reason": "price action unavailable"}
+            try:
+                from .price_action import read as _price_action_read
+                _pa_state = self.feed.state(symbol)
+                _pa = _price_action_read(
+                    list(getattr(_pa_state, "times", []) or []),
+                    list(getattr(_pa_state, "opens", []) or []),
+                    list(getattr(_pa_state, "closes", []) or []),
+                    list(getattr(_pa_state, "highs", []) or []),
+                    list(getattr(_pa_state, "lows", []) or []),
+                    list(getattr(_pa_state, "volumes", []) or []),
+                    price=float(price or 0.0), now=time.time())
+            except Exception:
+                log.exception("price-action read failed for %s|%s", symbol, tf)
             _voters = {
                 "fused": int(res.get("direction") or 0),
+                "price_action": int(_pa.get("direction") or 0),
                 "emotion": int((store.get("emotions") or {}).get(tf, {})
                                .get("polarity") or 0),
                 "physics": (1 if (store.get("physics") or {}).get(tf, {})
@@ -3425,7 +3448,11 @@ class PredictionEngine:
                 exp_bps_all=_lstats.get("exp_bps"),
                 exp_n_all=int(_lstats.get("exp_n_all")
                               or _lstats.get("n") or 0),
-                exp_sd=_lstats.get("exp_sd_recent"))
+                exp_sd=_lstats.get("exp_sd_recent"),
+                pa_conflict=bool(
+                    _pa.get("strong") and _pa.get("direction")
+                    and direction
+                    and int(_pa.get("direction")) != int(direction)))
             await self._emit_stage(
                 job, "recheck", "done" if recheck["passed"] else "blocked",
                 _t_re, time.time(), recheck["verdict"],
@@ -3450,6 +3477,7 @@ class PredictionEngine:
                      / max(1, sum(1 for v in _voters.values() if v != 0)))
                     if direction and any(_voters.values()) else 0.0, 4),
                 "voters": _voters,
+                "price_action": _pa,
                 "provisional": not bool(_lv),
                 "price": price,
                 "entry": round(entry_used, 6),
@@ -5595,20 +5623,23 @@ class PredictionEngine:
                 if not _scale or _scale <= 0:
                     _scale = float(final.get("atr") or 0.0)
                     _scale_src = "engine ATR warmup proxy (q80 not yet estimable)"
-                # §18: the live lock is the ERA RIDE when the cell
-                # carries guarded era stops (m < 999 — every v9 cell);
-                # a legacy v9-less artifact (v8 m=999 ride, unbounded)
-                # falls back to the ROW ladder + window settlement so
-                # the old shipped file keeps working unchanged.
+                # Every sealed hold lock follows a bounded trade lifecycle.
+                # Use guarded-era geometry when certified; the v8 m=999
+                # cells use the measured row ladder but still have a
+                # maximum hold and TP/SL/side-flip settlement.
                 _sum = _hp_s.summary(symbol, tf)
                 _era_m = float(_sum.get("era_m") or 0.0)
-                _use_era = bool(_scale and _scale > 0 and _era_m
-                                and 0 < _era_m < 999.0)
+                _use_era_geometry = bool(_scale and _scale > 0 and _era_m
+                                         and 0 < _era_m < 999.0)
+                # Every hold-cell lock is bounded, even if warmup data is
+                # too thin to derive row geometry (then retain the measured
+                # analysis levels but still enforce maximum hold).
+                _use_era = True
                 _bars_pair = (
                     _hp_s.build_era_bars(
                         symbol, tf, entry_hold,
                         int(final.get("direction") or 0), _scale)
-                    if _use_era else
+                    if _use_era_geometry else
                     (_hp_s.build_row_bars(
                         symbol, tf, entry_hold,
                         int(final.get("direction") or 0), _scale)
@@ -5622,6 +5653,7 @@ class PredictionEngine:
                     "scale_source": _scale_src,
                     "row_tp": tp, "row_sl": sl,
                     "era_ride": _use_era,
+                    "geometry": "guarded_era" if _use_era_geometry else "row",
                     "era_max_hold_s": (_hp_s.ERA_MAX_HOLD_S
                                        if _use_era else None),
                     "settle_rules": _hp_s.row_settle_rules(symbol, tf),
@@ -5640,6 +5672,7 @@ class PredictionEngine:
                            for k, v in (final.get("voters") or {}).items()},
             "brain_signals": brain_sigs,
             "voters": final.get("voters"),
+            "price_action": final.get("price_action"),
             "weightage": final.get("weightage"),
             "ai": {k: v for k, v in (final.get("ai") or {}).items()
                    if k in ("source", "backend", "direction", "confidence",
@@ -5652,9 +5685,8 @@ class PredictionEngine:
                           or (final.get("thinking") or {}).get("signature")),
         }
         if hold_block:
-            # settlement reads this: hold cells grade rows with the
-            # certified first-touch rules (SL wins ties, flat = loss,
-            # no friction on rows — eras carry the round trips)
+            # Backtest row rules retain a pessimistic SL-first bound;
+            # live OHLC ties are unresolvable and are never learned as loss.
             evidence["hold_policy"] = hold_block
         return self.predlocks.seal(
             symbol, tf,
@@ -5942,28 +5974,33 @@ class PredictionEngine:
                 closes = list(getattr(st, "closes", []) or [])
                 highs = list(getattr(st, "highs", []) or [])
                 lows = list(getattr(st, "lows", []) or [])
+                minute_now = (int(now if now is not None else time.time()) // 60) * 60
+                # A bar with timestamp == current minute is still forming;
+                # never let its partial high/low decide a sealed outcome.
+                closed_n = sum(1 for ts in times if float(ts) < minute_now)
                 # only the bars printed since the newest open lock matter;
                 # passing the session extreme would settle a lock on a touch
                 # that happened before it existed.
                 opens = [r for r in (self.predlocks.rows or [])
                          if r.get("symbol") == symbol
                          and r.get("status") == "open"]
+                if opens:
+                    # Explicit empty series means "no closed bars yet";
+                    # don't fall back to the forming live quote for TP/SL.
+                    series_by_sym[symbol] = []
                 if opens and closes:
                     since = min(float(r.get("created_at") or 0.0)
                                 for r in opens)
-                    n = len(closes)
-                    lo_i = max(0, n - int(max(1, (time.time() - since) / 60)))
-                    extremes[symbol] = (
-                        max(highs[lo_i:] or [closes[-1]]),
-                        min(lows[lo_i:] or [closes[-1]]))
-                    # certified hold rows grade bar-by-bar (SL-first
-                    # same-bar ties) — pass the closed-bar series so the
-                    # live walk matches backtest.continuous._simulate
-                    if times:
+                    n = min(closed_n, len(closes), len(times),
+                            len(highs), len(lows))
+                    lo_i = max(0, n - int(max(1, ((now or time.time()) - since) / 60)))
+                    # The lock can only learn from completed OHLC bars.
+                    # No aggregate extremes: they erase sequence and used
+                    # to turn two touches inside the same candle into a loss.
+                    if n > lo_i:
                         series_by_sym[symbol] = [
-                            (float(times[j]), float(highs[j]),
-                             float(lows[j]))
-                            for j in range(lo_i, len(times))
+                            (float(times[j]), float(highs[j]), float(lows[j]))
+                            for j in range(lo_i, n)
                         ]
             # §18: the CURRENT certified side per (symbol, tf) — an
             # open era ride exits at market when it no longer matches
@@ -5975,7 +6012,7 @@ class PredictionEngine:
                         getattr(cyc, "direction", 0) or 0)
                 except Exception:
                     continue
-            rows = self.predlocks.settle_all(prices, extremes=extremes,
+            rows = self.predlocks.settle_all(prices, extremes={},
                                               now=now,
                                               series=series_by_sym,
                                               sides_now=sides_now)
@@ -6016,15 +6053,15 @@ class PredictionEngine:
             _nz = [d for d in _dirs if d]
             _agree = (sum(1 for d in _nz if d == int(final["direction"]))
                       / len(_nz)) if _nz else 0.5
-            if _agree >= 0.75:
-                _mult, _eff = 1.05, "committee confirms (+5% confidence)"
-            elif _agree <= 0.25:
-                _mult, _eff = 0.95, "committee challenges (-5% confidence)"
-            else:
-                _mult, _eff = 1.0, "committee split (confidence unchanged)"
+            # An uncalibrated board vote is not accuracy evidence. Keep it
+            # visible as telemetry, but never let it inflate/deflate the
+            # displayed probability; only realised outcomes may calibrate it.
             _c0 = float(final.get("confidence") or 0.0)
-            final["confidence"] = round(
-                min(1.0, max(0.05, _c0 * _mult)), 4)
+            _eff = ("committee confirms (telemetry only; confidence unchanged)"
+                    if _agree >= 0.75 else
+                    "committee challenges (telemetry only; confidence unchanged)"
+                    if _agree <= 0.25 else
+                    "committee split (telemetry only; confidence unchanged)")
             final["committee"] = {
                 **_last.as_dict(),
                 "agree_share": round(_agree, 3),
@@ -6032,8 +6069,9 @@ class PredictionEngine:
                 "confidence_before": _c0,
                 "confidence_after": final["confidence"],
                 "direction_held": True,
-                "rule": ("bounded ±5% confidence; the certified hold "
-                         "side is never flipped by the board"),
+                "rule": ("telemetry only; confidence changes only from "
+                         "realised calibration, and the certified side "
+                         "is never flipped by the board"),
             }
         except Exception:
             log.exception("committee contribution failed for %s|%s",
@@ -6073,7 +6111,7 @@ class PredictionEngine:
                 key = (symbol, tf)
                 cur = self._hold_cursor.get(key)
                 if cur is None:
-                    cur = {"win": 0.0, "bar_i": 0}
+                    cur = {"win": 0.0, "bar_i": -1}
                     self._hold_cursor[key] = cur
                 W = TIMEFRAMES[tf]["minutes"] * 60
                 # window boundary (epoch grid, hold.py's start anchor)
@@ -6106,14 +6144,18 @@ class PredictionEngine:
                             gate_ok=gate_ok)
                 # closed-bar first-touch scan while inside the position
                 acct = _he.accountant(symbol, tf)
-                i0 = int(cur.get("bar_i", 0))
+                i0 = int(cur.get("bar_i", -1))
+                closed_i = max((j for j, ts in enumerate(times)
+                                if float(ts) < minute_now), default=-1)
                 new_bars = [(float(times[j]), float(highs[j] or closes[j]),
                              float(lows[j] or closes[j]))
-                            for j in range(i0 + 1, len(times))
-                            if float(times[j]) < minute_now]
+                            for j in range(i0 + 1, closed_i + 1)]
                 if new_bars and acct.in_position:
                     acct.on_bars(new_bars)
-                cur["bar_i"] = len(times) - 1
+                # Do not advance the cursor over a forming candle. The feed
+                # updates that same timestamp when it finally closes; advancing
+                # too early permanently skipped its OHLC range.
+                cur["bar_i"] = max(i0, closed_i)
 
     def hold_cells_block(self, now: float | None = None) -> dict:
         """The live 16-cell picture: certified tier + win rate +
@@ -6170,7 +6212,7 @@ class PredictionEngine:
             "direction": int(res.get("direction") or 0),
             "direction_label": ("BUY" if (res.get("direction") or 0) > 0
                                 else "SELL" if (res.get("direction") or 0) < 0
-                                else "NO TRADE"),
+                                else "FLAT"),
             "signal": ("BUY" if (res.get("direction") or 0) > 0
                        else "SELL" if (res.get("direction") or 0) < 0
                        else "FLAT"),

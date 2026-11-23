@@ -21,9 +21,11 @@ Rules
   non-finite price or a zero confidence is refused with the exact reasons.
   A below-floor call may still be sealed as ``kind="watch"`` — it is a
   prediction, it is graded, it is simply not execution-eligible.
-* **Settlement is measured, never guessed.**  A barrier touch wins/loses the
-  lock; otherwise the strict sign of the price at expiry decides.  A price
-  exactly at entry is a ``push`` and is excluded from the hit-rate.
+* **Settlement is measured from closed bars.**  A single barrier touch
+  grades the lock. If TP and SL are both inside one OHLC bar, sequence is
+  unknowable and the result is ``ambiguous`` (ungraded, no bps), never an
+  invented loss. The backtest retains SL-first only as a pessimistic bound.
+  Flat at exit is a ``push`` and is excluded from the hit-rate.
 * **Learning is attached, not implied.**  ``settle_all`` returns the rows
   that just closed; the engine feeds their stored evidence (formula signs,
   subsystem votes, confidence, agent call) into the existing learners.
@@ -162,7 +164,7 @@ class PredictionJournal:
         for row in reversed(self.rows):
             if (row.get("symbol") == symbol and row.get("tf") == tf
                     and row.get("window") == window
-                    and row.get("status") in ("open", "won", "lost", "push")):
+                    and row.get("status") in ("open", "won", "lost", "push", "ambiguous")):
                 return {**self._public(row), "locked": True, "already": True,
                         "why": [f"{symbol} {tf.upper()} is already locked for "
                                 "this {W}-minute window — the sealed prediction "
@@ -238,12 +240,11 @@ class PredictionJournal:
                side_now: int | None = None) -> list[dict]:
         """Settle every open lock for (symbol, tf) that has resolved.
 
-        ``series`` — optional ``[(ts, high, low), …]`` of closed bars
-        for this asset.  Certified hold rows use it to grade the
-        window BAR-BY-BAR in time order with SL winning same-bar ties,
-        exactly like ``backtest.continuous._simulate`` (0 parity
-        mismatches); without it the aggregate sample falls back to the
-        documented hold tie rules.
+        ``series`` — optional ``[(ts, high, low), …]`` of CLOSED bars.
+        If both barriers lie inside one candle, the order is unknowable
+        from OHLC: status becomes ``ambiguous`` (ungraded, no bps), never
+        an invented win or loss. The backtest's SL-first walk is retained
+        only as its pessimistic bound, not as live truth.
 
         ``side_now`` — the CURRENT certified side (±1).  An open
         **era ride** (§18, settle_mode ``era_ride``) exits at market
@@ -266,25 +267,24 @@ class PredictionJournal:
             entry = _finite(row.get("entry")) or 0.0
             tp = _finite(row.get("tp")) or 0.0
             sl = _finite(row.get("sl")) or 0.0
-            hit_tp = (hi >= tp) if d > 0 else (lo <= tp)
-            hit_sl = (lo <= sl) if d > 0 else (hi >= sl)
+            # If the caller supplied a bar series (even an empty one),
+            # only completed bars may trigger TP/SL. The live spot price
+            # is reserved for a market exit at side-flip/expiry, not a
+            # substitute for a completed-bar barrier touch.
+            if series is None:
+                hit_tp = (hi >= tp) if d > 0 else (lo <= tp)
+                hit_sl = (lo <= sl) if d > 0 else (hi >= sl)
+            else:
+                hit_tp = hit_sl = False
             expired = now >= float(row.get("expires_at") or 0.0)
-            # CERTIFIED HOLD POLICY rows grade every window with the
-            # benchmark's rules: SL wins same-window ties (a both-
-            # touch is a LOSS, never an excluded "ambiguous") and a
-            # flat settle at expiry is a LOSS (tie = loss — no row
-            # ever escapes the denominator).  Legacy locks keep the
-            # original semantics untouched.
+            # Walk closed bars for every lock, not just hold rows. OHLC
+            # cannot reveal which barrier traded first inside one candle;
+            # label that result unresolved rather than guessing SL-first.
             hold = (row.get("evidence") or {}).get("hold_policy") or {}
             hold_rules = bool(hold.get("hold_rules"))
             result = None
             reason = None
-            if hold_rules and series:
-                # BAR-BY-BAR in time order, SL first inside each bar —
-                # the identical walk backtest.continuous._simulate
-                # performs over the window's native bars (this is the
-                # zero-parity path; the aggregate below is only the
-                # fallback when no bar series is available).
+            if series:
                 created = float(row.get("created_at") or 0.0)
                 horizon = float(row.get("expires_at") or now)
                 for ts, bhi, blo in series:
@@ -300,24 +300,21 @@ class PredictionJournal:
                     else:
                         sl_hit = bhi >= sl
                         tp_hit = blo <= tp
+                    if sl_hit and tp_hit:
+                        result = "ambiguous"
+                        reason = ("both TP and SL crossed inside one closed "
+                                  "bar; OHLC cannot establish order")
+                        break
                     if sl_hit:
-                        result = "lost"
-                        reason = ("SL wins same-bar ties (hold policy — "
-                                  "sequential bar grade)")
+                        result, reason = "lost", "SL touched on a closed bar"
                         break
                     if tp_hit:
-                        result = "won"
-                        reason = ("TP touched before SL (hold policy — "
-                                  "sequential bar grade)")
+                        result, reason = "won", "TP touched on a closed bar"
                         break
             if result is None and hit_tp and hit_sl:
-                if hold_rules:
-                    result = "lost"
-                    reason = ("SL wins same-window ties (hold policy — "
-                              "both barriers inside the window)")
-                else:
-                    result = "ambiguous"
-                    reason = "both barriers were crossed inside one sample"
+                result = "ambiguous"
+                reason = ("both TP and SL crossed inside the available sample; "
+                          "OHLC cannot establish order")
             elif result is None and hit_tp:
                 result, reason = "won", "TP touched before SL"
             elif result is None and hit_sl:
@@ -333,10 +330,6 @@ class PredictionJournal:
                     result = "won" if d > 0 else "lost"
                 elif move < -1e-12:
                     result = "lost" if d > 0 else "won"
-                elif hold_rules:
-                    result = "lost"
-                    reason = ("flat settle at side flip = loss "
-                              "(hold policy — every ride counted)")
                 else:
                     result = "push"
                 if reason is None:
@@ -349,10 +342,6 @@ class PredictionJournal:
                     result = "won" if d > 0 else "lost"
                 elif move < -1e-12:
                     result = "lost" if d > 0 else "won"
-                elif hold_rules:
-                    result = "lost"
-                    reason = ("flat settle at expiry = loss (hold policy "
-                              "— every window counted, tie loses)")
                 else:
                     result = "push"
                 if reason is None:
@@ -378,7 +367,7 @@ class PredictionJournal:
                                       "same-window"))
             _ref = ((tp if result == "won" else sl) if _touch else p)
             row["bps"] = (round(d * (_ref / entry - 1.0) * 1e4, 2)
-                          if entry else None)
+                          if entry and result != "ambiguous" else None)
             row["graded"] = result in ("won", "lost")
             self._history({"type": "prediction_lock", "event": "settled",
                            **self._compact(row)})

@@ -565,8 +565,10 @@ def _mom44h_live(times, closes, i_entry: int, side_name: str) -> int:
 # ─────────────────── row settlement (hold rules) ─────────────────────
 def row_settle_rules(symbol: str, tf: str) -> dict[str, Any]:
     """How a sealed lock for this cell must be graded — the certified
-    first-touch rules (SL wins same-window ties; a flat settle is a
-    LOSS, not a push; friction belongs to eras, never to rows)."""
+    benchmark row rules. The backtest reports SL-first as a pessimistic
+    bound; live OHLC cannot order same-bar TP/SL, so live grading marks
+    that bar ambiguous and never learns a guessed result. A flat expiry
+    is a push (friction belongs to measured trades/eras, never rows)."""
     c = cell(symbol, tf)
     if not is_hold_cell(symbol, tf):
         return {"hold_rules": False}
@@ -575,8 +577,9 @@ def row_settle_rules(symbol: str, tf: str) -> dict[str, Any]:
         "hold_rules": True,
         "row_k": g[0] if g else None,
         "row_m": g[1] if g else None,
-        "tie_rule": "SL wins same-window ties",
-        "flat_rule": "zero move at expiry = loss (every window counted)",
+        "tie_rule": ("live: both barriers in one closed OHLC bar = "
+                     "ambiguous, no W/L; backtest SL-first is pessimistic bound"),
+        "flat_rule": "zero move at max hold = push (not a fabricated loss)",
         "friction": ("charged once per era round trip by the era "
                      "accountant — rows carry none"),
     }

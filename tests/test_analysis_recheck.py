@@ -54,3 +54,10 @@ def test_negative_measured_expectancy_blocked():
     assert r2["passed"]
     r3 = _recheck_prediction(**{**GOOD, "exp_bps": -4.2, "exp_n": 5})
     assert r3["passed"]  # too few settled windows to judge yet
+
+
+def test_strong_context_price_action_conflict_vetoes_call():
+    r = _recheck_prediction(**{**GOOD, "pa_conflict": True})
+    assert not r["passed"]
+    assert "strong opposing price action" in r["hard_failed"]
+    assert "watch-only" in r["verdict"]

@@ -1692,3 +1692,74 @@ trend-aligned windows (entry gating, not ride extension); or
 verified row win rate (0.69–0.72 gross, ~0.39 net) as *measurement*
 while the live system keeps v8's certified era policy — until a
 structure clears (iii) on its own pre-registered shot.
+
+## §22 — LIVE LOCK INTEGRITY + PRICE-ACTION CONTEXT (2026-11-20)
+
+This section records **live application correctness changes**, not a
+backtest selection run. No benchmark candidate, certified summary, or
+v8 pin was changed. In particular, this section makes **no claim that
+win rate or post-cost expectancy has improved**.
+
+### 22.1 Settlement: don't invent an intrabar sequence
+
+The former live paths walked OHLC bars SL-first and graded a
+both-barrier candle as a loss; when the prediction-lock walk was
+unavailable it also used aggregate extremes that erased intrabar order.
+Both were guesses presented as outcomes. The benchmark's SL-first
+convention is retained as a **pessimistic bound only**; live prediction
+locks and the era accountant now:
+
+* inspect completed bars only (the current-minute bar cannot trigger
+  TP/SL); the era cursor now advances only across closed bars, so a bar
+  that was forming on the previous pass is not silently skipped;
+* walk bars in time order; one barrier touch grades normally;
+* mark a candle containing both TP and SL **ambiguous**, with no bps,
+  no calibration/learner update, and no win/loss denominator credit;
+* mark a flat max-hold or side-flip exit a push, not a fabricated loss;
+* the era accountant records both-touch bars as ambiguous, excludes them
+  from PnL/accuracy, and separately counts unresolved friction rather
+  than silently treating them as zero-cost trades;
+* give legacy v8 `m=999` hold cells the measured row geometry plus the
+  bounded seven-day TP/SL/side-flip/max-hold lifecycle, rather than a
+  22-minute expiry-sign verdict.
+
+The UI labels ambiguous results explicitly. App prediction locks are
+measurement records and are **not connected to an external demo order
+or its actual fills**; the view says this beside the lock. OHLC can
+still not identify intrabar sequence; tick/exchange fills would be
+needed to resolve it.
+
+### 22.2 Price action enters the recheck, not the confidence multiplier
+
+Added `app/price_action.py`: closed-bar swing structure, nearby support /
+resistance, strict pin/engulfing triggers using observed OHLC, and a
+1.5×-mean volume confirmation. It is context-gated: a lone candle does
+not become a strong vote. It is recorded in the lock, added as a
+recheck voter, and a strong structure+level+trigger conflict forces
+watch-only. It never flips the certified side or inflates confidence.
+The reviewed pattern research warned that standalone candlestick
+patterns have no reliable corrected edge; this implementation is a
+transparent, testable signal input—not a claim of profitability. The
+new input has **not** been selected or validated on out-of-sample PnL;
+future accuracy must be measured before any performance claim.
+
+### 22.3 Confidence and audit corrections
+
+An uncalibrated committee agreement previously multiplied displayed
+confidence by ±5%. It is now telemetry-only; displayed probability is
+left alone and realized outcome calibration remains the source for
+confidence updates. Ambiguous/push outcomes do not enter those rings.
+The live settlement documentation now distinguishes pessimistic
+benchmark tie handling from unknowable live OHLC order. Lock history
+shows ambiguous explicitly; recheck refusals use WATCH ONLY / NO CALL
+wording rather than the prohibited NO TRADE label.
+
+### 22.4 Verification
+
+* `git diff --check`, Python compile for all `app/*.py`, and
+  `node --check static/app.js`: passed.
+* Focused settlement / price-action / recheck tests: **64 passed**.
+* Full suite, run alone: **871 passed, 1 skipped, 0 failed** in 743.94 s.
+* Certified v8 result remains `backtest/results/hold_wr.json`, md5
+  `cee99dc26d359a3de2cbf7c7a2751b8f`. §18 gates remain the acceptance
+  bar; no higher real win rate is certified by this code-only change.
