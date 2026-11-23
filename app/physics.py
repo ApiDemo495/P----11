@@ -1598,3 +1598,96 @@ class PhysicsSystem:
             "alpha_series": len(self.alpha),
             "ufp_component": "99",
         }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# §P26 — DIAGNOSIS-DRIVEN PHYSICS EXTENSIONS (2026-11-23)
+# ═══════════════════════════════════════════════════════════════════════
+# The physics layer already answers "what state is this market in".  What
+# it could not answer — and what the 3-year grading showed was missing —
+# are the two questions that decide whether a book survives:
+#
+#   P26 BARRIER-FRICTION COUPLING  — does the barrier geometry imply a
+#       friction load the move cannot carry?
+#   P27 TRAVEL-TIME ESTIMATOR      — how long until the target is reached,
+#       so a timeout can be set from physics instead of by habit?
+#
+# Both are pure measurement over the tape already in the Scene; neither
+# introduces a new fitted parameter.
+
+def p26_barrier_friction(scene: "Scene", tp_bps: float, sl_bps: float,
+                         rt_bps: float) -> tuple[float, dict]:
+    """P26 BFC — can this barrier geometry pay for its own friction?
+
+    Returns a value in [-1, +1]:
+        +1  the geometry is comfortably payable (target >> cost)
+         0  marginal — the target is around the round trip
+        -1  structurally unpayable (target below cost: a "win" loses money)
+
+    This is the direct analogue of the thermodynamic efficiency of the
+    cycle: work out (tp) versus heat lost to friction (rt) per unit of
+    path.  The engine can refuse to issue a lock whose P26 is strongly
+    negative, which is exactly the defect found in §24 of REAL_RESULTS.
+    """
+    tp = max(float(tp_bps), 1e-9)
+    sl = max(float(sl_bps), 1e-9)
+    rt = max(float(rt_bps), 1e-9)
+    # efficiency: of the target, how much survives the round trip
+    eff = (tp - rt) / tp                       # 1 = cost-free, <0 = unpayable
+    # reward:risk sanity: a 1:40 geometry is not "efficient", it is a lottery
+    rr = tp / sl
+    # map: efficiency dominates; rr above 1 is a mild bonus, below 0.05 a
+    # strong penalty (a lottery ticket is not a business)
+    rr_pen = _tanh((rr - 0.02) * 6.0)
+    v = _tanh(3.0 * (eff - 0.5)) * 0.65 + rr_pen * 0.35
+    detail = {"tp_bps": round(tp, 2), "sl_bps": round(sl, 2),
+              "rt_bps": round(rt, 2),
+              "efficiency": round(eff, 4), "reward_risk": round(rr, 4),
+              "verdict": ("payable" if v > 0.25 else
+                          "marginal" if v > -0.25 else "unpayable"),
+              "note": ("a target at or below the round trip makes every "
+                       "'win' a loss before the market moves at all")}
+    return (max(-1.0, min(1.0, v)), detail)
+
+
+def p27_travel_time(scene: "Scene", target_bps: float) -> tuple[float, dict]:
+    """P27 TTE — expected time to travel `target_bps`, from realised vol.
+
+    Uses the random-walk travel-time law  t ≈ (target / sigma_per_bar)²,
+    which is the honest first-order estimate: with no forecasting skill,
+    the expected time for a barrier to be reached scales with the square
+    of the distance in volatility units.
+
+    Returns a value in [-1, +1] representing *fitness of the horizon*:
+    +1 when the target is reachable well inside one window, -1 when it is
+    many windows away (in which case a window-length timeout guarantees a
+    time-out exit, and the barrier is decorative).
+    """
+    P = list(getattr(scene, "P", []) or [])
+    detail: dict[str, Any] = {"target_bps": round(float(target_bps), 2)}
+    if len(P) < 30 or target_bps <= 0:
+        detail["reason"] = "not enough bars for a travel-time estimate"
+        return (0.0, detail)
+    rets = [(P[i + 1] / P[i] - 1.0) for i in range(len(P) - 1) if P[i] > 0]
+    if len(rets) < 20:
+        detail["reason"] = "not enough returns"
+        return (0.0, detail)
+    sigma = _std(rets) * 1e4                    # bps per bar
+    if sigma <= 1e-12:
+        detail["reason"] = "zero volatility"
+        return (0.0, detail)
+    bars_needed = (target_bps / sigma) ** 2
+    window_bars = max(1, int(getattr(scene, "W", 60) or 60))
+    ratio = bars_needed / window_bars            # <1 means reachable inside
+    v = _tanh((1.0 - ratio) * 1.5)               # >0 reachable, <0 not
+    detail.update({
+        "sigma_bps_per_bar": round(sigma, 4),
+        "bars_to_target": round(bars_needed, 1),
+        "window_bars": window_bars,
+        "ratio": round(ratio, 3),
+        "verdict": ("reachable inside one window" if v > 0.25 else
+                    "marginal" if v > -0.25 else
+                    "further than one window — a window timeout will "
+                    "force a time exit"),
+    })
+    return (max(-1.0, min(1.0, v)), detail)

@@ -392,6 +392,15 @@ class LivePortfolio:
         # a de-risked sleeve trades at reduced size, not full size
         if sleeve.status != "open":
             sized *= THROTTLE_SIZE_SCALE
+        # §E2: the emotional/discipline state may only ever REDUCE size.
+        # FOMO, panic, revenge sizing and complacency are the four states
+        # that turn a small edge into a lost account, and measuring them
+        # without acting on them would be decoration.
+        _disc = getattr(self, "discipline", None)
+        if _disc is None:
+            _disc = self.discipline = {"size_mult": 1.0, "block_new": False,
+                                       "reasons": []}
+        sized *= float(_disc.get("size_mult", 1.0) or 1.0)
         room_book = MAX_GROSS_EXPOSURE - self.gross_exposure
         room_asset = MAX_ASSET_EXPOSURE - self.asset_exposure(sleeve.asset)
         return max(0.0, min(sized, room_book, room_asset))

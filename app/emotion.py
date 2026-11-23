@@ -1434,3 +1434,149 @@ def _crowd(emos, dirs, ids, labels):
              labels[1] if score < -0.15 else labels[2])
     return {"score": round(score, 4), "label": label,
             "channels": list(ids)}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# §E2 — DIAGNOSIS-DRIVEN AFFECT EXTENSIONS (2026-11-23)
+# ═══════════════════════════════════════════════════════════════════════
+# The original 22 emotion cells describe the CROWD's affect.  Grading the
+# whole stack on 3 years of tape showed what was missing: nothing measured
+# the *trader's* affect — the emotional states that actually cost money.
+# These four channels are computed from the same tape and are deliberately
+# about discipline rather than sentiment:
+#
+#   FOMO_PRESSURE   — chasing a move that has already happened
+#   PANIC_URGENCY   — the felt need to act NOW (costs the round trip)
+#   REVENGE_BIAS    — sizing up after a loss
+#   COMPLACENCY_DRIFT — small wins breeding oversized positions
+#
+# Each is [0,1] and each maps to an action limit, so the emotional state
+# changes POSITION SIZE AND HOLDING PERIOD, not just a dashboard colour.
+
+def fomo_pressure(closes: list[float], vol_bps: float,
+                  window: int = 22) -> dict:
+    """How much of the recent move is already behind us (chase risk).
+
+    High when the last `window` bars moved sharply AND the move is late in
+    its own path (most of the net move happened recently).  Chasing a
+    spent move is the single most expensive emotion in trading: it buys
+    the top of the move and pays the round trip for the privilege.
+    """
+    if len(closes) < max(4, window) or window < 3:
+        return {"value": 0.0,
+                "reason": f"needs {max(4, window)} bars, had {len(closes)}"}
+    seg = closes[-(window + 1):]
+    net = seg[-1] / seg[0] - 1.0
+    net_bps = abs(net) * 1e4
+    if vol_bps <= 0:
+        vol_bps = 1.0
+    z = net_bps / max(vol_bps, 1e-9)
+    # late-ness: share of the total path travelled in the final third
+    path = sum(abs(seg[i + 1] - seg[i]) for i in range(len(seg) - 1))
+    _start = max(0, len(seg) - 1 - max(1, window // 3))
+    third = sum(abs(seg[i + 1] - seg[i]) for i in range(_start, len(seg) - 1))
+    late = (third / path) if path > 1e-12 else 0.0
+    v = _clamp(min(1.0, z / 3.0) * (0.4 + 0.6 * late), 0.0, 1.0)
+    return {"value": round(v, 4), "z": round(z, 3), "late_share": round(late, 3),
+            "reading": ("chasing — move is spent" if v > 0.6
+                        else "moderate" if v > 0.3 else "calm")}
+
+
+def panic_urgency(returns: list[float], cost_bps: float) -> dict:
+    """The felt need to act immediately, which is always a cost.
+
+    Measured as the ratio of the current absolute move to the round trip:
+    when a window's move is smaller than the cost of capturing it, acting
+    NOW is pure loss.  High urgency should REDUCE size, never raise it.
+    """
+    if not returns:
+        return {"value": 0.0, "reason": "no returns"}
+    move_bps = abs(returns[-1]) * 1e4
+    if cost_bps <= 0:
+        cost_bps = 30.0
+    ratio = move_bps / cost_bps
+    v = _clamp(1.0 / (1.0 + max(ratio, 1e-6)), 0.0, 1.0)
+    return {"value": round(v, 4), "move_bps": round(move_bps, 2),
+            "cost_bps": round(cost_bps, 2), "ratio": round(ratio, 3),
+            "reading": ("act now would be pure cost" if v > 0.6
+                        else "move clears cost" if v < 0.3 else "marginal")}
+
+
+def revenge_bias(losses: list[float], sizes: list[float]) -> dict:
+    """Sizing up after losses — the classic account killer.
+
+    Compares the average size following a loss with the average size
+    following a win.  A ratio above 1.0 means the book is getting bigger
+    exactly when it has just been proven wrong.
+    """
+    if len(losses) < 4 or len(sizes) < 4:
+        return {"value": 0.0, "reason": "not enough graded trades"}
+    n = min(len(losses), len(sizes))
+    after_loss = [sizes[i] for i in range(1, n) if losses[i - 1] < 0]
+    after_win = [sizes[i] for i in range(1, n) if losses[i - 1] >= 0]
+    if not after_loss:
+        return {"value": 0.0, "reason": "no losses to grade"}
+    m_l = sum(after_loss) / len(after_loss)
+    if not after_win:
+        # Every graded trade followed a loss — there is no win-side baseline
+        # to compare against, so the honest statement is "unmeasurable"
+        # rather than a fabricated ratio.  Report the level so the caller
+        # can still see it, and score 0 (no claim).
+        return {"value": 0.0, "size_after_loss": round(m_l, 4),
+                "reason": "no wins in the ledger — baseline unmeasurable"}
+    m_w = sum(after_win) / len(after_win)
+    if m_w <= 1e-12:
+        return {"value": 1.0, "reason": "sizes after wins are zero"}
+    ratio = m_l / m_w
+    v = _clamp((ratio - 1.0) / 2.0, 0.0, 1.0)
+    return {"value": round(v, 4), "size_after_loss": round(m_l, 4),
+            "size_after_win": round(m_w, 4), "ratio": round(ratio, 3),
+            "reading": ("sizing up after losses" if v > 0.3 else "balanced")}
+
+
+def complacency_drift(win_streak: int, size_mult: float) -> dict:
+    """Small wins breeding oversized positions.
+
+    A long win streak is the most dangerous state in a wide-stop book,
+    because the next trade is the one that pays for all of them.
+    """
+    streak = max(0, int(win_streak))
+    v = _clamp((min(streak, 12) / 12.0) * (0.5 + 0.5 * min(1.0, size_mult)),
+               0.0, 1.0)
+    return {"value": round(v, 4), "win_streak": streak,
+            "size_mult": round(size_mult, 3),
+            "reading": ("complacent — cut size" if v > 0.6 else "normal")}
+
+
+def discipline_overlay(*, fomo: dict, panic: dict, revenge: dict,
+                       complacent: dict) -> dict:
+    """Turn the four channels into ONE position-size multiplier.
+
+    This is the point of the extension: the emotional state has to change
+    the trade, or it is decoration.  The multiplier multiplies (never
+    adds) so it can only ever reduce risk — no emotional reading is
+    allowed to INCREASE position size.
+    """
+    mult = 1.0
+    reasons: list[str] = []
+    if fomo["value"] > 0.6:
+        mult *= 0.5
+        reasons.append("FOMO: move already spent, half size")
+    if panic["value"] > 0.6:
+        mult *= 0.5
+        reasons.append("panic: move smaller than cost, half size")
+    if revenge["value"] > 0.3:
+        mult *= 0.5
+        reasons.append("revenge: sizing up after a loss, half size")
+    if complacent["value"] > 0.6:
+        mult *= 0.6
+        reasons.append("complacency: long win streak, cut 40 %")
+    mult = _clamp(mult, 0.05, 1.0)
+    return {"size_mult": round(mult, 4),
+            "block_new": bool(mult <= 0.25),
+            "reasons": reasons,
+            "note": ("emotional readings may only REDUCE size; nothing here "
+                     "can raise it"),
+            "channels": {"fomo": fomo["value"], "panic": panic["value"],
+                         "revenge": revenge["value"],
+                         "complacency": complacent["value"]}}

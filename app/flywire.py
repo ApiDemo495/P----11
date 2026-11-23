@@ -74,9 +74,12 @@ AVOID_NT = ("glutamate",)
 DN_SUPER = "descending"
 KC_SPARSITY = 0.05            # APL feedback: keep top 5 % of Kenyon cells
 VALENCE_HOPS = 3
-# N_INPUTS: this app's signed directional formula outputs (F1..F31 minus
+# N_INPUTS: this app's signed directional formula outputs (F1..F44 minus
 # F20 DRHE, the confidence gauge) — one odour channel per formula.
-N_INPUTS = 30
+# Grown with the diagnosis-driven block (F36-F44); pinned by
+# tests/test_orderbook_signals.py so the projection can never silently
+# truncate a formula.
+N_INPUTS = 39
 WHOLE_PASS_PERIOD_S = 2.0     # whole-brain pass on a worker thread (B-6)
 RPE_LAMBDA = 2.25
 RPE_TONIC = 0.85

@@ -47,6 +47,17 @@ from .f22_f31 import (
     f31_clre,
 )
 from .f32_f35 import f32_dbi, f33_mpd, f34_cwa, f35_lnp
+from .f36_f44 import (
+    f36_tvf,
+    f37_rpg,
+    f38_vrp,
+    f39_ctx,
+    f40_vlq,
+    f41_fnd,
+    f42_mdc,
+    f43_crc,
+    f44_hdg,
+)
 
 FORMULA_NAMES: dict[int, str] = {
     1: "RPIC", 2: "CDIF", 3: "PEM", 4: "SATD", 5: "IRKG",
@@ -56,6 +67,10 @@ FORMULA_NAMES: dict[int, str] = {
     21: "CCI", 22: "BAPR", 23: "SARD", 24: "FBPS", 25: "TMDM",
     26: "IFDS", 27: "VCDP", 28: "ARC", 29: "DLP", 30: "PCV", 31: "CLRE",
     32: "DBI", 33: "MPD", 34: "CWA", 35: "LNP",
+    # F36-F44: diagnosis-driven block (see f36_f44.py) — each one answers a
+    # defect measured on 3 years of tape, not a new theoretical story.
+    36: "TVF", 37: "RPG", 38: "VRP", 39: "CTX", 40: "VLQ",
+    41: "FND", 42: "MDC", 43: "CRC", 44: "HDG",
 }
 
 FORMULA_FUNCTIONS = {
@@ -67,6 +82,11 @@ FORMULA_FUNCTIONS = {
     26: f26_ifds, 27: f27_vcdp, 31: f31_clre,
     # order-book / liquidation layer (user-authorized extension):
     32: f32_dbi, 33: f33_mpd, 34: f34_cwa, 35: f35_lnp,
+    # diagnosis-driven layer (added 2026-11-23 after grading F1-F35 on
+    # 3 years of real tape): trend persistence, exhaustion, cost-to-edge,
+    # liquidity vacuum, carry, cross-asset confirmation, hold duration.
+    36: f36_tvf, 37: f37_rpg, 38: f38_vrp, 39: f39_ctx, 40: f40_vlq,
+    41: f41_fnd, 42: f42_mdc, 43: f43_crc, 44: f44_hdg,
 }
 
 # Formulas bounded to [-1, +1] (DRHE is the documented exception)

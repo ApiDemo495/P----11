@@ -450,19 +450,25 @@ def test_finalize_confidence_pipeline_order():
     assert fin5["issued"] is (fin5["confidence"] > CONFIDENCE_FLOOR)
 
 
-def test_cci_has_36_weighted_components():
+def test_cci_weighted_component_count_matches_registry():
     from app.config import HEDGE_COMPONENT_ID, HEDGE_INITIAL_WEIGHT
 
     eng = CCIEngine()
     w = eng.get_weights("BTC", "tf1")
     assert set(w) == set(WEIGHT_IDS)
-    assert len(w) == 36
+    from app.config import N_WEIGHT_COMPONENTS
+    # the count is derived, never hardcoded: F36-F44 grew the registry and
+    # a literal 36 here would silently fail to notice a missing formula
+    assert len(w) == N_WEIGHT_COMPONENTS
     assert sum(w.values()) == pytest.approx(1.0, abs=1e-9)
     assert all(W_CLAMP_LO <= v for v in w.values())
     # Section 8: hedge/dark-pool combined starts at exactly 0.08
     assert w[HEDGE_COMPONENT_ID] == pytest.approx(HEDGE_INITIAL_WEIGHT)
     others = [v for f, v in w.items() if f != HEDGE_COMPONENT_ID]
-    assert all(v == pytest.approx(0.92 / 35, abs=1e-12) for v in others)
+    # the remainder is split evenly across every other component, so the
+    # divisor must follow the registry rather than a frozen literal
+    share = (1.0 - HEDGE_INITIAL_WEIGHT) / (len(w) - 1)
+    assert all(v == pytest.approx(share, abs=1e-12) for v in others)
 
 
 def test_brain4_secondary_weight_adjustment():

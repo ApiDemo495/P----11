@@ -134,6 +134,11 @@ TIER_SHIPGATE = "ROWS VERIFIED · SHIP GATE FAIL"
 # what makes a reported win rate comparable to money.
 MIN_TP_OVER_RT = 1.5
 
+#: A geometry whose target is a smaller fraction of its stop than this is a
+#: lottery ticket: it wins often and loses the account. Measured on 3 years
+#: of tape, every >=66 % win-rate geometry had reward:risk below 0.2.
+MIN_REWARD_RISK = 0.25
+
 
 def round_trip_bps(symbol: str) -> float:
     """Full-stack round trip (both sides) in bps for one asset."""
@@ -744,6 +749,44 @@ def row_settle_rules(symbol: str, tf: str) -> dict[str, Any]:
         "flat_rule": "zero move at max hold = push (not a fabricated loss)",
         "friction": ("charged once per era round trip by the era "
                      "accountant — rows carry none"),
+    }
+
+
+def barrier_payability(tp_bps: float, sl_bps: float, rt_bps: float) -> dict:
+    """Is this barrier geometry structurally payable? (P26, in plain terms)
+
+    The 3-year grading found the decisive defect: the certified geometry
+    aimed a target (~23 bps on BTC tf1) INSIDE the round trip (~29 bps),
+    so 86 % of windows "won" and the book still lost ~29 bps per trade.
+
+    ``payable`` is False when the target cannot clear the round trip at
+    all, or when the reward:risk is lottery-shaped (a 1:40 geometry wins
+    often and loses the account).  The caller must treat False as a
+    refusal to issue the lock, not as a warning.
+    """
+    tp = float(tp_bps or 0.0)
+    sl = float(sl_bps or 0.0)
+    rt = float(rt_bps or 0.0)
+    if tp <= 0 or sl <= 0:
+        return {"payable": False, "reason": "degenerate barrier",
+                "tp_bps": tp, "sl_bps": sl, "rt_bps": rt}
+    efficiency = (tp - rt) / tp            # share of the target after cost
+    rr = tp / sl
+    # the two refusals, stated as numbers rather than adjectives
+    below_cost = tp < MIN_TP_OVER_RT * rt
+    lottery = rr < MIN_REWARD_RISK
+    return {
+        "payable": not (below_cost or lottery),
+        "below_cost": bool(below_cost),
+        "lottery_shape": bool(lottery),
+        "tp_bps": round(tp, 2), "sl_bps": round(sl, 2), "rt_bps": round(rt, 2),
+        "efficiency": round(efficiency, 4),
+        "reward_risk": round(rr, 4),
+        "min_tp_bps": round(MIN_TP_OVER_RT * rt, 2),
+        "min_reward_risk": MIN_REWARD_RISK,
+        "reason": ("target sits inside the round trip" if below_cost else
+                   "reward:risk below the lottery floor" if lottery else
+                   "payable geometry"),
     }
 
 

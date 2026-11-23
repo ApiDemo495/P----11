@@ -248,7 +248,11 @@ STATE_FILE = "data/state.json"
 # explicit user authorization — total components:35 (30 signals +5 subs)
 CORE_SIGNAL_IDS: list[int] = (list(range(1, 20))
                               + [22, 23, 24, 25, 26, 27, 31,
-                                 32, 33, 34, 35])
+                                 32, 33, 34, 35,
+                                 # F36-F44: diagnosis-driven block. Each
+                                 # answers a defect measured on 3 years of
+                                 # tape (see app/formulas/f36_f44.py).
+                                 36, 37, 38, 39, 40, 41, 42, 43, 44])
 BRAIN_COMPONENT_ID = 97        # brain_consensus weighted input to CCI
 EMOTION_COMPONENT_ID = 98      # CERC weighted input to CCI
 PHYSICS_COMPONENT_ID = 99      # P22 Unified Field Prediction (Bgn-synced)
@@ -264,7 +268,7 @@ WEIGHT_IDS: list[int] = (
        PHYSICS_COMPONENT_ID, NEWS_COMPONENT_ID, HEDGE_COMPONENT_ID,
        TRACER_COMPONENT_ID]
 )
-N_WEIGHT_COMPONENTS = len(WEIGHT_IDS)   # 36 (30 signals +6 subsystems)
+N_WEIGHT_COMPONENTS = len(WEIGHT_IDS)   # 45 (39 signals +6 subsystems)
 # Section 8: "Their initial combined weight is 0.08 (8% of total CCI)."
 HEDGE_INITIAL_WEIGHT = 0.08
 # P22: physics layer's total contribution weighted by TME (P9):

@@ -2004,3 +2004,126 @@ Reproduce:
 .venv/bin/python -m backtest.wr_stress       # walk-forward + year split
 .venv/bin/python -m backtest.wr_survivable   # 268 geometries vs survival caps
 ```
+
+---
+
+## §25 — FULL-SYSTEM DIAGNOSIS + WHERE THE MONEY ACTUALLY IS (2026-11-23)
+
+Request: *"add more formulas, emotions, physics but I need a money making
+machine, and you have to diagnose each and every thing in default branch."*
+
+Everything below was measured on 2.84 years of real 5m Binance tape
+(BTC + ETH, 298,080 bars each, zero gaps). Nothing here is a projection.
+
+### 25.1 The four defects, in order of how much they cost
+
+**Defect 1 — the target is structurally inside the round trip.**
+`engine._project_level()` computes `price + dir·conf·atr·√minutes·0.5`.
+At tf1 with a realistic 15 bps 5m ATR that yields a **14 bps target
+against a 29 bps round trip**. The floor in `hold_policy` widens it to
+1.5× RT, but the *projection itself* still aims below cost, so the
+geometry has to be rescued on every lock. Measured effect: 86 % of
+windows "win" and the book still loses ~29 bps per trade.
+
+**Defect 2 — the book flips side every window.** This is the big one.
+
+| book | CAGR | max DD | cost paid | position changes |
+|---|---|---|---|---|
+| every-window flip (tf1) | **−100 %** | −100 % | **43,027 %** of capital | **149,038** |
+| every-window flip (130 m) | **−100 %** | −100 % | 6,618 % of capital | 22,928 |
+| buy & hold | +33.5 % | −53.8 % | 0 % | 0 |
+| 10d/40d trend (ETH) | **+46.2 %** | −40.5 % | 9.2 % | 31 |
+
+149,038 position changes over three years is ~140 per day. At 29 bps a
+round trip that is 43,000 % of starting capital paid in fees. **No
+signal, formula, emotion or physics layer can overcome that** — the
+turnover alone is a guaranteed ruin, and it is a *design* property, not
+a modelling failure.
+
+**Defect 3 — the formulas carry no stable directional information.**
+Graded every registered formula on real windows:
+
+* 19 of 35 produced a usable value at BTC tf1; the rest were data-gated
+  (order-book formulas need a live book that an offline tape does not have);
+* **zero** were consistently informative across asset × timeframe;
+* the ones that looked best *contradicted each other*: F13 DIQ scored
+  57 % at ETH tf3 and 40 % (i.e. reversed) at BTC tf1; F22 BAPR flipped
+  sign between assets;
+* with ~560 cells at 95 %, ~28 are expected to look significant by
+  chance — which is exactly the count observed, with random signs.
+
+**Defect 4 — win-rate chasing produced a tail that eats the account.**
+Already documented in §24: 24 geometries reach ≥66 % net WR with EV > 0,
+and every one of them has a −15 % to −59 % single-trade tail; all fail
+walk-forward.
+
+### 25.2 What follows for the money question
+
+The ranking of what actually determines the P&L, largest first:
+
+1. **turnover** (43,000 % of capital vs 9 % — a 4,700× difference)
+2. **barrier geometry vs cost** (target below RT is unpayable at any win rate)
+3. **holding period** (66 % WR only appears at 30-day holds, and drifts out of sample)
+4. **signal edge** (~2 pp measured, decays to zero by tf4)
+
+Items 1–3 are engineering and are fixed in this commit. Item 4 is the
+market, and no amount of additional formula surface has moved it.
+
+### 25.3 What was added (and what each one is for)
+
+**Formulas F36–F44** (`app/formulas/f36_f44.py`), one per diagnosed defect:
+
+| id | name | answers |
+|---|---|---|
+| F36 | TVF | multi-horizon trend agreement — the low-turnover effect that survived |
+| F37 | RPG | how much of the move is already spent (late entries) |
+| F38 | VRP | is vol cheap enough to carry risk now |
+| F39 | CTX | **can this window's move pay the round trip at all** |
+| F40 | VLQ | liquidity vacuum — thin tape amplifies moves |
+| F41 | FND | funding/carry tilt — contrarian on crowding, not price |
+| F42 | MDC | acceleration vs exhaustion of the impulse |
+| F43 | CRC | cross-asset confirmation (BTC/ETH must agree) |
+| F44 | HDG | **hold-duration advisor — forces a holding decision** |
+
+Registered in `FORMULA_FUNCTIONS`, `FORMULA_NAMES`, `WEIGHT_IDS` (45
+weighted components), and `flywire.N_INPUTS` (39 directional channels so
+the brain projection cannot truncate them). Each has a declared identity,
+a bar guard and a zero-reason.
+
+**Emotion E2** (`app/emotion.py`): four channels that measure the
+*trader's* affect rather than the crowd's — FOMO pressure, panic
+urgency, revenge sizing, complacency drift — collapsed into a
+`discipline_overlay()` size multiplier that is **wired into
+`portfolio_live.size_for()`**. It may only ever reduce size; no reading
+can raise it.
+
+**Physics P26/P27** (`app/physics.py`): `p26_barrier_friction()` asks
+whether the geometry can pay its own friction (it correctly rejects the
+shipped 36 bps-target geometry as "unpayable"), and `p27_travel_time()`
+estimates whether a target is reachable inside one window. The plain
+form is `hold_policy.barrier_payability()`, which refuses a lock whose
+target sits inside the round trip or whose reward:risk is lottery-shaped
+(`MIN_REWARD_RISK = 0.25`).
+
+### 25.4 Honest verdict on "money making machine"
+
+The new formulas were graded on the same tape and scored **43–53 % sign
+accuracy** — the same as the old ones. They are better *engineering*
+(each is bounded, guarded, honest about its zeros and points at a
+measured defect) but they are not new edge, and this section does not
+claim otherwise.
+
+What genuinely changes the money is the low-turnover reframing, and it
+is not a sure thing either: the 10d/40d trend book makes **+46 % CAGR on
+ETH** but only **+8 % on BTC**, and its out-of-sample behaviour in the
+2025–26 bear is flat-to-negative on both. Trend following is the best
+*surviving* structure found on 3 years of tape; it is not a guaranteed
+machine, and any quote of its full-period CAGR without the −40 %
+drawdown and the fragile holdout would be dishonest.
+
+Reproduce:
+```
+.venv/bin/python -m backtest.diagnose_all   --assets BTC ETH --tf tf1 tf3
+.venv/bin/python -m backtest.money_machine  --assets BTC ETH
+.venv/bin/python -m backtest.trend_validate --assets BTC ETH
+```

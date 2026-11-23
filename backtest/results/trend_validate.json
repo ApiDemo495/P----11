@@ -1,0 +1,147 @@
+[
+ {
+  "asset": "BTC",
+  "status": "ok",
+  "rt_bps": 28.87,
+  "chosen": {
+   "fast_d": 10,
+   "slow_d": 20,
+   "train_calmar": 3.0,
+   "train_cagr": 66.2,
+   "train_turnover": 32.0
+  },
+  "holdout": {
+   "cagr_pct": -28.55,
+   "total_x": 0.716,
+   "max_drawdown_pct": -38.0,
+   "sharpe": -1.03,
+   "sortino": -0.88,
+   "calmar": -0.75,
+   "cost_paid_pct_of_start": 6.1,
+   "turnover_units": 21.0,
+   "years": 0.99
+  },
+  "holdout_buy_hold": {
+   "cagr_pct": -30.35,
+   "total_x": 0.698,
+   "max_drawdown_pct": -53.8,
+   "sharpe": -0.56,
+   "sortino": -0.73,
+   "calmar": -0.56,
+   "cost_paid_pct_of_start": 0.0,
+   "turnover_units": 0.0,
+   "years": 0.99
+  },
+  "full": {
+   "cagr_pct": 22.96,
+   "total_x": 1.777,
+   "max_drawdown_pct": -42.5,
+   "sharpe": 0.76,
+   "sortino": 0.73,
+   "calmar": 0.54,
+   "cost_paid_pct_of_start": 15.3,
+   "turnover_units": 53.0,
+   "years": 2.78
+  },
+  "cost_stress": {
+   "1x": {
+    "cagr_pct": 22.96,
+    "max_drawdown_pct": -42.5,
+    "calmar": 0.54
+   },
+   "2x": {
+    "cagr_pct": 16.47,
+    "max_drawdown_pct": -45.8,
+    "calmar": 0.36
+   },
+   "3x": {
+    "cagr_pct": 10.31,
+    "max_drawdown_pct": -49.1,
+    "calmar": 0.21
+   }
+  },
+  "checks": {
+   "holdout_calmar_beats_buyhold": false,
+   "holdout_cagr_positive": false,
+   "survives_2x_cost": true,
+   "turnover_sane": true
+  },
+  "validated": false,
+  "reasons_failed": [
+   "holdout_calmar_beats_buyhold",
+   "holdout_cagr_positive"
+  ]
+ },
+ {
+  "asset": "ETH",
+  "status": "ok",
+  "rt_bps": 29.81,
+  "chosen": {
+   "fast_d": 10,
+   "slow_d": 40,
+   "train_calmar": 2.3,
+   "train_cagr": 88.75,
+   "train_turnover": 19.0
+  },
+  "holdout": {
+   "cagr_pct": -6.39,
+   "total_x": 0.937,
+   "max_drawdown_pct": -38.1,
+   "sharpe": 0.0,
+   "sortino": 0.0,
+   "calmar": -0.17,
+   "cost_paid_pct_of_start": 3.6,
+   "turnover_units": 12.0,
+   "years": 0.99
+  },
+  "holdout_buy_hold": {
+   "cagr_pct": -45.11,
+   "total_x": 0.551,
+   "max_drawdown_pct": -68.2,
+   "sharpe": -0.64,
+   "sortino": -0.83,
+   "calmar": -0.66,
+   "cost_paid_pct_of_start": 0.0,
+   "turnover_units": 0.0,
+   "years": 0.99
+  },
+  "full": {
+   "cagr_pct": 46.25,
+   "total_x": 2.819,
+   "max_drawdown_pct": -40.5,
+   "sharpe": 1.09,
+   "sortino": 0.99,
+   "calmar": 1.14,
+   "cost_paid_pct_of_start": 9.2,
+   "turnover_units": 31.0,
+   "years": 2.73
+  },
+  "cost_stress": {
+   "1x": {
+    "cagr_pct": 46.25,
+    "max_drawdown_pct": -40.5,
+    "calmar": 1.14
+   },
+   "2x": {
+    "cagr_pct": 41.52,
+    "max_drawdown_pct": -42.5,
+    "calmar": 0.98
+   },
+   "3x": {
+    "cagr_pct": 36.92,
+    "max_drawdown_pct": -44.5,
+    "calmar": 0.83
+   }
+  },
+  "checks": {
+   "holdout_calmar_beats_buyhold": true,
+   "holdout_cagr_positive": false,
+   "survives_2x_cost": true,
+   "turnover_sane": true
+  },
+  "validated": false,
+  "reasons_failed": [
+   "holdout_cagr_positive"
+  ]
+ }
+]
