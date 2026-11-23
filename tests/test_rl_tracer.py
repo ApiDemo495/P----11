@@ -162,7 +162,7 @@ def test_tracer_enters_the_weighted_36():
                             N_WEIGHT_COMPONENTS, SUBSYSTEM_SHARES_INIT)
     from app.formulas import FORMULA_FUNCTIONS
     assert TRACER_COMPONENT_ID in WEIGHT_IDS
-    assert N_WEIGHT_COMPONENTS == len(WEIGHT_IDS) == 36
+    assert N_WEIGHT_COMPONENTS == len(WEIGHT_IDS)
     assert SUBSYSTEM_SHARES_INIT["tracer"] == pytest.approx(0.06)
     assert sum(SUBSYSTEM_SHARES_INIT.values()) == pytest.approx(1.0)
     # tracer is a SUBSYSTEM component — not a formula (registry stays 31)
@@ -193,6 +193,8 @@ def test_engine_rl_wiring_and_contracts():
     html = (ROOT / "static" / "index.html").read_text()
     assert "rl-panel" in html
     js = (ROOT / "static" / "app.js").read_text()
-    assert "loadRL" in js and "36 weighted components" in js
+    # the UI string must agree with the registry, whatever its size
+    from app.config import N_WEIGHT_COMPONENTS
+    assert "loadRL" in js and f"{N_WEIGHT_COMPONENTS} weighted components" in js
     cci = (ROOT / "app" / "cci.py").read_text()
     assert "damp_all" in cci

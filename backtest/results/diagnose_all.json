@@ -1,0 +1,1724 @@
+{
+ "BTC|tf1": {
+  "status": "ok",
+  "tf": "tf1",
+  "w_min": 22,
+  "rows": [
+   {
+    "n": 299,
+    "accuracy": 0.5418,
+    "ci95": [
+     0.4852,
+     0.5974
+    ],
+    "ic": 0.1136,
+    "ic_train": -0.0576,
+    "ic_holdout": 0.1646,
+    "acc_train": 0.5206,
+    "acc_holdout": 0.581,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 10,
+    "name": "DVDI"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5385,
+    "ci95": [
+     0.4818,
+     0.5941
+    ],
+    "ic": -0.0333,
+    "ic_train": -0.0383,
+    "ic_holdout": -0.0429,
+    "acc_train": 0.5567,
+    "acc_holdout": 0.5048,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 15,
+    "name": "ARSI"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5184,
+    "ci95": [
+     0.4619,
+     0.5744
+    ],
+    "ic": -0.0123,
+    "ic_train": 0.0113,
+    "ic_holdout": -0.0562,
+    "acc_train": 0.5103,
+    "acc_holdout": 0.5333,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 24,
+    "name": "FBPS"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5151,
+    "ci95": [
+     0.4586,
+     0.5711
+    ],
+    "ic": -0.019,
+    "ic_train": -0.0196,
+    "ic_holdout": -0.0187,
+    "acc_train": 0.5155,
+    "acc_holdout": 0.5143,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 12,
+    "name": "RMET"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5117,
+    "ci95": [
+     0.4553,
+     0.5679
+    ],
+    "ic": -0.0372,
+    "ic_train": -0.0749,
+    "ic_holdout": -0.0252,
+    "acc_train": 0.5,
+    "acc_holdout": 0.5333,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 3,
+    "name": "PEM"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5117,
+    "ci95": [
+     0.4553,
+     0.5679
+    ],
+    "ic": 0.045,
+    "ic_train": 0.0503,
+    "ic_holdout": 0.0286,
+    "acc_train": 0.5309,
+    "acc_holdout": 0.4762,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 23,
+    "name": "SARD"
+   },
+   {
+    "n": 283,
+    "accuracy": 0.5053,
+    "ci95": [
+     0.4474,
+     0.5631
+    ],
+    "ic": -0.066,
+    "ic_train": -0.1237,
+    "ic_holdout": 0.0499,
+    "acc_train": 0.4918,
+    "acc_holdout": 0.53,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 2,
+    "name": "CDIF"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.505,
+    "ci95": [
+     0.4486,
+     0.5613
+    ],
+    "ic": 0.014,
+    "ic_train": -0.0193,
+    "ic_holdout": 0.0826,
+    "acc_train": 0.5052,
+    "acc_holdout": 0.5048,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 22,
+    "name": "BAPR"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5017,
+    "ci95": [
+     0.4453,
+     0.558
+    ],
+    "ic": 0.0303,
+    "ic_train": -0.0385,
+    "ic_holdout": 0.1612,
+    "acc_train": 0.5,
+    "acc_holdout": 0.5048,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 11,
+    "name": "MSRC"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5017,
+    "ci95": [
+     0.4453,
+     0.558
+    ],
+    "ic": 0.0219,
+    "ic_train": 0.116,
+    "ic_holdout": -0.1348,
+    "acc_train": 0.5309,
+    "acc_holdout": 0.4476,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 17,
+    "name": "VAD"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4983,
+    "ci95": [
+     0.442,
+     0.5547
+    ],
+    "ic": -0.0068,
+    "ic_train": 0.029,
+    "ic_holdout": -0.0777,
+    "acc_train": 0.4845,
+    "acc_holdout": 0.5238,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 5,
+    "name": "IRKG"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4983,
+    "ci95": [
+     0.442,
+     0.5547
+    ],
+    "ic": 0.0423,
+    "ic_train": 0.0715,
+    "ic_holdout": 0.0281,
+    "acc_train": 0.4897,
+    "acc_holdout": 0.5143,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 14,
+    "name": "TCI"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.495,
+    "ci95": [
+     0.4387,
+     0.5514
+    ],
+    "ic": -0.0388,
+    "ic_train": -0.051,
+    "ic_holdout": -0.0199,
+    "acc_train": 0.5258,
+    "acc_holdout": 0.4381,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 13,
+    "name": "DIQ"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4916,
+    "ci95": [
+     0.4354,
+     0.5481
+    ],
+    "ic": -0.0504,
+    "ic_train": -0.1208,
+    "ic_holdout": 0.0195,
+    "acc_train": 0.4948,
+    "acc_holdout": 0.4857,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 20,
+    "name": "DRHE"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4916,
+    "ci95": [
+     0.4354,
+     0.5481
+    ],
+    "ic": 0.0205,
+    "ic_train": 0.058,
+    "ic_holdout": -0.0416,
+    "acc_train": 0.5052,
+    "acc_holdout": 0.4667,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 25,
+    "name": "TMDM"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4849,
+    "ci95": [
+     0.4289,
+     0.5414
+    ],
+    "ic": 0.026,
+    "ic_train": 0.017,
+    "ic_holdout": 0.0606,
+    "acc_train": 0.4639,
+    "acc_holdout": 0.5238,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 8,
+    "name": "RTDI"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4716,
+    "ci95": [
+     0.4157,
+     0.5282
+    ],
+    "ic": 0.0438,
+    "ic_train": -0.0476,
+    "ic_holdout": -0.0153,
+    "acc_train": 0.4794,
+    "acc_holdout": 0.4571,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 1,
+    "name": "RPIC"
+   },
+   {
+    "n": 295,
+    "accuracy": 0.4678,
+    "ci95": [
+     0.4116,
+     0.5248
+    ],
+    "ic": -0.0878,
+    "ic_train": -0.0836,
+    "ic_holdout": -0.0822,
+    "acc_train": 0.4974,
+    "acc_holdout": 0.4135,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 4,
+    "name": "SATD"
+   },
+   {
+    "n": 30,
+    "accuracy": 0.4667,
+    "ci95": [
+     0.3023,
+     0.6386
+    ],
+    "ic": 0.1671,
+    "ic_train": 0.1175,
+    "ic_holdout": 0.0818,
+    "acc_train": 0.4211,
+    "acc_holdout": 0.5455,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 35,
+    "name": "LNP"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4649,
+    "ci95": [
+     0.4092,
+     0.5215
+    ],
+    "ic": -0.0148,
+    "ic_train": -0.018,
+    "ic_holdout": -0.0006,
+    "acc_train": 0.4536,
+    "acc_holdout": 0.4857,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 26,
+    "name": "IFDS"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4615,
+    "ci95": [
+     0.4059,
+     0.5182
+    ],
+    "ic": -0.0717,
+    "ic_train": -0.1721,
+    "ic_holdout": -0.0605,
+    "acc_train": 0.4536,
+    "acc_holdout": 0.4762,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 16,
+    "name": "ISA"
+   },
+   {
+    "n": 78,
+    "accuracy": 0.4615,
+    "ci95": [
+     0.3553,
+     0.5714
+    ],
+    "ic": -0.1793,
+    "ic_train": -0.0793,
+    "ic_holdout": -0.3727,
+    "acc_train": 0.5,
+    "acc_holdout": 0.3929,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 18,
+    "name": "CCMDR"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 6,
+    "name": "SSBD"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 7,
+    "name": "WRPP"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 9,
+    "name": "CLDF"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 19,
+    "name": "PMTL"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 27,
+    "name": "VCDP"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 31,
+    "name": "CLRE"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 32,
+    "name": "DBI"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 33,
+    "name": "MPD"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 34,
+    "name": "CWA"
+   }
+  ],
+  "errors": {}
+ },
+ "BTC|tf3": {
+  "status": "ok",
+  "tf": "tf3",
+  "w_min": 130,
+  "rows": [
+   {
+    "n": 300,
+    "accuracy": 0.57,
+    "ci95": [
+     0.5134,
+     0.6248
+    ],
+    "ic": 0.1053,
+    "ic_train": 0.0563,
+    "ic_holdout": 0.2259,
+    "acc_train": 0.559,
+    "acc_holdout": 0.5905,
+    "ic_stable": true,
+    "informative": true,
+    "fid": 14,
+    "name": "TCI"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.5567,
+    "ci95": [
+     0.5001,
+     0.6118
+    ],
+    "ic": 0.0417,
+    "ic_train": 0.0603,
+    "ic_holdout": 0.0123,
+    "acc_train": 0.5795,
+    "acc_holdout": 0.5143,
+    "ic_stable": true,
+    "informative": true,
+    "fid": 24,
+    "name": "FBPS"
+   },
+   {
+    "n": 79,
+    "accuracy": 0.5443,
+    "ci95": [
+     0.435,
+     0.6495
+    ],
+    "ic": 0.0317,
+    "ic_train": 0.0335,
+    "ic_holdout": 0.0,
+    "acc_train": 0.4902,
+    "acc_holdout": 0.6429,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 18,
+    "name": "CCMDR"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.5233,
+    "ci95": [
+     0.4669,
+     0.5792
+    ],
+    "ic": 0.0005,
+    "ic_train": 0.0487,
+    "ic_holdout": -0.0972,
+    "acc_train": 0.5333,
+    "acc_holdout": 0.5048,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 25,
+    "name": "TMDM"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.52,
+    "ci95": [
+     0.4636,
+     0.5759
+    ],
+    "ic": 0.1318,
+    "ic_train": 0.1233,
+    "ic_holdout": 0.1565,
+    "acc_train": 0.5128,
+    "acc_holdout": 0.5333,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 5,
+    "name": "IRKG"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.52,
+    "ci95": [
+     0.4636,
+     0.5759
+    ],
+    "ic": 0.0489,
+    "ic_train": 0.0383,
+    "ic_holdout": 0.0542,
+    "acc_train": 0.5128,
+    "acc_holdout": 0.5333,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 15,
+    "name": "ARSI"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.5167,
+    "ci95": [
+     0.4603,
+     0.5726
+    ],
+    "ic": 0.0079,
+    "ic_train": -0.0198,
+    "ic_holdout": 0.0625,
+    "acc_train": 0.5179,
+    "acc_holdout": 0.5143,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 8,
+    "name": "RTDI"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5117,
+    "ci95": [
+     0.4553,
+     0.5679
+    ],
+    "ic": 0.0271,
+    "ic_train": -0.0197,
+    "ic_holdout": -0.0041,
+    "acc_train": 0.5206,
+    "acc_holdout": 0.4952,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 1,
+    "name": "RPIC"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.51,
+    "ci95": [
+     0.4537,
+     0.5661
+    ],
+    "ic": 0.0419,
+    "ic_train": 0.0594,
+    "ic_holdout": 0.0383,
+    "acc_train": 0.5487,
+    "acc_holdout": 0.4381,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 10,
+    "name": "DVDI"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.5033,
+    "ci95": [
+     0.4471,
+     0.5595
+    ],
+    "ic": 0.0228,
+    "ic_train": -0.102,
+    "ic_holdout": 0.1952,
+    "acc_train": 0.4974,
+    "acc_holdout": 0.5143,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 3,
+    "name": "PEM"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.5,
+    "ci95": [
+     0.4438,
+     0.5562
+    ],
+    "ic": 0.0096,
+    "ic_train": 0.0238,
+    "ic_holdout": -0.0077,
+    "acc_train": 0.4872,
+    "acc_holdout": 0.5238,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 13,
+    "name": "DIQ"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.4967,
+    "ci95": [
+     0.4405,
+     0.5529
+    ],
+    "ic": -0.0021,
+    "ic_train": 0.0427,
+    "ic_holdout": -0.0666,
+    "acc_train": 0.5282,
+    "acc_holdout": 0.4381,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 23,
+    "name": "SARD"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4916,
+    "ci95": [
+     0.4354,
+     0.5481
+    ],
+    "ic": -0.0003,
+    "ic_train": -0.0497,
+    "ic_holdout": 0.0787,
+    "acc_train": 0.4794,
+    "acc_holdout": 0.5143,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 4,
+    "name": "SATD"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.49,
+    "ci95": [
+     0.4339,
+     0.5463
+    ],
+    "ic": -0.0085,
+    "ic_train": 0.0136,
+    "ic_holdout": -0.0635,
+    "acc_train": 0.4872,
+    "acc_holdout": 0.4952,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 11,
+    "name": "MSRC"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.49,
+    "ci95": [
+     0.4339,
+     0.5463
+    ],
+    "ic": -0.0709,
+    "ic_train": -0.1757,
+    "ic_holdout": 0.16,
+    "acc_train": 0.4872,
+    "acc_holdout": 0.4952,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 20,
+    "name": "DRHE"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.49,
+    "ci95": [
+     0.4339,
+     0.5463
+    ],
+    "ic": -0.0167,
+    "ic_train": -0.0316,
+    "ic_holdout": -0.002,
+    "acc_train": 0.4821,
+    "acc_holdout": 0.5048,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 22,
+    "name": "BAPR"
+   },
+   {
+    "n": 294,
+    "accuracy": 0.4864,
+    "ci95": [
+     0.4298,
+     0.5433
+    ],
+    "ic": 0.0281,
+    "ic_train": -0.0424,
+    "ic_holdout": 0.044,
+    "acc_train": 0.4974,
+    "acc_holdout": 0.466,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 2,
+    "name": "CDIF"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4849,
+    "ci95": [
+     0.4289,
+     0.5414
+    ],
+    "ic": -0.0181,
+    "ic_train": 0.0434,
+    "ic_holdout": -0.1322,
+    "acc_train": 0.5258,
+    "acc_holdout": 0.4095,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 17,
+    "name": "VAD"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.48,
+    "ci95": [
+     0.4241,
+     0.5364
+    ],
+    "ic": -0.0829,
+    "ic_train": -0.0995,
+    "ic_holdout": -0.0502,
+    "acc_train": 0.5026,
+    "acc_holdout": 0.4381,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 12,
+    "name": "RMET"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.4733,
+    "ci95": [
+     0.4175,
+     0.5298
+    ],
+    "ic": -0.0622,
+    "ic_train": -0.07,
+    "ic_holdout": -0.047,
+    "acc_train": 0.4769,
+    "acc_holdout": 0.4667,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 26,
+    "name": "IFDS"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4716,
+    "ci95": [
+     0.4157,
+     0.5282
+    ],
+    "ic": -0.0333,
+    "ic_train": -0.1275,
+    "ic_holdout": 0.0435,
+    "acc_train": 0.4742,
+    "acc_holdout": 0.4667,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 16,
+    "name": "ISA"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 6,
+    "name": "SSBD"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 7,
+    "name": "WRPP"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 9,
+    "name": "CLDF"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 19,
+    "name": "PMTL"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 27,
+    "name": "VCDP"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 31,
+    "name": "CLRE"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 32,
+    "name": "DBI"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 33,
+    "name": "MPD"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 34,
+    "name": "CWA"
+   },
+   {
+    "n": 17,
+    "status": "too_few",
+    "fid": 35,
+    "name": "LNP"
+   }
+  ],
+  "errors": {}
+ },
+ "ETH|tf1": {
+  "status": "ok",
+  "tf": "tf1",
+  "w_min": 22,
+  "rows": [
+   {
+    "n": 299,
+    "accuracy": 0.5585,
+    "ci95": [
+     0.5019,
+     0.6137
+    ],
+    "ic": 0.0548,
+    "ic_train": 0.0421,
+    "ic_holdout": 0.0783,
+    "acc_train": 0.5722,
+    "acc_holdout": 0.5333,
+    "ic_stable": true,
+    "informative": true,
+    "fid": 22,
+    "name": "BAPR"
+   },
+   {
+    "n": 298,
+    "accuracy": 0.5336,
+    "ci95": [
+     0.4768,
+     0.5894
+    ],
+    "ic": -0.0156,
+    "ic_train": -0.015,
+    "ic_holdout": 0.0953,
+    "acc_train": 0.5285,
+    "acc_holdout": 0.5429,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 3,
+    "name": "PEM"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5284,
+    "ci95": [
+     0.4718,
+     0.5843
+    ],
+    "ic": 0.0417,
+    "ic_train": -0.0125,
+    "ic_holdout": 0.13,
+    "acc_train": 0.5206,
+    "acc_holdout": 0.5429,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 8,
+    "name": "RTDI"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5284,
+    "ci95": [
+     0.4718,
+     0.5843
+    ],
+    "ic": 0.0069,
+    "ic_train": 0.0811,
+    "ic_holdout": -0.137,
+    "acc_train": 0.567,
+    "acc_holdout": 0.4571,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 24,
+    "name": "FBPS"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5151,
+    "ci95": [
+     0.4586,
+     0.5711
+    ],
+    "ic": 0.09,
+    "ic_train": -0.0317,
+    "ic_holdout": 0.2241,
+    "acc_train": 0.5206,
+    "acc_holdout": 0.5048,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 10,
+    "name": "DVDI"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5084,
+    "ci95": [
+     0.4519,
+     0.5646
+    ],
+    "ic": -0.006,
+    "ic_train": -0.0563,
+    "ic_holdout": 0.1007,
+    "acc_train": 0.4691,
+    "acc_holdout": 0.581,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 13,
+    "name": "DIQ"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.505,
+    "ci95": [
+     0.4486,
+     0.5613
+    ],
+    "ic": -0.0209,
+    "ic_train": 0.0213,
+    "ic_holdout": -0.0808,
+    "acc_train": 0.5,
+    "acc_holdout": 0.5143,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 5,
+    "name": "IRKG"
+   },
+   {
+    "n": 298,
+    "accuracy": 0.4899,
+    "ci95": [
+     0.4337,
+     0.5465
+    ],
+    "ic": -0.0353,
+    "ic_train": 0.0342,
+    "ic_holdout": -0.1985,
+    "acc_train": 0.513,
+    "acc_holdout": 0.4476,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 12,
+    "name": "RMET"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4816,
+    "ci95": [
+     0.4256,
+     0.5381
+    ],
+    "ic": 0.0183,
+    "ic_train": 0.0495,
+    "ic_holdout": -0.0292,
+    "acc_train": 0.4948,
+    "acc_holdout": 0.4571,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 23,
+    "name": "SARD"
+   },
+   {
+    "n": 294,
+    "accuracy": 0.4796,
+    "ci95": [
+     0.4231,
+     0.5366
+    ],
+    "ic": -0.0866,
+    "ic_train": -0.093,
+    "ic_holdout": -0.0816,
+    "acc_train": 0.466,
+    "acc_holdout": 0.5049,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 4,
+    "name": "SATD"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4749,
+    "ci95": [
+     0.419,
+     0.5315
+    ],
+    "ic": -0.0729,
+    "ic_train": -0.0635,
+    "ic_holdout": -0.2118,
+    "acc_train": 0.5155,
+    "acc_holdout": 0.4,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 16,
+    "name": "ISA"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4716,
+    "ci95": [
+     0.4157,
+     0.5282
+    ],
+    "ic": -0.031,
+    "ic_train": -0.0959,
+    "ic_holdout": 0.1062,
+    "acc_train": 0.4227,
+    "acc_holdout": 0.5619,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 14,
+    "name": "TCI"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4716,
+    "ci95": [
+     0.4157,
+     0.5282
+    ],
+    "ic": -0.0043,
+    "ic_train": 0.0172,
+    "ic_holdout": -0.0476,
+    "acc_train": 0.4845,
+    "acc_holdout": 0.4476,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 25,
+    "name": "TMDM"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4682,
+    "ci95": [
+     0.4124,
+     0.5248
+    ],
+    "ic": -0.0574,
+    "ic_train": -0.0829,
+    "ic_holdout": -0.0262,
+    "acc_train": 0.4639,
+    "acc_holdout": 0.4762,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 26,
+    "name": "IFDS"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4649,
+    "ci95": [
+     0.4092,
+     0.5215
+    ],
+    "ic": -0.0529,
+    "ic_train": -0.0985,
+    "ic_holdout": 0.0441,
+    "acc_train": 0.4742,
+    "acc_holdout": 0.4476,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 11,
+    "name": "MSRC"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4615,
+    "ci95": [
+     0.4059,
+     0.5182
+    ],
+    "ic": -0.0175,
+    "ic_train": -0.0552,
+    "ic_holdout": 0.0717,
+    "acc_train": 0.4691,
+    "acc_holdout": 0.4476,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 20,
+    "name": "DRHE"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4582,
+    "ci95": [
+     0.4026,
+     0.5148
+    ],
+    "ic": -0.0549,
+    "ic_train": -0.0305,
+    "ic_holdout": -0.1444,
+    "acc_train": 0.4845,
+    "acc_holdout": 0.4095,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 1,
+    "name": "RPIC"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4548,
+    "ci95": [
+     0.3993,
+     0.5115
+    ],
+    "ic": -0.0842,
+    "ic_train": -0.1131,
+    "ic_holdout": -0.0216,
+    "acc_train": 0.4175,
+    "acc_holdout": 0.5238,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 15,
+    "name": "ARSI"
+   },
+   {
+    "n": 72,
+    "accuracy": 0.4444,
+    "ci95": [
+     0.3354,
+     0.5591
+    ],
+    "ic": -0.1247,
+    "ic_train": -0.0392,
+    "ic_holdout": -0.2875,
+    "acc_train": 0.4783,
+    "acc_holdout": 0.3846,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 18,
+    "name": "CCMDR"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4415,
+    "ci95": [
+     0.3863,
+     0.4981
+    ],
+    "ic": -0.1348,
+    "ic_train": -0.123,
+    "ic_holdout": -0.1643,
+    "acc_train": 0.4536,
+    "acc_holdout": 0.419,
+    "ic_stable": true,
+    "informative": true,
+    "fid": 17,
+    "name": "VAD"
+   },
+   {
+    "n": 281,
+    "accuracy": 0.4413,
+    "ci95": [
+     0.3844,
+     0.4997
+    ],
+    "ic": -0.0925,
+    "ic_train": -0.1011,
+    "ic_holdout": -0.0602,
+    "acc_train": 0.4396,
+    "acc_holdout": 0.4444,
+    "ic_stable": true,
+    "informative": true,
+    "fid": 2,
+    "name": "CDIF"
+   },
+   {
+    "n": 31,
+    "accuracy": 0.3871,
+    "ci95": [
+     0.2373,
+     0.5618
+    ],
+    "ic": -0.3262,
+    "ic_train": -0.397,
+    "ic_holdout": -0.1,
+    "acc_train": 0.25,
+    "acc_holdout": 0.6364,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 35,
+    "name": "LNP"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 6,
+    "name": "SSBD"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 7,
+    "name": "WRPP"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 9,
+    "name": "CLDF"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 19,
+    "name": "PMTL"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 27,
+    "name": "VCDP"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 31,
+    "name": "CLRE"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 32,
+    "name": "DBI"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 33,
+    "name": "MPD"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 34,
+    "name": "CWA"
+   }
+  ],
+  "errors": {}
+ },
+ "ETH|tf3": {
+  "status": "ok",
+  "tf": "tf3",
+  "w_min": 130,
+  "rows": [
+   {
+    "n": 300,
+    "accuracy": 0.5667,
+    "ci95": [
+     0.5101,
+     0.6215
+    ],
+    "ic": 0.1509,
+    "ic_train": 0.1799,
+    "ic_holdout": 0.0971,
+    "acc_train": 0.5949,
+    "acc_holdout": 0.5143,
+    "ic_stable": true,
+    "informative": true,
+    "fid": 13,
+    "name": "DIQ"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5518,
+    "ci95": [
+     0.4952,
+     0.6072
+    ],
+    "ic": 0.1304,
+    "ic_train": 0.1332,
+    "ic_holdout": 0.0924,
+    "acc_train": 0.5567,
+    "acc_holdout": 0.5429,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 4,
+    "name": "SATD"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.5467,
+    "ci95": [
+     0.4901,
+     0.6021
+    ],
+    "ic": 0.0593,
+    "ic_train": 0.0479,
+    "ic_holdout": 0.086,
+    "acc_train": 0.5333,
+    "acc_holdout": 0.5714,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 24,
+    "name": "FBPS"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.54,
+    "ci95": [
+     0.4835,
+     0.5955
+    ],
+    "ic": 0.1267,
+    "ic_train": 0.1119,
+    "ic_holdout": 0.1514,
+    "acc_train": 0.5385,
+    "acc_holdout": 0.5429,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 5,
+    "name": "IRKG"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.54,
+    "ci95": [
+     0.4835,
+     0.5955
+    ],
+    "ic": 0.0264,
+    "ic_train": -0.0506,
+    "ic_holdout": 0.1767,
+    "acc_train": 0.5282,
+    "acc_holdout": 0.5619,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 10,
+    "name": "DVDI"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.53,
+    "ci95": [
+     0.4735,
+     0.5857
+    ],
+    "ic": 0.0871,
+    "ic_train": 0.0276,
+    "ic_holdout": 0.177,
+    "acc_train": 0.5128,
+    "acc_holdout": 0.5619,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 22,
+    "name": "BAPR"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.5184,
+    "ci95": [
+     0.4619,
+     0.5744
+    ],
+    "ic": 0.0473,
+    "ic_train": 0.0442,
+    "ic_holdout": 0.0677,
+    "acc_train": 0.5052,
+    "acc_holdout": 0.5429,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 17,
+    "name": "VAD"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.5133,
+    "ci95": [
+     0.457,
+     0.5694
+    ],
+    "ic": -0.0031,
+    "ic_train": -0.004,
+    "ic_holdout": 0.0092,
+    "acc_train": 0.5077,
+    "acc_holdout": 0.5238,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 15,
+    "name": "ARSI"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.51,
+    "ci95": [
+     0.4537,
+     0.5661
+    ],
+    "ic": -0.0145,
+    "ic_train": -0.0529,
+    "ic_holdout": 0.0298,
+    "acc_train": 0.5128,
+    "acc_holdout": 0.5048,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 8,
+    "name": "RTDI"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.51,
+    "ci95": [
+     0.4537,
+     0.5661
+    ],
+    "ic": 0.0778,
+    "ic_train": 0.1369,
+    "ic_holdout": -0.0244,
+    "acc_train": 0.4872,
+    "acc_holdout": 0.5524,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 11,
+    "name": "MSRC"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.5033,
+    "ci95": [
+     0.4471,
+     0.5595
+    ],
+    "ic": 0.0147,
+    "ic_train": -0.0873,
+    "ic_holdout": 0.1234,
+    "acc_train": 0.4821,
+    "acc_holdout": 0.5429,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 20,
+    "name": "DRHE"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.5,
+    "ci95": [
+     0.4438,
+     0.5562
+    ],
+    "ic": 0.0045,
+    "ic_train": 0.0057,
+    "ic_holdout": 0.0497,
+    "acc_train": 0.4923,
+    "acc_holdout": 0.5143,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 3,
+    "name": "PEM"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.495,
+    "ci95": [
+     0.4387,
+     0.5514
+    ],
+    "ic": -0.0463,
+    "ic_train": -0.0132,
+    "ic_holdout": 0.0068,
+    "acc_train": 0.5052,
+    "acc_holdout": 0.4762,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 16,
+    "name": "ISA"
+   },
+   {
+    "n": 79,
+    "accuracy": 0.4937,
+    "ci95": [
+     0.3863,
+     0.6016
+    ],
+    "ic": 0.0513,
+    "ic_train": 0.0495,
+    "ic_holdout": 0.0848,
+    "acc_train": 0.5294,
+    "acc_holdout": 0.4286,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 18,
+    "name": "CCMDR"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.4933,
+    "ci95": [
+     0.4372,
+     0.5496
+    ],
+    "ic": -0.093,
+    "ic_train": -0.0551,
+    "ic_holdout": -0.1476,
+    "acc_train": 0.5179,
+    "acc_holdout": 0.4476,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 25,
+    "name": "TMDM"
+   },
+   {
+    "n": 292,
+    "accuracy": 0.4897,
+    "ci95": [
+     0.4329,
+     0.5468
+    ],
+    "ic": -0.0068,
+    "ic_train": 0.044,
+    "ic_holdout": 0.0024,
+    "acc_train": 0.4921,
+    "acc_holdout": 0.4854,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 2,
+    "name": "CDIF"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.4767,
+    "ci95": [
+     0.4208,
+     0.5331
+    ],
+    "ic": -0.0969,
+    "ic_train": -0.1396,
+    "ic_holdout": 0.0,
+    "acc_train": 0.4564,
+    "acc_holdout": 0.5143,
+    "ic_stable": false,
+    "informative": false,
+    "fid": 14,
+    "name": "TCI"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.4567,
+    "ci95": [
+     0.4012,
+     0.5132
+    ],
+    "ic": -0.0526,
+    "ic_train": -0.0708,
+    "ic_holdout": -0.0161,
+    "acc_train": 0.4564,
+    "acc_holdout": 0.4571,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 23,
+    "name": "SARD"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.4533,
+    "ci95": [
+     0.3979,
+     0.5099
+    ],
+    "ic": -0.1564,
+    "ic_train": -0.1609,
+    "ic_holdout": -0.1494,
+    "acc_train": 0.4615,
+    "acc_holdout": 0.4381,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 26,
+    "name": "IFDS"
+   },
+   {
+    "n": 299,
+    "accuracy": 0.4448,
+    "ci95": [
+     0.3895,
+     0.5015
+    ],
+    "ic": -0.0835,
+    "ic_train": -0.1414,
+    "ic_holdout": -0.0368,
+    "acc_train": 0.433,
+    "acc_holdout": 0.4667,
+    "ic_stable": true,
+    "informative": false,
+    "fid": 1,
+    "name": "RPIC"
+   },
+   {
+    "n": 300,
+    "accuracy": 0.4367,
+    "ci95": [
+     0.3817,
+     0.4932
+    ],
+    "ic": -0.1507,
+    "ic_train": -0.1523,
+    "ic_holdout": -0.1473,
+    "acc_train": 0.441,
+    "acc_holdout": 0.4286,
+    "ic_stable": true,
+    "informative": true,
+    "fid": 12,
+    "name": "RMET"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 6,
+    "name": "SSBD"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 7,
+    "name": "WRPP"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 9,
+    "name": "CLDF"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 19,
+    "name": "PMTL"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 27,
+    "name": "VCDP"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 31,
+    "name": "CLRE"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 32,
+    "name": "DBI"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 33,
+    "name": "MPD"
+   },
+   {
+    "n": 0,
+    "status": "too_few",
+    "fid": 34,
+    "name": "CWA"
+   },
+   {
+    "n": 28,
+    "status": "too_few",
+    "fid": 35,
+    "name": "LNP"
+   }
+  ],
+  "errors": {}
+ }
+}

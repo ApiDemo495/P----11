@@ -74,7 +74,7 @@ const FORMULA_LOGIC = {
   18:"entropy of return signs → trendiness",
   19:"price acceleration ΔΔclose → momentum of momentum",
   20:"DRHE trend durability — confidence gate ×min(1,DRHE)",
-  21:"CCI master aggregate: 36 weighted components",
+  21:"CCI master aggregate: 45 weighted components (F1-F44 + 6 subsystems)",
   22:"breakout age since level break → early/late",
   23:"round-number liquidity cluster pressure",
   24:"session-open positioning vs prior close",

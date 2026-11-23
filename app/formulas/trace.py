@@ -93,6 +93,14 @@ EVENT_REASON: dict[int, str] = {
     33: "flat this pass — no live depth book (or micro-price centred)",
     34: "flat this pass — no live cancel flow measured (quiet book)",
     35: "flat this pass — no live forceOrder prints (liq flow net-zero)",
+    # F36-F44: a zero must say WHY (cause 6 honesty)
+    37: "impulse fully spent or no net move to judge (persistence undefined)",
+    39: "move is small relative to the round trip — cost eats it",
+    40: "volume baseline missing or no directional move to amplify",
+    41: "no funding series attached (offline tape has no carry data)",
+    42: "no acceleration or deceleration measurable this window",
+    43: "aligned other-asset series not ready, or assets disagree evenly",
+    44: "too few sign changes to judge persistence",
 }
 
 # F32..F35 identities (selftest contract) — order-book / liquidation
@@ -101,6 +109,17 @@ DOUBLE_CHECK_EXTRA: dict[int, str] = {
     33: "MPD: micro-price position inside the spread (inventory-weighted)",
     34: "CWA: cancellation elasticity ln(Vcancel_ask/Vcancel_bid)/3",
     35: "LNP: liquidation net forced-flow share (real @forceOrder prints)",
+    # F36-F44 — diagnosis-driven block (2026-11-23).  Each identity states
+    # the DEFECT it answers, because that is why it exists.
+    36: "TVF: multi-horizon trend agreement, vol-normalised legs",
+    37: "RPG: regime-persistence gap — how much of the move is already spent",
+    38: "VRP: volatility-risk-premium proxy (short vs long realised vol)",
+    39: "CTX: cost-to-edge ratio — can this window's move pay the round trip",
+    40: "VLQ: liquidity vacuum (thin tape amplifies a directional move)",
+    41: "FND: funding / carry tilt (contrarian on CROWDING, not on price)",
+    42: "MDC: move-decay / exhaustion (accelerating vs fading impulse)",
+    43: "CRC: cross-asset confirmation (BTC/ETH must agree or stand down)",
+    44: "HDG: hold-duration advisor (persistence vs chop of the tape)",
 }
 
 # Formulas whose honest 0 can be "genuinely flat" (no inner gate fired).
@@ -111,6 +130,9 @@ DOUBLE_CHECK.update(DOUBLE_CHECK_EXTRA)
 for _fid in (32, 33, 34, 35):
     # bar-count floor (cold tape); the live-feed gate lives in EVENT_REASON
     PRIMARY_GUARD.setdefault(_fid, 5)
+for _fid in (36, 37, 38, 39, 40, 41, 42, 43, 44):
+    # F36-F44 all need a warmed window before their ratios mean anything
+    PRIMARY_GUARD.setdefault(_fid, 12)
 
 NON_DIRECTIONAL = {20}   # DRHE: regime/confidence, never a direction vote
 

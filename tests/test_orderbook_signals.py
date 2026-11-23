@@ -78,14 +78,18 @@ def test_registry_and_brain_channel_budget():
     from app.formulas import FORMULA_FUNCTIONS, FORMULA_NAMES
     from app.config import WEIGHT_IDS, N_WEIGHT_COMPONENTS
     from app.flywire import N_INPUTS
-    assert len(WEIGHT_IDS) == 36 == N_WEIGHT_COMPONENTS
+    assert len(WEIGHT_IDS) == 45 == N_WEIGHT_COMPONENTS
     assert [FORMULA_NAMES[i] for i in (32, 33, 34, 35)] == \
         ["DBI", "MPD", "CWA", "LNP"]
     # the brain's odour channels must fit every directional formula —
     # this invariant pins N_INPUTS whenever the registry grows
     directional = [f for f in FORMULA_FUNCTIONS if f != 20]
-    assert len(FORMULA_FUNCTIONS) == 31
+    assert len(FORMULA_FUNCTIONS) == 40
     assert len(directional) == N_INPUTS, (len(directional), N_INPUTS)
+    # F36-F44 must be present as directional voters, not decoration
+    for fid in range(36, 45):
+        assert fid in FORMULA_FUNCTIONS
+        assert fid in WEIGHT_IDS
 
 
 def test_cci_weight_migration_for_old_state():
