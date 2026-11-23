@@ -30,17 +30,24 @@ from .hold_policy import era_geometry, friction_bps, managed
 
 
 def track_eras(sides, starts, i_entry, i_exit, entry, scale,
-               t, h, l, c, k, m, fr_bps) -> list[dict]:
+               t, h, l, c, k, m, fr_bps, gate_l_min=0) -> list[dict]:
     """Batch era records with era_sim's exact control flow.
 
     Mirrors ``backtest.hold.era_sim`` (kept byte-for-byte in spirit —
     the certified code stays untouched; this twin is asserted equal in
-    ``tests/test_hold_live.py``).
+    ``tests/test_hold_live.py``).  ``gate_l_min`` is the §20 TSMOM
+    gate: at each run start, skip the run when
+    ``side · (entry[w]/entry[w−lb_w] − 1) < 0``; warmup → take.
     """
     n = len(starts)
     med = float(np.nanmedian(scale)) if np.isfinite(scale).any() else 0.0
     scale_f = np.where(np.isfinite(scale) & (scale > 0), scale, med)
     fr = fr_bps * 1e-4
+    lb_w = 0
+    if gate_l_min and n > 1:
+        w_sec = int(starts[1]) - int(starts[0])
+        if w_sec > 0:
+            lb_w = max(1, int(round(gate_l_min * 60.0 / w_sec)))
     recs: list[dict] = []
     w = 0
     while w < n:
@@ -51,6 +58,11 @@ def track_eras(sides, starts, i_entry, i_exit, entry, scale,
         w2 = w + 1
         while w2 < n and int(sides[w2]) == s:
             w2 += 1
+        if lb_w > 0 and w >= lb_w:
+            r = float(entry[w]) / float(entry[w - lb_w]) - 1.0
+            if s * r < 0.0:
+                w = w2
+                continue
         e = float(entry[w])
         sl = m * float(scale_f[w])
         if not np.isfinite(sl) or sl <= 0 or e <= 0:
@@ -113,6 +125,10 @@ class EraAccountant:
         the run stays FLAT until the side flips,
       * a side flip closes an open position at the flip-boundary price
         and opens the new run,
+      * §20 TSMOM gate: when the engine reports ``gate_ok=False`` for a
+        NEW run (side trades against the slow trend), the run never
+        opens — a previously open era still closes at the flip-boundary
+        price (batch parity), and the skip persists for the whole run,
       * each closed era pays ``2 × friction_bps`` (real round trip).
 
     State persists to ``data/hold_era_state.json`` so a restart keeps
@@ -130,6 +146,7 @@ class EraAccountant:
         self.k, self.m = g if g else (None, None)
         self.fr_bps = friction_bps(symbol)
         self.side: int | None = None
+        self.skip_side: int | None = None   # §20: gate-failed run
         self.entry_px: float | None = None
         self.entry_ts: float | None = None
         self.scale_px: float | None = None
@@ -164,6 +181,7 @@ class EraAccountant:
         self.touched = bool(raw.get("touched"))
         self.run_id = int(raw.get("run_id") or 0)
         self.resumed = bool(raw.get("resumed"))
+        self.skip_side = raw.get("skip_side")
         self.history = list(raw.get("history") or [])[-500:]
         tot = raw.get("totals") or {}
         for k in self.totals:
@@ -187,6 +205,7 @@ class EraAccountant:
                     "n_windows": self.n_windows,
                     "in_position": self.in_position, "touched": self.touched,
                     "run_id": self.run_id, "resumed": self.resumed,
+                    "skip_side": self.skip_side,
                     "history": self.history[-500:],
                     "totals": self.totals,
                 }, fh)
@@ -196,17 +215,41 @@ class EraAccountant:
 
     # ── events ─────────────────────────────────────────────────────
     def on_window(self, side: int, entry_px: float, scale_px: float,
-                  window_start: float) -> dict[str, Any]:
+                  window_start: float,
+                  gate_ok: bool = True) -> dict[str, Any]:
         """A new window opened with certified side ``side``.
 
         Handles run boundaries: side change closes an open position at
         this window's entry (flip exit) and opens the new run; same
         side extends the run.  Returns an event dict (for the UI log).
+
+        §20 TSMOM gate (``gate_ok``): consulted only when a NEW run
+        would start — a failing gate closes any open era at the flip
+        boundary (batch parity) and skips the run entirely for as long
+        as its side persists (the batch sim checks the gate at run
+        start only, never mid-run).
         """
         side = int(side)
         ev: dict[str, Any] = {"event": "window", "window_start": window_start}
         if side == 0 or entry_px <= 0:
             return ev
+        if side == self.skip_side:
+            return ev                     # still inside a gate-skipped run
+        new_run = self.side != side
+        if new_run and not gate_ok:
+            if self.in_position and self.entry_px:
+                self._close(exit_px=entry_px, outcome=2,
+                            at_ts=window_start)
+                ev["event"] = "era_gated_close"
+                ev["closed"] = self.history[-1] if self.history else None
+            else:
+                ev["event"] = "era_gated_skip"
+            self.skip_side = side
+            self.side = None
+            self._save()
+            return ev
+        if new_run:
+            self.skip_side = None
         if self.side is None:
             self._open(side, entry_px, scale_px, window_start)
             ev["event"] = "era_open"
@@ -326,6 +369,7 @@ class EraAccountant:
             "ride": bool(self.m is not None and float(self.m) >= 999.0),
             "n_windows": self.n_windows, "run_id": self.run_id,
             "touched_this_run": self.touched, "resumed": self.resumed,
+            "gate_skip_side": self.skip_side,
             "unrealised_net": unreal,
             "totals": dict(self.totals),
             "era_win_rate": round(wins / n, 4) if n else None,
