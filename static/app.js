@@ -2077,6 +2077,9 @@ function renderCells() {
     const active = sym === S.symbol && tf === S.focusTf;
     const wr = c.win_rate != null ? `${(c.win_rate * 100).toFixed(1)}%` :
       (c.certified ? "—" : "n/a");
+    // the number above is a GROSS first-touch hit rate — label it so it
+    // can never be read as money
+    const wrLabel = c.win_rate != null ? " <span class=\"dim\">gross</span>" : "";
     const conf = c.confidence != null ? `wilson lo ${(c.confidence * 100).toFixed(1)}%` :
       (c.tier === "UNGRADEABLE / WARMUP" ? "warmup — no certified WR" : "");
     const dir = c.live_direction > 0 ? `<span class="buy">▲ BUY</span>` :
@@ -2094,7 +2097,7 @@ function renderCells() {
     return `<div class="hcell ${active ? "active" : ""}" data-cell="${key}" title="${esc(key)} — ${esc(c.rule || c.tier || "")}">
       <div class="hc-top"><span class="hc-sym">${sym} ${tf.toUpperCase()} · ${(a.tf_minutes || c.minutes)}m</span>
         <span class="hc-tier ${_tierCls(c.tier)}">${esc(c.tier)}</span></div>
-      <div class="hc-wr">${wr} <span class="hc-conf">WR${conf ? " · " + conf : ""}</span></div>
+      <div class="hc-wr">${wr}${wrLabel} <span class="hc-conf">WR${conf ? " · " + conf : ""}${c.round_trip_bps != null && c.win_rate != null ? ` · net needs target ≥ ${(c.min_tp_bps ?? 0).toFixed(0)}bp` : ""}</span></div>
       <div class="hc-side">${dir} · ${esc(c.rule || (c.certified ? "" : "no rule"))}</div>
       <div class="hc-era">${esc(eraTxt)}</div>
       <div class="hc-lock">${esc(lock)}</div>
@@ -2318,7 +2321,8 @@ function onAnalyseDone(msg) {
       <div class="big">${bigWord}</div>
       ${conflictBanner}
       <div class="conf">confidence ${fx(r.confidence, 3)} · ${r.verdict === "ISSUE" ? "ISSUED" : (r.verdict || (r.gate_ok ? "WATCH" : "NO CALL"))}${r.issue_note ? ` · ${esc(r.issue_note)}` : ""}${r.cell_certainty != null ? ` · certainty ${fx(r.cell_certainty, 3)} (n=${r.cell_certainty_n ?? "?"})` : ""}</div>
-      ${r.cell_win_rate_net != null ? `<div class="conf">real win rate ${fx(r.cell_win_rate_net * 100, 1)}% after ${fx(r.cell_round_trip_bps ?? 0, 1)} bps round trip · gross ${fx((r.cell_win_rate ?? 0) * 100, 1)}%</div>` : ""}
+      ${r.cell_win_rate_net != null ? `<div class="conf">real win rate ${fx(r.cell_win_rate_net * 100, 1)}% after ${fx(r.cell_round_trip_bps ?? 0, 1)} bps round trip · gross ${fx((r.cell_win_rate ?? 0) * 100, 1)}%</div>`
+        : (r.cell_win_rate != null ? `<div class="conf acc-warn">gross hit rate ${fx(r.cell_win_rate * 100, 1)}% — no post-cost win rate is recorded for this cell${r.cell_min_tp_bps != null ? `; a win only pays if the target clears ${fx(r.cell_min_tp_bps, 1)} bps (${fx(r.cell_round_trip_bps ?? 0, 1)} bps round trip × 1.5)` : ""}</div>` : "")}
       ${r.prediction_lock?.locked ? `<div class="conf acc-up">🔒 LOCKED ${esc(r.prediction_lock.side)} · ${esc(String(r.prediction_lock.id || "").slice(-10))} · TP ${px(r.prediction_lock.tp)} / SL ${px(r.prediction_lock.sl)} · saved to history</div><div class="hint">Prediction tracking only — not connected to external demo fills. Outcome is graded from completed market bars; same-bar TP/SL is marked ambiguous, never guessed.</div>` : `<div class="conf acc-warn">lock refused: ${esc((r.prediction_lock?.why || ["no finite ladder"]).join("; "))}</div>`}
       ${r.price_action ? `<div class="conf">📈 price action · ${r.price_action.direction > 0 ? "bullish" : r.price_action.direction < 0 ? "bearish" : "neutral"} · score ${fmt(r.price_action.score, 2)} · ${esc(r.price_action.reason || "no contextual setup")} · no confidence boost</div>` : ""}
       <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? Number(r.ratio).toFixed(2) + ":1" : "—"} · ${esc(r.levels_source || "preview only")}</div>
@@ -2326,7 +2330,9 @@ function onAnalyseDone(msg) {
         const wr = pol.win_rate != null ? `${(pol.win_rate * 100).toFixed(1)}%` : "—";
         const lo = pol.confidence != null ? ` · wilson lo ${(pol.confidence * 100).toFixed(1)}%` : "";
         const hd = pol.era_ev_net != null ? ` · era EV ${(pol.era_ev_net * 100).toFixed(2)}%/era net after ${(pol.round_trip_friction_bps || 24)}bp RT friction` : "";
-        return `<div class="conf acc-up">🎯 HOLD POLICY [${esc(pol.tier || "?")}] ${esc(pol.rule || pol.side || "")} · certified WR ${wr}${lo}${hd}</div>` +
+        const cf = pol.cost_floor;
+        const cfLine = cf ? `<div class="conf ${cf.tp_widened_for_cost ? "acc-warn" : "acc-up"}">💰 cost floor: target ${fx(cf.tp_bps_certified, 1)} bps vs ${fx(cf.min_tp_bps, 1)} bps required (1.5× ${fx(cf.rt_bps, 1)} bps round trip) — ${esc(cf.note)}</div>` : "";
+        return `<div class="conf acc-up">🎯 HOLD POLICY [${esc(pol.tier || "?")}] ${esc(pol.rule || pol.side || "")} · certified GROSS hit rate ${wr}${lo}${hd}</div>` + cfLine +
           (pol.scale_source ? `<div class="conf">row geometry k=${pol.row_k} m=${pol.row_m} · ${esc(String(pol.scale_source).slice(0, 90))}</div>` : ""); })()}
       ${(() => { const ev = r.prediction_lock?.evidence; if (!ev) return "";
         const fs = Object.entries(ev.formula_signs || {}).slice(0, 8)

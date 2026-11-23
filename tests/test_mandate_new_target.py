@@ -67,12 +67,16 @@ def test_mandate_tiers_follow_measured_cells():
         assert out["tier"] == "full", (sym, tf, out.get("tier_rule"))
         assert "hold policy" in out["tier_rule"], (sym, tf)
         assert f"[{hp.tier(sym, tf)}]" in out["tier_rule"], (sym, tf)
-    # the certified tier distribution is exact — v8 §17 census
-    # (7 HOLD-OUT VERIFIED / 0 rows-only / 0 in-sample / 5 holdout
-    # misses / 4 warmup; the v6-era 7/1/4/3/1 came from the 8-month
-    # BNB extract and single-year labels that the 9-year tape ended)
+    # the certified tier distribution is exact — and it is now gated by
+    # the artifact's own ship verdict.  The shipped hold_wr.json FAILS
+    # backtest/gates18.py gate (ii) (it records no REAL post-cost win
+    # rate for any cell, so it cannot beat the v8 reference), therefore
+    # the 7 cells whose rows held up out-of-fold are reported as
+    # ROWS VERIFIED · SHIP GATE FAIL — never as HOLD-OUT VERIFIED.
     counts = hp.tier_counts()
-    assert counts["HOLD-OUT VERIFIED"] == 7
+    assert hp.artifact_ship_verdict()["gate_ii_pass"] is False
+    assert counts.get("HOLD-OUT VERIFIED", 0) == 0
+    assert counts[hp.TIER_SHIPGATE] == 7
     assert counts.get("HOLDOUT ROWS · ERA n<3", 0) == 0
     assert counts.get("IN-SAMPLE SHADOW", 0) == 0
     assert counts["IN-SAMPLE SHADOW · HOLDOUT MISS"] == 5

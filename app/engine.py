@@ -1952,8 +1952,12 @@ class PredictionEngine:
                         "cell_certainty": _wil[0],
                         "cell_certainty_n": _hs.get("n_windows"),
                         "cell_win_rate": _hs.get("win_rate"),
+                        "cell_win_rate_label": _hs.get("win_rate_label"),
                         "cell_win_rate_net": _hs.get("win_rate_net"),
                         "cell_round_trip_bps": _hs.get("round_trip_bps"),
+                        # the target must clear this before a "win" pays
+                        "cell_min_tp_bps": _hs.get("min_tp_bps"),
+                        "cell_cost_note": _hs.get("cost_note"),
                         "cell_tier": _hs.get("tier"),
                     }
             except Exception:
@@ -5644,6 +5648,26 @@ class PredictionEngine:
                         symbol, tf, entry_hold,
                         int(final.get("direction") or 0), _scale)
                      if _scale else None))
+                # COST FLOOR: a "win" must pay more than the round trip.
+                # The certified gross geometry targets k=0.15 x SL, which
+                # on the short timeframes lands INSIDE the Binance round
+                # trip — an ~85 % hit rate that still loses money per
+                # trade. _cost_aware widens such a target to the floor
+                # (see app/hold_policy.MIN_TP_OVER_RT); the verdict is
+                # recorded on the seal so it is never silent.
+                _cost_meta = None
+                try:
+                    _g = (_hp_s.era_geometry(symbol, tf)
+                          if _use_era_geometry else _hp_s.row_geometry(
+                              symbol, tf))
+                    if _g and _scale and _scale > 0:
+                        _cost_meta = _hp_s._cost_aware(
+                            symbol, entry_hold,
+                            int(final.get("direction") or 0),
+                            _scale, float(_g[0]), float(_g[1]))[2]
+                except Exception:
+                    log.exception("cost-floor check failed for %s|%s",
+                                  symbol, tf)
                 if _bars_pair:
                     tp, sl = float(_bars_pair[0]), float(_bars_pair[1])
                 hold_block = {
@@ -5652,6 +5676,7 @@ class PredictionEngine:
                     "scale": _scale,
                     "scale_source": _scale_src,
                     "row_tp": tp, "row_sl": sl,
+                    "cost_floor": _cost_meta,
                     "era_ride": _use_era,
                     "geometry": "guarded_era" if _use_era_geometry else "row",
                     "era_max_hold_s": (_hp_s.ERA_MAX_HOLD_S
