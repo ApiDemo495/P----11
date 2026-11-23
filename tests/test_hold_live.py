@@ -153,61 +153,70 @@ def test_era_friction_is_never_relaxed():
 
 
 # ─────────────────────────── 3) row parity ───────────────────────────
-def test_row_settlement_parity_vs_simulate(tmp_path, monkeypatch):
-    """Sealed hold locks settle exactly like continuous._simulate:
-    sequential native-bar walk, SL wins same-bar ties, flat = loss,
-    every window counted — 0 mismatches over randomised windows."""
+def test_live_row_settlement_marks_same_bar_both_touch_ambiguous(tmp_path, monkeypatch):
+    """Live OHLC does not expose intrabar order; never guess SL-first.
+
+    Backtest SL-first remains a pessimistic bound, not live truth.
+    """
     from app import predlock
-    monkeypatch.setattr(predlock, "JOURNAL_FILE",
-                        str(tmp_path / "pl.json"))
+    monkeypatch.setattr(predlock, "JOURNAL_FILE", str(tmp_path / "pl.json"))
     j = predlock.PredictionJournal(str(tmp_path / "pl.json"))
-    rng = np.random.default_rng(5)
-    W = 22 * 60
-    n = 400
-    checked = {"won": 0, "lost": 0}
-    for i in range(n):
-        created = 1_700_000_000.0 + i * (W + 1) * 60.0
-        entry = 100.0 + rng.normal(0, 1)
-        scale = abs(rng.normal(2.0, 0.5)) + 0.3
-        k, m = 0.3, 0.4                      # a certified row geometry
-        sl, tp = m * scale, k * m * scale
-        side = 1 if rng.random() < 0.5 else -1
-        hi = entry + abs(rng.normal(0, 1.5 * scale))
-        lo = entry - abs(rng.normal(0, 1.5 * scale))
-        lo = min(lo, hi)
-        close = float(np.clip(rng.normal(entry, scale), lo, hi))
-        # bar1 of the window carries the full range; bar2 is a no-op
-        # tick (so _simulate's a=1,b=2 walk matches the lock series)
-        pad = 1e-9 * scale
-        h2 = close + pad
-        l2 = close - pad
-        # reference: single-window _simulate over the native bars
-        t0 = created - 60.0
-        t_arr = np.array([t0, created + 60, created + 120])
-        res = _simulate(np.array([side]), np.array([entry]),
-                        np.array([close]),
-                        np.array([close - entry]), np.array([scale]),
-                        k, m, np.array([created]),
-                        t_arr,
-                        np.array([entry, hi, h2]),
-                        np.array([entry, lo, l2]),
-                        60, 0.0, np.array([0]), np.array([2]))
-        exp = "won" if bool(res["win"][0]) else "lost"
-        row = j.seal("BTC", "tf1", direction=side, entry=entry,
-                     tp=entry + tp * side, sl=entry - sl * side,
-                     confidence=0.7, created_at=created,
-                     evidence={"hold_policy": {"hold_rules": True}})
-        assert row["locked"] and not row.get("already"), row
-        j.settle("BTC", "tf1", close, high=hi, low=lo,
-                 now=created + W * 60 + 1,
-                 series=[(created + 60, hi, lo),
-                         (created + 120, h2, l2)])
-        got = next(r for r in j.rows if r["id"] == row["id"])
-        assert got["outcome"] in ("won", "lost"), got
-        assert got["outcome"] == exp, (i, got["outcome"], exp,
-                                       got.get("settle_reason"))
-        checked[exp] += 1
-    assert checked["won"] > 0 and checked["lost"] > 0
+    created = 1_700_000_000.0
+    row = j.seal("BTC", "tf1", direction=1, entry=100.0,
+                 tp=105.0, sl=95.0, confidence=0.7, created_at=created,
+                 evidence={"hold_policy": {"hold_rules": True}})
+    assert row["locked"]
+    closed = j.settle("BTC", "tf1", 101.0, now=created + 120,
+                      series=[(created + 60, 106.0, 94.0)])
+    assert len(closed) == 1
+    got = closed[0]
+    assert got["status"] == got["outcome"] == "ambiguous"
+    assert got["graded"] is False and got["bps"] is None
+    assert "cannot establish order" in got["settle_reason"]
+
+
+def test_live_row_settlement_single_touch_and_flat_expiry(tmp_path, monkeypatch):
+    from app import predlock
+    monkeypatch.setattr(predlock, "JOURNAL_FILE", str(tmp_path / "pl.json"))
+    j = predlock.PredictionJournal(str(tmp_path / "pl.json"))
+    created = 1_700_000_000.0
+    row = j.seal("BTC", "tf1", direction=1, entry=100.0,
+                 tp=105.0, sl=95.0, confidence=0.7, created_at=created,
+                 evidence={"hold_policy": {"hold_rules": True}})
+    j.settle("BTC", "tf1", 105.0, now=created + 120,
+             series=[(created + 60, 106.0, 99.0)])
+    got = next(r for r in j.rows if r["id"] == row["id"])
+    assert got["outcome"] == "won" and got["bps"] == 500.0
+
+    # A bounded hold with no movement at expiry is a push, never a loss.
+    j2 = predlock.PredictionJournal(str(tmp_path / "pl2.json"))
+    row2 = j2.seal("BTC", "tf1", direction=1, entry=100.0,
+                   tp=105.0, sl=95.0, confidence=0.7, created_at=created,
+                   max_hold_s=60,
+                   evidence={"hold_policy": {"hold_rules": True}})
+    j2.settle("BTC", "tf1", 100.0, now=created + 61)
+    got2 = next(r for r in j2.rows if r["id"] == row2["id"])
+    assert got2["outcome"] == "push" and got2["graded"] is False
+
+
+def test_engine_never_settles_from_forming_bar_extremes():
+    """A still-forming candle and its live quote cannot trigger TP/SL."""
+    from tests.test_engine import make_engine
+    eng, feed, _ = make_engine()
+    minute = int(time.time() // 60) * 60
+    created = minute - 10
+    st = feed.state("BTC")
+    st.push_bar(minute, 106.0, 10.0, open_=100.0,
+                high=107.0, low=99.0, source="unknown")
+    st.live_price = 106.0
+    sealed = eng.predlocks.seal(
+        "BTC", "tf1", direction=1, entry=100.0, tp=105.0, sl=95.0,
+        confidence=0.7, created_at=created, gate_ok=True,
+        evidence={"hold_policy": {"hold_rules": True}})
+    assert sealed["locked"]
+    assert eng.settle_prediction_locks(now=minute + 10) == []
+    row = next(r for r in eng.predlocks.rows if r["id"] == sealed["id"])
+    assert row["status"] == "open" and row["outcome"] is None
 
 
 # ─────────────────────────── 4) seal geometry ────────────────────────
@@ -241,10 +250,11 @@ def test_engine_seal_uses_certified_era_ride_geometry():
         assert row.get("settle_mode") == "era_ride"
         assert row.get("max_hold_s") == hp.ERA_MAX_HOLD_S
     else:
-        # legacy v8 ride (m=999, unbounded) → ROW ladder, window mode
+        # legacy v8 ride (m=999) → ROW geometry, bounded ride mode
         sl_exp = min(pol["row_m"] * scale, 100.0 * 0.9)
         tp_exp = min(pol["row_k"] * sl_exp, 100.0 * 0.9)
-        assert row.get("settle_mode") == "window"
+        assert row.get("settle_mode") == "era_ride"
+        assert row.get("max_hold_s") == hp.ERA_MAX_HOLD_S
     assert abs(row["sl"] - (100.0 + sl_exp)) < 1e-9      # side −1
     assert abs(row["tp"] - (100.0 - tp_exp)) < 1e-9
     hold = row["evidence"]["hold_policy"]
@@ -366,7 +376,7 @@ def test_committee_contribution_is_bounded_and_holds_side():
     COMMITTEE.last = None
     eng._committee_contribution("BTC", "tf1", final)
     assert final["confidence"] == 0.80
-    # 4/4 agreement → +5 %
+    # A board vote is telemetry, not accuracy evidence.
     votes = [AgentVote(agent=a, direction=1, confidence=0.9,
                        reason="test") for a in
              ("flow", "lead_lag", "contrarian", "governor")]
@@ -375,10 +385,11 @@ def test_committee_contribution_is_bounded_and_holds_side():
         may_issue=True, vetoes=[], notes=[])
     final = {"direction": 1, "confidence": 0.80}
     eng._committee_contribution("BTC", "tf1", final)
-    assert final["confidence"] == pytest.approx(0.84)
+    assert final["confidence"] == pytest.approx(0.80)
     assert final["committee"]["direction_held"] is True
     assert "confirms" in final["committee"]["effect"]
-    # 0/4 agreement (challenge) → −5 %, side NEVER flipped
+    assert "confidence unchanged" in final["committee"]["effect"]
+    # 0/4 agreement is visible, but still does not mutate confidence.
     votes = [AgentVote(agent=a, direction=-1, confidence=0.9,
                        reason="test") for a in
              ("flow", "lead_lag", "contrarian", "governor")]
@@ -388,7 +399,7 @@ def test_committee_contribution_is_bounded_and_holds_side():
     final = {"direction": 1, "confidence": 0.80}
     eng._committee_contribution("BTC", "tf1", final)
     assert final["direction"] == 1
-    assert final["confidence"] == pytest.approx(0.76)
+    assert final["confidence"] == pytest.approx(0.80)
     assert "challenges" in final["committee"]["effect"]
 
 

@@ -2085,7 +2085,8 @@ function renderCells() {
     const eraTxt = era.error ? "" :
       era.side ? `${era.in_position ? "IN" : "flat"} ${era.side > 0 ? "+" : "−"}${era.ride ? " ride" : ""}` +
         (era.unrealised_net != null ? ` · unreal ${(era.unrealised_net * 100).toFixed(2)}%` : "") +
-        ` · eras ${era.totals?.eras || 0} net ${((era.totals?.net || 0) * 100).toFixed(2)}%`
+        ` · eras ${era.totals?.eras || 0} net ${((era.totals?.net || 0) * 100).toFixed(2)}%` +
+        (era.totals?.ambiguous ? ` · ambiguous ${era.totals.ambiguous} (friction unresolved)` : "")
       : "era — waiting first window";
     const lock = c.last_lock && c.last_lock.outcome
       ? `last: ${c.last_lock.outcome} ${c.last_lock.bps != null ? (c.last_lock.bps >= 0 ? "+" : "") + c.last_lock.bps + "bp" : ""}`
@@ -2206,12 +2207,14 @@ function onPredictionSettled(msg) {
   S.predStats = msg.stats || S.predStats || null;
   const won = locks.filter(l => l.outcome === "won").length;
   const lost = locks.filter(l => l.outcome === "lost").length;
+  const ambiguous = locks.filter(l => l.outcome === "ambiguous").length;
   if (locks.length) {
     const last = locks[locks.length - 1];
-    toast(`🎯 settled ${locks.length} lock${locks.length > 1 ? "s" : ""} ` +
-      `(+${won} / −${lost}) · ${last.symbol || ""} ${String(last.tf || "").toUpperCase()} ` +
+    const tone = ambiguous && !won && !lost ? "" : won >= lost ? "ok" : "err";
+    toast(`📊 updated ${locks.length} lock${locks.length > 1 ? "s" : ""} ` +
+      `(+${won} / −${lost} / ?${ambiguous}) · ${last.symbol || ""} ${String(last.tf || "").toUpperCase()} ` +
       `${String(last.outcome || "").toUpperCase()}${last.bps != null ? " " + (last.bps >= 0 ? "+" : "") + Number(last.bps).toFixed(1) + "bp" : ""}`,
-      won >= lost ? "ok" : "err");
+      tone);
   }
   if (S.view === "history") {
     loadSealedPredictions().catch(() => {});
@@ -2316,7 +2319,8 @@ function onAnalyseDone(msg) {
       ${conflictBanner}
       <div class="conf">confidence ${fx(r.confidence, 3)} · ${r.verdict === "ISSUE" ? "ISSUED" : (r.verdict || (r.gate_ok ? "WATCH" : "NO CALL"))}${r.issue_note ? ` · ${esc(r.issue_note)}` : ""}${r.cell_certainty != null ? ` · certainty ${fx(r.cell_certainty, 3)} (n=${r.cell_certainty_n ?? "?"})` : ""}</div>
       ${r.cell_win_rate_net != null ? `<div class="conf">real win rate ${fx(r.cell_win_rate_net * 100, 1)}% after ${fx(r.cell_round_trip_bps ?? 0, 1)} bps round trip · gross ${fx((r.cell_win_rate ?? 0) * 100, 1)}%</div>` : ""}
-      ${r.prediction_lock?.locked ? `<div class="conf acc-up">🔒 LOCKED ${esc(r.prediction_lock.side)} · ${esc(String(r.prediction_lock.id || "").slice(-10))} · TP ${px(r.prediction_lock.tp)} / SL ${px(r.prediction_lock.sl)} · saved to history</div>` : `<div class="conf acc-warn">lock refused: ${esc((r.prediction_lock?.why || ["no finite ladder"]).join("; "))}</div>`}
+      ${r.prediction_lock?.locked ? `<div class="conf acc-up">🔒 LOCKED ${esc(r.prediction_lock.side)} · ${esc(String(r.prediction_lock.id || "").slice(-10))} · TP ${px(r.prediction_lock.tp)} / SL ${px(r.prediction_lock.sl)} · saved to history</div><div class="hint">Prediction tracking only — not connected to external demo fills. Outcome is graded from completed market bars; same-bar TP/SL is marked ambiguous, never guessed.</div>` : `<div class="conf acc-warn">lock refused: ${esc((r.prediction_lock?.why || ["no finite ladder"]).join("; "))}</div>`}
+      ${r.price_action ? `<div class="conf">📈 price action · ${r.price_action.direction > 0 ? "bullish" : r.price_action.direction < 0 ? "bearish" : "neutral"} · score ${fmt(r.price_action.score, 2)} · ${esc(r.price_action.reason || "no contextual setup")} · no confidence boost</div>` : ""}
       <div class="conf">entry ${px(r.entry ?? r.price)} · ATR ${fmt(r.atr, 4)} · TP:SL ${r.ratio ? Number(r.ratio).toFixed(2) + ":1" : "—"} · ${esc(r.levels_source || "preview only")}</div>
       ${(() => { const pol = r.prediction_lock?.evidence?.hold_policy; if (!pol) return "";
         const wr = pol.win_rate != null ? `${(pol.win_rate * 100).toFixed(1)}%` : "—";
@@ -4360,6 +4364,7 @@ async function loadSealedPredictions() {
       const outcome = r.outcome === "won" ? '<span class="acc-up">WON</span>'
         : r.outcome === "lost" ? '<span class="acc-dn">LOST</span>'
         : r.outcome === "push" ? '<span class="dim">PUSH</span>'
+        : r.outcome === "ambiguous" ? '<span class="dim" title="Both TP and SL were inside one OHLC candle; order is unknowable, excluded from accuracy.">AMBIGUOUS</span>'
         : '<span class="dim">open</span>';
       const when = Number(r.created_at) ? new Date(r.created_at * 1000).toISOString().slice(5, 16).replace("T", " ") : "—";
       return `<tr>

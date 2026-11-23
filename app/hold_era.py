@@ -120,9 +120,10 @@ class EraAccountant:
       * first window of a run opens the position at that window's
         entry price with ``sl = m·scale``, ``tp = k·sl`` (or rides
         when ``m >= 999``),
-      * every closed native bar while inside checks SL first, then TP
-        (SL wins same-window ties) — a touch closes the position and
-        the run stays FLAT until the side flips,
+      * every closed native bar while inside checks TP/SL; if both lie
+        inside one OHLC bar, order is unknowable, so the exit is marked
+        ambiguous and excluded from PnL/accuracy (the batch benchmark's
+        SL-first rule is only a pessimistic bound),
       * a side flip closes an open position at the flip-boundary price
         and opens the new run,
       * §20 TSMOM gate: when the engine reports ``gate_ok=False`` for a
@@ -160,7 +161,8 @@ class EraAccountant:
         self.history: list[dict] = []       # closed eras (capped 500)
         self.totals = {"eras": 0, "net": 0.0, "gross": 0.0,
                        "friction_paid": 0.0, "touches": 0,
-                       "flip_exits": 0}
+                       "flip_exits": 0, "ambiguous": 0,
+                       "friction_unresolved": 0}
         self._load()
 
     # ── persistence ────────────────────────────────────────────────
@@ -270,9 +272,10 @@ class EraAccountant:
     def on_bars(self, bars: Iterable[tuple[float, float, float]]
                 ) -> list[dict[str, Any]]:
         """Feed CLOSED native bars ``(ts, high, low)`` while a position
-        is open — first-touch checks with SL-win ties (era_sim order)."""
+        is open. A both-barrier candle is ambiguous: OHLC has no order."""
         out: list[dict[str, Any]] = []
-        if not self.in_position or not self.entry_px or not self.side:
+        if (not self.in_position or not self.entry_px or not self.side
+                or self.tp_px is None or self.sl_px is None):
             return out
         if self.m is not None and float(self.m) >= 999.0:
             return out                      # ride: no barriers at all
@@ -282,6 +285,10 @@ class EraAccountant:
                 continue
             sl_hit = (lo <= self.sl_px) if s > 0 else (hi >= self.sl_px)
             tp_hit = (hi >= self.tp_px) if s > 0 else (lo <= self.tp_px)
+            if sl_hit and tp_hit:
+                rec = self._close_ambiguous(at_ts=float(ts))
+                out.append(rec)
+                break
             if sl_hit:
                 rec = self._close(exit_px=self.sl_px, outcome=-1,
                                   at_ts=float(ts))
@@ -316,6 +323,31 @@ class EraAccountant:
             self.sl_px = self.entry_px - sl * self.side
         else:
             self.tp_px = self.sl_px = None   # invalid scale → skip era
+
+    def _close_ambiguous(self, *, at_ts: float) -> dict[str, Any]:
+        """Close bookkeeping without inventing a fill or realized PnL."""
+        rec = {
+            "symbol": self.symbol, "tf": self.tf, "run_id": self.run_id,
+            "side": int(self.side or 0), "entry": self.entry_px,
+            "exit": None, "entry_ts": self.entry_ts,
+            "closed_ts": float(at_ts), "n_windows": self.n_windows,
+            "outcome": "ambiguous", "pnl_gross": None, "pnl_net": None,
+            "friction_bps": None,
+            "reason": "TP and SL both inside one closed OHLC bar; order unknown",
+            "closed_at": time.time(),
+        }
+        self.history.append(rec)
+        self.history = self.history[-500:]
+        self.totals["ambiguous"] = int(self.totals.get("ambiguous", 0)) + 1
+        self.totals["friction_unresolved"] = int(
+            self.totals.get("friction_unresolved", 0)) + 1
+        # The model cannot know which barrier filled, the exit price, or
+        # the associated spread/slippage. Keep the cost unresolved rather
+        # than quietly counting a zero-cost result in net performance.
+        self.in_position = False
+        self.touched = True
+        self._save()
+        return rec
 
     def _close(self, *, exit_px: float, outcome: int,
                at_ts: float) -> dict[str, Any]:
@@ -357,8 +389,11 @@ class EraAccountant:
             unreal = ((float(price) / float(self.entry_px) - 1.0)
                       * int(self.side))
         hist = self.history
-        n = len(hist)
-        wins = sum(1 for r in hist if r.get("pnl_net", 0) > 0)
+        graded = [r for r in hist
+                  if r.get("outcome") != "ambiguous"
+                  and r.get("pnl_net") is not None]
+        n = len(graded)
+        wins = sum(1 for r in graded if r.get("pnl_net", 0) > 0)
         return {
             "symbol": self.symbol, "tf": self.tf,
             "certified": managed(self.symbol, self.tf),
