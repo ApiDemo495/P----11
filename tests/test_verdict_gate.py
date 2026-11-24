@@ -441,3 +441,60 @@ def test_card_note_and_evidence_come_from_one_computation():
         out["trend_gate"].get("blocked"))
     src = open("app/engine.py", encoding="utf-8").read()
     assert "reconcile_card" in src
+
+
+# ------------------------------------------------- rungs stay on the locked side
+
+def test_rung_predicate_rejects_a_target_above_a_short_entry():
+    from app.levels import rung_on_side
+    # the exact live defect: BNB|tf1 short at 439.473416, TP1 at 439.64265
+    assert rung_on_side(439.473416, -1, 439.64265) is False
+    assert rung_on_side(439.473416, -1, 435.5069) is True
+    assert rung_on_side(100.0, 1, 110.0) is True
+    assert rung_on_side(100.0, 1, 90.0) is False
+    assert rung_on_side(100.0, 0, 110.0) is False      # no side -> no target
+
+
+def test_every_ladder_rung_is_between_entry_and_target():
+    from app.contracts import build_ladder
+    from app.levels import rung_on_side
+    for entry, direction, tp, mins in (
+            (439.473416, -1, 433.811284, [5, 10, 15, 22]),
+            (443.26, 1, 456.5, [11, 22, 33, 44]),
+            (68251.34, 1, 69334.97, [5, 10, 15, 22])):
+        rows = build_ladder(entry, direction, tp, mins)
+        assert rows, (entry, direction)
+        for r in rows:
+            assert rung_on_side(entry, direction, r["level"]), r
+            assert abs(r["level"] - entry) <= abs(tp - entry) + 1e-6, r
+
+
+def test_grc_never_reprojects_a_rung_on_the_live_lean():
+    """A rung may move in PRICE, never in SIDE. The GRC used to project rung 1
+    on res['direction'] — the live lean — which rebuilt a short's target above
+    its own entry."""
+    src = inspect.getsource(eng_mod.PredictionEngine._apply_grc_lock_rules)
+    # strip comments so the explanatory note about the old bug cannot match
+    code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
+    assert 'res["direction"] or t1.direction' not in code
+    assert "t1.direction = res[" not in code
+    assert "_side1 = int(cyc.direction or t1.direction or 0)" in code
+
+
+def test_intermediate_rungs_are_priced_on_the_canonical_contract():
+    """TP2/TP3 are level-less on the CYCLE by design (a rung is only tracked
+    once the one before it is hit), so their price must live on the canonical
+    contract — otherwise a panel prints OPEN for a level the lock knows."""
+    from app.contracts import build_ladder
+    entry, direction, tp, mins = 443.261675, -1, 438.992799, [11, 22, 33, 44]
+    rungs = build_ladder(entry, direction, tp, mins)
+    assert len(rungs) == len(mins)
+    from app.levels import rung_on_side
+    for r in rungs:
+        assert r["level"] is not None
+        assert rung_on_side(entry, direction, r["level"]), r
+    # and the cycle keeps its documented shape
+    src = inspect.getsource(eng_mod.PredictionEngine)
+    seg = src[src.index("_rungs = _build_ladder("):]
+    seg = seg[:seg.index("cyc = TFCycle(")]
+    assert '_level, _status = None, "pending"' in seg

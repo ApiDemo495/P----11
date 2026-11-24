@@ -7457,6 +7457,10 @@ class PredictionEngine:
             elif _k == 1:
                 _level, _status = _rung1, "locked"
             else:
+                # TP2/TP3 stay level-less on the cycle BY DESIGN (a rung is
+                # only tracked once the one before it is hit) — their frozen
+                # price is published on the canonical contract instead, so no
+                # panel prints "OPEN" for a level the lock already knows.
                 _level, _status = None, "pending"
             targets.append(TargetState(
                 k=_k, minutes=_minutes, level=_level, status=_status,
@@ -7913,7 +7917,8 @@ class PredictionEngine:
                 # Tp4 (macro thesis) changes ONLY here
                 t4.direction = res["direction"] or t4_dir
                 t4.level = self._project_level(
-                    price, t4.direction, res["confidence"], res["atr"], t4.minutes
+                    price, int(cyc.direction or t4.direction or 0),
+                    res["confidence"], res["atr"], t4.minutes
                 )
                 t4.locked_at = now
                 t4.locked_cci = res["cci_adjusted"]
@@ -7960,13 +7965,21 @@ class PredictionEngine:
         shift = abs(new_cci - prev_cci)
 
         # --- Tp1: lowest lock strength — adjusts at every GRC before being hit
+        #
+        # SIDE IS FROZEN. This used to project rung 1 on
+        # `res["direction"] or t1.direction` — the LIVE lean — and then write
+        # that lean back onto the rung. On a live SHORT the tape leaned long,
+        # so rung 1 was rebuilt ABOVE the entry (BNB|tf1: short at 439.47 with
+        # TP1 at 439.64), i.e. a target on the losing side of its own trade,
+        # and every later rung inherited the flipped side. A cycle's side is
+        # the locked prediction (§3): rungs may move in PRICE, never in SIDE.
         t1 = cyc.target(1)
         if t1.status == "locked":
+            _side1 = int(cyc.direction or t1.direction or 0)
             t1.level = self._project_level(
-                price, res["direction"] or t1.direction, res["confidence"],
-                res["atr"], t1.minutes,
+                price, _side1, res["confidence"], res["atr"], t1.minutes,
             )
-            t1.direction = res["direction"] or t1.direction
+            t1.direction = _side1
             t1.locked_at = now
             t1.locked_cci = new_cci
             # The measured rung may be refreshed; the cycle side and its

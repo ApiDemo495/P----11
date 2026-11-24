@@ -96,6 +96,25 @@ def valid(levels: dict | None) -> bool:
     return (tp > e > sl) if d > 0 else (tp < e < sl)
 
 
+def rung_on_side(entry: float, direction: int, level: float) -> bool:
+    """A target rung must sit on the FAVOURABLE side of the locked entry.
+
+    Reported from the live board: BNB|tf1 was a short at 439.47 with TP1 at
+    439.64 — above its own entry, i.e. a target that can only be reached by
+    losing. The cause was a rung re-projected on the LIVE lean instead of the
+    locked side. This predicate is the invariant every rung writer now
+    checks, so a target on the wrong side of its entry is impossible.
+    """
+    e, lv = _number(entry), _number(level)
+    try:
+        d = int(direction)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if e is None or lv is None or e <= 0 or d not in (-1, 1):
+        return False
+    return lv > e if d > 0 else lv < e
+
+
 def repair(levels: dict, block: dict | None) -> dict | None:
     """Rebuild from measured bps at the original entry, never current spot."""
     if not isinstance(levels, dict):
