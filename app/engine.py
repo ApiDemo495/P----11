@@ -8616,16 +8616,8 @@ class PredictionEngine:
                     # upgraded, and gate_ok/verdict/issue_note are always
                     # shipped together with the confidence they describe.
                     try:
-                        from .verdict import reconcile as _vrec
-                        _ok_d, _verdict_d, _note_d = _vrec(
-                            symbol, tf, int(d.get("direction") or 0),
-                            float(d.get("confidence") or 0.0), d.get("tier"),
-                            bool(d.get("gate_ok")), str(d.get("verdict") or ""),
-                            str(d.get("issue_note") or ""))
-                        d["gate_ok"], d["verdict"] = _ok_d, _verdict_d
-                        d["issue_note"] = _note_d
-                        d["execution_eligible"] = bool(
-                            d.get("execution_eligible")) and _ok_d
+                        from .verdict import reconcile_card as _vcard
+                        _vcard(symbol, tf, d)
                     except Exception:
                         log.exception("verdict reconcile failed for %s|%s",
                                       symbol, tf)

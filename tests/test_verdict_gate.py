@@ -418,3 +418,26 @@ def test_stale_trend_note_is_regenerated_once_the_reading_is_gone():
         g.observe("ETH", "tf1", c)
     ok, verdict, note = vd.public_verdict("ETH", "tf1", 1, 0.30, "half")
     assert "chases" in note and ok is False
+
+
+def test_card_note_and_evidence_come_from_one_computation():
+    """A card must never print 'chases the trend — withheld' beside its own
+    trend_gate block saying trend 0 / not blocked (live symptom)."""
+    from app import verdict as vd
+    card = {
+        "direction": 1, "confidence": 0.30, "tier": "half",
+        "gate_ok": True, "verdict": "ISSUE", "execution_eligible": True,
+        "issue_note": ("chases the 2-decision trend (up) — measured 46.0 % "
+                       "… call withheld"),
+        "trend_gate": {"trend": 0, "blocked": False},
+    }
+    out = vd.reconcile_card("BTC", "tf1", card)
+    assert "chases" not in out["issue_note"]
+    assert out["trend_gate"]["blocked"] is False
+    assert out["verdict"] == "NO CALL" and out["gate_ok"] is False
+    assert out["execution_eligible"] is False
+    # and the published evidence must agree with the published note
+    assert ("chases" in out["issue_note"]) == bool(
+        out["trend_gate"].get("blocked"))
+    src = open("app/engine.py", encoding="utf-8").read()
+    assert "reconcile_card" in src

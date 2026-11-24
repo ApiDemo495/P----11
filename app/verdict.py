@@ -164,3 +164,26 @@ def describe(symbol: str, tf: str, direction: int, confidence: float,
     return {"gate_ok": ok, "verdict": verdict, "issue_note": note,
             "floor": _floor(symbol), "confidence": _num(confidence),
             "trend_gate": ev}
+
+
+def reconcile_card(symbol: str, tf: str, card: dict) -> dict:
+    """Apply the whole consistency rule to one published card, in place.
+
+    The badge, its note AND the evidence block are derived in one call, so a
+    card can never ship a note that describes a gate decision its own
+    ``trend_gate`` block denies (the live symptom: "chases the 2-decision
+    trend — withheld" beside ``trend: 0``, because the evidence was a stored
+    copy from an earlier refresh while the note was regenerated at print).
+    """
+    ok, verdict, note = reconcile(
+        symbol, tf, int(card.get("direction") or 0),
+        _num(card.get("confidence")), card.get("tier"),
+        bool(card.get("gate_ok")), str(card.get("verdict") or ""),
+        str(card.get("issue_note") or ""))
+    card["gate_ok"], card["verdict"] = ok, verdict
+    card["issue_note"] = note
+    card["trend_gate"] = describe(
+        symbol, tf, int(card.get("direction") or 0),
+        _num(card.get("confidence")), card.get("tier"))["trend_gate"]
+    card["execution_eligible"] = bool(card.get("execution_eligible")) and ok
+    return card
