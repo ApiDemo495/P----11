@@ -1,0 +1,462 @@
+[
+ {
+  "asset": "BTC",
+  "tf": "tf3",
+  "minutes": 130,
+  "side": "long",
+  "tp_bps": 8.0,
+  "sl_bps": 32.0,
+  "venue": "lighter (0 bps)",
+  "n": 11464,
+  "tie_rate": 0.0444,
+  "fee_budget_bps": 0.61,
+  "full": {
+   "n": 11464,
+   "wr": 0.8153,
+   "ev_bps": 0.613,
+   "total_ret": 0.9924,
+   "cagr": 0.2752,
+   "max_dd": -0.0988,
+   "worst_bps": -32.0,
+   "sharpe": 2.09
+  },
+  "train": {
+   "n": 7451,
+   "wr": 0.816,
+   "ev_bps": 0.64,
+   "total_ret": 0.5965,
+   "cagr": 0.289,
+   "max_dd": -0.0955,
+   "worst_bps": -32.0,
+   "sharpe": 2.18
+  },
+  "holdout": {
+   "n": 4013,
+   "wr": 0.8141,
+   "ev_bps": 0.564,
+   "total_ret": 0.248,
+   "cagr": 0.2501,
+   "max_dd": -0.0973,
+   "worst_bps": -32.0,
+   "sharpe": 1.92
+  },
+  "per_year": [
+   {
+    "n": 676,
+    "wr": 0.8062,
+    "ev_bps": 0.249,
+    "total_ret": 0.0161,
+    "cagr": 0.1001,
+    "max_dd": -0.0456,
+    "worst_bps": -32.0,
+    "sharpe": 0.83,
+    "year": 2023
+   },
+   {
+    "n": 4054,
+    "wr": 0.8207,
+    "ev_bps": 0.827,
+    "total_ret": 0.3915,
+    "cagr": 0.3903,
+    "max_dd": -0.0955,
+    "worst_bps": -32.0,
+    "sharpe": 2.85,
+    "year": 2024
+   },
+   {
+    "n": 4043,
+    "wr": 0.8128,
+    "ev_bps": 0.511,
+    "total_ret": 0.2232,
+    "cagr": 0.2232,
+    "max_dd": -0.0988,
+    "worst_bps": -32.0,
+    "sharpe": 1.73,
+    "year": 2025
+   },
+   {
+    "n": 2691,
+    "wr": 0.8135,
+    "ev_bps": 0.538,
+    "total_ret": 0.152,
+    "cagr": 0.2369,
+    "max_dd": -0.0973,
+    "worst_bps": -32.0,
+    "sharpe": 1.82,
+    "year": 2026
+   }
+  ],
+  "ci95": [
+   0.8081,
+   0.8223
+  ]
+ },
+ {
+  "asset": "BTC",
+  "tf": "tf4",
+  "minutes": 245,
+  "side": "long",
+  "tp_bps": 8.0,
+  "sl_bps": 32.0,
+  "venue": "lighter (0 bps)",
+  "n": 6083,
+  "tie_rate": 0.0242,
+  "fee_budget_bps": 0.67,
+  "full": {
+   "n": 6083,
+   "wr": 0.8169,
+   "ev_bps": 0.675,
+   "total_ret": 0.4964,
+   "cagr": 0.1528,
+   "max_dd": -0.0622,
+   "worst_bps": -32.0,
+   "sharpe": 1.68
+  },
+  "train": {
+   "n": 3953,
+   "wr": 0.8143,
+   "ev_bps": 0.573,
+   "total_ret": 0.2481,
+   "cagr": 0.1278,
+   "max_dd": -0.0622,
+   "worst_bps": -32.0,
+   "sharpe": 1.42
+  },
+  "holdout": {
+   "n": 2130,
+   "wr": 0.8216,
+   "ev_bps": 0.864,
+   "total_ret": 0.199,
+   "cagr": 0.2006,
+   "max_dd": -0.0586,
+   "worst_bps": -32.0,
+   "sharpe": 2.17
+  },
+  "per_year": [
+   {
+    "n": 359,
+    "wr": 0.8524,
+    "ev_bps": 2.095,
+    "total_ret": 0.0777,
+    "cagr": 0.5639,
+    "max_dd": -0.0261,
+    "worst_bps": -32.0,
+    "sharpe": 5.67,
+    "year": 2023
+   },
+   {
+    "n": 2151,
+    "wr": 0.8145,
+    "ev_bps": 0.58,
+    "total_ret": 0.13,
+    "cagr": 0.1296,
+    "max_dd": -0.0566,
+    "worst_bps": -32.0,
+    "sharpe": 1.44,
+    "year": 2024
+   },
+   {
+    "n": 2146,
+    "wr": 0.8094,
+    "ev_bps": 0.377,
+    "total_ret": 0.0813,
+    "cagr": 0.0813,
+    "max_dd": -0.0622,
+    "worst_bps": -32.0,
+    "sharpe": 0.92,
+    "year": 2025
+   },
+   {
+    "n": 1427,
+    "wr": 0.8227,
+    "ev_bps": 0.908,
+    "total_ret": 0.1365,
+    "cagr": 0.2121,
+    "max_dd": -0.0432,
+    "worst_bps": -32.0,
+    "sharpe": 2.29,
+    "year": 2026
+   }
+  ],
+  "ci95": [
+   0.8069,
+   0.8264
+  ]
+ },
+ {
+  "asset": "BTC",
+  "tf": "1d",
+  "minutes": 1440,
+  "side": "short",
+  "tp_bps": 20.0,
+  "sl_bps": 80.0,
+  "venue": "lighter (0 bps)",
+  "n": 1035,
+  "tie_rate": 0.0058,
+  "fee_budget_bps": 3.57,
+  "full": {
+   "n": 1035,
+   "wr": 0.8357,
+   "ev_bps": 3.575,
+   "total_ret": 0.4374,
+   "cagr": 0.1365,
+   "max_dd": -0.0702,
+   "worst_bps": -80.0,
+   "sharpe": 1.53
+  },
+  "train": {
+   "n": 672,
+   "wr": 0.8244,
+   "ev_bps": 2.44,
+   "total_ret": 0.1725,
+   "cagr": 0.0903,
+   "max_dd": -0.0702,
+   "worst_bps": -80.0,
+   "sharpe": 1.02
+  },
+  "holdout": {
+   "n": 363,
+   "wr": 0.8567,
+   "ev_bps": 5.675,
+   "total_ret": 0.2259,
+   "cagr": 0.2273,
+   "max_dd": -0.0356,
+   "worst_bps": -80.0,
+   "sharpe": 2.57
+  },
+  "per_year": [
+   {
+    "n": 61,
+    "wr": 0.8197,
+    "ev_bps": 1.967,
+    "total_ret": 0.0116,
+    "cagr": 0.0715,
+    "max_dd": -0.0219,
+    "worst_bps": -80.0,
+    "sharpe": 0.81,
+    "year": 2023
+   },
+   {
+    "n": 366,
+    "wr": 0.8361,
+    "ev_bps": 3.607,
+    "total_ret": 0.1382,
+    "cagr": 0.1378,
+    "max_dd": -0.0495,
+    "worst_bps": -80.0,
+    "sharpe": 1.54,
+    "year": 2024
+   },
+   {
+    "n": 365,
+    "wr": 0.8274,
+    "ev_bps": 2.74,
+    "total_ret": 0.1023,
+    "cagr": 0.1023,
+    "max_dd": -0.0702,
+    "worst_bps": -80.0,
+    "sharpe": 1.15,
+    "year": 2025
+   },
+   {
+    "n": 243,
+    "wr": 0.8519,
+    "ev_bps": 5.185,
+    "total_ret": 0.1325,
+    "cagr": 0.2055,
+    "max_dd": -0.0297,
+    "worst_bps": -80.0,
+    "sharpe": 2.31,
+    "year": 2026
+   }
+  ],
+  "ci95": [
+   0.8119,
+   0.8571
+  ]
+ },
+ {
+  "asset": "ETH",
+  "tf": "tf3",
+  "minutes": 130,
+  "side": "long",
+  "tp_bps": 8.0,
+  "sl_bps": 32.0,
+  "venue": "lighter (0 bps)",
+  "n": 11464,
+  "tie_rate": 0.0462,
+  "fee_budget_bps": 0.7,
+  "full": {
+   "n": 11464,
+   "wr": 0.8174,
+   "ev_bps": 0.697,
+   "total_ret": 1.1934,
+   "cagr": 0.3192,
+   "max_dd": -0.1005,
+   "worst_bps": -32.0,
+   "sharpe": 2.38
+  },
+  "train": {
+   "n": 7451,
+   "wr": 0.8161,
+   "ev_bps": 0.645,
+   "total_ret": 0.6029,
+   "cagr": 0.2918,
+   "max_dd": -0.1005,
+   "worst_bps": -32.0,
+   "sharpe": 2.2
+  },
+  "holdout": {
+   "n": 4013,
+   "wr": 0.8198,
+   "ev_bps": 0.793,
+   "total_ret": 0.3684,
+   "cagr": 0.3716,
+   "max_dd": -0.0887,
+   "worst_bps": -32.0,
+   "sharpe": 2.73
+  },
+  "per_year": [
+   {
+    "n": 676,
+    "wr": 0.8314,
+    "ev_bps": 1.254,
+    "total_ret": 0.0877,
+    "cagr": 0.653,
+    "max_dd": -0.0215,
+    "worst_bps": -32.0,
+    "sharpe": 4.42,
+    "year": 2023
+   },
+   {
+    "n": 4054,
+    "wr": 0.8145,
+    "ev_bps": 0.58,
+    "total_ret": 0.259,
+    "cagr": 0.2582,
+    "max_dd": -0.0875,
+    "worst_bps": -32.0,
+    "sharpe": 1.97,
+    "year": 2024
+   },
+   {
+    "n": 4043,
+    "wr": 0.8157,
+    "ev_bps": 0.629,
+    "total_ret": 0.2834,
+    "cagr": 0.2834,
+    "max_dd": -0.1005,
+    "worst_bps": -32.0,
+    "sharpe": 2.14,
+    "year": 2025
+   },
+   {
+    "n": 2691,
+    "wr": 0.8209,
+    "ev_bps": 0.835,
+    "total_ret": 0.2481,
+    "cagr": 0.3951,
+    "max_dd": -0.0887,
+    "worst_bps": -32.0,
+    "sharpe": 2.88,
+    "year": 2026
+   }
+  ],
+  "ci95": [
+   0.8103,
+   0.8244
+  ]
+ },
+ {
+  "asset": "ETH",
+  "tf": "1d",
+  "minutes": 1440,
+  "side": "long",
+  "tp_bps": 20.0,
+  "sl_bps": 80.0,
+  "venue": "lighter (0 bps)",
+  "n": 1035,
+  "tie_rate": 0.001,
+  "fee_budget_bps": 5.22,
+  "full": {
+   "n": 1035,
+   "wr": 0.8522,
+   "ev_bps": 5.217,
+   "total_ret": 0.7046,
+   "cagr": 0.2069,
+   "max_dd": -0.0588,
+   "worst_bps": -80.0,
+   "sharpe": 2.33
+  },
+  "train": {
+   "n": 672,
+   "wr": 0.8438,
+   "ev_bps": 4.375,
+   "total_ret": 0.3357,
+   "cagr": 0.1703,
+   "max_dd": -0.0588,
+   "worst_bps": -80.0,
+   "sharpe": 1.91
+  },
+  "holdout": {
+   "n": 363,
+   "wr": 0.8678,
+   "ev_bps": 6.777,
+   "total_ret": 0.2761,
+   "cagr": 0.2778,
+   "max_dd": -0.0336,
+   "worst_bps": -80.0,
+   "sharpe": 3.17
+  },
+  "per_year": [
+   {
+    "n": 61,
+    "wr": 0.8033,
+    "ev_bps": 0.328,
+    "total_ret": 0.0015,
+    "cagr": 0.0091,
+    "max_dd": -0.0356,
+    "worst_bps": -80.0,
+    "sharpe": 0.13,
+    "year": 2023
+   },
+   {
+    "n": 366,
+    "wr": 0.847,
+    "ev_bps": 4.699,
+    "total_ret": 0.1848,
+    "cagr": 0.1843,
+    "max_dd": -0.0588,
+    "worst_bps": -80.0,
+    "sharpe": 2.07,
+    "year": 2024
+   },
+   {
+    "n": 365,
+    "wr": 0.8658,
+    "ev_bps": 6.575,
+    "total_ret": 0.2684,
+    "cagr": 0.2684,
+    "max_dd": -0.0336,
+    "worst_bps": -80.0,
+    "sharpe": 3.06,
+    "year": 2025
+   },
+   {
+    "n": 243,
+    "wr": 0.8519,
+    "ev_bps": 5.185,
+    "total_ret": 0.1325,
+    "cagr": 0.2055,
+    "max_dd": -0.0299,
+    "worst_bps": -80.0,
+    "sharpe": 2.31,
+    "year": 2026
+   }
+  ],
+  "ci95": [
+   0.8292,
+   0.8725
+  ]
+ }
+]
