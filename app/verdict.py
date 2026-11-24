@@ -53,6 +53,16 @@ def _num(value: Any) -> float:
         return 0.0
 
 
+#: the exact shapes this module generates; anything else is an engine
+#: explanation and is never rewritten
+_GENERATED_PREFIXES = ("below floor (", "cleared the ")
+
+
+def _is_generated(note: str | None) -> bool:
+    text = str(note or "")
+    return any(text.startswith(p) for p in _GENERATED_PREFIXES)
+
+
 def public_verdict(symbol: str, tf: str, direction: int, confidence: float,
                    tier: str | None, issue_note: str | None = None,
                    ) -> tuple[bool, str, str]:
@@ -84,6 +94,9 @@ def public_verdict(symbol: str, tf: str, direction: int, confidence: float,
     else:
         verdict = "NO CALL"
 
+    # THREE decimals — exactly how the card prints confidence
+    # (`fx(res.confidence, 3)`). Any other precision reads as a different
+    # number beside it: "conf 0.235" next to "below floor (0.24 …)".
     floor_note = (f"cleared the {floor:.3f} floor" if conf > floor
                   else f"below floor ({conf:.3f} <= {floor:.3f})")
     if trend.get("blocked"):
@@ -92,9 +105,13 @@ def public_verdict(symbol: str, tf: str, direction: int, confidence: float,
             # say BOTH reasons — a card that is withheld for one reason while
             # it also fails the floor must not read as if only one applied
             note += f"; also {floor_note}"
-    elif issue_note:
+    elif issue_note and not _is_generated(issue_note):
+        # an ENGINE explanation (double-check conflict, degraded evidence…)
+        # is kept — it says something this rule cannot know
         note = str(issue_note)
     else:
+        # ours is always recomputed: a note formatted beside an older
+        # confidence would otherwise contradict the number printed with it
         note = floor_note
     return gate_ok, verdict, note
 
@@ -121,6 +138,15 @@ def reconcile(symbol: str, tf: str, direction: int, confidence: float,
     if _ORDER.get(cur, 0) > _ORDER.get(verdict_rule, 0):
         # stored verdict claims more than the rule allows for this confidence
         return False, verdict_rule, note_rule
+    # The stored note was formatted next to an OLDER confidence. Even when the
+    # badge is still right, a note naming a different number is a printed
+    # contradiction ("conf 0.135" beside "below floor (0.08 …)" — a live
+    # defect), so any note in one of this module's own generated formats is
+    # regenerated from the numbers shipping now.
+    if cur_ok or _is_generated(issue_note):
+        return cur_ok, cur, note_rule
+    # else the engine declined this call for a reason the rule cannot see (a
+    # double-check conflict, a degraded-evidence cap) — keep its own words
     return cur_ok, cur, str(issue_note or note_rule)
 
 

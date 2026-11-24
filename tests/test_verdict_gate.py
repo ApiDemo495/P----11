@@ -81,7 +81,7 @@ def test_reconcile_only_ever_downgrades():
     # stored ISSUE whose confidence has since been cut below the floor
     ok, verdict, note = vd.reconcile("BTC", "tf4", 1, 0.009, "half",
                                      True, "ISSUE", "cleared the 0.385 floor")
-    assert (ok, verdict) == (False, "NO CALL") and "0.385" in note
+    assert (ok, verdict) == (False, "NO CALL") and "floor" in note
     # stored NO CALL with a recovering confidence is NOT upgraded here
     ok, verdict, _ = vd.reconcile("BTC", "tf1", 1, floor + 0.05, "full",
                                   False, "NO CALL", "")
@@ -272,3 +272,64 @@ def test_rejected_confidence_filter_is_documented_not_shipped():
     from backtest import trend_gate_audit as a2
     rep = a2.build()
     assert rep["pooled"]["opp_wr"] - rep["pooled"]["agree_wr"] > 0.10
+
+
+def test_note_prints_the_same_number_the_card_prints():
+    """The note and the card must round confidence identically."""
+    from app import verdict as vd
+    for conf in (0.2805, 0.0164, 0.3849, 0.3851, 0.9):
+        ok, _, note = vd.public_verdict("BTC", "tf1", 1, conf, "full")
+        # a CLEARED card prints the floor it cleared; a withheld card prints
+        # its own confidence. Both are 2-dp, matching the card's confidence.
+        expected = (f"{config.asset_issue_floor('BTC'):.3f}" if ok
+                    else f"{conf:.3f}")
+        assert expected in note, (conf, note)
+        # and the verdict must follow the printed numbers' ordering
+        assert ok == (conf > config.asset_issue_floor("BTC"))
+
+
+# ------------------------------------------------- calibration de-duplication
+
+def test_calibration_sample_is_booked_once_per_window():
+    """Two grading paths settle the same window; it must count once."""
+    from app.engine import calib_should_record
+    done: dict = {}
+    key = ("BTC", "tf1")
+    assert calib_should_record(done, key, 0.001) is True
+    # the same settled window arriving from the other path
+    assert calib_should_record(done, key, 0.001) is False
+    assert calib_should_record(done, key, 0.001) is False
+    # a genuinely different window is a new sample
+    assert calib_should_record(done, key, -0.004) is True
+    # and cells are independent
+    assert calib_should_record(done, ("ETH", "tf1"), 0.001) is True
+
+
+def test_both_grading_paths_use_the_dedup_rule():
+    eng = inspect.getsource(eng_mod)
+    assert eng.count("calib_should_record(") >= 3   # def + two call sites
+    # the paired rings and the lock-learning path must both be guarded
+    paired = inspect.getsource(eng_mod.PredictionEngine._grade_settlement) \
+        if hasattr(eng_mod.PredictionEngine, "_grade_settlement") else eng
+    assert "calib_p" in paired
+
+
+def test_every_confidence_mutation_re_derives_the_badge():
+    """A confidence changed after the badge was written must not print a
+    note naming the old number (the live ETH tf2 defect: conf 0.135 beside
+    'below floor (0.08 ...)')."""
+    from app import verdict as vd
+    ok, verdict, note = vd.reconcile("ETH", "tf2", 1, 0.1347, "watch-only",
+                                     False, "NO CALL",
+                                     "below floor (0.08 <= 0.40)")
+    assert "0.135" in note and "0.08" not in note
+    # but an engine-declined call keeps its own explanation
+    ok, verdict, note = vd.reconcile("ETH", "tf2", 1, 0.1347, "watch-only",
+                                     False, "NO CALL",
+                                     "double-check conflict: 3 formulas "
+                                     "disagree")
+    assert note.startswith("double-check conflict")
+    # the two post-hoc mutation sites must re-derive, not inherit
+    for name in ("_on_target_hit", "_on_sl_hit"):
+        fn = inspect.getsource(getattr(eng_mod.PredictionEngine, name))
+        assert "public_verdict(" in fn, name

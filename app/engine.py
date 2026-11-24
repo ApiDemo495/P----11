@@ -409,6 +409,22 @@ def public_verdict(symbol: str, tf: str, direction: int, confidence: float,
     return _verdict_rule(symbol, tf, direction, confidence, tier, issue_note)
 
 
+def calib_should_record(done: dict, key: tuple[str, str], move: float) -> bool:
+    """True once per settled window, whichever grading path asks first.
+
+    Two paths grade the same window at the same boundary (the paired
+    ``calib_p``/``calib_h`` rings and the lock-learning pass), and both used
+    to append — so every window was counted twice in the calibration panel
+    and in its Brier score. The wake is identified by the realised move,
+    which is frozen for a settled window.
+    """
+    prev = done.get(key)
+    if prev is not None and abs(float(prev) - float(move)) < 1e-12:
+        return False
+    done[key] = float(move)
+    return True
+
+
 def _trend_evidence(symbol: str, tf: str, side: int) -> dict:
     """The trend gate's own reading, for the card's evidence block."""
     try:
@@ -526,6 +542,9 @@ class PredictionEngine:
         self._fw_last_vote: dict[tuple[str, str], float] = {}
         self._last_raws: dict[tuple[str, str], dict] = {}
         self._calib_pending: dict[tuple[str, str], float] = {}
+        # last realised move already counted in the calibration rings, so the
+        # two grading paths cannot book the same window twice
+        self._calib_done: dict[tuple[str, str], float] = {}
         # RL controllers (error-finder + issue bandit) + tracer last value
         from .rlsys import get_rl
         self.rl = get_rl()
@@ -1237,7 +1256,9 @@ class PredictionEngine:
                 # calibration panel plots hit-rate vs stated confidence
                 _cb = self._calib_pending.pop((symbol, tf), None)
                 pdir = self.prev_cci_dir.get((symbol, tf), 0)
-                if move != 0 and pdir != 0 and _cb is not None and _cb > 0:
+                if (move != 0 and pdir != 0 and _cb is not None and _cb > 0
+                        and calib_should_record(self._calib_done,
+                                                (symbol, tf), move)):
                     _bucket = round(min(1.0, max(0.0, _cb)) * 20) / 20.0
                     self.hist.ring(
                         self.hist.tf_key(symbol, tf, "calib_p"), 400
@@ -1807,6 +1828,7 @@ class PredictionEngine:
                 fin["gate_ok"] = bool(_dir_final != 0 and
                                       float(fin["confidence"])
                                       > float(fin["asset_floor"]))
+                # 3-dp, the same rounding the card prints confidence with
                 fin["issue_note"] = (
                     f"cleared the {float(fin['asset_floor']):.3f} floor"
                     if fin["gate_ok"] else
@@ -6035,9 +6057,11 @@ class PredictionEngine:
                 symbol, tf, move_sign, signals, subs, brain,
                 1 if outcome == "won" else None,
                 1 if outcome == "lost" else None)
-            # calibration ring: stated confidence vs realised sign
+            # calibration ring: stated confidence vs realised sign — the same
+            # once-per-window rule as the paired rings above
             conf = float(lock.get("confidence") or 0.0)
-            if conf > 0:
+            if conf > 0 and calib_should_record(self._calib_done,
+                                                (symbol, tf), move_sign):
                 self.hist.ring(self.hist.tf_key(symbol, tf, "calib_p"),
                                400).append(round(min(1.0, conf) * 20) / 20.0)
                 self.hist.ring(self.hist.tf_key(symbol, tf, "calib_h"),
@@ -8038,6 +8062,12 @@ class PredictionEngine:
             cyc.active_k = k + 1
             cyc.confidence = res["confidence"]
             cyc.cci = res["cci_adjusted"]
+            # the badge describes the number beside it — re-derive it here too
+            cyc.gate_ok, cyc.verdict, cyc.issue_note = public_verdict(
+                symbol, tf, int(cyc.direction or 0), cyc.confidence, cyc.tier,
+                None)
+            cyc.trend_gate = _trend_evidence(symbol, tf,
+                                             int(cyc.direction or 0))
             self._apply_risk(symbol, tf, cyc, res)
             await self.emit({
                 "type": "event",
@@ -8105,6 +8135,12 @@ class PredictionEngine:
                     )
                     t.locked_at = now
                     t.locked_cci = res["cci_adjusted"]
+            # the penalty above changed the number; the badge follows it
+            cyc.gate_ok, cyc.verdict, cyc.issue_note = public_verdict(
+                symbol, tf, int(cyc.direction or 0), cyc.confidence, cyc.tier,
+                None)
+            cyc.trend_gate = _trend_evidence(symbol, tf,
+                                             int(cyc.direction or 0))
             self._apply_risk(symbol, tf, cyc, res)
             cyc.refreshed_at = now
             cyc.safe_alert = True
