@@ -423,7 +423,4 @@ def accountant(symbol: str, tf: str) -> EraAccountant:
         _ACCOUNTANTS[key] = EraAccountant(symbol, tf)
     return _ACCOUNTANTS[key]
 
-
-def reset_all() -> None:
-    """Tests: drop in-memory accountants (files honour HOLD_ERA_PATH)."""
-    _ACCOUNTANTS.clear()
+# [removed 2026-11-23] reset_all — dead code: zero references anywhere

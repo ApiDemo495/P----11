@@ -253,11 +253,7 @@ def is_hold_cell(symbol: str, tf: str) -> bool:
     c = cell(symbol, tf)
     return bool(c and c.get("status") == "ok")
 
-
-def is_warmup_cell(symbol: str, tf: str) -> bool:
-    """PAXG tf1–tf3: known cell, no certified measurement (1 h bars)."""
-    c = cell(symbol, tf)
-    return bool(c and c.get("status") != "ok")
+# [removed 2026-11-23] is_warmup_cell — dead code: zero references anywhere
 
 
 def managed(symbol: str, tf: str) -> bool:
@@ -865,35 +861,7 @@ def build_era_bars(symbol: str, tf: str, entry: float, side: int,
     tp, sl, _meta = _cost_aware(symbol, entry, side, scale_px, k, m)
     return tp, sl
 
-
-def geometry_for_live(symbol: str, tf: str) -> dict[str, Any]:
-    """Which certified geometry the live trade uses, and does it pay?
-
-    Mirrors the engine's selection rule (guarded era geometry when the
-    artifact has ``0 < era_m < 999``; the row ladder otherwise) and adds
-    the cost verdict the seal needs to stay honest.
-    """
-    pol = summary(symbol, tf)
-    if not pol.get("managed") or pol.get("status") != "ok":
-        return {"geometry": None, "pays_round_trip": None,
-                "why": "no certified geometry for this cell"}
-    era_m = float(pol.get("era_m") or 0.0)
-    guarded = 0 < era_m < 999.0
-    k = float(pol.get("era_k") if guarded else pol.get("row_k") or 0.0)
-    m = float(era_m if guarded else pol.get("row_m") or 0.0)
-    rt = round_trip_bps(symbol)
-    # the artifact's TP distance is k*m x the q80 window move; expressed
-    # as a multiple of the round trip it is what the floor tests
-    return {
-        "geometry": "guarded_era" if guarded else "row",
-        "k": k, "m": m,
-        "rt_bps": round(rt, 3),
-        "min_tp_bps": round(MIN_TP_OVER_RT * rt, 3),
-        "pays_round_trip": None,   # needs the live scale — see seal
-        "rule": f"target must be >= {MIN_TP_OVER_RT}x round trip "
-                f"({MIN_TP_OVER_RT * rt:.1f} bps); closer targets are "
-                "widened at lock time",
-    }
+# [removed 2026-11-23] geometry_for_live — dead code: zero references anywhere
 
 
 def scale_at_bars(bars: tuple, at_ts, tf: str) -> np.ndarray:

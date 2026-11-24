@@ -234,22 +234,7 @@ def validate(contract: dict | None) -> bool:
     except (TypeError, ValueError):
         return False
 
-
-def levels_for_display(contract: dict | None) -> dict:
-    """Flatten a contract into the keys every panel/label consumes."""
-    if not isinstance(contract, dict) or not contract:
-        return {}
-    out = {
-        "entry": contract.get("entry"),
-        "tp": contract.get("horizon_tp"),
-        "sl": contract.get("sl"),
-        "direction": contract.get("direction"),
-        "confidence": contract.get("final_confidence"),
-    }
-    for row in contract.get("rungs") or []:
-        out[f"tp{row['k']}"] = row["level"]
-        out[f"tp{row['k']}_min"] = row["minutes"]
-    return out
+# [removed 2026-11-23] levels_for_display — dead code: zero references anywhere
 
 
 def divergences(panels: dict, contract: dict | None,

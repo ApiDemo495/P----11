@@ -727,6 +727,7 @@ class PredictionEngine:
             O=O,
             H=H,
             L=L,
+            funding=self._funding_series(symbol),
         )
         self._attach_flow(ctx)
         return ctx
@@ -5423,6 +5424,39 @@ class PredictionEngine:
                             else "OVERCONFIDENT — predicted more than realised"
                             if mean_pred > realised
                             else "underconfident — realised more than predicted")}
+
+    def _funding_series(self, symbol: str) -> list[float] | None:
+        """Recent settled funding rates for ``symbol``, newest last.
+
+        ``app/derivs.py`` has been in the tree (and tested) since the
+        derivatives work, but nothing in the runtime ever called it, so
+        the formula that consumes carry (F41 FND) always saw ``None`` and
+        always voted zero. This is the wiring that makes that block real.
+
+        Returns ``None`` — not an empty list — when the archive is absent,
+        which is the honest signal F41 distinguishes from "carry is flat".
+        Loaded once per symbol and cached, because the archive is on disk
+        and funding only settles three times a day.
+        """
+        cache = getattr(self, "_funding_cache", None)
+        if cache is None:
+            cache = self._funding_cache = {}
+        if symbol in cache:
+            return cache[symbol]
+        series: list[float] | None = None
+        try:
+            from . import derivs as _derivs
+            loaded = _derivs.load(symbol)
+            fund = (loaded or {}).get("funding") or {}
+            vals = fund.get("funding_rate")
+            if vals is not None and len(vals):
+                arr = [float(v) for v in list(vals)[-8:]
+                       if v == v]                      # drop NaN
+                series = arr or None
+        except Exception:                              # optional module
+            series = None
+        cache[symbol] = series
+        return series
 
     @staticmethod
     def _grid_window(tf: str, now: float) -> tuple[float, float]:

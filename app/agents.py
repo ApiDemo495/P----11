@@ -2514,7 +2514,4 @@ def start_boot_worker(manager=None) -> dict:
 def boot_state() -> dict:
     return dict(_boot_state)
 
-
-def get_status() -> dict:
-    """`agents.get_status()` — the boot worker's state without a manager."""
-    return boot_state()
+# [removed 2026-11-23] get_status — dead code: zero references anywhere

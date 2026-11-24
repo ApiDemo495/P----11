@@ -210,18 +210,4 @@ def _cumsum_time(t: np.ndarray, v: np.ndarray, span: float) -> np.ndarray:
         out[i] = cs[i + 1] - cs[lo[i]]
     return out
 
-
-def squeeze_score(f: dict[str, np.ndarray], bars, i: np.ndarray) -> np.ndarray:
-    """Leverage-crowding score: OI built up while price stalled.
-
-    High score = lots of new positioning, extreme funding, and price going
-    nowhere — the fuel for a liquidation cascade once the range breaks.
-    """
-    oi = np.nan_to_num(f.get("oi_chg_24h", 0.0), nan=0.0)
-    fz = np.abs(np.nan_to_num(f.get("funding_z", 0.0), nan=0.0))
-    c = np.asarray(bars.c, dtype=float)
-    rng = np.zeros(c.size)
-    for k in range(24, c.size):
-        rng[k] = abs(c[k] / max(1e-9, c[k - 24]) - 1.0)
-    stall = 1.0 / (1.0 + rng[np.asarray(i, int)] * 100.0)
-    return np.clip(oi, 0, 0.5) * 4.0 + np.clip(fz, 0, 4) * 0.5 + stall
+# [removed 2026-11-23] squeeze_score — dead code: zero references anywhere

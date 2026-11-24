@@ -1206,10 +1206,4 @@ class BrainSystem:
             "per_instance": states,
         }
 
-
-def empty_brain_consensus() -> dict:
-    return {"polarity": 0, "strength": 0.0, "agreement": 0.0,
-            "consensus": 0.0, "hormones_avg": {}, "experience": 0.5,
-            "state_dist": {}, "dominant": "ranging", "p_dominant": 0.2,
-            "weight_adj": {wid: 0.0 for wid in WEIGHT_IDS},
-            "instances": []}
+# [removed 2026-11-23] empty_brain_consensus — dead code: zero references anywhere

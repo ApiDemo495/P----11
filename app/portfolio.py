@@ -280,7 +280,4 @@ def block_bootstrap(returns, block: int = 20, draws: int = 2000,
             "lo_bp": round(float(np.percentile(means, 2.5)) * 1e4, 2),
             "hi_bp": round(float(np.percentile(means, 97.5)) * 1e4, 2)}
 
-
-def bucket_neff(n: int, per_bucket: int) -> float:
-    """Independent trades when `n` fires arrive in `per_bucket` clusters."""
-    return _block_neff(n, max(1, per_bucket))
+# [removed 2026-11-23] bucket_neff — dead code: zero references anywhere
