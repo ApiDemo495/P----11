@@ -2255,3 +2255,176 @@ vote zero. `PredictionEngine._funding_series()` now loads the archive and
 archive exists and an honest `None` when it does not.
 
 Audit tool: `.venv/bin/python -m backtest.dead_code`
+
+---
+
+## §28 — THE VENUE MAP: WHERE A 66 % WIN RATE ACTUALLY LIVES (2026-11-23)
+
+§26 proved the ceiling `WR ≤ P(|move| > RT)` but only ever evaluated it at
+the repo's **legacy 28.87 bps round trip**. That number was never a market
+fact — it is ~7× the current cost of a round trip on MEXC and infinite
+versus Lighter. This section re-runs the whole question with real 2026 fee
+schedules, and reports the result the user asked for: the highest win rate
+that exists anywhere, on the cheapest venue, at which horizon.
+
+### 28.1 Fee ladder (verified 2026-11; **re-verify before any live use**)
+
+| venue | maker RT | taker RT | caveat |
+|---|---|---|---|
+| **Lighter (Standard)** | **0 bps** | **0 bps** | 300 ms taker delay; 219 markets; zk-rollup; no KYC |
+| dYdX v4 — BTC-USD / SOL-USD | 0 bps | 0 bps (waived) | zero-fee pairs only |
+| MEXC futures | 0 bps | 4 bps | not available US/UK; thinnest compliance record |
+| Extended (Starknet) | 0 bps | 5 bps | young venue, thin books |
+| Hyperliquid Tier 4 | 0 bps | 8 bps | 0 % maker needs $500M/14 d volume; rebates below |
+| Aster | 0 bps | 8 bps | VIP ladder, 3.2 bps at VIP6 |
+| Binance / Bybit / OKX futures | 4 bps | 10 bps | deepest liquidity |
+| **legacy `FRICTION_BPS`** | — | **28.87 bps** | ~7× MEXC, ∞ vs Lighter |
+
+Sources: docs.lighter.xyz and four independent reviews (2026); dYdX v4 fee
+schedule; MEXC futures schedule; Hyperliquid tier table; cryptowinrate DEX
+fee comparison. Aggregators disagree on Lighter/Hyperliquid taker rates
+(0.025 / 0.030 / 0.045 %), so the docs-backed figure is quoted and the
+range is flagged.
+
+**Lighter is the single largest lever found in this entire project.** At
+0 bps the toll leaves the break-even inequality completely.
+
+### 28.2 The two levers, measured (`backtest/winrate_venue.py`)
+
+At the measured 52.4 % directional skill, `WR_realizable ≈ skill × coverage`.
+This model is validated against measurement: it predicts **7.0 %** at
+BTC tf1 / 28.87 bps against the harness-measured **7.1 %**.
+
+| venue | RT | BTC tf1 WR | BTC tf1 EV | EV-positive cells |
+|---|---|---|---|---|
+| Lighter | 0 bps | **52.4 %** | +0.7 bps | 9 / 9 |
+| MEXC | 4 bps | 40.5 % | −3.3 bps | 5 |
+| Extended | 5 bps | 37.8 % | −4.3 bps | 5 |
+| Hyperliquid / Aster | 8 bps | 30.4 % | −7.3 bps | 5 |
+| Binance | 10 bps | 26.2 % | −9.3 bps | 4 |
+| legacy | 28.9 bps | 7.0 % | −28.1 bps | 2 |
+
+**The fee cut alone is worth +45.3 pp of win rate at 22 min.** Nothing in
+§1–§27 came close: the signal work moved win rate by ~1 pp, the venue
+change moves it by 45.
+
+### 28.3 The 52.4 % skill ceiling on *direction* is real but not binding
+
+`WR ≈ skill × coverage` says zero fee ⇒ WR = skill = 52 %. That is true
+only for a **1:1 payoff** book. A barrier book pays `tp` and loses `sl`,
+so break-even is `sl/(tp+sl)` — a 4:1 stop-to-target book breaks even at
+80 % and needs no skill at all. **This is the geometry the repo's own old
+arithmetic pointed at and never joined to the venue question.**
+
+### 28.4 The scans (`backtest/geometry_scan.py`)
+
+Non-overlapping whole-tape windows, long at each window open, first touch
+of tp/sl, else marked at the window close. Ties (both barriers inside one
+5-minute bar) are resolved explicitly — see 28.6.
+
+At **0 bps, BTC tf1, tp 8 / sl 32**: **65.1 % net win rate, EV −5.96 bps.**
+66 % on the cheapest venue at the app's native timeframe is *at the
+break-even line* — the arithmetic signature of a fair coin, not an edge.
+
+Positive-EV cells only appear where the tape trends inside the window:
+
+| venue | BTC best cell | WR | EV | worst | DD |
+|---|---|---|---|---|---|
+| Lighter 0 bps | 7d tp8/sl32 | 87.8 % | +3.10 | −32 | −120 |
+| Lighter 0 bps | 1d tp8/sl32 | 85.6 % | +2.24 | −32 | −136 |
+| MEXC 4 bps | 7d tp20/sl80 | 85.7 % | +1.71 | −84 | −412 |
+| Binance 10 bps | 7d tp40/sl160 | 85.0 % | +0.07 | −170 | −750 |
+| **legacy 28.9 bps** | **none** | — | — | — | — |
+
+At the legacy fee there is **no EV-positive geometry at any horizon on
+either asset.** The 28.87 bps assumption was not just pessimistic, it was
+the binding constraint on the whole strategy space.
+
+### 28.5 Survivors (`backtest/geometry_validate.py`)
+
+19 of 144 cells survive all four filters: holdout (last 35 %) beats
+break-even, Wilson lower bound clears break-even, holdout EV > 0, **and
+the result holds under all three tie rules**. Headline cells at 0 bps:
+
+| asset | cell | WR holdout | CI lo | BE | EV | n |
+|---|---|---|---|---|---|---|
+| ETH | 1d long tp20/sl80 | **86.8 %** | 82.9 % | 80.0 % | +6.78 | 363 |
+| BTC | 1d short tp20/sl80 | 85.7 % | 81.7 % | 80.0 % | +5.67 | 363 |
+| ETH | tf4 long tp8/sl32 | 82.5 % | 80.8 % | 80.0 % | +0.99 | 2130 |
+| BTC | tf4 long tp8/sl32 | 82.2 % | 80.5 % | 80.0 % | +0.86 | 2130 |
+
+### 28.6 The bug that almost shipped a fake 86 %
+
+An earlier version of `barrier_book` resolved same-bar double touches by
+falling through to the window's **close return**. On 1d/7d windows
+**85–96 % of them tie**, so the drift of the tape — not the strategy —
+decided the result, and both the long book and the short book "won" 86 %
+of the time. It looked like a miracle and was a scoring artefact.
+
+Ties are now resolved by an explicit rule (`stop` / `half` / `tp`) and
+every survivor must hold under all three. `tests/test_geometry.py` pins
+this: a window that closes +500 bps after touching both barriers must
+still lose under `tie="stop"`.
+
+**The long and short books both winning is genuine, not a bug**: 67–73 %
+of 1d windows touch both barriers, and the side entered first wins on
+first touch. That is a statement about how crypto moves (strong within-window
+trend), not a free lunch.
+
+### 28.7 The book in capital (`backtest/venue_book.py`)
+
+1× notional, one position at a time, no leverage.
+
+| cell | WR | holdout CAGR | DD | Sharpe | **fee budget** |
+|---|---|---|---|---|---|
+| ETH 1d long tp20/sl80 | 85.2 % | **+27.8 %** | −3.4 % | 2.33 | **+5.22 bps** |
+| ETH tf3 long tp8/sl32 | 81.7 % | +37.2 % | −8.9 % | 2.38 | +0.70 bps |
+| BTC 1d short tp20/sl80 | 83.6 % | +22.7 % | −3.6 % | 1.53 | +3.57 bps |
+| BTC tf3 long tp8/sl32 | 81.4 % | +25.0 % | −9.7 % | — | +0.61 bps |
+
+Per-year WR is stable (80.3 / 84.7 / 86.6 / 85.2 % for ETH 1d) — not one
+lucky year. Max losing streak is 4 windows; worst window is exactly −sl.
+
+**The `fee budget` column is the whole risk.** These books are profitable
+only while the round trip stays under it. Lighter Premium (0.028 % taker
+= 5.6 bps RT) would wipe out all but ETH 1d; a normal Binance taker fee
+(10 bps) wipes out every one of them. The edge is not "high win rate" —
+it is "high win rate *minus a toll nobody was paying before*."
+
+Benchmark: ETH 1d long earns +20.7 % CAGR at −6 % DD over 2.84 y against
+buy-and-hold +14.9 % CAGR at **−66 % DD**. The 85 % win rate is therefore
+a real risk-adjusted improvement, not leveraged beta — but it is also only
+~6 %/yr better in return, and BTC 1d short (+13.6 % CAGR) *underperforms*
+BTC buy-and-hold (+36.7 % CAGR) outright. The honest summary is: **the
+win rate is real, the CAGR is ordinary, and the drawdown reduction is the
+actual product.**
+
+### 28.8 Answers
+
+* **Highest win rate with positive EV anywhere: 87.8 %** — BTC 7d,
+  tp 8 / sl 32, Lighter, n=147. Too few windows to trade on (CI
+  [72.5, 92.0]).
+* **Highest win rate that survives full validation: 86.8 %** — ETH 1d
+  long tp20/sl80, n=363 holdout, CI lo 82.9 %.
+* **66 % at the app's 22-minute timeframe: 65.1 % at 0 bps (EV −5.96),
+  and unreachable at 28.87 bps (ceiling 13.4 %).** The app's native
+  horizon cannot host a profitable 66 % book at any fee — that is a
+  property of 22-minute crypto moves, not of the signal.
+* **Bill of materials for 66 %+:** a zero-fee venue (Lighter or dYdX
+  BTC-USD), a horizon of **1 hour or longer** (ideally 4 h+), a
+  **4:1 stop-to-target** geometry, and acceptance of a 32–80 bps stop on
+  the other side of 4 out of 5 trades.
+
+### 28.9 Reproduce
+
+```bash
+.venv/bin/python -m backtest.winrate_venue --assets BTC ETH
+.venv/bin/python -m backtest.winrate_venue --check-fees
+.venv/bin/python -m backtest.geometry_scan --assets BTC ETH
+.venv/bin/python -m backtest.geometry_validate --assets BTC ETH
+.venv/bin/python -m backtest.venue_book
+```
+
+Every one of these is a measurement on 298,080 5-minute bars
+(2023-11-01 → 2026-08-31) with no in-sample selection in the reported
+columns.

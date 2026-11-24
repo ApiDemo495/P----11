@@ -1,0 +1,6206 @@
+[
+ {
+  "asset": "BTC",
+  "status": "ok",
+  "rows": [
+   {
+    "asset": "BTC",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.2909,
+    "wr_all": 0.651,
+    "wr_holdout": 0.6278,
+    "ci_lo_holdout": 0.6219,
+    "ev_holdout_bps": -6.89,
+    "dd_bps": -444184.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.651,
+      "wr_holdout": 0.6278,
+      "ci_lo_holdout": 0.6219,
+      "ev_holdout_bps": -6.89,
+      "dd_bps": -444184.0
+     },
+     "half": {
+      "wr": 0.651,
+      "wr_holdout": 0.6278,
+      "ci_lo_holdout": 0.6219,
+      "ev_holdout_bps": -0.454,
+      "dd_bps": -24256.0
+     },
+     "tp": {
+      "wr": 0.9419,
+      "wr_holdout": 0.9495,
+      "ci_lo_holdout": 0.9468,
+      "ev_holdout_bps": 5.982,
+      "dd_bps": -304.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.2827,
+    "wr_all": 0.6644,
+    "wr_holdout": 0.6325,
+    "ci_lo_holdout": 0.6267,
+    "ev_holdout_bps": -6.698,
+    "dd_bps": -404176.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.6644,
+      "wr_holdout": 0.6325,
+      "ci_lo_holdout": 0.6267,
+      "ev_holdout_bps": -6.698,
+      "dd_bps": -404176.0
+     },
+     "half": {
+      "wr": 0.6644,
+      "wr_holdout": 0.6325,
+      "ci_lo_holdout": 0.6267,
+      "ev_holdout_bps": -0.351,
+      "dd_bps": -17988.0
+     },
+     "tp": {
+      "wr": 0.9472,
+      "wr_holdout": 0.9499,
+      "ci_lo_holdout": 0.9472,
+      "ev_holdout_bps": 5.997,
+      "dd_bps": -208.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.2909,
+    "wr_all": 0.651,
+    "wr_holdout": 0.6278,
+    "ci_lo_holdout": 0.6219,
+    "ev_holdout_bps": -10.89,
+    "dd_bps": -742252.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.651,
+      "wr_holdout": 0.6278,
+      "ci_lo_holdout": 0.6219,
+      "ev_holdout_bps": -10.89,
+      "dd_bps": -742252.0
+     },
+     "half": {
+      "wr": 0.651,
+      "wr_holdout": 0.6278,
+      "ci_lo_holdout": 0.6219,
+      "ev_holdout_bps": -4.454,
+      "dd_bps": -308752.0
+     },
+     "tp": {
+      "wr": 0.9419,
+      "wr_holdout": 0.9495,
+      "ci_lo_holdout": 0.9468,
+      "ev_holdout_bps": 1.982,
+      "dd_bps": -1728.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.2827,
+    "wr_all": 0.6644,
+    "wr_holdout": 0.6325,
+    "ci_lo_holdout": 0.6267,
+    "ev_holdout_bps": -10.698,
+    "dd_bps": -702248.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.6644,
+      "wr_holdout": 0.6325,
+      "ci_lo_holdout": 0.6267,
+      "ev_holdout_bps": -10.698,
+      "dd_bps": -702248.0
+     },
+     "half": {
+      "wr": 0.6644,
+      "wr_holdout": 0.6325,
+      "ci_lo_holdout": 0.6267,
+      "ev_holdout_bps": -4.351,
+      "dd_bps": -280848.0
+     },
+     "tp": {
+      "wr": 0.9472,
+      "wr_holdout": 0.9499,
+      "ci_lo_holdout": 0.9472,
+      "ev_holdout_bps": 1.997,
+      "dd_bps": -1532.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.2909,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -16.89,
+    "dd_bps": -1189358.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -16.89,
+      "dd_bps": -1189358.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -10.454,
+      "dd_bps": -755858.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -4.018,
+      "dd_bps": -322358.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.2827,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -16.698,
+    "dd_bps": -1149358.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -16.698,
+      "dd_bps": -1149358.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -10.351,
+      "dd_bps": -727958.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -4.003,
+      "dd_bps": -306558.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.2909,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -35.762,
+    "dd_bps": -2595680.6,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -35.762,
+      "dd_bps": -2595680.6
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -29.326,
+      "dd_bps": -2162180.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -22.89,
+      "dd_bps": -1728680.6
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.2827,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -35.57,
+    "dd_bps": -2555680.6,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -35.57,
+      "dd_bps": -2555680.6
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -29.223,
+      "dd_bps": -2134280.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -22.875,
+      "dd_bps": -1712880.6
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.146,
+    "wr_all": 0.7547,
+    "wr_holdout": 0.7405,
+    "ci_lo_holdout": 0.7325,
+    "ev_holdout_bps": -2.38,
+    "dd_bps": -60152.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.7547,
+      "wr_holdout": 0.7405,
+      "ci_lo_holdout": 0.7325,
+      "ev_holdout_bps": -2.38,
+      "dd_bps": -60152.0
+     },
+     "half": {
+      "wr": 0.7547,
+      "wr_holdout": 0.7405,
+      "ci_lo_holdout": 0.7325,
+      "ev_holdout_bps": 0.992,
+      "dd_bps": -1328.0
+     },
+     "tp": {
+      "wr": 0.9007,
+      "wr_holdout": 0.9091,
+      "ci_lo_holdout": 0.9037,
+      "ev_holdout_bps": 4.363,
+      "dd_bps": -344.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.1445,
+    "wr_all": 0.7582,
+    "wr_holdout": 0.7345,
+    "ci_lo_holdout": 0.7264,
+    "ev_holdout_bps": -2.621,
+    "dd_bps": -55448.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.7582,
+      "wr_holdout": 0.7345,
+      "ci_lo_holdout": 0.7264,
+      "ev_holdout_bps": -2.621,
+      "dd_bps": -55448.0
+     },
+     "half": {
+      "wr": 0.7582,
+      "wr_holdout": 0.7345,
+      "ci_lo_holdout": 0.7264,
+      "ev_holdout_bps": 0.855,
+      "dd_bps": -1416.0
+     },
+     "tp": {
+      "wr": 0.9027,
+      "wr_holdout": 0.9083,
+      "ci_lo_holdout": 0.9029,
+      "ev_holdout_bps": 4.332,
+      "dd_bps": -328.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.146,
+    "wr_all": 0.7547,
+    "wr_holdout": 0.7405,
+    "ci_lo_holdout": 0.7325,
+    "ev_holdout_bps": -6.38,
+    "dd_bps": -192444.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.7547,
+      "wr_holdout": 0.7405,
+      "ci_lo_holdout": 0.7325,
+      "ev_holdout_bps": -6.38,
+      "dd_bps": -192444.0
+     },
+     "half": {
+      "wr": 0.7547,
+      "wr_holdout": 0.7405,
+      "ci_lo_holdout": 0.7325,
+      "ev_holdout_bps": -3.008,
+      "dd_bps": -95744.0
+     },
+     "tp": {
+      "wr": 0.9007,
+      "wr_holdout": 0.9091,
+      "ci_lo_holdout": 0.9037,
+      "ev_holdout_bps": 0.363,
+      "dd_bps": -6748.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.1445,
+    "wr_all": 0.7582,
+    "wr_holdout": 0.7345,
+    "ci_lo_holdout": 0.7264,
+    "ev_holdout_bps": -6.621,
+    "dd_bps": -187840.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.7582,
+      "wr_holdout": 0.7345,
+      "ci_lo_holdout": 0.7264,
+      "ev_holdout_bps": -6.621,
+      "dd_bps": -187840.0
+     },
+     "half": {
+      "wr": 0.7582,
+      "wr_holdout": 0.7345,
+      "ci_lo_holdout": 0.7264,
+      "ev_holdout_bps": -3.145,
+      "dd_bps": -92140.0
+     },
+     "tp": {
+      "wr": 0.9027,
+      "wr_holdout": 0.9083,
+      "ci_lo_holdout": 0.9029,
+      "ev_holdout_bps": 0.332,
+      "dd_bps": -4488.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.146,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -12.38,
+    "dd_bps": -391158.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -12.38,
+      "dd_bps": -391158.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.008,
+      "dd_bps": -294458.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -5.637,
+      "dd_bps": -197758.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.1445,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -12.621,
+    "dd_bps": -386518.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -12.621,
+      "dd_bps": -386518.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.145,
+      "dd_bps": -290818.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -5.668,
+      "dd_bps": -195118.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.146,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -31.252,
+    "dd_bps": -1016179.8,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -31.252,
+      "dd_bps": -1016179.8
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.88,
+      "dd_bps": -919479.8
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -24.509,
+      "dd_bps": -822779.8
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.1445,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -31.493,
+    "dd_bps": -1011539.8,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -31.493,
+      "dd_bps": -1011539.8
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.017,
+      "dd_bps": -915839.8
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -24.54,
+      "dd_bps": -820139.8
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0444,
+    "wr_all": 0.8153,
+    "wr_holdout": 0.8141,
+    "ci_lo_holdout": 0.8018,
+    "ev_holdout_bps": 0.564,
+    "dd_bps": -1024.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8153,
+      "wr_holdout": 0.8141,
+      "ci_lo_holdout": 0.8018,
+      "ev_holdout_bps": 0.564,
+      "dd_bps": -1024.0
+     },
+     "half": {
+      "wr": 0.8153,
+      "wr_holdout": 0.8141,
+      "ci_lo_holdout": 0.8018,
+      "ev_holdout_bps": 1.576,
+      "dd_bps": -500.0
+     },
+     "tp": {
+      "wr": 0.8597,
+      "wr_holdout": 0.8647,
+      "ci_lo_holdout": 0.8538,
+      "ev_holdout_bps": 2.588,
+      "dd_bps": -312.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0485,
+    "wr_all": 0.8141,
+    "wr_holdout": 0.8074,
+    "ci_lo_holdout": 0.7949,
+    "ev_holdout_bps": 0.295,
+    "dd_bps": -968.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8141,
+      "wr_holdout": 0.8074,
+      "ci_lo_holdout": 0.7949,
+      "ev_holdout_bps": 0.295,
+      "dd_bps": -968.0
+     },
+     "half": {
+      "wr": 0.8141,
+      "wr_holdout": 0.8074,
+      "ci_lo_holdout": 0.7949,
+      "ev_holdout_bps": 1.451,
+      "dd_bps": -320.0
+     },
+     "tp": {
+      "wr": 0.8626,
+      "wr_holdout": 0.8652,
+      "ci_lo_holdout": 0.8543,
+      "ev_holdout_bps": 2.608,
+      "dd_bps": -264.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0444,
+    "wr_all": 0.8153,
+    "wr_holdout": 0.8141,
+    "ci_lo_holdout": 0.8018,
+    "ev_holdout_bps": -3.436,
+    "dd_bps": -38876.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8153,
+      "wr_holdout": 0.8141,
+      "ci_lo_holdout": 0.8018,
+      "ev_holdout_bps": -3.436,
+      "dd_bps": -38876.0
+     },
+     "half": {
+      "wr": 0.8153,
+      "wr_holdout": 0.8141,
+      "ci_lo_holdout": 0.8018,
+      "ev_holdout_bps": -2.424,
+      "dd_bps": -28696.0
+     },
+     "tp": {
+      "wr": 0.8597,
+      "wr_holdout": 0.8647,
+      "ci_lo_holdout": 0.8538,
+      "ev_holdout_bps": -1.412,
+      "dd_bps": -18524.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0485,
+    "wr_all": 0.8141,
+    "wr_holdout": 0.8074,
+    "ci_lo_holdout": 0.7949,
+    "ev_holdout_bps": -3.705,
+    "dd_bps": -39420.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8141,
+      "wr_holdout": 0.8074,
+      "ci_lo_holdout": 0.7949,
+      "ev_holdout_bps": -3.705,
+      "dd_bps": -39420.0
+     },
+     "half": {
+      "wr": 0.8141,
+      "wr_holdout": 0.8074,
+      "ci_lo_holdout": 0.7949,
+      "ev_holdout_bps": -2.549,
+      "dd_bps": -28328.0
+     },
+     "tp": {
+      "wr": 0.8626,
+      "wr_holdout": 0.8652,
+      "ci_lo_holdout": 0.8543,
+      "ev_holdout_bps": -1.392,
+      "dd_bps": -17308.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0444,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -9.436,
+    "dd_bps": -107606.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.436,
+      "dd_bps": -107606.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.424,
+      "dd_bps": -97426.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.412,
+      "dd_bps": -87246.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0485,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -9.705,
+    "dd_bps": -108166.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.705,
+      "dd_bps": -108166.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.549,
+      "dd_bps": -97046.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.392,
+      "dd_bps": -85926.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0444,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -28.308,
+    "dd_bps": -323935.7,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.308,
+      "dd_bps": -323935.7
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.296,
+      "dd_bps": -313755.7
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.284,
+      "dd_bps": -303575.7
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0485,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -28.577,
+    "dd_bps": -324495.7,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.577,
+      "dd_bps": -324495.7
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.421,
+      "dd_bps": -313375.7
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.264,
+      "dd_bps": -302255.7
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0242,
+    "wr_all": 0.8169,
+    "wr_holdout": 0.8216,
+    "ci_lo_holdout": 0.8048,
+    "ev_holdout_bps": 0.864,
+    "dd_bps": -632.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8169,
+      "wr_holdout": 0.8216,
+      "ci_lo_holdout": 0.8048,
+      "ev_holdout_bps": 0.864,
+      "dd_bps": -632.0
+     },
+     "half": {
+      "wr": 0.8169,
+      "wr_holdout": 0.8216,
+      "ci_lo_holdout": 0.8048,
+      "ev_holdout_bps": 1.399,
+      "dd_bps": -400.0
+     },
+     "tp": {
+      "wr": 0.841,
+      "wr_holdout": 0.8484,
+      "ci_lo_holdout": 0.8325,
+      "ev_holdout_bps": 1.934,
+      "dd_bps": -360.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0245,
+    "wr_all": 0.828,
+    "wr_holdout": 0.8141,
+    "ci_lo_holdout": 0.797,
+    "ev_holdout_bps": 0.563,
+    "dd_bps": -496.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.828,
+      "wr_holdout": 0.8141,
+      "ci_lo_holdout": 0.797,
+      "ev_holdout_bps": 0.563,
+      "dd_bps": -496.0
+     },
+     "half": {
+      "wr": 0.828,
+      "wr_holdout": 0.8141,
+      "ci_lo_holdout": 0.797,
+      "ev_holdout_bps": 1.146,
+      "dd_bps": -408.0
+     },
+     "tp": {
+      "wr": 0.8525,
+      "wr_holdout": 0.8432,
+      "ci_lo_holdout": 0.8271,
+      "ev_holdout_bps": 1.728,
+      "dd_bps": -368.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0242,
+    "wr_all": 0.8169,
+    "wr_holdout": 0.8216,
+    "ci_lo_holdout": 0.8048,
+    "ev_holdout_bps": -3.136,
+    "dd_bps": -20332.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8169,
+      "wr_holdout": 0.8216,
+      "ci_lo_holdout": 0.8048,
+      "ev_holdout_bps": -3.136,
+      "dd_bps": -20332.0
+     },
+     "half": {
+      "wr": 0.8169,
+      "wr_holdout": 0.8216,
+      "ci_lo_holdout": 0.8048,
+      "ev_holdout_bps": -2.601,
+      "dd_bps": -17392.0
+     },
+     "tp": {
+      "wr": 0.841,
+      "wr_holdout": 0.8484,
+      "ci_lo_holdout": 0.8325,
+      "ev_holdout_bps": -2.066,
+      "dd_bps": -14464.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0245,
+    "wr_all": 0.828,
+    "wr_holdout": 0.8141,
+    "ci_lo_holdout": 0.797,
+    "ev_holdout_bps": -3.437,
+    "dd_bps": -17572.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.828,
+      "wr_holdout": 0.8141,
+      "ci_lo_holdout": 0.797,
+      "ev_holdout_bps": -3.437,
+      "dd_bps": -17572.0
+     },
+     "half": {
+      "wr": 0.828,
+      "wr_holdout": 0.8141,
+      "ci_lo_holdout": 0.797,
+      "ev_holdout_bps": -2.854,
+      "dd_bps": -14604.0
+     },
+     "tp": {
+      "wr": 0.8525,
+      "wr_holdout": 0.8432,
+      "ci_lo_holdout": 0.8271,
+      "ev_holdout_bps": -2.272,
+      "dd_bps": -11644.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0242,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -9.136,
+    "dd_bps": -56724.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.136,
+      "dd_bps": -56724.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.601,
+      "dd_bps": -53784.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.066,
+      "dd_bps": -50844.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0245,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -9.437,
+    "dd_bps": -54004.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.437,
+      "dd_bps": -54004.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.854,
+      "dd_bps": -51024.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.272,
+      "dd_bps": -48044.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0242,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -28.008,
+    "dd_bps": -171503.5,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.008,
+      "dd_bps": -171503.5
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.473,
+      "dd_bps": -168563.5
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.938,
+      "dd_bps": -165623.5
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0245,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -28.309,
+    "dd_bps": -168783.5,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.309,
+      "dd_bps": -168783.5
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.726,
+      "dd_bps": -165803.5
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.144,
+      "dd_bps": -162823.5
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0145,
+    "wr_all": 0.856,
+    "wr_holdout": 0.8402,
+    "ci_lo_holdout": 0.799,
+    "ev_holdout_bps": 1.609,
+    "dd_bps": -136.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.856,
+      "wr_holdout": 0.8402,
+      "ci_lo_holdout": 0.799,
+      "ev_holdout_bps": 1.609,
+      "dd_bps": -136.0
+     },
+     "half": {
+      "wr": 0.856,
+      "wr_holdout": 0.8402,
+      "ci_lo_holdout": 0.799,
+      "ev_holdout_bps": 2.105,
+      "dd_bps": -112.0
+     },
+     "tp": {
+      "wr": 0.8705,
+      "wr_holdout": 0.865,
+      "ci_lo_holdout": 0.826,
+      "ev_holdout_bps": 2.601,
+      "dd_bps": -112.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0174,
+    "wr_all": 0.8647,
+    "wr_holdout": 0.843,
+    "ci_lo_holdout": 0.802,
+    "ev_holdout_bps": 1.719,
+    "dd_bps": -136.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8647,
+      "wr_holdout": 0.843,
+      "ci_lo_holdout": 0.802,
+      "ev_holdout_bps": 1.719,
+      "dd_bps": -136.0
+     },
+     "half": {
+      "wr": 0.8647,
+      "wr_holdout": 0.843,
+      "ci_lo_holdout": 0.802,
+      "ev_holdout_bps": 2.16,
+      "dd_bps": -136.0
+     },
+     "tp": {
+      "wr": 0.8821,
+      "wr_holdout": 0.865,
+      "ci_lo_holdout": 0.826,
+      "ev_holdout_bps": 2.601,
+      "dd_bps": -136.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0145,
+    "wr_all": 0.856,
+    "wr_holdout": 0.8402,
+    "ci_lo_holdout": 0.799,
+    "ev_holdout_bps": -2.391,
+    "dd_bps": -1840.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.856,
+      "wr_holdout": 0.8402,
+      "ci_lo_holdout": 0.799,
+      "ev_holdout_bps": -2.391,
+      "dd_bps": -1840.0
+     },
+     "half": {
+      "wr": 0.856,
+      "wr_holdout": 0.8402,
+      "ci_lo_holdout": 0.799,
+      "ev_holdout_bps": -1.895,
+      "dd_bps": -1540.0
+     },
+     "tp": {
+      "wr": 0.8705,
+      "wr_holdout": 0.865,
+      "ci_lo_holdout": 0.826,
+      "ev_holdout_bps": -1.399,
+      "dd_bps": -1240.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0174,
+    "wr_all": 0.8647,
+    "wr_holdout": 0.843,
+    "ci_lo_holdout": 0.802,
+    "ev_holdout_bps": -2.281,
+    "dd_bps": -1568.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8647,
+      "wr_holdout": 0.843,
+      "ci_lo_holdout": 0.802,
+      "ev_holdout_bps": -2.281,
+      "dd_bps": -1568.0
+     },
+     "half": {
+      "wr": 0.8647,
+      "wr_holdout": 0.843,
+      "ci_lo_holdout": 0.802,
+      "ev_holdout_bps": -1.84,
+      "dd_bps": -1208.0
+     },
+     "tp": {
+      "wr": 0.8821,
+      "wr_holdout": 0.865,
+      "ci_lo_holdout": 0.826,
+      "ev_holdout_bps": -1.399,
+      "dd_bps": -900.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0145,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -8.391,
+    "dd_bps": -8028.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.391,
+      "dd_bps": -8028.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.895,
+      "dd_bps": -7728.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.399,
+      "dd_bps": -7428.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0174,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -8.281,
+    "dd_bps": -7668.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.281,
+      "dd_bps": -7668.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.84,
+      "dd_bps": -7308.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.399,
+      "dd_bps": -6948.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0145,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -27.263,
+    "dd_bps": -27541.6,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.263,
+      "dd_bps": -27541.6
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.767,
+      "dd_bps": -27241.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.271,
+      "dd_bps": -26941.6
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0174,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -27.153,
+    "dd_bps": -27181.6,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.153,
+      "dd_bps": -27181.6
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.712,
+      "dd_bps": -26821.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.271,
+      "dd_bps": -26461.6
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0058,
+    "wr_all": 0.8377,
+    "wr_holdout": 0.8347,
+    "ci_lo_holdout": 0.793,
+    "ev_holdout_bps": 3.471,
+    "dd_bps": -660.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8377,
+      "wr_holdout": 0.8347,
+      "ci_lo_holdout": 0.793,
+      "ev_holdout_bps": 3.471,
+      "dd_bps": -660.0
+     },
+     "half": {
+      "wr": 0.8377,
+      "wr_holdout": 0.8347,
+      "ci_lo_holdout": 0.793,
+      "ev_holdout_bps": 4.298,
+      "dd_bps": -520.0
+     },
+     "tp": {
+      "wr": 0.8435,
+      "wr_holdout": 0.8512,
+      "ci_lo_holdout": 0.811,
+      "ev_holdout_bps": 5.124,
+      "dd_bps": -520.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0058,
+    "wr_all": 0.8357,
+    "wr_holdout": 0.8567,
+    "ci_lo_holdout": 0.817,
+    "ev_holdout_bps": 5.675,
+    "dd_bps": -720.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8357,
+      "wr_holdout": 0.8567,
+      "ci_lo_holdout": 0.817,
+      "ev_holdout_bps": 5.675,
+      "dd_bps": -720.0
+     },
+     "half": {
+      "wr": 0.8357,
+      "wr_holdout": 0.8567,
+      "ci_lo_holdout": 0.817,
+      "ev_holdout_bps": 6.088,
+      "dd_bps": -720.0
+     },
+     "tp": {
+      "wr": 0.8415,
+      "wr_holdout": 0.865,
+      "ci_lo_holdout": 0.826,
+      "ev_holdout_bps": 6.501,
+      "dd_bps": -720.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0058,
+    "wr_all": 0.8377,
+    "wr_holdout": 0.8347,
+    "ci_lo_holdout": 0.793,
+    "ev_holdout_bps": -0.529,
+    "dd_bps": -1412.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8377,
+      "wr_holdout": 0.8347,
+      "ci_lo_holdout": 0.793,
+      "ev_holdout_bps": -0.529,
+      "dd_bps": -1412.0
+     },
+     "half": {
+      "wr": 0.8377,
+      "wr_holdout": 0.8347,
+      "ci_lo_holdout": 0.793,
+      "ev_holdout_bps": 0.298,
+      "dd_bps": -1112.0
+     },
+     "tp": {
+      "wr": 0.8435,
+      "wr_holdout": 0.8512,
+      "ci_lo_holdout": 0.811,
+      "ev_holdout_bps": 1.124,
+      "dd_bps": -812.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0058,
+    "wr_all": 0.8357,
+    "wr_holdout": 0.8567,
+    "ci_lo_holdout": 0.817,
+    "ev_holdout_bps": 1.675,
+    "dd_bps": -1392.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8357,
+      "wr_holdout": 0.8567,
+      "ci_lo_holdout": 0.817,
+      "ev_holdout_bps": 1.675,
+      "dd_bps": -1392.0
+     },
+     "half": {
+      "wr": 0.8357,
+      "wr_holdout": 0.8567,
+      "ci_lo_holdout": 0.817,
+      "ev_holdout_bps": 2.088,
+      "dd_bps": -1392.0
+     },
+     "tp": {
+      "wr": 0.8415,
+      "wr_holdout": 0.865,
+      "ci_lo_holdout": 0.826,
+      "ev_holdout_bps": 2.501,
+      "dd_bps": -1392.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0058,
+    "wr_all": 0.8377,
+    "wr_holdout": 0.8347,
+    "ci_lo_holdout": 0.793,
+    "ev_holdout_bps": -6.529,
+    "dd_bps": -6590.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8377,
+      "wr_holdout": 0.8347,
+      "ci_lo_holdout": 0.793,
+      "ev_holdout_bps": -6.529,
+      "dd_bps": -6590.0
+     },
+     "half": {
+      "wr": 0.8377,
+      "wr_holdout": 0.8347,
+      "ci_lo_holdout": 0.793,
+      "ev_holdout_bps": -5.702,
+      "dd_bps": -6290.0
+     },
+     "tp": {
+      "wr": 0.8435,
+      "wr_holdout": 0.8512,
+      "ci_lo_holdout": 0.811,
+      "ev_holdout_bps": -4.876,
+      "dd_bps": -5990.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0058,
+    "wr_all": 0.8357,
+    "wr_holdout": 0.8567,
+    "ci_lo_holdout": 0.817,
+    "ev_holdout_bps": -4.325,
+    "dd_bps": -6760.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8357,
+      "wr_holdout": 0.8567,
+      "ci_lo_holdout": 0.817,
+      "ev_holdout_bps": -4.325,
+      "dd_bps": -6760.0
+     },
+     "half": {
+      "wr": 0.8357,
+      "wr_holdout": 0.8567,
+      "ci_lo_holdout": 0.817,
+      "ev_holdout_bps": -3.912,
+      "dd_bps": -6460.0
+     },
+     "tp": {
+      "wr": 0.8415,
+      "wr_holdout": 0.865,
+      "ci_lo_holdout": 0.826,
+      "ev_holdout_bps": -3.499,
+      "dd_bps": -6160.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0058,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -25.401,
+    "dd_bps": -25873.6,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -25.401,
+      "dd_bps": -25873.6
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -24.574,
+      "dd_bps": -25573.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -23.748,
+      "dd_bps": -25273.6
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0058,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -23.197,
+    "dd_bps": -26173.6,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -23.197,
+      "dd_bps": -26173.6
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -22.784,
+      "dd_bps": -25873.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -22.371,
+      "dd_bps": -25573.6
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8776,
+    "wr_holdout": 0.8846,
+    "ci_lo_holdout": 0.7703,
+    "ev_holdout_bps": 3.385,
+    "dd_bps": -120.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8776,
+      "wr_holdout": 0.8846,
+      "ci_lo_holdout": 0.7703,
+      "ev_holdout_bps": 3.385,
+      "dd_bps": -120.0
+     },
+     "half": {
+      "wr": 0.8776,
+      "wr_holdout": 0.8846,
+      "ci_lo_holdout": 0.7703,
+      "ev_holdout_bps": 3.385,
+      "dd_bps": -120.0
+     },
+     "tp": {
+      "wr": 0.8776,
+      "wr_holdout": 0.8846,
+      "ci_lo_holdout": 0.7703,
+      "ev_holdout_bps": 3.385,
+      "dd_bps": -120.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0068,
+    "wr_all": 0.8299,
+    "wr_holdout": 0.8269,
+    "ci_lo_holdout": 0.7027,
+    "ev_holdout_bps": 1.077,
+    "dd_bps": -168.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8299,
+      "wr_holdout": 0.8269,
+      "ci_lo_holdout": 0.7027,
+      "ev_holdout_bps": 1.077,
+      "dd_bps": -168.0
+     },
+     "half": {
+      "wr": 0.8299,
+      "wr_holdout": 0.8269,
+      "ci_lo_holdout": 0.7027,
+      "ev_holdout_bps": 1.077,
+      "dd_bps": -168.0
+     },
+     "tp": {
+      "wr": 0.8367,
+      "wr_holdout": 0.8269,
+      "ci_lo_holdout": 0.7027,
+      "ev_holdout_bps": 1.077,
+      "dd_bps": -168.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8776,
+    "wr_holdout": 0.8846,
+    "ci_lo_holdout": 0.7703,
+    "ev_holdout_bps": -0.615,
+    "dd_bps": -224.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8776,
+      "wr_holdout": 0.8846,
+      "ci_lo_holdout": 0.7703,
+      "ev_holdout_bps": -0.615,
+      "dd_bps": -224.0
+     },
+     "half": {
+      "wr": 0.8776,
+      "wr_holdout": 0.8846,
+      "ci_lo_holdout": 0.7703,
+      "ev_holdout_bps": -0.615,
+      "dd_bps": -224.0
+     },
+     "tp": {
+      "wr": 0.8776,
+      "wr_holdout": 0.8846,
+      "ci_lo_holdout": 0.7703,
+      "ev_holdout_bps": -0.615,
+      "dd_bps": -224.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0068,
+    "wr_all": 0.8299,
+    "wr_holdout": 0.8269,
+    "ci_lo_holdout": 0.7027,
+    "ev_holdout_bps": -2.923,
+    "dd_bps": -448.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8299,
+      "wr_holdout": 0.8269,
+      "ci_lo_holdout": 0.7027,
+      "ev_holdout_bps": -2.923,
+      "dd_bps": -448.0
+     },
+     "half": {
+      "wr": 0.8299,
+      "wr_holdout": 0.8269,
+      "ci_lo_holdout": 0.7027,
+      "ev_holdout_bps": -2.923,
+      "dd_bps": -428.0
+     },
+     "tp": {
+      "wr": 0.8367,
+      "wr_holdout": 0.8269,
+      "ci_lo_holdout": 0.7027,
+      "ev_holdout_bps": -2.923,
+      "dd_bps": -416.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -6.615,
+    "dd_bps": -1012.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -6.615,
+      "dd_bps": -1012.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -6.615,
+      "dd_bps": -1012.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -6.615,
+      "dd_bps": -1012.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0068,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -8.923,
+    "dd_bps": -1292.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.923,
+      "dd_bps": -1292.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.923,
+      "dd_bps": -1272.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.923,
+      "dd_bps": -1252.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -25.487,
+    "dd_bps": -3767.3,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -25.487,
+      "dd_bps": -3767.3
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -25.487,
+      "dd_bps": -3767.3
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -25.487,
+      "dd_bps": -3767.3
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0068,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -27.795,
+    "dd_bps": -4047.3,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.795,
+      "dd_bps": -4047.3
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.795,
+      "dd_bps": -4027.3
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.795,
+      "dd_bps": -4007.3
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8571,
+    "wr_holdout": 0.9038,
+    "ci_lo_holdout": 0.7939,
+    "ev_holdout_bps": 10.385,
+    "dd_bps": -360.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8571,
+      "wr_holdout": 0.9038,
+      "ci_lo_holdout": 0.7939,
+      "ev_holdout_bps": 10.385,
+      "dd_bps": -360.0
+     },
+     "half": {
+      "wr": 0.8571,
+      "wr_holdout": 0.9038,
+      "ci_lo_holdout": 0.7939,
+      "ev_holdout_bps": 10.385,
+      "dd_bps": -360.0
+     },
+     "tp": {
+      "wr": 0.8571,
+      "wr_holdout": 0.9038,
+      "ci_lo_holdout": 0.7939,
+      "ev_holdout_bps": 10.385,
+      "dd_bps": -360.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8707,
+    "wr_holdout": 0.9423,
+    "ci_lo_holdout": 0.8436,
+    "ev_holdout_bps": 14.231,
+    "dd_bps": -320.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8707,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 14.231,
+      "dd_bps": -320.0
+     },
+     "half": {
+      "wr": 0.8707,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 14.231,
+      "dd_bps": -320.0
+     },
+     "tp": {
+      "wr": 0.8707,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 14.231,
+      "dd_bps": -320.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8571,
+    "wr_holdout": 0.9038,
+    "ci_lo_holdout": 0.7939,
+    "ev_holdout_bps": 6.385,
+    "dd_bps": -412.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8571,
+      "wr_holdout": 0.9038,
+      "ci_lo_holdout": 0.7939,
+      "ev_holdout_bps": 6.385,
+      "dd_bps": -412.0
+     },
+     "half": {
+      "wr": 0.8571,
+      "wr_holdout": 0.9038,
+      "ci_lo_holdout": 0.7939,
+      "ev_holdout_bps": 6.385,
+      "dd_bps": -412.0
+     },
+     "tp": {
+      "wr": 0.8571,
+      "wr_holdout": 0.9038,
+      "ci_lo_holdout": 0.7939,
+      "ev_holdout_bps": 6.385,
+      "dd_bps": -412.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8707,
+    "wr_holdout": 0.9423,
+    "ci_lo_holdout": 0.8436,
+    "ev_holdout_bps": 10.231,
+    "dd_bps": -508.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8707,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 10.231,
+      "dd_bps": -508.0
+     },
+     "half": {
+      "wr": 0.8707,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 10.231,
+      "dd_bps": -508.0
+     },
+     "tp": {
+      "wr": 0.8707,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 10.231,
+      "dd_bps": -508.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8571,
+    "wr_holdout": 0.9038,
+    "ci_lo_holdout": 0.7939,
+    "ev_holdout_bps": 0.385,
+    "dd_bps": -690.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8571,
+      "wr_holdout": 0.9038,
+      "ci_lo_holdout": 0.7939,
+      "ev_holdout_bps": 0.385,
+      "dd_bps": -690.0
+     },
+     "half": {
+      "wr": 0.8571,
+      "wr_holdout": 0.9038,
+      "ci_lo_holdout": 0.7939,
+      "ev_holdout_bps": 0.385,
+      "dd_bps": -690.0
+     },
+     "tp": {
+      "wr": 0.8571,
+      "wr_holdout": 0.9038,
+      "ci_lo_holdout": 0.7939,
+      "ev_holdout_bps": 0.385,
+      "dd_bps": -690.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8707,
+    "wr_holdout": 0.9423,
+    "ci_lo_holdout": 0.8436,
+    "ev_holdout_bps": 4.231,
+    "dd_bps": -880.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8707,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 4.231,
+      "dd_bps": -880.0
+     },
+     "half": {
+      "wr": 0.8707,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 4.231,
+      "dd_bps": -880.0
+     },
+     "tp": {
+      "wr": 0.8707,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 4.231,
+      "dd_bps": -880.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -18.487,
+    "dd_bps": -3295.3,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -18.487,
+      "dd_bps": -3295.3
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -18.487,
+      "dd_bps": -3295.3
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -18.487,
+      "dd_bps": -3295.3
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -14.641,
+    "dd_bps": -3195.3,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -14.641,
+      "dd_bps": -3195.3
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -14.641,
+      "dd_bps": -3195.3
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -14.641,
+      "dd_bps": -3195.3
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0476,
+    "wr_all": 0.6735,
+    "wr_holdout": 0.6731,
+    "ci_lo_holdout": 0.5376,
+    "ev_holdout_bps": 0.317,
+    "dd_bps": -113.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.6735,
+      "wr_holdout": 0.6731,
+      "ci_lo_holdout": 0.5376,
+      "ev_holdout_bps": 0.317,
+      "dd_bps": -113.0
+     },
+     "half": {
+      "wr": 0.6735,
+      "wr_holdout": 0.6731,
+      "ci_lo_holdout": 0.5376,
+      "ev_holdout_bps": 0.769,
+      "dd_bps": -89.5
+     },
+     "tp": {
+      "wr": 0.7211,
+      "wr_holdout": 0.7115,
+      "ci_lo_holdout": 0.5773,
+      "ev_holdout_bps": 1.221,
+      "dd_bps": -75.5
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0408,
+    "wr_all": 0.5986,
+    "wr_holdout": 0.6538,
+    "ci_lo_holdout": 0.518,
+    "ev_holdout_bps": -0.135,
+    "dd_bps": -238.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.5986,
+      "wr_holdout": 0.6538,
+      "ci_lo_holdout": 0.518,
+      "ev_holdout_bps": -0.135,
+      "dd_bps": -238.0
+     },
+     "half": {
+      "wr": 0.5986,
+      "wr_holdout": 0.6538,
+      "ci_lo_holdout": 0.518,
+      "ev_holdout_bps": 0.091,
+      "dd_bps": -196.0
+     },
+     "tp": {
+      "wr": 0.6395,
+      "wr_holdout": 0.6731,
+      "ci_lo_holdout": 0.5376,
+      "ev_holdout_bps": 0.317,
+      "dd_bps": -172.5
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0476,
+    "wr_all": 0.6735,
+    "wr_holdout": 0.6731,
+    "ci_lo_holdout": 0.5376,
+    "ev_holdout_bps": -3.683,
+    "dd_bps": -564.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.6735,
+      "wr_holdout": 0.6731,
+      "ci_lo_holdout": 0.5376,
+      "ev_holdout_bps": -3.683,
+      "dd_bps": -564.0
+     },
+     "half": {
+      "wr": 0.6735,
+      "wr_holdout": 0.6731,
+      "ci_lo_holdout": 0.5376,
+      "ev_holdout_bps": -3.231,
+      "dd_bps": -481.8
+     },
+     "tp": {
+      "wr": 0.7211,
+      "wr_holdout": 0.7115,
+      "ci_lo_holdout": 0.5773,
+      "ev_holdout_bps": -2.779,
+      "dd_bps": -399.5
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0408,
+    "wr_all": 0.5986,
+    "wr_holdout": 0.6538,
+    "ci_lo_holdout": 0.518,
+    "ev_holdout_bps": -4.135,
+    "dd_bps": -779.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.5986,
+      "wr_holdout": 0.6538,
+      "ci_lo_holdout": 0.518,
+      "ev_holdout_bps": -4.135,
+      "dd_bps": -779.0
+     },
+     "half": {
+      "wr": 0.5986,
+      "wr_holdout": 0.6538,
+      "ci_lo_holdout": 0.518,
+      "ev_holdout_bps": -3.909,
+      "dd_bps": -708.5
+     },
+     "tp": {
+      "wr": 0.6395,
+      "wr_holdout": 0.6731,
+      "ci_lo_holdout": 0.5376,
+      "ev_holdout_bps": -3.683,
+      "dd_bps": -638.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0476,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -9.683,
+    "dd_bps": -1420.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.683,
+      "dd_bps": -1420.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.231,
+      "dd_bps": -1337.8
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.779,
+      "dd_bps": -1255.5
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0408,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -10.135,
+    "dd_bps": -1655.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -10.135,
+      "dd_bps": -1655.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.909,
+      "dd_bps": -1584.5
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.683,
+      "dd_bps": -1514.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0476,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -28.555,
+    "dd_bps": -4175.3,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.555,
+      "dd_bps": -4175.3
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.103,
+      "dd_bps": -4093.1
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.651,
+      "dd_bps": -4010.8
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "BTC",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0408,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -29.007,
+    "dd_bps": -4410.3,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -29.007,
+      "dd_bps": -4410.3
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.781,
+      "dd_bps": -4339.8
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.555,
+      "dd_bps": -4269.3
+     }
+    },
+    "survives_all_tie_rules": false
+   }
+  ]
+ },
+ {
+  "asset": "ETH",
+  "status": "ok",
+  "rows": [
+   {
+    "asset": "ETH",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.1815,
+    "wr_all": 0.7335,
+    "wr_holdout": 0.7107,
+    "ci_lo_holdout": 0.7051,
+    "ev_holdout_bps": -3.573,
+    "dd_bps": -198280.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.7335,
+      "wr_holdout": 0.7107,
+      "ci_lo_holdout": 0.7051,
+      "ev_holdout_bps": -3.573,
+      "dd_bps": -198280.0
+     },
+     "half": {
+      "wr": 0.7335,
+      "wr_holdout": 0.7107,
+      "ci_lo_holdout": 0.7051,
+      "ev_holdout_bps": 0.757,
+      "dd_bps": -3392.0
+     },
+     "tp": {
+      "wr": 0.915,
+      "wr_holdout": 0.9272,
+      "ci_lo_holdout": 0.924,
+      "ev_holdout_bps": 5.088,
+      "dd_bps": -432.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.1745,
+    "wr_all": 0.7476,
+    "wr_holdout": 0.7156,
+    "ci_lo_holdout": 0.71,
+    "ev_holdout_bps": -3.378,
+    "dd_bps": -156248.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.7476,
+      "wr_holdout": 0.7156,
+      "ci_lo_holdout": 0.71,
+      "ev_holdout_bps": -3.378,
+      "dd_bps": -156248.0
+     },
+     "half": {
+      "wr": 0.7476,
+      "wr_holdout": 0.7156,
+      "ci_lo_holdout": 0.71,
+      "ev_holdout_bps": 0.895,
+      "dd_bps": -2576.0
+     },
+     "tp": {
+      "wr": 0.9221,
+      "wr_holdout": 0.9292,
+      "ci_lo_holdout": 0.926,
+      "ev_holdout_bps": 5.167,
+      "dd_bps": -472.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.1815,
+    "wr_all": 0.7335,
+    "wr_holdout": 0.7107,
+    "ci_lo_holdout": 0.7051,
+    "ev_holdout_bps": -7.573,
+    "dd_bps": -496340.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.7335,
+      "wr_holdout": 0.7107,
+      "ci_lo_holdout": 0.7051,
+      "ev_holdout_bps": -7.573,
+      "dd_bps": -496340.0
+     },
+     "half": {
+      "wr": 0.7335,
+      "wr_holdout": 0.7107,
+      "ci_lo_holdout": 0.7051,
+      "ev_holdout_bps": -3.243,
+      "dd_bps": -225800.0
+     },
+     "tp": {
+      "wr": 0.915,
+      "wr_holdout": 0.9272,
+      "ci_lo_holdout": 0.924,
+      "ev_holdout_bps": 1.088,
+      "dd_bps": -6756.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.1745,
+    "wr_all": 0.7476,
+    "wr_holdout": 0.7156,
+    "ci_lo_holdout": 0.71,
+    "ev_holdout_bps": -7.378,
+    "dd_bps": -454324.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.7476,
+      "wr_holdout": 0.7156,
+      "ci_lo_holdout": 0.71,
+      "ev_holdout_bps": -7.378,
+      "dd_bps": -454324.0
+     },
+     "half": {
+      "wr": 0.7476,
+      "wr_holdout": 0.7156,
+      "ci_lo_holdout": 0.71,
+      "ev_holdout_bps": -3.105,
+      "dd_bps": -194264.0
+     },
+     "tp": {
+      "wr": 0.9221,
+      "wr_holdout": 0.9292,
+      "ci_lo_holdout": 0.926,
+      "ev_holdout_bps": 1.167,
+      "dd_bps": -2244.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.1815,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -13.573,
+    "dd_bps": -943438.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -13.573,
+      "dd_bps": -943438.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.243,
+      "dd_bps": -672898.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -4.912,
+      "dd_bps": -402358.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.1745,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -13.378,
+    "dd_bps": -901438.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -13.378,
+      "dd_bps": -901438.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.105,
+      "dd_bps": -641378.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -4.833,
+      "dd_bps": -381318.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.1815,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -32.445,
+    "dd_bps": -2349760.6,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -32.445,
+      "dd_bps": -2349760.6
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.115,
+      "dd_bps": -2079220.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -23.784,
+      "dd_bps": -1808680.6
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf1",
+    "minutes": 20,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 74520,
+    "n_holdout": 26082,
+    "tie_rate": 0.1745,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -32.25,
+    "dd_bps": -2307760.6,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -32.25,
+      "dd_bps": -2307760.6
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.977,
+      "dd_bps": -2047700.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -23.705,
+      "dd_bps": -1787640.6
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.0915,
+    "wr_all": 0.7925,
+    "wr_holdout": 0.7817,
+    "ci_lo_holdout": 0.7741,
+    "ev_holdout_bps": -0.73,
+    "dd_bps": -11216.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.7925,
+      "wr_holdout": 0.7817,
+      "ci_lo_holdout": 0.7741,
+      "ev_holdout_bps": -0.73,
+      "dd_bps": -11216.0
+     },
+     "half": {
+      "wr": 0.7925,
+      "wr_holdout": 0.7817,
+      "ci_lo_holdout": 0.7741,
+      "ev_holdout_bps": 1.552,
+      "dd_bps": -848.0
+     },
+     "tp": {
+      "wr": 0.884,
+      "wr_holdout": 0.8959,
+      "ci_lo_holdout": 0.8902,
+      "ev_holdout_bps": 3.835,
+      "dd_bps": -328.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.0937,
+    "wr_all": 0.7966,
+    "wr_holdout": 0.7786,
+    "ci_lo_holdout": 0.7709,
+    "ev_holdout_bps": -0.858,
+    "dd_bps": -11392.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.7966,
+      "wr_holdout": 0.7786,
+      "ci_lo_holdout": 0.7709,
+      "ev_holdout_bps": -0.858,
+      "dd_bps": -11392.0
+     },
+     "half": {
+      "wr": 0.7966,
+      "wr_holdout": 0.7786,
+      "ci_lo_holdout": 0.7709,
+      "ev_holdout_bps": 1.506,
+      "dd_bps": -924.0
+     },
+     "tp": {
+      "wr": 0.8902,
+      "wr_holdout": 0.8967,
+      "ci_lo_holdout": 0.8911,
+      "ev_holdout_bps": 3.87,
+      "dd_bps": -248.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.0915,
+    "wr_all": 0.7925,
+    "wr_holdout": 0.7817,
+    "ci_lo_holdout": 0.7741,
+    "ev_holdout_bps": -4.73,
+    "dd_bps": -142372.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.7925,
+      "wr_holdout": 0.7817,
+      "ci_lo_holdout": 0.7741,
+      "ev_holdout_bps": -4.73,
+      "dd_bps": -142372.0
+     },
+     "half": {
+      "wr": 0.7925,
+      "wr_holdout": 0.7817,
+      "ci_lo_holdout": 0.7741,
+      "ev_holdout_bps": -2.448,
+      "dd_bps": -81772.0
+     },
+     "tp": {
+      "wr": 0.884,
+      "wr_holdout": 0.8959,
+      "ci_lo_holdout": 0.8902,
+      "ev_holdout_bps": -0.165,
+      "dd_bps": -22764.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.0937,
+    "wr_all": 0.7966,
+    "wr_holdout": 0.7786,
+    "ci_lo_holdout": 0.7709,
+    "ev_holdout_bps": -4.858,
+    "dd_bps": -137000.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.7966,
+      "wr_holdout": 0.7786,
+      "ci_lo_holdout": 0.7709,
+      "ev_holdout_bps": -4.858,
+      "dd_bps": -137000.0
+     },
+     "half": {
+      "wr": 0.7966,
+      "wr_holdout": 0.7786,
+      "ci_lo_holdout": 0.7709,
+      "ev_holdout_bps": -2.494,
+      "dd_bps": -74960.0
+     },
+     "tp": {
+      "wr": 0.8902,
+      "wr_holdout": 0.8967,
+      "ci_lo_holdout": 0.8911,
+      "ev_holdout_bps": -0.13,
+      "dd_bps": -14196.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.0915,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -10.73,
+    "dd_bps": -341078.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -10.73,
+      "dd_bps": -341078.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.448,
+      "dd_bps": -280478.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -6.165,
+      "dd_bps": -219878.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.0937,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -10.858,
+    "dd_bps": -335678.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -10.858,
+      "dd_bps": -335678.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.494,
+      "dd_bps": -273638.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -6.13,
+      "dd_bps": -211598.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.0915,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -29.602,
+    "dd_bps": -966099.8,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -29.602,
+      "dd_bps": -966099.8
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.32,
+      "dd_bps": -905499.8
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -25.037,
+      "dd_bps": -844899.8
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf2",
+    "minutes": 45,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 33120,
+    "n_holdout": 11592,
+    "tie_rate": 0.0937,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -29.73,
+    "dd_bps": -960699.8,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -29.73,
+      "dd_bps": -960699.8
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.366,
+      "dd_bps": -898659.8
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -25.002,
+      "dd_bps": -836619.8
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0462,
+    "wr_all": 0.8174,
+    "wr_holdout": 0.8198,
+    "ci_lo_holdout": 0.8076,
+    "ev_holdout_bps": 0.793,
+    "dd_bps": -1056.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8174,
+      "wr_holdout": 0.8198,
+      "ci_lo_holdout": 0.8076,
+      "ev_holdout_bps": 0.793,
+      "dd_bps": -1056.0
+     },
+     "half": {
+      "wr": 0.8174,
+      "wr_holdout": 0.8198,
+      "ci_lo_holdout": 0.8076,
+      "ev_holdout_bps": 1.641,
+      "dd_bps": -452.0
+     },
+     "tp": {
+      "wr": 0.8637,
+      "wr_holdout": 0.8622,
+      "ci_lo_holdout": 0.8512,
+      "ev_holdout_bps": 2.488,
+      "dd_bps": -312.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0498,
+    "wr_all": 0.8192,
+    "wr_holdout": 0.8168,
+    "ci_lo_holdout": 0.8046,
+    "ev_holdout_bps": 0.674,
+    "dd_bps": -1288.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8192,
+      "wr_holdout": 0.8168,
+      "ci_lo_holdout": 0.8046,
+      "ev_holdout_bps": 0.674,
+      "dd_bps": -1288.0
+     },
+     "half": {
+      "wr": 0.8192,
+      "wr_holdout": 0.8168,
+      "ci_lo_holdout": 0.8046,
+      "ev_holdout_bps": 1.78,
+      "dd_bps": -632.0
+     },
+     "tp": {
+      "wr": 0.869,
+      "wr_holdout": 0.8722,
+      "ci_lo_holdout": 0.8615,
+      "ev_holdout_bps": 2.887,
+      "dd_bps": -368.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0462,
+    "wr_all": 0.8174,
+    "wr_holdout": 0.8198,
+    "ci_lo_holdout": 0.8076,
+    "ev_holdout_bps": -3.207,
+    "dd_bps": -37916.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8174,
+      "wr_holdout": 0.8198,
+      "ci_lo_holdout": 0.8076,
+      "ev_holdout_bps": -3.207,
+      "dd_bps": -37916.0
+     },
+     "half": {
+      "wr": 0.8174,
+      "wr_holdout": 0.8198,
+      "ci_lo_holdout": 0.8076,
+      "ev_holdout_bps": -2.359,
+      "dd_bps": -27336.0
+     },
+     "tp": {
+      "wr": 0.8637,
+      "wr_holdout": 0.8622,
+      "ci_lo_holdout": 0.8512,
+      "ev_holdout_bps": -1.512,
+      "dd_bps": -16780.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0498,
+    "wr_all": 0.8192,
+    "wr_holdout": 0.8168,
+    "ci_lo_holdout": 0.8046,
+    "ev_holdout_bps": -3.326,
+    "dd_bps": -37064.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8192,
+      "wr_holdout": 0.8168,
+      "ci_lo_holdout": 0.8046,
+      "ev_holdout_bps": -3.326,
+      "dd_bps": -37064.0
+     },
+     "half": {
+      "wr": 0.8192,
+      "wr_holdout": 0.8168,
+      "ci_lo_holdout": 0.8046,
+      "ev_holdout_bps": -2.22,
+      "dd_bps": -25644.0
+     },
+     "tp": {
+      "wr": 0.869,
+      "wr_holdout": 0.8722,
+      "ci_lo_holdout": 0.8615,
+      "ev_holdout_bps": -1.113,
+      "dd_bps": -14232.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0462,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -9.207,
+    "dd_bps": -106646.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.207,
+      "dd_bps": -106646.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.359,
+      "dd_bps": -96046.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.512,
+      "dd_bps": -85446.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0498,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -9.326,
+    "dd_bps": -105806.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.326,
+      "dd_bps": -105806.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.22,
+      "dd_bps": -94386.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.113,
+      "dd_bps": -82966.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0462,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -28.079,
+    "dd_bps": -322975.7,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.079,
+      "dd_bps": -322975.7
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.231,
+      "dd_bps": -312375.7
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.384,
+      "dd_bps": -301775.7
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf3",
+    "minutes": 130,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 11464,
+    "n_holdout": 4013,
+    "tie_rate": 0.0498,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -28.198,
+    "dd_bps": -322135.7,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.198,
+      "dd_bps": -322135.7
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.092,
+      "dd_bps": -310715.7
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -25.985,
+      "dd_bps": -299295.7
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0411,
+    "wr_all": 0.8182,
+    "wr_holdout": 0.8249,
+    "ci_lo_holdout": 0.8082,
+    "ev_holdout_bps": 0.995,
+    "dd_bps": -1272.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8182,
+      "wr_holdout": 0.8249,
+      "ci_lo_holdout": 0.8082,
+      "ev_holdout_bps": 0.995,
+      "dd_bps": -1272.0
+     },
+     "half": {
+      "wr": 0.8182,
+      "wr_holdout": 0.8249,
+      "ci_lo_holdout": 0.8082,
+      "ev_holdout_bps": 1.793,
+      "dd_bps": -408.0
+     },
+     "tp": {
+      "wr": 0.8593,
+      "wr_holdout": 0.8648,
+      "ci_lo_holdout": 0.8496,
+      "ev_holdout_bps": 2.592,
+      "dd_bps": -288.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0393,
+    "wr_all": 0.8292,
+    "wr_holdout": 0.8122,
+    "ci_lo_holdout": 0.7951,
+    "ev_holdout_bps": 0.488,
+    "dd_bps": -520.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8292,
+      "wr_holdout": 0.8122,
+      "ci_lo_holdout": 0.7951,
+      "ev_holdout_bps": 0.488,
+      "dd_bps": -520.0
+     },
+     "half": {
+      "wr": 0.8292,
+      "wr_holdout": 0.8122,
+      "ci_lo_holdout": 0.7951,
+      "ev_holdout_bps": 1.408,
+      "dd_bps": -248.0
+     },
+     "tp": {
+      "wr": 0.8685,
+      "wr_holdout": 0.8582,
+      "ci_lo_holdout": 0.8428,
+      "ev_holdout_bps": 2.329,
+      "dd_bps": -224.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0411,
+    "wr_all": 0.8182,
+    "wr_holdout": 0.8249,
+    "ci_lo_holdout": 0.8082,
+    "ev_holdout_bps": -3.005,
+    "dd_bps": -19972.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8182,
+      "wr_holdout": 0.8249,
+      "ci_lo_holdout": 0.8082,
+      "ev_holdout_bps": -3.005,
+      "dd_bps": -19972.0
+     },
+     "half": {
+      "wr": 0.8182,
+      "wr_holdout": 0.8249,
+      "ci_lo_holdout": 0.8082,
+      "ev_holdout_bps": -2.207,
+      "dd_bps": -14972.0
+     },
+     "tp": {
+      "wr": 0.8593,
+      "wr_holdout": 0.8648,
+      "ci_lo_holdout": 0.8496,
+      "ev_holdout_bps": -1.408,
+      "dd_bps": -9972.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0393,
+    "wr_all": 0.8292,
+    "wr_holdout": 0.8122,
+    "ci_lo_holdout": 0.7951,
+    "ev_holdout_bps": -3.512,
+    "dd_bps": -17268.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8292,
+      "wr_holdout": 0.8122,
+      "ci_lo_holdout": 0.7951,
+      "ev_holdout_bps": -3.512,
+      "dd_bps": -17268.0
+     },
+     "half": {
+      "wr": 0.8292,
+      "wr_holdout": 0.8122,
+      "ci_lo_holdout": 0.7951,
+      "ev_holdout_bps": -2.592,
+      "dd_bps": -12488.0
+     },
+     "tp": {
+      "wr": 0.8685,
+      "wr_holdout": 0.8582,
+      "ci_lo_holdout": 0.8428,
+      "ev_holdout_bps": -1.671,
+      "dd_bps": -7748.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0411,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -9.005,
+    "dd_bps": -56404.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.005,
+      "dd_bps": -56404.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.207,
+      "dd_bps": -51404.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.408,
+      "dd_bps": -46404.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0393,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -9.512,
+    "dd_bps": -53684.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.512,
+      "dd_bps": -53684.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.592,
+      "dd_bps": -48904.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.671,
+      "dd_bps": -44124.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0411,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -27.877,
+    "dd_bps": -171183.5,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.877,
+      "dd_bps": -171183.5
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.079,
+      "dd_bps": -166183.5
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.28,
+      "dd_bps": -161183.5
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "tf4",
+    "minutes": 245,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 6083,
+    "n_holdout": 2130,
+    "tie_rate": 0.0393,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -28.384,
+    "dd_bps": -168463.5,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.384,
+      "dd_bps": -168463.5
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.464,
+      "dd_bps": -163683.5
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.543,
+      "dd_bps": -158903.5
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0319,
+    "wr_all": 0.8551,
+    "wr_holdout": 0.8705,
+    "ci_lo_holdout": 0.8321,
+    "ev_holdout_bps": 2.821,
+    "dd_bps": -272.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8551,
+      "wr_holdout": 0.8705,
+      "ci_lo_holdout": 0.8321,
+      "ev_holdout_bps": 2.821,
+      "dd_bps": -272.0
+     },
+     "half": {
+      "wr": 0.8551,
+      "wr_holdout": 0.8705,
+      "ci_lo_holdout": 0.8321,
+      "ev_holdout_bps": 3.537,
+      "dd_bps": -232.0
+     },
+     "tp": {
+      "wr": 0.887,
+      "wr_holdout": 0.9063,
+      "ci_lo_holdout": 0.872,
+      "ev_holdout_bps": 4.253,
+      "dd_bps": -192.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0319,
+    "wr_all": 0.8319,
+    "wr_holdout": 0.8347,
+    "ci_lo_holdout": 0.793,
+    "ev_holdout_bps": 1.388,
+    "dd_bps": -320.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8319,
+      "wr_holdout": 0.8347,
+      "ci_lo_holdout": 0.793,
+      "ev_holdout_bps": 1.388,
+      "dd_bps": -320.0
+     },
+     "half": {
+      "wr": 0.8319,
+      "wr_holdout": 0.8347,
+      "ci_lo_holdout": 0.793,
+      "ev_holdout_bps": 2.38,
+      "dd_bps": -280.0
+     },
+     "tp": {
+      "wr": 0.8638,
+      "wr_holdout": 0.8843,
+      "ci_lo_holdout": 0.8473,
+      "ev_holdout_bps": 3.372,
+      "dd_bps": -240.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0319,
+    "wr_all": 0.8551,
+    "wr_holdout": 0.8705,
+    "ci_lo_holdout": 0.8321,
+    "ev_holdout_bps": -1.179,
+    "dd_bps": -1940.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8551,
+      "wr_holdout": 0.8705,
+      "ci_lo_holdout": 0.8321,
+      "ev_holdout_bps": -1.179,
+      "dd_bps": -1940.0
+     },
+     "half": {
+      "wr": 0.8551,
+      "wr_holdout": 0.8705,
+      "ci_lo_holdout": 0.8321,
+      "ev_holdout_bps": -0.463,
+      "dd_bps": -1404.0
+     },
+     "tp": {
+      "wr": 0.887,
+      "wr_holdout": 0.9063,
+      "ci_lo_holdout": 0.872,
+      "ev_holdout_bps": 0.253,
+      "dd_bps": -976.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0319,
+    "wr_all": 0.8319,
+    "wr_holdout": 0.8347,
+    "ci_lo_holdout": 0.793,
+    "ev_holdout_bps": -2.612,
+    "dd_bps": -2848.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8319,
+      "wr_holdout": 0.8347,
+      "ci_lo_holdout": 0.793,
+      "ev_holdout_bps": -2.612,
+      "dd_bps": -2848.0
+     },
+     "half": {
+      "wr": 0.8319,
+      "wr_holdout": 0.8347,
+      "ci_lo_holdout": 0.793,
+      "ev_holdout_bps": -1.62,
+      "dd_bps": -2188.0
+     },
+     "tp": {
+      "wr": 0.8638,
+      "wr_holdout": 0.8843,
+      "ci_lo_holdout": 0.8473,
+      "ev_holdout_bps": -0.628,
+      "dd_bps": -1528.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0319,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -7.179,
+    "dd_bps": -8068.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.179,
+      "dd_bps": -8068.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -6.463,
+      "dd_bps": -7408.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -5.747,
+      "dd_bps": -6748.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0319,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -8.612,
+    "dd_bps": -8988.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.612,
+      "dd_bps": -8988.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.62,
+      "dd_bps": -8328.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -6.628,
+      "dd_bps": -7668.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0319,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -26.051,
+    "dd_bps": -27581.6,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.051,
+      "dd_bps": -27581.6
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -25.335,
+      "dd_bps": -26921.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -24.619,
+      "dd_bps": -26261.6
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0319,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -27.484,
+    "dd_bps": -28501.6,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.484,
+      "dd_bps": -28501.6
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.492,
+      "dd_bps": -27841.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -25.5,
+      "dd_bps": -27181.6
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.001,
+    "wr_all": 0.8522,
+    "wr_holdout": 0.8678,
+    "ci_lo_holdout": 0.829,
+    "ev_holdout_bps": 6.777,
+    "dd_bps": -600.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8522,
+      "wr_holdout": 0.8678,
+      "ci_lo_holdout": 0.829,
+      "ev_holdout_bps": 6.777,
+      "dd_bps": -600.0
+     },
+     "half": {
+      "wr": 0.8522,
+      "wr_holdout": 0.8678,
+      "ci_lo_holdout": 0.829,
+      "ev_holdout_bps": 6.915,
+      "dd_bps": -600.0
+     },
+     "tp": {
+      "wr": 0.8531,
+      "wr_holdout": 0.8705,
+      "ci_lo_holdout": 0.8321,
+      "ev_holdout_bps": 7.052,
+      "dd_bps": -600.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0048,
+    "wr_all": 0.8541,
+    "wr_holdout": 0.876,
+    "ci_lo_holdout": 0.8381,
+    "ev_holdout_bps": 7.603,
+    "dd_bps": -620.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8541,
+      "wr_holdout": 0.876,
+      "ci_lo_holdout": 0.8381,
+      "ev_holdout_bps": 7.603,
+      "dd_bps": -620.0
+     },
+     "half": {
+      "wr": 0.8541,
+      "wr_holdout": 0.876,
+      "ci_lo_holdout": 0.8381,
+      "ev_holdout_bps": 8.154,
+      "dd_bps": -620.0
+     },
+     "tp": {
+      "wr": 0.8589,
+      "wr_holdout": 0.8871,
+      "ci_lo_holdout": 0.8504,
+      "ev_holdout_bps": 8.705,
+      "dd_bps": -620.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.001,
+    "wr_all": 0.8522,
+    "wr_holdout": 0.8678,
+    "ci_lo_holdout": 0.829,
+    "ev_holdout_bps": 2.777,
+    "dd_bps": -952.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8522,
+      "wr_holdout": 0.8678,
+      "ci_lo_holdout": 0.829,
+      "ev_holdout_bps": 2.777,
+      "dd_bps": -952.0
+     },
+     "half": {
+      "wr": 0.8522,
+      "wr_holdout": 0.8678,
+      "ci_lo_holdout": 0.829,
+      "ev_holdout_bps": 2.915,
+      "dd_bps": -952.0
+     },
+     "tp": {
+      "wr": 0.8531,
+      "wr_holdout": 0.8705,
+      "ci_lo_holdout": 0.8321,
+      "ev_holdout_bps": 3.052,
+      "dd_bps": -952.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0048,
+    "wr_all": 0.8541,
+    "wr_holdout": 0.876,
+    "ci_lo_holdout": 0.8381,
+    "ev_holdout_bps": 3.603,
+    "dd_bps": -900.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8541,
+      "wr_holdout": 0.876,
+      "ci_lo_holdout": 0.8381,
+      "ev_holdout_bps": 3.603,
+      "dd_bps": -900.0
+     },
+     "half": {
+      "wr": 0.8541,
+      "wr_holdout": 0.876,
+      "ci_lo_holdout": 0.8381,
+      "ev_holdout_bps": 4.154,
+      "dd_bps": -900.0
+     },
+     "tp": {
+      "wr": 0.8589,
+      "wr_holdout": 0.8871,
+      "ci_lo_holdout": 0.8504,
+      "ev_holdout_bps": 4.705,
+      "dd_bps": -900.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.001,
+    "wr_all": 0.8522,
+    "wr_holdout": 0.8678,
+    "ci_lo_holdout": 0.829,
+    "ev_holdout_bps": -3.223,
+    "dd_bps": -5290.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8522,
+      "wr_holdout": 0.8678,
+      "ci_lo_holdout": 0.829,
+      "ev_holdout_bps": -3.223,
+      "dd_bps": -5290.0
+     },
+     "half": {
+      "wr": 0.8522,
+      "wr_holdout": 0.8678,
+      "ci_lo_holdout": 0.829,
+      "ev_holdout_bps": -3.085,
+      "dd_bps": -5240.0
+     },
+     "tp": {
+      "wr": 0.8531,
+      "wr_holdout": 0.8705,
+      "ci_lo_holdout": 0.8321,
+      "ev_holdout_bps": -2.948,
+      "dd_bps": -5190.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0048,
+    "wr_all": 0.8541,
+    "wr_holdout": 0.876,
+    "ci_lo_holdout": 0.8381,
+    "ev_holdout_bps": -2.397,
+    "dd_bps": -4840.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8541,
+      "wr_holdout": 0.876,
+      "ci_lo_holdout": 0.8381,
+      "ev_holdout_bps": -2.397,
+      "dd_bps": -4840.0
+     },
+     "half": {
+      "wr": 0.8541,
+      "wr_holdout": 0.876,
+      "ci_lo_holdout": 0.8381,
+      "ev_holdout_bps": -1.846,
+      "dd_bps": -4590.0
+     },
+     "tp": {
+      "wr": 0.8589,
+      "wr_holdout": 0.8871,
+      "ci_lo_holdout": 0.8504,
+      "ev_holdout_bps": -1.295,
+      "dd_bps": -4340.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.001,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -22.095,
+    "dd_bps": -24473.6,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -22.095,
+      "dd_bps": -24473.6
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -21.957,
+      "dd_bps": -24423.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -21.82,
+      "dd_bps": -24373.6
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "1d",
+    "minutes": 1440,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 1035,
+    "n_holdout": 363,
+    "tie_rate": 0.0048,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -21.269,
+    "dd_bps": -24173.6,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -21.269,
+      "dd_bps": -24173.6
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -20.718,
+      "dd_bps": -23923.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -20.167,
+      "dd_bps": -23673.6
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0136,
+    "wr_all": 0.8639,
+    "wr_holdout": 0.8462,
+    "ci_lo_holdout": 0.7248,
+    "ev_holdout_bps": 1.846,
+    "dd_bps": -200.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8639,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": 1.846,
+      "dd_bps": -200.0
+     },
+     "half": {
+      "wr": 0.8639,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": 2.231,
+      "dd_bps": -200.0
+     },
+     "tp": {
+      "wr": 0.8776,
+      "wr_holdout": 0.8654,
+      "ci_lo_holdout": 0.7473,
+      "ev_holdout_bps": 2.615,
+      "dd_bps": -200.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0204,
+    "wr_all": 0.8299,
+    "wr_holdout": 0.8462,
+    "ci_lo_holdout": 0.7248,
+    "ev_holdout_bps": 1.846,
+    "dd_bps": -128.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8299,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": 1.846,
+      "dd_bps": -128.0
+     },
+     "half": {
+      "wr": 0.8299,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": 2.615,
+      "dd_bps": -128.0
+     },
+     "tp": {
+      "wr": 0.8503,
+      "wr_holdout": 0.8846,
+      "ci_lo_holdout": 0.7703,
+      "ev_holdout_bps": 3.385,
+      "dd_bps": -128.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0136,
+    "wr_all": 0.8639,
+    "wr_holdout": 0.8462,
+    "ci_lo_holdout": 0.7248,
+    "ev_holdout_bps": -2.154,
+    "dd_bps": -264.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8639,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": -2.154,
+      "dd_bps": -264.0
+     },
+     "half": {
+      "wr": 0.8639,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": -1.769,
+      "dd_bps": -260.0
+     },
+     "tp": {
+      "wr": 0.8776,
+      "wr_holdout": 0.8654,
+      "ci_lo_holdout": 0.7473,
+      "ev_holdout_bps": -1.385,
+      "dd_bps": -260.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0204,
+    "wr_all": 0.8299,
+    "wr_holdout": 0.8462,
+    "ci_lo_holdout": 0.7248,
+    "ev_holdout_bps": -2.154,
+    "dd_bps": -448.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8299,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": -2.154,
+      "dd_bps": -448.0
+     },
+     "half": {
+      "wr": 0.8299,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": -1.385,
+      "dd_bps": -392.0
+     },
+     "tp": {
+      "wr": 0.8503,
+      "wr_holdout": 0.8846,
+      "ci_lo_holdout": 0.7703,
+      "ev_holdout_bps": -0.615,
+      "dd_bps": -352.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0136,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -8.154,
+    "dd_bps": -1092.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.154,
+      "dd_bps": -1092.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.769,
+      "dd_bps": -1052.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.385,
+      "dd_bps": -1012.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0204,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -8.154,
+    "dd_bps": -1252.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.154,
+      "dd_bps": -1252.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -7.385,
+      "dd_bps": -1192.0
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -6.615,
+      "dd_bps": -1132.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0136,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -27.026,
+    "dd_bps": -3847.3,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.026,
+      "dd_bps": -3847.3
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.641,
+      "dd_bps": -3807.3
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.257,
+      "dd_bps": -3767.3
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 32.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0204,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -27.026,
+    "dd_bps": -4007.3,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.026,
+      "dd_bps": -4007.3
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -26.257,
+      "dd_bps": -3947.3
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -25.487,
+      "dd_bps": -3887.3
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8163,
+    "wr_holdout": 0.8462,
+    "ci_lo_holdout": 0.7248,
+    "ev_holdout_bps": 4.615,
+    "dd_bps": -320.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8163,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": 4.615,
+      "dd_bps": -320.0
+     },
+     "half": {
+      "wr": 0.8163,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": 4.615,
+      "dd_bps": -320.0
+     },
+     "tp": {
+      "wr": 0.8163,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": 4.615,
+      "dd_bps": -320.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8912,
+    "wr_holdout": 0.9423,
+    "ci_lo_holdout": 0.8436,
+    "ev_holdout_bps": 14.231,
+    "dd_bps": -260.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8912,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 14.231,
+      "dd_bps": -260.0
+     },
+     "half": {
+      "wr": 0.8912,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 14.231,
+      "dd_bps": -260.0
+     },
+     "tp": {
+      "wr": 0.8912,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 14.231,
+      "dd_bps": -260.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8163,
+    "wr_holdout": 0.8462,
+    "ci_lo_holdout": 0.7248,
+    "ev_holdout_bps": 0.615,
+    "dd_bps": -540.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8163,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": 0.615,
+      "dd_bps": -540.0
+     },
+     "half": {
+      "wr": 0.8163,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": 0.615,
+      "dd_bps": -540.0
+     },
+     "tp": {
+      "wr": 0.8163,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": 0.615,
+      "dd_bps": -540.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8912,
+    "wr_holdout": 0.9423,
+    "ci_lo_holdout": 0.8436,
+    "ev_holdout_bps": 10.231,
+    "dd_bps": -316.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8912,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 10.231,
+      "dd_bps": -316.0
+     },
+     "half": {
+      "wr": 0.8912,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 10.231,
+      "dd_bps": -316.0
+     },
+     "tp": {
+      "wr": 0.8912,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 10.231,
+      "dd_bps": -316.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8163,
+    "wr_holdout": 0.8462,
+    "ci_lo_holdout": 0.7248,
+    "ev_holdout_bps": -5.385,
+    "dd_bps": -1290.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8163,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": -5.385,
+      "dd_bps": -1290.0
+     },
+     "half": {
+      "wr": 0.8163,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": -5.385,
+      "dd_bps": -1290.0
+     },
+     "tp": {
+      "wr": 0.8163,
+      "wr_holdout": 0.8462,
+      "ci_lo_holdout": 0.7248,
+      "ev_holdout_bps": -5.385,
+      "dd_bps": -1290.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.8912,
+    "wr_holdout": 0.9423,
+    "ci_lo_holdout": 0.8436,
+    "ev_holdout_bps": 4.231,
+    "dd_bps": -590.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.8912,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 4.231,
+      "dd_bps": -590.0
+     },
+     "half": {
+      "wr": 0.8912,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 4.231,
+      "dd_bps": -590.0
+     },
+     "tp": {
+      "wr": 0.8912,
+      "wr_holdout": 0.9423,
+      "ci_lo_holdout": 0.8436,
+      "ev_holdout_bps": 4.231,
+      "dd_bps": -590.0
+     }
+    },
+    "survives_all_tie_rules": true
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -24.257,
+    "dd_bps": -3995.3,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -24.257,
+      "dd_bps": -3995.3
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -24.257,
+      "dd_bps": -3995.3
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -24.257,
+      "dd_bps": -3995.3
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 20.0,
+    "sl_bps": 80.0,
+    "break_even_wr": 0.8,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -14.641,
+    "dd_bps": -2795.3,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -14.641,
+      "dd_bps": -2795.3
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -14.641,
+      "dd_bps": -2795.3
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -14.641,
+      "dd_bps": -2795.3
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0884,
+    "wr_all": 0.619,
+    "wr_holdout": 0.6154,
+    "ci_lo_holdout": 0.4796,
+    "ev_holdout_bps": -1.038,
+    "dd_bps": -183.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.619,
+      "wr_holdout": 0.6154,
+      "ci_lo_holdout": 0.4796,
+      "ev_holdout_bps": -1.038,
+      "dd_bps": -183.0
+     },
+     "half": {
+      "wr": 0.619,
+      "wr_holdout": 0.6154,
+      "ci_lo_holdout": 0.4796,
+      "ev_holdout_bps": 0.091,
+      "dd_bps": -118.8
+     },
+     "tp": {
+      "wr": 0.7075,
+      "wr_holdout": 0.7115,
+      "ci_lo_holdout": 0.5773,
+      "ev_holdout_bps": 1.221,
+      "dd_bps": -115.5
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "lighter",
+    "rt_bps": 0.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.102,
+    "wr_all": 0.5918,
+    "wr_holdout": 0.6538,
+    "ci_lo_holdout": 0.518,
+    "ev_holdout_bps": -0.135,
+    "dd_bps": -302.5,
+    "by_tie": {
+     "stop": {
+      "wr": 0.5918,
+      "wr_holdout": 0.6538,
+      "ci_lo_holdout": 0.518,
+      "ev_holdout_bps": -0.135,
+      "dd_bps": -302.5
+     },
+     "half": {
+      "wr": 0.5918,
+      "wr_holdout": 0.6538,
+      "ci_lo_holdout": 0.518,
+      "ev_holdout_bps": 0.769,
+      "dd_bps": -169.8
+     },
+     "tp": {
+      "wr": 0.6939,
+      "wr_holdout": 0.7308,
+      "ci_lo_holdout": 0.5975,
+      "ev_holdout_bps": 1.673,
+      "dd_bps": -125.5
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0884,
+    "wr_all": 0.619,
+    "wr_holdout": 0.6154,
+    "ci_lo_holdout": 0.4796,
+    "ev_holdout_bps": -5.038,
+    "dd_bps": -744.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.619,
+      "wr_holdout": 0.6154,
+      "ci_lo_holdout": 0.4796,
+      "ev_holdout_bps": -5.038,
+      "dd_bps": -744.0
+     },
+     "half": {
+      "wr": 0.619,
+      "wr_holdout": 0.6154,
+      "ci_lo_holdout": 0.4796,
+      "ev_holdout_bps": -3.909,
+      "dd_bps": -591.2
+     },
+     "tp": {
+      "wr": 0.7075,
+      "wr_holdout": 0.7115,
+      "ci_lo_holdout": 0.5773,
+      "ev_holdout_bps": -2.779,
+      "dd_bps": -438.5
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "mexc_fut",
+    "rt_bps": 4.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.102,
+    "wr_all": 0.5918,
+    "wr_holdout": 0.6538,
+    "ci_lo_holdout": 0.518,
+    "ev_holdout_bps": -4.135,
+    "dd_bps": -826.5,
+    "by_tie": {
+     "stop": {
+      "wr": 0.5918,
+      "wr_holdout": 0.6538,
+      "ci_lo_holdout": 0.518,
+      "ev_holdout_bps": -4.135,
+      "dd_bps": -826.5
+     },
+     "half": {
+      "wr": 0.5918,
+      "wr_holdout": 0.6538,
+      "ci_lo_holdout": 0.518,
+      "ev_holdout_bps": -3.231,
+      "dd_bps": -650.2
+     },
+     "tp": {
+      "wr": 0.6939,
+      "wr_holdout": 0.7308,
+      "ci_lo_holdout": 0.5975,
+      "ev_holdout_bps": -2.327,
+      "dd_bps": -490.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0884,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -11.038,
+    "dd_bps": -1608.0,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -11.038,
+      "dd_bps": -1608.0
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.909,
+      "dd_bps": -1455.2
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.779,
+      "dd_bps": -1302.5
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "binance",
+    "rt_bps": 10.0,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.102,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -10.135,
+    "dd_bps": -1678.5,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -10.135,
+      "dd_bps": -1678.5
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -9.231,
+      "dd_bps": -1502.2
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -8.327,
+      "dd_bps": -1326.0
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "long",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.0884,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -29.91,
+    "dd_bps": -4363.3,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -29.91,
+      "dd_bps": -4363.3
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.781,
+      "dd_bps": -4210.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.651,
+      "dd_bps": -4057.8
+     }
+    },
+    "survives_all_tie_rules": false
+   },
+   {
+    "asset": "ETH",
+    "tf": "7d",
+    "minutes": 10080,
+    "venue": "legacy",
+    "rt_bps": 28.872,
+    "side": "short",
+    "tp_bps": 8.0,
+    "sl_bps": 15.5,
+    "break_even_wr": 0.6596,
+    "n": 147,
+    "n_holdout": 52,
+    "tie_rate": 0.102,
+    "wr_all": 0.0,
+    "wr_holdout": 0.0,
+    "ci_lo_holdout": 0.0,
+    "ev_holdout_bps": -29.007,
+    "dd_bps": -4433.8,
+    "by_tie": {
+     "stop": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -29.007,
+      "dd_bps": -4433.8
+     },
+     "half": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -28.103,
+      "dd_bps": -4257.6
+     },
+     "tp": {
+      "wr": 0.0,
+      "wr_holdout": 0.0,
+      "ci_lo_holdout": 0.0,
+      "ev_holdout_bps": -27.199,
+      "dd_bps": -4081.3
+     }
+    },
+    "survives_all_tie_rules": false
+   }
+  ]
+ }
+]
