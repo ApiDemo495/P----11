@@ -357,3 +357,23 @@ def test_calibration_panel_is_honest_about_the_flat_hit_rate():
     assert "brier" in seg and "hit_rate" in seg
     # the note must not imply the numbers rise when they do not
     assert "should RISE" in seg
+
+
+def test_deployed_stack_is_reproducible_and_documented():
+    """The number the user experiences must be regenerable, with coverage."""
+    from backtest import trend_gate_audit as aud
+    import os
+    if not os.path.exists(aud.CSV_PATH):        # pragma: no cover - offline
+        pytest.skip("real per-cell record not checked out")
+    rep = aud.build()
+    dep = rep["deployed"]
+    # the composed rule is better than everything-shipped...
+    assert dep["wr"] > rep["baseline_wr"] + 0.03
+    # ...and it is honest about what it costs in silence
+    assert dep["coverage"] < 0.40
+    assert dep["ci"][0] > rep["baseline_ci"][0]
+    # per-asset disagreement is reported rather than hidden
+    assert dep["per_asset"]["PAXG"]["wr"] < dep["per_asset"]["BTC"]["wr"]
+    doc = open("docs/docs11-doublecheck.md", encoding="utf-8").read()
+    assert "What the app actually issues, end to end" in doc
+    assert "77 % of windows now print NO CALL" in doc

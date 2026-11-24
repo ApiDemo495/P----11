@@ -171,6 +171,27 @@ confidence is **not** wired in as a filter; the gate stays one measured rule.
 The confidence cap tested alone (V4: drop conf ≥ 0.60) also failed (holdout
 53.1 %).
 
+### 4.3 What the app actually issues, end to end
+
+The two rules compose. On the same 893 real windows, the stack **as it now
+ships** — confidence above the asset's own issue floor AND the side not
+chasing the trend — produces:
+
+| | n | coverage | win rate | 95 % CI |
+|---|---|---|---|---|
+| every window (before) | 893 | 100 % | 52.9 % | 49.6–56.1 |
+| **what ships now** | 208 | **23 %** | **60.1 %** | 53.3–66.5 |
+| train (first 65 %) | 135 | — | 63.0 % | 54.6–70.6 |
+| holdout (last 35 %) | 73 | — | 54.8 % | 43.4–65.7 |
+
+Per asset: BTC 73 % (n=41), ETH 70 % (n=37), BNB 59 % (n=92), PAXG 39 %
+(n=38). Note what that means: **77 % of windows now print NO CALL**. That is
+the honest cost of the win rate, and it is the only mechanism §0 allows —
+friction is never relaxed, no future bar is read, and the 60 %/80 % band is
+bought with abstention, never with a better guess. The holdout interval
+still includes 50 %; this is a measured in-sample improvement with a
+plausible mechanism, not a promise. PAXG at 39 % is the clear counter-example.
+
 Reproduce with `python -m backtest.trend_gate_audit` (writes
 `backtest/results/trend_gate_audit.json`); behaviour is pinned by
 `tests/test_verdict_gate.py`. Set `TREND_GATE=off` to disable it.

@@ -114,6 +114,50 @@ def build(path: str = CSV_PATH, lag: int = LAG) -> dict:
         "hold_n": len(ho), "hold_wr": round(hw / max(1, len(ho)), 4),
         "hold_ci": wilson(hw, len(ho)),
     }
+    # WHAT THE APP ACTUALLY ISSUES, end to end: confidence above the asset's
+    # own issue floor (app/config.asset_issue_floor) AND the call not chasing
+    # the trend. This is the number the user experiences, so it is reported
+    # with its coverage — a higher win rate bought with silence is not a win.
+    from app.config import asset_issue_floor
+    deployed = []
+    for cell, seq in sorted(by.items()):
+        seq.sort()
+        floor = asset_issue_floor(cell[0])
+        for k in range(len(seq)):
+            t, entry, side, win, conf = seq[k]
+            if conf <= floor:
+                continue
+            if k >= lag:
+                mv = seq[k][1] - seq[k - lag][1]
+                if mv != 0 and (1 if mv > 0 else -1) == side:
+                    continue
+            deployed.append({"asset": cell[0], "tf": cell[1], "t": t,
+                             "win": win})
+    dw = sum(r["win"] for r in deployed)
+    out["deployed"] = {
+        "rule": "confidence > asset_issue_floor AND side does not chase the "
+                f"{lag}-row trend",
+        "n": len(deployed),
+        "coverage": round(len(deployed) / len(rows), 4),
+        "wr": round(dw / max(1, len(deployed)), 4),
+        "ci": wilson(dw, len(deployed)),
+        "per_asset": {},
+    }
+    for a in sorted({r["asset"] for r in deployed}):
+        g = [r for r in deployed if r["asset"] == a]
+        w = sum(r["win"] for r in g)
+        out["deployed"]["per_asset"][a] = {
+            "n": len(g), "wr": round(w / max(1, len(g)), 4), "ci": wilson(w, len(g))}
+    deployed.sort(key=lambda r: r["t"])
+    cut = int(len(deployed) * 0.65)
+    tr, ho = deployed[:cut], deployed[cut:]
+    tw, hw = sum(r["win"] for r in tr), sum(r["win"] for r in ho)
+    out["deployed"]["split"] = {
+        "train_n": len(tr), "train_wr": round(tw / max(1, len(tr)), 4),
+        "train_ci": wilson(tw, len(tr)),
+        "hold_n": len(ho), "hold_wr": round(hw / max(1, len(ho)), 4),
+        "hold_ci": wilson(hw, len(ho)),
+    }
     out["per_cell_gated"] = []
     for cell in sorted(by):
         g = [r for r in recs if r["asset"] == cell[0] and r["tf"] == cell[1]
@@ -155,6 +199,19 @@ def main() -> None:
     print(f"65/35 split     train n={s['train_n']} {100 * s['train_wr']:.1f} % "
           f"CI {s['train_ci']} | holdout n={s['hold_n']} "
           f"{100 * s['hold_wr']:.1f} % CI {s['hold_ci']}")
+    dep = rep.get("deployed") or {}
+    if dep:
+        ds = dep["split"]
+        print(f"\nWHAT SHIPS     n={dep['n']:4d} ({100 * dep['coverage']:.0f}% of "
+              f"windows)  {100 * dep['wr']:5.1f} %  CI {dep['ci']}")
+        print(f"  vs all windows  {100 * rep['baseline_wr']:5.1f} %  CI "
+              f"{rep['baseline_ci']}")
+        print("  per asset    " + "  ".join(
+            f"{a} {100 * v['wr']:.0f}% (n={v['n']})"
+            for a, v in dep["per_asset"].items()))
+        print(f"  65/35 split  train n={ds['train_n']} "
+              f"{100 * ds['train_wr']:.1f} % | holdout n={ds['hold_n']} "
+              f"{100 * ds['hold_wr']:.1f} % CI {ds['hold_ci']}")
     worst = sorted(rep["per_cell_gated"], key=lambda r: r["wr"])[:4]
     print("weakest cells   " + "  ".join(
         f"{r['cell']} {100 * r['wr']:.1f}% (n={r['n']})" for r in worst))

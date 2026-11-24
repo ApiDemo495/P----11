@@ -153,6 +153,64 @@
    64.4
   ]
  },
+ "deployed": {
+  "rule": "confidence > asset_issue_floor AND side does not chase the 2-row trend",
+  "n": 208,
+  "coverage": 0.2329,
+  "wr": 0.601,
+  "ci": [
+   53.3,
+   66.5
+  ],
+  "per_asset": {
+   "BNB": {
+    "n": 92,
+    "wr": 0.587,
+    "ci": [
+     48.5,
+     68.2
+    ]
+   },
+   "BTC": {
+    "n": 41,
+    "wr": 0.7317,
+    "ci": [
+     58.1,
+     84.3
+    ]
+   },
+   "ETH": {
+    "n": 37,
+    "wr": 0.7027,
+    "ci": [
+     54.2,
+     82.5
+    ]
+   },
+   "PAXG": {
+    "n": 38,
+    "wr": 0.3947,
+    "ci": [
+     25.6,
+     55.3
+    ]
+   }
+  },
+  "split": {
+   "train_n": 135,
+   "train_wr": 0.6296,
+   "train_ci": [
+    54.6,
+    70.6
+   ],
+   "hold_n": 73,
+   "hold_wr": 0.5479,
+   "hold_ci": [
+    43.4,
+    65.7
+   ]
+  }
+ },
  "per_cell_gated": [
   {
    "cell": "BNB|tf1",
