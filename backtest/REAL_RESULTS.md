@@ -2469,3 +2469,107 @@ fee at all, and only up to ~5 bps.
 
 So the honest per-$1000 figure is **+$60 to +$250 a year on a venue that
 charges nothing, and a loss on any venue that charges a normal fee.**
+
+---
+
+## §29 — WHAT $666/DAY PER $1,000 WOULD MEAN, AND THE REAL CEILING (2026-11-23)
+
+### 29.1 The arithmetic of the request
+
+`$666 per day per $1,000` is **+66.6 % per day**.
+
+| horizon | $1,000 becomes |
+|---|---|
+| 1 month | $4,469,407,075 |
+| 6 months | $2.2 × 10⁴³ |
+| 1 year | $8.2 × 10⁸³ |
+| world GDP (~$10¹⁴) | reached in **49.6 days** |
+
+Annualised it is 8.2 × 10⁸³ times capital. There is no signal, venue,
+leverage or asset that produces this; the constraint is not the market, it
+is the total quantity of money on Earth. **This target is not a strategy
+problem and cannot be answered by improving the app.** What follows is the
+real ceiling, which is a legitimate and useful question.
+
+### 29.2 What leverage would be needed for the measured books
+
+| book | measured | leverage needed for 66.6 %/day | drawdown at that size |
+|---|---|---|---|
+| ETH 1d long | 0.067 %/day | **× 990** | −5,845 % of capital |
+| BTC 1d short | 0.056 %/day | × 1,188 | −8,316 % |
+| ETH tf3 long | 0.087 %/day | × 768 | −7,760 % |
+
+A drawdown above −100 % of capital is insolvency. The first bad day ends
+the account long before the target is approached.
+
+### 29.3 The honest ceiling — `backtest/path_risk.py`
+
+Kelly leverage is found by **searching for the maximum realised mean log
+growth** on the tape (not assumed from a formula), and ruin is bootstrapped
+with 20-day block resampling so losing streaks survive the resampling.
+(P(dd > 50 %) and P(dd > 80 %) are used rather than "equity touches zero",
+which can never fire when per-trade losses are bounded — a flaw in the first
+version of this module, now fixed.)
+
+**Portfolio of the two validated daily books, 50/50, correlation −0.177:**
+
+| leverage | $/day per $1,000 | CAGR | max DD | P(dd>50 %) | P(dd>80 %) |
+|---|---|---|---|---|---|
+| 1× | +0.44 | +17.3 % | −2.2 % | 0.0 % | 0.0 % |
+| 3× | +1.29 | +60.4 % | −6.6 % | 0.0 % | 0.0 % |
+| 5× | +2.13 | +117.5 % | −10.9 % | 0.0 % | 0.0 % |
+| 7× | +2.94 | +192.6 % | −15.1 % | 0.0 % | 0.0 % |
+| 10× | +4.12 | +349.4 % | −21.3 % | 0.1 % | 0.0 % |
+| 15× | +5.98 | +781.5 % | −31.3 % | 2.7 % | 0.0 % |
+| 20× | +7.69 | +1,540.8 % | −40.7 % | 25.4 % | 0.1 % |
+| 30× | +10.68 | +4,747.4 % | −57.2 % | 93.7 % | 2.1 % |
+| 50× | +14.87 | +21,845.5 % | −80.7 % | 100 % | 65.9 % |
+
+In-sample Kelly is **60×** and safe size (P(dd>50 %) < 5 %) is **16×**.
+Both are in-sample optima fitted to the same 2.84 years they are measured
+on, so **both are upper bounds, not targets.**
+
+### 29.4 The number that actually matters
+
+At a size a human can hold through the drawdown — **3× to 5×**:
+
+* **+$1.29 to +$2.13 per day per $1,000** (≈ 0.13–0.21 %/day)
+* max drawdown −6.6 % to −10.9 %
+* no bootstrapped path in 4,000 exceeded a 50 % drawdown
+
+That is the honest ceiling of "how great can this be": **roughly $1.30 to
+$2.10 per day per $1,000**, not $666. It is a genuinely good return —
+60–120 % a year at single-digit-to-teens drawdown — and it is 300–500×
+short of the request.
+
+**And it is fragile in one specific way: slippage.**
+
+| extra cost per round trip | ETH 1d long CAGR | BTC 1d short CAGR |
+|---|---|---|
+| 0 bps | +20.7 % | +13.7 % |
+| 1 bp | +16.4 % | +9.6 % |
+| 2 bps | +12.2 % | +5.7 % |
+| 4 bps | +4.3 % | **−1.8 %** |
+| 8 bps | −9.9 % | −15.1 % |
+
+Win rate is unchanged across that table (85.2 / 83.6 %) — the win rate is
+not what breaks, the **money** is. Two basis points of real-world slippage
+removes a third of the return; eight removes all of it. Lighter's 300 ms
+taker delay is exactly the kind of cost that lands in this table.
+
+### 29.5 Answer
+
+* **$666/day per $1,000 is not achievable and no honest system will get
+  there.** It exceeds world GDP in seven weeks.
+* **The real ceiling on this edge is +$1.30 to +$2.13/day per $1,000**
+  (≈ 60–120 %/yr) at 3×–5× leverage, drawdown 7–11 %.
+* **The binding constraint is slippage, not signal and not fees.** At 4 bps
+  of extra cost the second book is already negative. Any live deployment
+  must measure realised slippage first and size to it.
+
+### 29.6 Reproduce
+
+```bash
+.venv/bin/python -m backtest.path_risk
+.venv/bin/python -m pytest tests/test_path_risk.py
+```
