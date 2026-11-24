@@ -7999,15 +7999,17 @@ class PredictionEngine:
         cyc.drhe = res["drhe"]
         cyc.issued = True
         cyc.refreshed_at = now
-        # A NEW GRC analysis is the engine's next sampled decision for this
-        # cell: record its close for the trend gate, then re-derive the badge.
-        # (Both used to be skipped when the cycle stayed open, so a card kept
-        # the badge from its FIRST analysis forever — "ISSUED" at conf 0.009.)
-        try:
-            from . import trend_gate as _tg
-            _tg.observe(symbol, tf, float(price or 0.0))
-        except Exception:
-            log.exception("trend-gate observe failed for %s|%s", symbol, tf)
+        # The badge is re-derived from the number it sits next to — it used to
+        # be skipped whenever a cycle stayed open, so a card kept the badge
+        # from its FIRST analysis forever ("ISSUED" at conf 0.009).
+        #
+        # NOTE: the trend gate is deliberately NOT fed here. A GRC repeats the
+        # SAME price for an open window, and its ring only holds three
+        # samples, so observing per GRC filled it with [p, p, p] — the trend
+        # became 0 on every cell within minutes and the gate silently stopped
+        # withholding anything (caught on the live board: 16/16 cells
+        # "trend 0"). The gate's sampled series is one entry per SETTLED
+        # window (see _settle_and_lock) plus the warm replay, and nothing else.
         cyc.gate_ok, cyc.verdict, cyc.issue_note = public_verdict(
             symbol, tf, int(cyc.direction or 0), cyc.confidence, cyc.tier,
             res.get("issue_note"))

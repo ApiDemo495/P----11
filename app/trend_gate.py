@@ -141,6 +141,13 @@ def observe(symbol: str, tf: str, close: float) -> None:
         q = _hist.get((symbol, tf))
         if q is None:
             q = _hist[(symbol, tf)] = deque(maxlen=TREND_LAG_ROWS + 1)
+        if q and q[-1] == value:
+            # The SAME close twice is not a new observation. The ring only
+            # holds TREND_LAG_ROWS+1 samples, so accepting repeats let a
+            # caller that re-read one tick (a GRC refreshing an open window)
+            # flush the real history out and report "trend 0" — the gate then
+            # silently stopped withholding on all 16 cells.
+            return
         q.append(value)
 
 

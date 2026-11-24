@@ -55,7 +55,8 @@ def _num(value: Any) -> float:
 
 #: the exact shapes this module generates; anything else is an engine
 #: explanation and is never rewritten
-_GENERATED_PREFIXES = ("below floor (", "cleared the ")
+_GENERATED_PREFIXES = ("below floor (", "cleared the ", "chases the ",
+                       "opposes the ", "trend-interaction gate withheld")
 
 
 def _is_generated(note: str | None) -> bool:

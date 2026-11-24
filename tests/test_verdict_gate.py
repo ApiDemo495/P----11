@@ -105,7 +105,6 @@ def test_refresh_rederives_badge_from_the_refreshed_confidence():
     src = inspect.getsource(eng_mod.PredictionEngine._apply_grc_lock_rules)
     assert "public_verdict(" in src
     assert src.index("public_verdict(") > src.index('cyc.confidence = res["confidence"]')
-    assert "_tg.observe" in src
 
 
 # ------------------------------------------------------------- trend gate
@@ -377,3 +376,45 @@ def test_deployed_stack_is_reproducible_and_documented():
     doc = open("docs/docs11-doublecheck.md", encoding="utf-8").read()
     assert "What the app actually issues, end to end" in doc
     assert "77 % of windows now print NO CALL" in doc
+
+
+def test_grc_refresh_does_not_repeat_the_same_price_into_the_gate():
+    """A GRC re-analyses the OPEN window at the SAME price. Feeding that to the
+    gate filled its 3-sample ring with [p, p, p], so every cell read 'trend 0'
+    within minutes and the gate stopped withholding anything."""
+    src = inspect.getsource(eng_mod.PredictionEngine._apply_grc_lock_rules)
+    assert "_tg.observe" not in src and "trend_gate.observe" not in src
+    # the settled-window path is the only live writer
+    settle = inspect.getsource(eng_mod.PredictionEngine._settle_and_lock)
+    assert "_tg.observe" in settle
+
+
+def test_observe_ignores_a_repeated_price():
+    """The same close arriving twice must not consume a ring slot: that is how
+    the GRC path erased every reading on the live board."""
+    for c in (100.0, 103.0, 106.0):
+        tg.observe("BTC", "tf2", c)
+    assert tg.trend("BTC", "tf2") == 1
+    assert tg.stats()["BTC|tf2"] == 3
+    tg.observe("BTC", "tf2", 106.0)           # same price again
+    assert tg.stats()["BTC|tf2"] == 3
+    assert tg.trend("BTC", "tf2") == 1        # reading survives
+
+
+def test_stale_trend_note_is_regenerated_once_the_reading_is_gone():
+    """Live symptom: ETH tf1 printed "chases the 2-decision trend (up) —
+    withheld" while its own trend field read 0. A note that describes a gate
+    decision must be re-derived like the floor note is."""
+    from app import verdict as vd
+    stale = ("chases the 2-decision trend (up) — measured 46.0 % on 478 "
+             "windows vs 60.3 % on 383 against; call withheld")
+    ok, verdict, note = vd.reconcile("ETH", "tf1", 1, 0.30, "half",
+                                     False, "NO CALL", stale)
+    assert "chases" not in note
+    assert note == "below floor (0.300 <= 0.404)"
+    # and a genuinely live reading still produces its own note
+    from app import trend_gate as g
+    for c in (100.0, 101.0, 102.0):
+        g.observe("ETH", "tf1", c)
+    ok, verdict, note = vd.public_verdict("ETH", "tf1", 1, 0.30, "half")
+    assert "chases" in note and ok is False
