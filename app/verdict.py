@@ -84,14 +84,18 @@ def public_verdict(symbol: str, tf: str, direction: int, confidence: float,
     else:
         verdict = "NO CALL"
 
+    floor_note = (f"cleared the {floor:.3f} floor" if conf > floor
+                  else f"below floor ({conf:.3f} <= {floor:.3f})")
     if trend.get("blocked"):
         note = str(trend.get("why") or "trend-interaction gate withheld")
+        if conf <= floor:
+            # say BOTH reasons — a card that is withheld for one reason while
+            # it also fails the floor must not read as if only one applied
+            note += f"; also {floor_note}"
     elif issue_note:
         note = str(issue_note)
-    elif gate_ok:
-        note = f"cleared the {floor:.3f} floor"
     else:
-        note = f"below floor ({conf:.3f} <= {floor:.3f})"
+        note = floor_note
     return gate_ok, verdict, note
 
 

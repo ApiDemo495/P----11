@@ -222,3 +222,15 @@ def test_audit_reproduces_the_numbers_the_gate_ships():
     assert p["opp_ci"][0] > p["agree_ci"][1]
     # and the honest caveat is still honest: holdout is not proof
     assert rep["split"]["hold_wr"] > rep["baseline_wr"]
+
+
+def test_note_states_every_reason_a_call_was_withheld():
+    from app import verdict as vd
+    for c in (100.0, 101.0, 102.0):
+        tg.observe("BTC", "tf4", c)
+    ok, verdict, note = vd.public_verdict("BTC", "tf4", 1, 0.10, "full")
+    assert verdict == "NO CALL"
+    assert "chases" in note and "below floor" in note
+    # a call that clears the floor but chases is withheld for ONE reason
+    ok, verdict, note = vd.public_verdict("BTC", "tf4", 1, 0.90, "full")
+    assert verdict == "NO CALL" and "chases" in note and "floor" not in note
