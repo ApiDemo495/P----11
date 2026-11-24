@@ -234,3 +234,41 @@ def test_note_states_every_reason_a_call_was_withheld():
     # a call that clears the floor but chases is withheld for ONE reason
     ok, verdict, note = vd.public_verdict("BTC", "tf4", 1, 0.90, "full")
     assert verdict == "NO CALL" and "chases" in note and "floor" not in note
+
+
+def test_rejected_confidence_filter_is_documented_not_shipped():
+    """Record the negative result so the failing variant is not re-invented."""
+    import os
+    from backtest import trend_gate_audit as aud
+    if not os.path.exists(aud.CSV_PATH):        # pragma: no cover - offline
+        pytest.skip("real per-cell record not checked out")
+    import csv
+    from collections import defaultdict
+    rows = list(csv.DictReader(open(aud.CSV_PATH, encoding="utf-8")))
+    by = defaultdict(list)
+    for r in rows:
+        by[(r["asset"], r["tf"])].append(r)
+    recs = []
+    for seq in by.values():
+        seq.sort(key=lambda r: float(r["t"]))
+        for k in range(aud.LAG, len(seq)):
+            mv = float(seq[k]["entry"]) - float(seq[k - aud.LAG]["entry"])
+            if mv == 0:
+                continue
+            trend = 1 if mv > 0 else -1
+            recs.append((trend == int(seq[k]["direction"]),
+                         float(seq[k]["conf"]), int(seq[k]["win"]),
+                         float(seq[k]["t"])))
+    # TEMPORAL order: a holdout must be later data, never a re-sorted sample
+    recs.sort(key=lambda r: r[3])
+    # the variant: withhold only high-confidence chases
+    keep = [r for r in recs if not (r[0] and r[1] >= 0.60)]
+    cut = int(len(keep) * 0.65)
+    hold = keep[cut:]
+    wr = sum(r[2] for r in hold) / len(hold)
+    # it must NOT look like a proven edge: inside noise of the baseline
+    assert wr < 0.56
+    # while the shipped rule keeps its gap
+    from backtest import trend_gate_audit as a2
+    rep = a2.build()
+    assert rep["pooled"]["opp_wr"] - rep["pooled"]["agree_wr"] > 0.10

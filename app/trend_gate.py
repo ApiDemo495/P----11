@@ -50,6 +50,15 @@ Honesty about the evidence
   all 16 cells rather than switching itself off per cell, because choosing
   the cells from this same sample would be the very selection the rest of
   this docstring disclaims.
+* A SECOND rule was tested and REJECTED, and that is recorded here so it is
+  not re-invented: stated confidence is not monotone on this record (the
+  0.30–0.60 band won 62.6 % while conf >= 0.60 won 49.5 %), and 199 of the
+  315 high-confidence windows are exactly the ones that chase the trend.
+  "Withhold only high-confidence chases" looked attractive in-sample
+  (54.7 % on 77 % coverage) but its 65/35 time split held up at just 51.3 %
+  — i.e. within noise of the 52.9 % baseline — with two of five folds below
+  baseline. Confidence is therefore NOT used as a filter here; the single
+  measured rule stays a single rule.
 * Sample sizes are small (n = 383 gated windows pooled, 17–40 per cell).
   A +7.4 pp pooled difference is ≈ 2.9 sigma: strong enough to act on as an
   abstention, not strong enough to promise a forward win rate.

@@ -160,6 +160,17 @@ the selection being disclaimed. It is wired into **display and issue gating
 only** — never into the certified hold policy or the ship gate, which keep
 their own evidence bar.
 
+**A second rule was tested and rejected**, and is recorded so it is not
+re-invented. Stated confidence is not monotone on the same record: the
+0.30–0.60 band won 62.6 % (n=278) while conf ≥ 0.60 won 49.5 % (n=315), and
+199 of those 315 high-confidence windows are exactly the ones that chase the
+trend (44.7 %). Withholding only *high-confidence chases* scored 54.7 % on
+77 % coverage in-sample — but its 65/35 time split held at 51.3 %, inside
+noise of the 52.9 % baseline, with two of five folds below baseline. So
+confidence is **not** wired in as a filter; the gate stays one measured rule.
+The confidence cap tested alone (V4: drop conf ≥ 0.60) also failed (holdout
+53.1 %).
+
 Reproduce with `python -m backtest.trend_gate_audit` (writes
 `backtest/results/trend_gate_audit.json`); behaviour is pinned by
 `tests/test_verdict_gate.py`. Set `TREND_GATE=off` to disable it.
