@@ -1407,6 +1407,23 @@ function _trendGateRow(cyc) {
       : "—";
   return `<div class="kv"><span>trend gate ${g.lag_rows ? `(${g.lag_rows} dec)` : ""}</span><b class="${g.blocked ? "acc-dn" : "dim"}">${g.blocked ? "WITHHELD" : "stands"} · trend ${tr} · ${br}<span class="dim" style="font-size:11px"> ${esc(g.why || "")}</span></b></div>`;
 }
+/* WHERE the printed P comes from. `p_side` is the logistic of the score in
+   floor units — a CONFIDENCE PROXY, not a calibrated probability. The board's
+   own calibration panel says the realised hit-rate is ~0.50 in every
+   confidence bin (n=4534), so a card reading "P 1.00" is describing the
+   score's size, not a win probability. Label it, and put the measured
+   probability beside it whenever one exists — the two must never be
+   confusable. */
+function _pTag(cyc, res) {
+  const p = cyc?.p_side ?? res?.p_side;
+  if (p == null) return "";
+  const pc = cyc?.p_correct ?? res?.p_correct;
+  const src = cyc?.calib_source ? ` (${cyc.calib_source})` : "";
+  const meas = pc != null
+    ? ` · measured ${fmt(pc, 2)}${(cyc?.calib_n ?? res?.calib_n) != null ? ` n=${cyc?.calib_n ?? res?.calib_n}` : ""}`
+    : " · measured —";
+  return ` · P ${fmt(p, 2)} score-units${src}${meas}`;
+}
 function verdictOf(cyc, res) {
   const v = cyc?.verdict || (cyc?.provisional ? "PREVIEW" : "");
   if (v === "ISSUE") return "ISSUED";
@@ -1495,7 +1512,7 @@ function renderHero() {
   const badge = $("#hero-badge");
   if (badge) {
     badge.className = "hero-badge " + (dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat");
-    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)} · ${verdict}${cyc?.tier ? ` · ${cyc.tier}` : ""}${cyc?.p_side != null ? ` · P ${fmt(cyc.p_side, 2)}` : ""}${lockedId ? ` · lock ${lockedId.slice(-6)}` : ""}</small>${dir ? chopChip(tf) : ""}`;
+    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)} · ${verdict}${cyc?.tier ? ` · ${cyc.tier}` : ""}${_pTag(cyc, res)}${lockedId ? ` · lock ${lockedId.slice(-6)}` : ""}</small>${dir ? chopChip(tf) : ""}`;
   }
   const stats = $("#hero-stats");
   if (stats) {
@@ -1829,7 +1846,7 @@ function renderQuads(opts = {}) {
       qd.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}
         <span class="iss">${cyc?.provisional
           ? "PREVIEW · no lock yet"
-          : `${v}${cyc?.tier ? ` · ${cyc.tier}` : ""}${cyc?.p_side != null ? ` · P ${fmt(cyc.p_side, 2)}` : ""}`}</span>`;
+          : `${v}${cyc?.tier ? ` · ${cyc.tier}` : ""}${_pTag(cyc, res)}`}</span>`;
     }
     const _rk = cyc?.risk || {};
     $("#qf-" + tf).textContent = res
@@ -2629,7 +2646,7 @@ function renderWhy() {
         <div class="bar"><i class="${s.confidence > 0.35 ? "pos" : "neg"}" style="width:${clamp((s.confidence || 0) * 100, 0, 100)}%"></i></div>
         <b>${fx(s.confidence, 3)}</b> / floor ${bd.floor ?? 0.35}</div>
       <div class="why-badge ${s.issued ? "ok" : ""}">${s.issued
-        ? `✓ SIGNAL ${dir > 0 ? "BUY" : dir < 0 ? "SELL" : "—"} · ${esc(s.tier || "watch-only")} · P ${fmt(s.p_side, 2)}${s.tier === "watch-only" ? ` · size 0${s.tier_why ? " — " + esc(s.tier_why) : " (below measured noise floor)"}` : ""}`
+        ? `✓ SIGNAL ${dir > 0 ? "BUY" : dir < 0 ? "SELL" : "—"} · ${esc(s.tier || "watch-only")} · P ${fmt(s.p_side, 2)} score-units${s.tier === "watch-only" ? ` · size 0${s.tier_why ? " — " + esc(s.tier_why) : " (below measured noise floor)"}` : ""}`
           + (s.calib_n != null ? `<span class="dim" title="${esc(s.calib_source || "")}"> · n=${s.calib_n}${s.calib_provisional ? " (provisional scale)" : ""}</span>` : "")
         : "side pending"}</div>
     </div>

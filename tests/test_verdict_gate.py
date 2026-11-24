@@ -333,3 +333,27 @@ def test_every_confidence_mutation_re_derives_the_badge():
     for name in ("_on_target_hit", "_on_sl_hit"):
         fn = inspect.getsource(getattr(eng_mod.PredictionEngine, name))
         assert "public_verdict(" in fn, name
+
+
+# --------------------------------------------------- P is a confidence proxy
+
+def test_printed_p_is_labelled_as_a_proxy_with_the_measured_p_beside_it():
+    """`p_side` is the logistic of the score; the calibration panel says the
+    realised hit-rate is ~0.50 in every bin. A card must not print "P 1.00"
+    as if it were a win probability."""
+    js = open("static/app.js", encoding="utf-8").read()
+    assert "function _pTag(" in js
+    assert "score-units" in js
+    assert "p_correct" in js            # the measured P travels with it
+    # and no bare P readout survives
+    assert "` · P ${fmt(cyc.p_side, 2)}`" not in js
+
+
+def test_calibration_panel_is_honest_about_the_flat_hit_rate():
+    """/api/history/calibration must be able to say 'this is a coin flip'."""
+    src = open("app/main.py", encoding="utf-8").read()
+    seg = src[src.index('@app.get("/api/history/calibration")'):]
+    seg = seg[:seg.index("@app.get", 10)]
+    assert "brier" in seg and "hit_rate" in seg
+    # the note must not imply the numbers rise when they do not
+    assert "should RISE" in seg
