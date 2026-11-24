@@ -275,7 +275,14 @@ def build_tf_candles(bars_1m: list[dict], tf: str,
             b = buckets.get(bkt)
             if b is None:
                 buckets[bkt] = {
-                    "t": t,                      # FIRST time in the bucket
+                    # EPOCH SESSION START, not the first sample's timestamp.
+                    # Storing the raw `t` made a bucket that began before the
+                    # published window start report a time that was not a
+                    # multiple of the bucket width, and two calls could
+                    # disagree about where a bucket "is" as the tape grows
+                    # (the docstring's stability promise). Aggregated bars
+                    # are now always epoch-aligned to step×60.
+                    "t": bkt,
                     "o": float(r.get("o") or r.get("c") or 0.0),
                     "h": float(r.get("h") or r.get("c") or 0.0),
                     "l": float(r.get("l") or r.get("c") or 0.0),

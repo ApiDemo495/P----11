@@ -86,7 +86,7 @@ def main(argv=None) -> int:
                                     friction_bps=FRICTION.get(sym, 12.0),
                                     market=market)
             except Exception as e:  # never fake a number
-                print(f"{sym} step{step}: ERROR {e}", file=sys.stderr)
+                print(f"{sym} h{horizon}: ERROR {e}", file=sys.stderr)
                 continue
             if "error" in r:
                 print(f"{sym} h{horizon}: {r['error']}")

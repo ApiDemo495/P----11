@@ -443,7 +443,7 @@ class RealBrains:
         total_syn = int(sum(c.edges for c in self.circuits.values()))
         self.total_synapses = total_syn
         return {"backend": "flywire-v783-real",
-                "total_synapses": total_syn,
+                "loaded_synapses": total_syn,
                 "built_ms": self.built_ms,
                 "circuits": {k: {"neurons": c.n, "synapses": c.edges,
                                  "role": c.role}

@@ -386,6 +386,11 @@ def _metacog_block() -> dict:
         return {}
 
 
+def _verdict_rule(*a, **k):
+    from .verdict import public_verdict as _pv
+    return _pv(*a, **k)
+
+
 def _committee_block() -> dict:
     """§5 four-agent committee: the last vote each prediction cast."""
     try:
@@ -395,6 +400,22 @@ def _committee_block() -> dict:
                 "last": last.as_dict() if last else None}
     except Exception:
         return {"vote_count": 0, "last": None}
+
+
+def public_verdict(symbol: str, tf: str, direction: int, confidence: float,
+                   tier: str | None, issue_note: str | None = None,
+                   ) -> tuple[bool, str, str]:
+    """Backwards-compatible re-export — the rule lives in app/verdict.py."""
+    return _verdict_rule(symbol, tf, direction, confidence, tier, issue_note)
+
+
+def _trend_evidence(symbol: str, tf: str, side: int) -> dict:
+    """The trend gate's own reading, for the card's evidence block."""
+    try:
+        from . import trend_gate
+        return trend_gate.check(symbol, tf, side)
+    except Exception:
+        return {}
 
 
 class PredictionEngine:
@@ -2001,7 +2022,6 @@ class PredictionEngine:
                 "score_floor_ratio": fin.get("score_floor_ratio"),
                 "calib_n": fin.get("calib_n"),
                 "calib_source": fin.get("calib_source"),
-                "noise_floor_s": fin.get("noise_floor_s"),
                 "tier_rule": fin.get("tier_rule"),
                 "calib_provisional": fin.get("calib_provisional"),
                 "asset_floor": fin.get("asset_floor"),
@@ -2270,7 +2290,6 @@ class PredictionEngine:
                     "winrate_n": results[tf].get("winrate_n", 0),
                     "issue_note": results[tf].get("issue_note"),
                     "gate_ok": results[tf].get("gate_ok"),
-                    "issued": results[tf].get("issued"),
                     "tps": results[tf].get("tps"),
                     "horizon": results[tf].get("horizon"),
                     "edge": results[tf].get("edge"),
@@ -2284,7 +2303,6 @@ class PredictionEngine:
                     "score_floor_ratio": results[tf].get("score_floor_ratio"),
                     "calib_n": results[tf].get("calib_n"),
                     "calib_source": results[tf].get("calib_source"),
-                    "noise_floor_s": results[tf].get("noise_floor_s"),
                     "tier_rule": results[tf].get("tier_rule"),
                     "calib_provisional": results[tf].get("calib_provisional"),
                     "lock": dict(self.locks.get((symbol, tf)) or {}),
@@ -3669,8 +3687,22 @@ class PredictionEngine:
             # and the timeframe cards read one answer (not "ISSUED" + a lock
             # that says NO CALL)
             if cyc is not None:
-                cyc.verdict = str(final.get("verdict") or "NO CALL")
+                # ONE derivation for the GRC card and the ANALYSE card: the
+                # analyse final and the cycle badge come from the same rule,
+                # so the hero can never print a verdict its cycle contradicts.
+                _ok_a, _verdict_a, _note_a = public_verdict(
+                    symbol, tf, int(final.get("direction") or 0),
+                    float(final.get("confidence") or 0.0),
+                    cyc.tier, final.get("issue_note") or cyc.issue_note)
+                final["gate_ok"] = _ok_a
+                final["issue_note"] = _note_a
+                if _verdict_a != "ISSUE" and str(final.get("verdict")) == "ISSUE":
+                    final["verdict"] = _verdict_a
+                cyc.verdict = str(final.get("verdict") or _verdict_a)
                 cyc.gate_ok = bool(final.get("gate_ok"))
+                cyc.issue_note = str(final.get("issue_note") or _note_a)
+                cyc.trend_gate = _trend_evidence(
+                    symbol, tf, int(final.get("direction") or 0))
                 cyc.prediction_lock = dict(final.get("prediction_lock") or {})
                 if _conflict is not None:
                     # watch-only ⇒ execution_eligible flips False on the
@@ -6824,6 +6856,16 @@ class PredictionEngine:
         inside the halt used to return before the ledger was written and
         that window was lost forever (the all-zero settlement history)."""
         prev = self.locks.get((symbol, tf))
+        # TREND GATE bookkeeping: one sampled decision close per settled
+        # window, recorded BEFORE the next window is priced, so the gate's
+        # "trend" is the engine's own decision series (what the interaction
+        # was measured on) and never a reading it has not yet seen.
+        try:
+            from . import trend_gate as _tg
+            if prev is not None and float(prev.get("price") or 0.0) > 0:
+                _tg.observe(symbol, tf, float(prev["price"]))
+        except Exception:
+            log.exception("trend-gate observe failed for %s|%s", symbol, tf)
         # Prediction, contract, probability audit and settlement all share
         # the same lock-anchored [start, end) interval (W from issuance).
         start = float(now)
@@ -7136,6 +7178,7 @@ class PredictionEngine:
 
         Everything here is labelled `provisional` — the UI prints PREVIEW
         and never treats these levels as a contract."""
+        from .verdict import describe as vd_describe
         res = (self.last_result.get((symbol, tf))
                or self.display_systems.get((symbol, tf)) or {})
         if not res:
@@ -7152,14 +7195,22 @@ class PredictionEngine:
                     "hit_ts": None, "locked_cci": None}
                    for i, m in enumerate(mins)]
         end = next_grc_ts(now)
+        # ONE call to the shared rule, so the four published fields describe
+        # the same decision (they were three separate calls before).
+        _pv_pre = vd_describe(symbol, tf, direction, conf, res.get("tier"))
         return {
             "provisional": True,
             "symbol": symbol, "tf": tf, "W": int(TIMEFRAMES[tf]["minutes"]),
             "direction": direction, "confidence": round(conf, 4),
             "strength": float(res.get("strength") or 0.0),
             "issued": bool(res.get("issued")),
-            "verdict": ("WATCH" if res.get("gate_ok") else "NO CALL"),
-            "gate_ok": bool(res.get("gate_ok")),
+            # same rule as a locked card (app/verdict.py) — a PREVIEW that
+            # reads WATCH while its own confidence is below the floor was the
+            # other half of the same reported contradiction
+            "verdict": _pv_pre["verdict"],
+            "gate_ok": _pv_pre["gate_ok"],
+            "issue_note": _pv_pre["issue_note"],
+            "trend_gate": _pv_pre["trend_gate"],
             "prediction_lock": {},
             "tier": res.get("tier") or "watch-only",
             "p_side": res.get("p_side"),
@@ -7395,11 +7446,10 @@ class PredictionEngine:
         _g_start, _g_end = now, now + W * 60
         # public verdict for the card: the contract keeps `issued` true so a
         # call can be graded, but the badge must say what actually cleared.
-        _gate_ok = bool(res.get("gate_ok", res.get("issued")))
-        _verdict = ("ISSUE" if _gate_ok and str(res.get("tier")
-                                                or "watch-only") != "watch-only"
-                    else "WATCH" if _gate_ok and res.get("direction")
-                    else "NO CALL")
+        _gate_ok, _verdict, _issue_note = public_verdict(
+            symbol, tf, int(res.get("direction") or 0),
+            float(res.get("confidence") or 0.0), res.get("tier"),
+            res.get("issue_note"))
         cyc = TFCycle(
             symbol=symbol,
             tf=tf,
@@ -7411,6 +7461,9 @@ class PredictionEngine:
             issued=res["issued"],
             verdict=_verdict,
             gate_ok=_gate_ok,
+            issue_note=_issue_note,
+            trend_gate=_trend_evidence(symbol, tf,
+                                       int(res.get("direction") or 0)),
             tier=str(res.get("tier") or "watch-only"),
             p_side=float(res.get("p_side") or 0.5),
             calib_n=int(res.get("calib_n") or 0),
@@ -7861,6 +7914,15 @@ class PredictionEngine:
             cyc.drhe = res["drhe"]
             cyc.active_k = None
             cyc.refreshed_at = now
+            # BADGE + CONFIDENCE ARE ONE NUMBER. This branch refreshed the
+            # confidence every GRC but never re-derived the badge, so a card
+            # could read "ISSUED / cleared the floor" while its own number was
+            # 0.009 against a 0.385 floor (the reported mismatch error).
+            cyc.gate_ok, cyc.verdict, cyc.issue_note = public_verdict(
+                symbol, tf, int(cyc.direction or 0), cyc.confidence, cyc.tier,
+                None)
+            cyc.trend_gate = _trend_evidence(symbol, tf,
+                                             int(cyc.direction or 0))
             self._save_cycle_lock_state(cyc)
             return
 
@@ -7913,6 +7975,19 @@ class PredictionEngine:
         cyc.drhe = res["drhe"]
         cyc.issued = True
         cyc.refreshed_at = now
+        # A NEW GRC analysis is the engine's next sampled decision for this
+        # cell: record its close for the trend gate, then re-derive the badge.
+        # (Both used to be skipped when the cycle stayed open, so a card kept
+        # the badge from its FIRST analysis forever — "ISSUED" at conf 0.009.)
+        try:
+            from . import trend_gate as _tg
+            _tg.observe(symbol, tf, float(price or 0.0))
+        except Exception:
+            log.exception("trend-gate observe failed for %s|%s", symbol, tf)
+        cyc.gate_ok, cyc.verdict, cyc.issue_note = public_verdict(
+            symbol, tf, int(cyc.direction or 0), cyc.confidence, cyc.tier,
+            res.get("issue_note"))
+        cyc.trend_gate = _trend_evidence(symbol, tf, int(cyc.direction or 0))
         self._apply_risk(symbol, tf, cyc, res)
         self._save_cycle_lock_state(cyc)
 
@@ -8494,6 +8569,28 @@ class PredictionEngine:
                     # analysis had a call, a confidence and a preview
                     # ladder. Publish those, explicitly flagged preview.
                     d = self._provisional_cycle_dict(symbol, tf, now, price)
+                if d:
+                    # BADGE INVARIANT at the one place every card is printed.
+                    # Confidence can change between analyses (SL penalties,
+                    # tier cuts, ageing), so the published badge is checked
+                    # against the published number here: it may be
+                    # DOWNGRADED (ISSUE -> WATCH -> NO CALL) and never
+                    # upgraded, and gate_ok/verdict/issue_note are always
+                    # shipped together with the confidence they describe.
+                    try:
+                        from .verdict import reconcile as _vrec
+                        _ok_d, _verdict_d, _note_d = _vrec(
+                            symbol, tf, int(d.get("direction") or 0),
+                            float(d.get("confidence") or 0.0), d.get("tier"),
+                            bool(d.get("gate_ok")), str(d.get("verdict") or ""),
+                            str(d.get("issue_note") or ""))
+                        d["gate_ok"], d["verdict"] = _ok_d, _verdict_d
+                        d["issue_note"] = _note_d
+                        d["execution_eligible"] = bool(
+                            d.get("execution_eligible")) and _ok_d
+                    except Exception:
+                        log.exception("verdict reconcile failed for %s|%s",
+                                      symbol, tf)
                 # LEVELS GATE (rewrite): the snapshot NEVER invents a
                 # level from the current price. Levels come only from
                 # the cycle's frozen block anchored at the LOCKED entry
@@ -8844,7 +8941,12 @@ class PredictionEngine:
             # which is rebuilt at GRC — so a window that had not been
             # re-analysed yet painted "brain offline" over a healthy
             # connectome (the "brain disconnects at random" report).
-            "brain": self._brain_live(),
+            # (This dict used to declare "brain" twice — the AUTHORITATIVE
+            # block above was silently overwritten by this one, and the
+            # connectome's own vote was dropped. One entry now carries
+            # both; the duplicate key is gone.)
+            "brain": {**self._brain_live(),
+                      "vote": getattr(self.brains, "last_vote", None)},
             "flat_watch": self._flat_payload(),
             # §10.3 status chips: every subsystem's honesty state on top
             "chips": {
@@ -8907,16 +9009,6 @@ class PredictionEngine:
                 },
                 "probation_count": len(self.learning.probation),
             },
-            # AUTHORITATIVE BRAIN STATE (one source): the per-TF display
-            # entries can lag the connectome, which made the header say
-            # "brain offline — vote withheld" while the BRAIN tab showed
-            # FlyWire ready with 138k neurons.
-            "brain": (lambda _fw: {
-                "state": getattr(_fw, "state", "absent"),
-                "ready": getattr(_fw, "state", "absent") == "ready",
-                "chip": (_fw.chip() if _fw is not None else None),
-                "vote": getattr(self.brains, "last_vote", None),
-            })(getattr(self.brains, "fw", None)),
             "agents": self.agents.status(),
             # cosmetic settings the dashboard needs live (haptics off must
             # actually stop the vibration). NEVER the secret key fields.

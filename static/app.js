@@ -1391,6 +1391,22 @@ function renderBook() {
 /* One honest label for every surface: the sealed verdict. `issued` is kept
    true by the contract (the card always exists) so it can no longer be the
    thing the UI prints as "ISSUED". */
+/* trend-interaction gate (app/trend_gate.py): the ONE measured abstention
+   rule. It can withhold a call but never flips a side, so the panel shows
+   the reading, both measured branches and their sample sizes rather than a
+   bare "blocked" — a withheld call must be as explained as an issued one. */
+function _trendGateRow(cyc) {
+  const g = cyc?.trend_gate;
+  if (!g || typeof g !== "object") return "";
+  const me = g.measured || {};
+  const tr = g.trend > 0 ? "up" : g.trend < 0 ? "down" : "no reading";
+  const br = g.agrees === true
+    ? `chasing ${fx(me.agrees_wr * 100, 1)}% (n=${me.agrees_n ?? "?"})`
+    : g.agrees === false
+      ? `fading ${fx(me.opposes_wr * 100, 1)}% (n=${me.opposes_n ?? "?"})`
+      : "—";
+  return `<div class="kv"><span>trend gate ${g.lag_rows ? `(${g.lag_rows} dec)` : ""}</span><b class="${g.blocked ? "acc-dn" : "dim"}">${g.blocked ? "WITHHELD" : "stands"} · trend ${tr} · ${br}<span class="dim" style="font-size:11px"> ${esc(g.why || "")}</span></b></div>`;
+}
 function verdictOf(cyc, res) {
   const v = cyc?.verdict || (cyc?.provisional ? "PREVIEW" : "");
   if (v === "ISSUE") return "ISSUED";
@@ -1488,6 +1504,7 @@ function renderHero() {
       <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} · ${verdict}${res.issue_note ? ` <span class="dim" style="font-size:11px">${esc(res.issue_note)}</span>` : ""}${res.cell_certainty != null ? ` <span class="dim" style="font-size:11px">· certainty ${fx(res.cell_certainty, 3)} (n=${res.cell_certainty_n ?? "?"})</span>` : ""}</b></div>
       ${res.cell_win_rate_net != null ? `<div class="kv"><span>real win rate</span><b>${fx(res.cell_win_rate_net * 100, 1)}% after ${fx(res.cell_round_trip_bps ?? 0, 1)} bps RT <span class="dim" style="font-size:11px">(gross ${fx((res.cell_win_rate ?? 0) * 100, 1)}%)</span></b></div>` : ""}
       <div class="kv"><span>prediction lock</span><b class="${cyc?.prediction_lock?.locked ? "acc-up" : "dim"}">${cyc?.prediction_lock?.locked ? `🔒 ${esc(cyc.prediction_lock.side || "")} · ${esc(String(cyc.prediction_lock.id || "").slice(-8))}` : "not sealed yet"}</b></div>
+      ${_trendGateRow(cyc)}
       ${_pWinRow(res)}
       <div class="kv"><span>strength (voter agreement)</span><b>${fx(cyc?.strength ?? res.strength ?? 0, 2)}</b></div>
       <div class="kv"><span>measured win-rate (this conf)</span><b>${cyc?.winrate != null ? `${Math.round(cyc.winrate * 100)}% · n=${cyc.winrate_n}` : `collecting · n=${cyc?.winrate_n ?? 0}`}</b></div>
@@ -1496,7 +1513,7 @@ function renderHero() {
       <div class="kv"><span>countdown</span><b>${cyc?.countdown_s != null ? `${Math.floor(cyc.countdown_s / 60)}m ${cyc.countdown_s % 60}s` : "—"}</b></div>
       <div class="kv"><span>${prov ? "entry (preview)" : "entry (locked contract)"}</span><b>${heroEntry ? px(heroEntry) : "—"}</b></div>
       <div class="kv"><span>price now</span><b>${a.price ? px(a.price) : "—"}</b></div>
-      <div class="kv"><span>stop loss</span><b class="acc-dn">${heroSl ? px(heroSl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:11px">prov</span>' : ""}</b></div>
+      <div class="kv"><span>stop loss</span><b class="acc-dn">${heroSl ? px(heroSl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:11px">prov</span>' : ""}${verdict === "NO CALL" && heroSl ? ' <span class="dim" style="font-size:11px">grading only — will not be traded</span>' : ""}</b></div>
       <div class="kv"><span>TP:SL ratio</span><b>${cyc?.ratio ? Number(cyc.ratio).toFixed(2) + ":1" : "—"}</b></div>`;
   }
   // TP ladder — the TF's own horizon ALWAYS first (user rule)
@@ -2393,7 +2410,18 @@ function renderRail() {
   $("#rs-next").textContent = g.seconds_to_next != null
     ? `${Math.floor(g.seconds_to_next / 60)}m ${Math.floor(g.seconds_to_next % 60)}s` : "—";
   $("#rs-phase").textContent = (S.snap?.phase || "—").toUpperCase();
-  $("#feed-mode").textContent = a[BTC_MODE()]?.mode === "live" ? "LIVE (Binance)" : "SIM (regime-switching)";
+  // The engine publishes mode "binance" | "sim" (see app/feed.py) — it has
+  // NEVER published "live". Comparing against "live" made a real Binance
+  // tape print "SIM (regime-switching)" in the rail, and the status chip
+  // below (chips.feed === "live") made the dashboard chip read "SIM FEED"
+  // on a live tape. Both now compare against "binance" and fall back to the
+  // snapshot's own `feed.simulated` flag when the per-asset mode is absent.
+  const _feedMode = a[BTC_MODE()]?.mode || S.snap?.feed?.mode || "unknown";
+  const _sim = (typeof S.snap?.feed?.simulated === "boolean")
+    ? S.snap.feed.simulated : _feedMode !== "binance";
+  $("#feed-mode").textContent = _sim
+    ? `SIM (regime-switching)${S.snap?.feed?.real_error ? " — exchange unreachable" : ""}`
+    : "LIVE (Binance)";
   const led = (id, on, warn) => {
     const e = $(id); if (e) e.className = "led " + (warn ? "warn" : on ? "on" : "off");
   };
@@ -5150,8 +5178,8 @@ function applySnapshot(snap) {
     const chip = (label, cls, tip) =>
       `<span class="chip ${cls}" title="${esc(tip || "")}">${label}</span>`;
     sc.innerHTML =
-      chip(c.feed === "live" ? "● LIVE FEED" : "⚠ SIM FEED",
-           c.feed === "live" ? "chip-ok" : "chip-warn",
+      chip((c.feed === "binance" || c.feed === "live") ? "● LIVE FEED" : "⚠ SIM FEED",
+           (c.feed === "binance" || c.feed === "live") ? "chip-ok" : "chip-warn",
            "tape source from /api/feeds/diagnose") +
       chip("local " + (c.local_model === "on" ? "ON" : "off"),
            c.local_model === "on" ? "chip-ok" : "",

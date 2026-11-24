@@ -40,7 +40,6 @@ import time
 from .config import HIST_EMOTION_LAG
 from .formulas._helpers import sign, std_pop
 from .models import FormulaContext
-from .formulas._helpers import sign, std_pop
 
 # ── learning rule constants (Section 10) ────────────────────────────────
 ETA = 0.015               # η_emotion floor

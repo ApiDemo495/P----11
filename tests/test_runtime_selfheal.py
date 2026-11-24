@@ -207,7 +207,11 @@ def test_ws_has_a_single_message_handler_that_stamps_liveness():
 # ── brain chip: one live source of truth ─────────────────────────────────
 def test_snapshot_carries_live_brain_block():
     src = open("app/engine.py").read()
-    assert '"brain": self._brain_live()' in src
+    # one authoritative block: the live snapshot merged with the connectome's
+    # own vote (it used to be declared twice and the second copy won)
+    assert src.count('"brain": ') == 1 or '"brain": {**self._brain_live(),' in src
+    assert '"brain": {**self._brain_live(),' in src
+    assert '"vote": getattr(self.brains, "last_vote", None)' in src
     js = open("static/app.js").read()
     assert "const lb = S.snap?.brain" in js
     # a rebuild must not paint red over a healthy connectome

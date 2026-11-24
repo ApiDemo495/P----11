@@ -106,6 +106,64 @@ The floor is in the wrong unit. Do this:
 4. Show on every card: `BUY · P 0.57 · half · s = 0.012 (floor 0.009)` — the
    raw score and the floor in the same unit, next to each other.
 
+### 4.1 One derivation for the badge (added 2026-11-24)
+
+The badge was produced in three places and then frozen, so a live BTC tf4
+card printed `confidence 0.009 · tier half · verdict ISSUE · issued true`
+against a 0.385 floor while its siblings read `NO CALL`: an "ISSUED" card at
+2.3 % of the floor it was supposed to clear. Every penalty that lowers
+`confidence` after the fact (SL SAFE branch, tier cut, ageing) widened the
+gap.
+
+Now:
+
+* `app/verdict.py::public_verdict` is the **only** rule. Fresh cycles, GRC
+  refreshes and ANALYSE finals call it; `_on_sl_hit` cannot leave a stale
+  badge behind because the badge is re-derived from the number it prints.
+* `app/verdict.py::reconcile` runs once, at serialisation, on every card
+  including PREVIEW cards. It is **downgrade-only** (ISSUE → WATCH → NO
+  CALL) and never upgrades, so it cannot invent a call; it exists so that a
+  confidence changed after the badge was written is never published beside a
+  badge that contradicts it.
+* Every card ships `issue_note` ("cleared the 0.385 floor" / "below floor
+  (0.150 <= 0.385)") so the badge is auditable against its own number.
+
+### 4.2 Trend-interaction gate (the measured abstention)
+
+`backtest/results/per_tf_full_engine_real.csv` — the engine's own 893
+settled windows over 72 days of real tape — says the side is a coin flip
+(52.9 %, CI 49.6–56.1) and that the *interaction* with the tape's slow
+trend is what separates the windows:
+
+| slice | n | win rate | 95 % CI |
+|---|---|---|---|
+| every window (what shipped) | 893 | 52.9 % | 49.6–56.1 |
+| side **fades** the 2-decision trend | 383 | 60.3 % | 55.3–65.1 |
+| side **chases** that trend | 478 | 46.0 % | 41.6–50.5 |
+| the trend alone as the side | 861 | 43.2 % | 39.9–46.5 |
+
+`app/trend_gate.py` applies exactly that, as an abstention only: a call that
+**chases** the trend is withheld, a call that **fades** it stands, and a cell
+with no reading never blocks. It cannot flip a side, move a level or change
+a confidence. `TREND_GATE=off` disables it and returns the pre-gate
+behaviour byte-for-byte.
+
+Honesty about it: the split was found on the pooled record, so these numbers
+are **in-sample and selection-aware**, not a forward claim. What travels with
+them: five temporal folds all above the 52.9 % baseline (61.1 / 67.8 / 62.3
+/ 56.0 / 54.5 %), a 65/35 time split of the gated rows (train n=248 62.5 %,
+holdout n=135 56.3 %, CI 47.9–64.4 — **includes 50 %**), per-cell n of 17–40,
+and four cells where it does not work (PAXG tf4 36.4 %, PAXG tf2 38.9 %,
+ETH tf1 47.4 %, ETH tf2 50.0 %). The rule is applied uniformly rather than
+switched off per cell, because choosing cells from this same sample would be
+the selection being disclaimed. It is wired into **display and issue gating
+only** — never into the certified hold policy or the ship gate, which keep
+their own evidence bar.
+
+Reproduce with `python -m backtest.trend_gate_audit` (writes
+`backtest/results/trend_gate_audit.json`); behaviour is pinned by
+`tests/test_verdict_gate.py`. Set `TREND_GATE=off` to disable it.
+
 ## 5. Where a real check *may* change the output (and how)
 
 | situation | allowed reaction |
