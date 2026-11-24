@@ -2428,3 +2428,44 @@ actual product.**
 Every one of these is a measurement on 298,080 5-minute bars
 (2023-11-01 → 2026-08-31) with no in-sample selection in the reported
 columns.
+
+---
+
+## §28.10 — PER-$1000 DOLLAR ANSWER (2026-11-23)
+
+Straight conversion of §28.7 to money: **1× notional, one position at a
+time, no leverage, fees = 0 (Lighter).** `$` columns are per $1,000 of
+notional.
+
+| cell | trades/yr | $ per trade | $/yr simple | $/yr compounded | break-even fee |
+|---|---|---|---|---|---|
+| ETH 1d long tp20/sl80 | 365 | **+$0.68** | **+$247** | +$278 | +5.22 bps |
+| BTC 1d short tp20/sl80 | 365 | +$0.57 | +$207 | +$227 | +3.57 bps |
+| ETH tf3 long tp8/sl32 | 4,043 | +$0.08 | +$321 | +$372 | +0.70 bps |
+| BTC tf3 long tp8/sl32 | 4,043 | +$0.06 | +$228 | +$250 | +0.61 bps |
+| BTC tf4 long tp8/sl32 | 2,145 | +$0.09 | +$185 | +$201 | +0.67 bps |
+
+**Blended "core" (ETH 1d + BTC 1d, one position each): about +$450/yr per
+$1,000, i.e. ~45 % of notional per year** — but that is *two* books at 1×
+each, so it is 2× gross exposure. At 1× total capital split 50/50 it is
+~+$227/yr per $1,000 (~22.7 %/yr), which is the number that matches the
+−6 % drawdown.
+
+### The same table if you PAY a fee ($ per $1,000 per year)
+
+| cell | Lighter 0 bps | MEXC 4 bps | HL/Aster 8 bps | Binance 10 bps |
+|---|---|---|---|---|
+| ETH 1d long | +247 | **+101** | −45 | −118 |
+| BTC 1d short | +207 | **+61** | −85 | −158 |
+| ETH tf3 long | +321 | **−1,297** | −2,914 | −3,723 |
+| BTC tf3 long | +228 | −1,389 | −3,006 | −3,815 |
+| BTC tf4 long | +185 | −673 | −1,531 | −1,960 |
+
+**This is the single most important table in the repo.** The 1-hour books
+do not merely shrink on a paying venue — they *invert*, losing $1,300 to
+$3,800 per $1,000 per year, because 4,043 round trips × 4 bps of toll is
+161 % of notional annually in fees alone. Only the daily books survive a
+fee at all, and only up to ~5 bps.
+
+So the honest per-$1000 figure is **+$60 to +$250 a year on a venue that
+charges nothing, and a loss on any venue that charges a normal fee.**
