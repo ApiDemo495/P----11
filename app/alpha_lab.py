@@ -113,11 +113,7 @@ def _z(x: np.ndarray, ref: np.ndarray) -> np.ndarray:
     sd = float(np.std(ref)) or 1e-9
     return (x - float(np.mean(ref))) / sd
 
-
-def zscore(a: np.ndarray) -> np.ndarray:
-    mu = float(np.nanmean(a)) if a.size else 0.0
-    sd = float(np.nanstd(a)) if a.size else 0.0
-    return (a - mu) / sd if sd > 1e-12 else np.zeros_like(a)
+# [removed 2026-11-23] zscore — dead code: zero references anywhere
 
 
 def rankdata(a: np.ndarray) -> np.ndarray:
@@ -223,38 +219,7 @@ def fit_logistic(X: np.ndarray, y: np.ndarray, l2: float = 1.0,
             break
     return w[1:], float(w[0])
 
-
-def fit_ridge(X: np.ndarray, y: np.ndarray, lam: float | None = None,
-              standardise: bool = True) -> tuple[np.ndarray, float, dict]:
-    """Ridge regression with an intercept. Returns (beta, intercept, meta).
-
-    Adaptive shrinkage: `lam` defaults to n·1e-3, chosen so collinear
-    indicators (momentum vs range position vs taker imbalance, which all
-    read the same price path to a degree) share weight instead of
-    double-counting it. Closed form, deterministic, no sklearn.
-    """
-    n, k = X.shape
-    if n < 20 or k == 0:
-        return np.zeros(k), 0.0, {"lam": 0.0, "n": n}
-    mu = X.mean(axis=0)
-    sd = X.std(axis=0)
-    sd[sd < 1e-12] = 1.0
-    Z = (X - mu) / sd if standardise else X
-    ym = float(y.mean())
-    yc = y - ym
-    lam = float(n * 1e-3) if lam is None else float(lam)
-    A = Z.T @ Z + lam * np.eye(k)
-    try:
-        b = np.linalg.solve(A, Z.T @ yc)
-    except np.linalg.LinAlgError:
-        b = np.linalg.lstsq(A, Z.T @ yc, rcond=None)[0]
-    # effective degrees of freedom (ridge hat-trace)
-    try:
-        tr = float(np.trace(np.linalg.solve(A, Z.T @ Z)))
-    except np.linalg.LinAlgError:
-        tr = float(k)
-    return b / sd, ym - float((mu / sd) @ b), {
-        "lam": lam, "n": n, "edof": tr, "scale": sd.tolist()}
+# [removed 2026-11-23] fit_ridge — dead code: zero references anywhere
 
 
 def isotonic_fit(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

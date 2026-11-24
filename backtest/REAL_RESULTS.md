@@ -2127,3 +2127,131 @@ Reproduce:
 .venv/bin/python -m backtest.money_machine  --assets BTC ETH
 .venv/bin/python -m backtest.trend_validate --assets BTC ETH
 ```
+
+---
+
+## §26 — THE WIN-RATE CEILING: WHY 66 % IS IMPOSSIBLE SHORT, AND WHICH HORIZONS CAN HOST IT (2026-11-23)
+
+Every prior harness searched for a better *signal*. None asked the prior
+question: **is a 66 % net win rate even arithmetically reachable at this
+horizon?** It is not, and the reason is not about prediction at all.
+
+### 26.1 The law
+
+For a book that must close inside the window — which is exactly what
+"one trade ends when the next starts" means — a window can only be a WIN
+if the absolute move it captures exceeds the round trip:
+
+```
+WR_net  <=  P(|move over the window| > RT)          ... the ceiling
+max realizable WR  =  min( directional skill , ceiling )
+```
+
+Measured on 2.84 years of BTC/ETH 5m tape (RT = 28.9 / 29.8 bps):
+
+| tf | window | P(\|move\| > RT) BTC | ceiling | attackable at 52 % skill? |
+|---|---|---|---|---|
+| tf1 | 22 m | **13.4 %** | 13.4 % | no — 4.9× short |
+| tf2 | 44 m | 28.2 % | 28.2 % | no — 2.3× short |
+| tf3 | 130 m | 51.7 % | 51.7 % | no — 1.3× short |
+| tf4 | 247 m | 61.9 % | 61.9 % | no — 1.1× short |
+| 1 d | 1440 m | 85.5 % | 85.5 % | yes |
+| 7 d | 10080 m | 95.9 % | 95.9 % | yes |
+
+**This is why every short-horizon win rate in this project landed at
+7–32 %.** It was never a failing search. The ceiling is 13.4 % at tf1,
+and the measured 7.1 % is *that ceiling multiplied by skill*:
+`0.52 × 13.4 % = 7.0 %` against a measured 7.1 %.
+
+The formula `min(skill, ceiling)` predicts the measured win rate to
+within 1–2 points at **every** horizon and asset, with no fitted
+parameter:
+
+| tf | predicted @52 % | measured | | tf | predicted | measured |
+|---|---|---|---|---|---|---|
+| BTC tf1 | 7.0 % | **6.9 %** | | ETH tf1 | 10.9 % | **10.8 %** |
+| BTC tf3 | 26.9 % | **26.6 %** | | ETH tf3 | 32.2 % | **32.3 %** |
+| BTC 7 d | 49.9 % | **49.7 %** | | ETH 7 d | 49.5 % | **49.0 %** |
+
+### 26.2 The swap point: when win rate stops being a barrier question
+
+Win rate can only exceed 50 % when the **ceiling**, not the barrier, is
+what binds — i.e. when `P(|move| > RT) < skill`. That happens at:
+
+* **BTC: ~143 minutes** (2.4 h) — above this the book is skill-bound
+  (max ≈ 52 %) and the barrier geometry stops mattering;
+* **ETH: ~88 minutes** (1.5 h).
+
+Above the swap point, win rate is capped by *prediction*, not geometry.
+
+### 26.3 The hurdle-rate experiment, and why it made things worse
+
+`backtest/winrate_raise.py` tested the one lever never tried: enter on a
+**limit order at a distance** ("hurdle"), count **every** window, and
+treat unfilled windows as pushes rather than abstentions.
+
+Result on BTC tf1, 67,744 windows, all counted:
+
+| hurdle | fill % | WR (all windows) | EV |
+|---|---|---|---|
+| 0.00× RT | 99.2 % | 7.1 % | −28.98 bps |
+| 0.50× RT | 32.0 % | 2.9 % | −9.51 bps |
+| 1.00× RT | 12.1 % | 1.9 % | −3.40 bps |
+| 3.00× RT | 0.9 % | 0.7 % | −0.00 bps |
+
+A better fill **lowers the win rate and raises EV**, because demanding a
+better price costs you most of your windows. The two goals are in direct
+conflict at short horizons — another consequence of §26.1, since the
+unfilled windows are exactly the ones whose moves would have covered
+cost.
+
+### 26.4 What this means for the request
+
+* A 66 % **net** win rate at tf1/tf2 is **impossible** — not hard,
+  impossible: 4.9× and 2.3× beyond the ceiling on BTC.
+* At tf4 it is marginally out of reach (1.1×), and at ETH tf4 the ceiling
+  is 71.3 % — reachable in principle, but it needs 92.6 % directional
+  accuracy, versus the ~52 % this market supplies.
+* 66 % becomes *arithmetically available* above ~5.1 h (BTC) / ~2.9 h
+  (ETH), and **comfortable** (needs 82 % accuracy) above 0.5 d.
+* Any harness that reports a 66 %+ net win rate at a short horizon is
+  reporting a bug, an in-sample artifact, or a tail that has not yet been
+  paid out (§24).
+
+The honest target at short horizons is not a win rate — it is EV. At
+tf1 the ceiling makes a 66 % book a mathematical impossibility, and
+`min(skill, ceiling)` says the best obtainable is ~7 %.
+
+Reproduce:
+```
+.venv/bin/python -m backtest.winrate_ceiling   # the law, every horizon
+.venv/bin/python -m backtest.winrate_raise     # the hurdle experiment
+```
+
+---
+
+## §27 — DEAD CODE AUDIT (2026-11-23)
+
+789 module-level definitions in `app/` were parsed and cross-referenced
+against every occurrence in `app/`, `tests/`, `scripts/`, `backtest/`,
+`static/` and `docs/`. A definition counts as dead only with **zero**
+references outside its own `def`/`class` line and no route/registry
+exception.
+
+**Removed: 11 functions, 113 lines** — `alpha_lab.zscore`,
+`alpha_lab.fit_ridge`, `hold_policy.is_warmup_cell`,
+`hold_policy.geometry_for_live`, `agents.get_status`,
+`brain.empty_brain_consensus`, `contracts.levels_for_display`,
+`derivs.squeeze_score`, `hold_era.reset_all`, `portfolio.bucket_neff`,
+`regime.legacy_label`.
+
+**Found but wired instead of deleted: `app/derivs.py` + `app/event_alpha.py`.**
+These 18 KB of derivatives machinery (funding, basis, open interest,
+taker flow) were imported **only by a test** — no runtime path reached
+them, and no endpoint exposed them. Section 25 added F41 FND, which reads
+`ctx.funding`; with nothing populating it, that formula could only ever
+vote zero. `PredictionEngine._funding_series()` now loads the archive and
+`FormulaContext` carries the field, so F41 has real data when the derivs
+archive exists and an honest `None` when it does not.
+
+Audit tool: `.venv/bin/python -m backtest.dead_code`

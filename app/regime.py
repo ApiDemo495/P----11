@@ -277,9 +277,7 @@ def classify_tape(closes: list[float],
             f"no state extreme vs this tape (ER {er30:.2f}, VR {vr:.2f})",
             "metrics": metrics, "risk_throttle": False}
 
-
-def legacy_label(state: str) -> str:
-    return _LEGACY.get(state, "transitional")
+# [removed 2026-11-23] legacy_label — dead code: zero references anywhere
 
 
 def classify_regime(trend_strength: float, volatility_level: float) -> str:

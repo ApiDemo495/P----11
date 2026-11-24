@@ -1,0 +1,946 @@
+{
+ "dead": [
+  {
+   "name": "get_status",
+   "kind": "function",
+   "file": "app/agents.py",
+   "line": 2518,
+   "decorators": [],
+   "end_line": 2520,
+   "verdict": "DEAD",
+   "refs": 0,
+   "ref_files": []
+  },
+  {
+   "name": "zscore",
+   "kind": "function",
+   "file": "app/alpha_lab.py",
+   "line": 117,
+   "decorators": [],
+   "end_line": 120,
+   "verdict": "DEAD",
+   "refs": 0,
+   "ref_files": []
+  },
+  {
+   "name": "fit_ridge",
+   "kind": "function",
+   "file": "app/alpha_lab.py",
+   "line": 227,
+   "decorators": [],
+   "end_line": 257,
+   "verdict": "DEAD",
+   "refs": 0,
+   "ref_files": []
+  },
+  {
+   "name": "empty_brain_consensus",
+   "kind": "function",
+   "file": "app/brain.py",
+   "line": 1210,
+   "decorators": [],
+   "end_line": 1215,
+   "verdict": "DEAD",
+   "refs": 0,
+   "ref_files": []
+  },
+  {
+   "name": "levels_for_display",
+   "kind": "function",
+   "file": "app/contracts.py",
+   "line": 238,
+   "decorators": [],
+   "end_line": 252,
+   "verdict": "DEAD",
+   "refs": 0,
+   "ref_files": []
+  },
+  {
+   "name": "squeeze_score",
+   "kind": "function",
+   "file": "app/derivs.py",
+   "line": 214,
+   "decorators": [],
+   "end_line": 227,
+   "verdict": "DEAD",
+   "refs": 0,
+   "ref_files": []
+  },
+  {
+   "name": "reset_all",
+   "kind": "function",
+   "file": "app/hold_era.py",
+   "line": 427,
+   "decorators": [],
+   "end_line": 429,
+   "verdict": "DEAD",
+   "refs": 0,
+   "ref_files": []
+  },
+  {
+   "name": "is_warmup_cell",
+   "kind": "function",
+   "file": "app/hold_policy.py",
+   "line": 257,
+   "decorators": [],
+   "end_line": 260,
+   "verdict": "DEAD",
+   "refs": 0,
+   "ref_files": []
+  },
+  {
+   "name": "geometry_for_live",
+   "kind": "function",
+   "file": "app/hold_policy.py",
+   "line": 869,
+   "decorators": [],
+   "end_line": 896,
+   "verdict": "DEAD",
+   "refs": 0,
+   "ref_files": []
+  },
+  {
+   "name": "bucket_neff",
+   "kind": "function",
+   "file": "app/portfolio.py",
+   "line": 284,
+   "decorators": [],
+   "end_line": 286,
+   "verdict": "DEAD",
+   "refs": 0,
+   "ref_files": []
+  },
+  {
+   "name": "legacy_label",
+   "kind": "function",
+   "file": "app/regime.py",
+   "line": 281,
+   "decorators": [],
+   "end_line": 282,
+   "verdict": "DEAD",
+   "refs": 0,
+   "ref_files": []
+  }
+ ],
+ "same_file_only": [
+  {
+   "name": "fracdiff_weights",
+   "kind": "function",
+   "file": "app/advanced.py",
+   "line": 73,
+   "decorators": [],
+   "end_line": 80,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/advanced.py"
+   ]
+  },
+  {
+   "name": "fracdiff_series",
+   "kind": "function",
+   "file": "app/advanced.py",
+   "line": 83,
+   "decorators": [],
+   "end_line": 92,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/advanced.py"
+   ]
+  },
+  {
+   "name": "AgentCommittee",
+   "kind": "class",
+   "file": "app/agent_committee.py",
+   "line": 254,
+   "decorators": [],
+   "end_line": 341,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/agent_committee.py"
+   ]
+  },
+  {
+   "name": "resolve_model_path",
+   "kind": "function",
+   "file": "app/agents.py",
+   "line": 139,
+   "decorators": [],
+   "end_line": 144,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/agents.py"
+   ]
+  },
+  {
+   "name": "model_sidecar",
+   "kind": "function",
+   "file": "app/agents.py",
+   "line": 150,
+   "decorators": [],
+   "end_line": 151,
+   "verdict": "dead?:same-file-only",
+   "refs": 3,
+   "ref_files": [
+    "app/agents.py"
+   ]
+  },
+  {
+   "name": "record_sidecar_async",
+   "kind": "function",
+   "file": "app/agents.py",
+   "line": 179,
+   "decorators": [],
+   "end_line": 206,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/agents.py"
+   ]
+  },
+  {
+   "name": "sys_executable",
+   "kind": "function",
+   "file": "app/agents.py",
+   "line": 265,
+   "decorators": [],
+   "end_line": 267,
+   "verdict": "dead?:same-file-only",
+   "refs": 4,
+   "ref_files": [
+    "app/agents.py"
+   ]
+  },
+  {
+   "name": "ensure_ollama_running",
+   "kind": "function",
+   "file": "app/agents.py",
+   "line": 459,
+   "decorators": [],
+   "end_line": 485,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/agents.py"
+   ]
+  },
+  {
+   "name": "source_build_allowed",
+   "kind": "function",
+   "file": "app/agents.py",
+   "line": 549,
+   "decorators": [],
+   "end_line": 556,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/agents.py"
+   ]
+  },
+  {
+   "name": "compiler_ready",
+   "kind": "function",
+   "file": "app/agents.py",
+   "line": 559,
+   "decorators": [],
+   "end_line": 566,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/agents.py"
+   ]
+  },
+  {
+   "name": "ollama_pull",
+   "kind": "function",
+   "file": "app/agents.py",
+   "line": 569,
+   "decorators": [],
+   "end_line": 603,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/agents.py"
+   ]
+  },
+  {
+   "name": "list_hf_gguf",
+   "kind": "function",
+   "file": "app/agents.py",
+   "line": 622,
+   "decorators": [],
+   "end_line": 637,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/agents.py"
+   ]
+  },
+  {
+   "name": "boot_state",
+   "kind": "function",
+   "file": "app/agents.py",
+   "line": 2514,
+   "decorators": [],
+   "end_line": 2515,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/agents.py"
+   ]
+  },
+  {
+   "name": "rankdata",
+   "kind": "function",
+   "file": "app/alpha_lab.py",
+   "line": 123,
+   "decorators": [],
+   "end_line": 141,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/alpha_lab.py"
+   ]
+  },
+  {
+   "name": "calib_slope",
+   "kind": "function",
+   "file": "app/alpha_lab.py",
+   "line": 182,
+   "decorators": [],
+   "end_line": 194,
+   "verdict": "dead?:same-file-only",
+   "refs": 3,
+   "ref_files": [
+    "app/alpha_lab.py"
+   ]
+  },
+  {
+   "name": "fit_logistic",
+   "kind": "function",
+   "file": "app/alpha_lab.py",
+   "line": 206,
+   "decorators": [],
+   "end_line": 224,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/alpha_lab.py"
+   ]
+  },
+  {
+   "name": "vol_sigma",
+   "kind": "function",
+   "file": "app/alpha_lab.py",
+   "line": 472,
+   "decorators": [],
+   "end_line": 480,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/alpha_lab.py"
+   ]
+  },
+  {
+   "name": "feat_ic_get",
+   "kind": "function",
+   "file": "app/alpha_lab.py",
+   "line": 700,
+   "decorators": [],
+   "end_line": 706,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/alpha_lab.py"
+   ]
+  },
+  {
+   "name": "CellParams",
+   "kind": "class",
+   "file": "app/cell_registry.py",
+   "line": 56,
+   "decorators": [
+    "dataclass"
+   ],
+   "end_line": 82,
+   "verdict": "dead?:same-file-only",
+   "refs": 3,
+   "ref_files": [
+    "app/cell_registry.py"
+   ]
+  },
+  {
+   "name": "CellRegistry",
+   "kind": "class",
+   "file": "app/cell_registry.py",
+   "line": 106,
+   "decorators": [],
+   "end_line": 153,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/cell_registry.py"
+   ]
+  },
+  {
+   "name": "FoldStat",
+   "kind": "class",
+   "file": "app/edge_gate.py",
+   "line": 81,
+   "decorators": [
+    "dataclass"
+   ],
+   "end_line": 86,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/edge_gate.py"
+   ]
+  },
+  {
+   "name": "GateResult",
+   "kind": "class",
+   "file": "app/edge_gate.py",
+   "line": 90,
+   "decorators": [
+    "dataclass"
+   ],
+   "end_line": 134,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/edge_gate.py"
+   ]
+  },
+  {
+   "name": "fear_greed_index",
+   "kind": "function",
+   "file": "app/emotion.py",
+   "line": 402,
+   "decorators": [],
+   "end_line": 444,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/emotion.py"
+   ]
+  },
+  {
+   "name": "np_var",
+   "kind": "function",
+   "file": "app/engine.py",
+   "line": 103,
+   "decorators": [],
+   "end_line": 107,
+   "verdict": "dead?:same-file-only",
+   "refs": 4,
+   "ref_files": [
+    "app/engine.py"
+   ]
+  },
+  {
+   "name": "noise_band",
+   "kind": "function",
+   "file": "app/ensemble.py",
+   "line": 27,
+   "decorators": [],
+   "end_line": 29,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/ensemble.py"
+   ]
+  },
+  {
+   "name": "start_build",
+   "kind": "function",
+   "file": "app/flywire.py",
+   "line": 302,
+   "decorators": [],
+   "end_line": 320,
+   "verdict": "dead?:same-file-only",
+   "refs": 3,
+   "ref_files": [
+    "app/flywire.py"
+   ]
+  },
+  {
+   "name": "geometry_cost_check",
+   "kind": "function",
+   "file": "app/hold_policy.py",
+   "line": 346,
+   "decorators": [],
+   "end_line": 377,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/hold_policy.py"
+   ]
+  },
+  {
+   "name": "window_entry_index",
+   "kind": "function",
+   "file": "app/hold_policy.py",
+   "line": 648,
+   "decorators": [],
+   "end_line": 654,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/hold_policy.py"
+   ]
+  },
+  {
+   "name": "now_until",
+   "kind": "function",
+   "file": "app/learning.py",
+   "line": 773,
+   "decorators": [],
+   "end_line": 774,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/learning.py"
+   ]
+  },
+  {
+   "name": "engine_emit",
+   "kind": "function",
+   "file": "app/main.py",
+   "line": 65,
+   "decorators": [],
+   "end_line": 66,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/main.py"
+   ]
+  },
+  {
+   "name": "hourly_bars",
+   "kind": "function",
+   "file": "app/mandate_cfg.py",
+   "line": 169,
+   "decorators": [],
+   "end_line": 207,
+   "verdict": "dead?:same-file-only",
+   "refs": 3,
+   "ref_files": [
+    "app/mandate_cfg.py"
+   ]
+  },
+  {
+   "name": "PillarReport",
+   "kind": "class",
+   "file": "app/metacognition.py",
+   "line": 85,
+   "decorators": [
+    "dataclass"
+   ],
+   "end_line": 96,
+   "verdict": "dead?:same-file-only",
+   "refs": 4,
+   "ref_files": [
+    "app/metacognition.py"
+   ]
+  },
+  {
+   "name": "platt_step",
+   "kind": "function",
+   "file": "app/metacognition.py",
+   "line": 203,
+   "decorators": [],
+   "end_line": 210,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/metacognition.py"
+   ]
+  },
+  {
+   "name": "CellCalibration",
+   "kind": "class",
+   "file": "app/metacognition.py",
+   "line": 214,
+   "decorators": [
+    "dataclass"
+   ],
+   "end_line": 229,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/metacognition.py"
+   ]
+  },
+  {
+   "name": "sharpe_ratio",
+   "kind": "function",
+   "file": "app/metacognition.py",
+   "line": 346,
+   "decorators": [],
+   "end_line": 356,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/metacognition.py"
+   ]
+  },
+  {
+   "name": "CellVerdict",
+   "kind": "class",
+   "file": "app/metacognition.py",
+   "line": 389,
+   "decorators": [
+    "dataclass"
+   ],
+   "end_line": 402,
+   "verdict": "dead?:same-file-only",
+   "refs": 8,
+   "ref_files": [
+    "app/metacognition.py"
+   ]
+  },
+  {
+   "name": "nested_purged_walk_forward",
+   "kind": "function",
+   "file": "app/metacognition.py",
+   "line": 431,
+   "decorators": [],
+   "end_line": 519,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/metacognition.py"
+   ]
+  },
+  {
+   "name": "hawkes_branching",
+   "kind": "function",
+   "file": "app/micro_alpha.py",
+   "line": 201,
+   "decorators": [],
+   "end_line": 218,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/micro_alpha.py"
+   ]
+  },
+  {
+   "name": "classify_theme",
+   "kind": "function",
+   "file": "app/news.py",
+   "line": 166,
+   "decorators": [],
+   "end_line": 177,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/news.py"
+   ]
+  },
+  {
+   "name": "source_tier",
+   "kind": "function",
+   "file": "app/news.py",
+   "line": 180,
+   "decorators": [],
+   "end_line": 187,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/news.py"
+   ]
+  },
+  {
+   "name": "sentiment_score",
+   "kind": "function",
+   "file": "app/news.py",
+   "line": 257,
+   "decorators": [],
+   "end_line": 266,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/news.py"
+   ]
+  },
+  {
+   "name": "rho_at",
+   "kind": "function",
+   "file": "app/physics.py",
+   "line": 155,
+   "decorators": [],
+   "end_line": 164,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/physics.py"
+   ]
+  },
+  {
+   "name": "lvd_contribution",
+   "kind": "function",
+   "file": "app/physics.py",
+   "line": 167,
+   "decorators": [],
+   "end_line": 187,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/physics.py"
+   ]
+  },
+  {
+   "name": "mechanism_table",
+   "kind": "function",
+   "file": "app/physics.py",
+   "line": 218,
+   "decorators": [],
+   "end_line": 240,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/physics.py"
+   ]
+  },
+  {
+   "name": "p03_hpvu",
+   "kind": "function",
+   "file": "app/physics.py",
+   "line": 597,
+   "decorators": [],
+   "end_line": 608,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/physics.py"
+   ]
+  },
+  {
+   "name": "p07_beofc",
+   "kind": "function",
+   "file": "app/physics.py",
+   "line": 731,
+   "decorators": [],
+   "end_line": 750,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/physics.py"
+   ]
+  },
+  {
+   "name": "p08_fdpd",
+   "kind": "function",
+   "file": "app/physics.py",
+   "line": 756,
+   "decorators": [],
+   "end_line": 774,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/physics.py"
+   ]
+  },
+  {
+   "name": "realized_vol",
+   "kind": "function",
+   "file": "app/physics.py",
+   "line": 863,
+   "decorators": [],
+   "end_line": 870,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/physics.py"
+   ]
+  },
+  {
+   "name": "p11_rgvf",
+   "kind": "function",
+   "file": "app/physics.py",
+   "line": 873,
+   "decorators": [],
+   "end_line": 899,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/physics.py"
+   ]
+  },
+  {
+   "name": "p12_ssbd",
+   "kind": "function",
+   "file": "app/physics.py",
+   "line": 905,
+   "decorators": [],
+   "end_line": 916,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/physics.py"
+   ]
+  },
+  {
+   "name": "gauge_transform",
+   "kind": "function",
+   "file": "app/physics.py",
+   "line": 1179,
+   "decorators": [],
+   "end_line": 1208,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/physics.py"
+   ]
+  },
+  {
+   "name": "p20_pdobv",
+   "kind": "function",
+   "file": "app/physics.py",
+   "line": 1242,
+   "decorators": [],
+   "end_line": 1276,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/physics.py"
+   ]
+  },
+  {
+   "name": "RealCircuit",
+   "kind": "class",
+   "file": "app/real_brains.py",
+   "line": 58,
+   "decorators": [],
+   "end_line": 134,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/real_brains.py"
+   ]
+  },
+  {
+   "name": "efficiency_ratio",
+   "kind": "function",
+   "file": "app/regime.py",
+   "line": 75,
+   "decorators": [],
+   "end_line": 83,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/regime.py"
+   ]
+  },
+  {
+   "name": "variance_ratio",
+   "kind": "function",
+   "file": "app/regime.py",
+   "line": 86,
+   "decorators": [],
+   "end_line": 97,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/regime.py"
+   ]
+  },
+  {
+   "name": "bandwidth_pct",
+   "kind": "function",
+   "file": "app/regime.py",
+   "line": 100,
+   "decorators": [],
+   "end_line": 113,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/regime.py"
+   ]
+  },
+  {
+   "name": "jump_statistic",
+   "kind": "function",
+   "file": "app/regime.py",
+   "line": 116,
+   "decorators": [],
+   "end_line": 132,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/regime.py"
+   ]
+  },
+  {
+   "name": "semi_variance_share",
+   "kind": "function",
+   "file": "app/regime.py",
+   "line": 135,
+   "decorators": [],
+   "end_line": 142,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/regime.py"
+   ]
+  },
+  {
+   "name": "SyncClock",
+   "kind": "class",
+   "file": "app/sync_clock.py",
+   "line": 31,
+   "decorators": [],
+   "end_line": 150,
+   "verdict": "dead?:same-file-only",
+   "refs": 2,
+   "ref_files": [
+    "app/sync_clock.py"
+   ]
+  },
+  {
+   "name": "read_log",
+   "kind": "function",
+   "file": "app/trading.py",
+   "line": 96,
+   "decorators": [],
+   "end_line": 100,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/trading.py"
+   ]
+  },
+  {
+   "name": "factorial",
+   "kind": "function",
+   "file": "app/formulas/f22_f31.py",
+   "line": 590,
+   "decorators": [],
+   "end_line": 594,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/formulas/f22_f31.py"
+   ]
+  },
+  {
+   "name": "warm_store",
+   "kind": "function",
+   "file": "app/formulas/selftest.py",
+   "line": 74,
+   "decorators": [],
+   "end_line": 83,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/formulas/selftest.py"
+   ]
+  }
+ ],
+ "scanned": 789
+}

@@ -30,6 +30,10 @@ class FormulaContext:
     O: list[float] = field(default_factory=list)   # minute open  (F22 candles)
     H: list[float] = field(default_factory=list)   # minute high
     L: list[float] = field(default_factory=list)   # minute low
+    # recent settled funding rates (8h settlements, newest last). ``None``
+    # means "no derivs archive for this symbol" — F41 FND reads this and
+    # returns an honest zero rather than inventing carry.
+    funding: list[float] | None = None
 
     def candles(self) -> tuple[list[float], list[float], list[float]]:
         """OHLC-derived O/H/L aligned to P; falls back to close-only candles."""
