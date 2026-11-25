@@ -79,3 +79,25 @@ Caveat: the scan's two once-positive event sleeves are **retracted**
 harness and its falsifications stand, the positives do not. Cost
 verdicts from these measurements come from `app/cost_gate.py`; the
 certified book stays in `app/edge_gate.py` + `results/EDGE_SCAN.md`.
+
+## Win-rate dial (raise the win rate, never skip a window)
+
+`winrate_frontier.py` sweeps the whole barrier family (`TP = k·SL`,
+`SL = m·scale`) over every window of real tape with the round trip charged and
+the cost floor applied by widening **both** barriers, so a geometry cannot buy
+win rate by aiming the target inside the toll. Output
+`results/winrate_frontier.json` feeds `app/winrate_dial.py`, which returns a
+lockable geometry (reward:risk ≥ 0.25, target ≥ 1.5× round trip) for any
+requested win rate — and the measured net bps/trade that win rate costs.
+
+* `winrate_noabstain.py` — live cells × 7 geometries × 4 full-coverage sides.
+* `winrate_noabstain_horizon.py` — the same at 1/2/5/10 d.
+* `winrate_noabstain_wf.py` — 4-block walk-forward: selection by train win
+  rate collapses to 48.4 % pooled OOS (EV −33.5 bps). A win rate is not a
+  forward-looking criterion.
+* `winrate_dial_report.py` — printable table of win rate, break-even
+  `1/(1+k)`, the gap between them, and the price per trade.
+
+Measured headline: +20.3 pp (BTC tf4) / +22.6 pp (ETH tf4) at the lockable
+floor; 77–84 % at day scale; net EV ≈ −round trip everywhere. Full write-up in
+`WINRATE_NO_ABSTENTION.md`; §36 of `REAL_RESULTS.md`.

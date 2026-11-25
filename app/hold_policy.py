@@ -833,6 +833,24 @@ def _cost_aware(symbol: str, entry: float, side: int, scale_px: float,
     return entry + tp_px * side, entry - sl_px * side, meta
 
 
+def winrate_dial_plan(symbol: str, tf: str, target_wr: float | None = None,
+                      side_rule: str | None = None,
+                      direction: int | None = None) -> dict[str, Any]:
+    """Optional win-rate dial for this cell (see ``app.winrate_dial``).
+
+    Lazy import: ``app.winrate_dial`` imports this module for
+    ``_cost_aware``/``MIN_*``, so a module-level import would cycle.
+    Returns ``{}`` only if the dial module is unavailable — the default
+    geometry path never depends on it.
+    """
+    try:
+        from .winrate_dial import dial
+    except Exception:                                   # pragma: no cover
+        return {}
+    return dial(symbol, tf, target_wr=target_wr, side_rule=side_rule,
+                direction=direction)
+
+
 def build_row_bars(symbol: str, tf: str, entry: float, side: int,
                    scale_px: float) -> tuple[float, float] | None:
     """(tp_px, sl_px) for an EVERY-WINDOW row lock from the certified

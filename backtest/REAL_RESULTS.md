@@ -3332,3 +3332,47 @@ windows, mean +0.87, worst −0.11. It is not one lucky regime.
 ```bash
 .venv/bin/python -m backtest.longonly
 ```
+
+---
+
+## 36. Raising the win rate without abstention (§36)
+
+**Question.** Raise the win rate while still taking every signal — no skip, no
+no-trade gate, no confidence filter.
+
+**Answer.** A win rate is a property of the barrier geometry, not of the
+market. Every window was graded on real Binance tape (BTC/ETH 5 m Jan–Aug
+2026 for 22/44/130/247 min; BTC/ETH/BNB/PAXG 1 h Jan 2024–Aug 2026 for
+1/2/3 d) with the full round trip charged and lockable reward:risk ≥ 0.25.
+Dialling the target from 1:1 down to the lockable floor moves the net win rate
+**+20.3 pp on BTC tf4 (30.2 % → 50.5 %)** and **+22.6 pp on ETH tf4 (35.0 % →
+57.6 %)** on the same windows; the break-even win rate `1/(1+k)` moves from
+50 % to 80 % at the same time, so net EV stays at −26 to −28 bps. At 22–44 min
+the dial barely turns (BTC tf1 payable ceiling 10.7 %, ETH tf1 15.3 %) because
+the window move is the wrong size next to a ~29 bps round trip.
+
+Day scale is where a high win rate lives: ETH 2 d 84.1 %, BTC 3 d 80.8 %,
+BTC 2 d 79.5 %, BNB 2 d 79.5 %, all at k = 0.25 / m = 0.55 — each landing
+within a few points of its own 80 % break-even line. Measured, not wired: the
+live cycle has no day-scale lock.
+
+Walk-forward, selection by highest train win rate with train EV > 0, four
+sequential OOS blocks: pooled **48.4 %** (CI 43.4–53.4), **−33.5 bps**, and no
+asset positive in more than 2 of 4 blocks. A dialled configuration chosen on a
+win-rate criterion does not survive. The one lever that improvised both
+numbers is friction: halving the round trip adds 17–21 points of win rate and
+halves the loss per trade, with no window skipped (maker fill probability is
+not measurable from OHLCV — treat it as a ceiling).
+
+Shipped: `app/winrate_dial.py` (calibrated dial, always returns a lockable
+geometry, always quotes its measured price; never abstains),
+`app/hold_policy.winrate_dial_plan()` (lazy accessor, defaults unchanged),
+`backtest/winrate_frontier.py`, `backtest/winrate_noabstain{,_horizon,_wf}.py`,
+`backtest/winrate_dial_report.py`, `tests/test_winrate_dial.py`.
+Full write-up: `WINRATE_NO_ABSTENTION.md`.
+
+```bash
+PYTHONPATH=. python3 backtest/winrate_frontier.py      # the frontier sweep
+PYTHONPATH=. python3 backtest/winrate_dial_report.py   # the printable dial
+PYTHONPATH=. python3 backtest/winrate_noabstain_wf.py  # the walk-forward verdict
+```
