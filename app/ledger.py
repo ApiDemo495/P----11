@@ -159,10 +159,28 @@ class SettlementLedger:
         if (not isinstance(first_touch, str) or first_touch not in TOUCH_STATES):
             first_touch = (LEGACY_TOUCH.get(level_outcome)
                            if isinstance(level_outcome, str) else None)
+        # Bug fixed 2026-11-26: the caller's intent must be preserved.
+        #
+        #   barriers_available is None  -> the caller does not use barriers at
+        #       all (plain directional window grading). The SIGN of the price
+        #       move IS the outcome; grade it. This is the historical path and
+        #       the majority of settlements.
+        #   barriers_available is False -> the caller is in the barrier world
+        #       and explicitly reports that NO validated barrier was
+        #       available. Then a first-touch outcome does not exist, and
+        #       recording "win"/"loss" put a window the app could not grade
+        #       into `stats()`, which grades every win/loss row. That moved
+        #       the published win rate using data the contract says is absent.
+        #
+        # Only the explicit False is withheld; it is recorded as "ungraded",
+        # which no win rate counts, while the price move stays on the row.
+        barrier_mode = barriers_available is not None
         if barriers_available is None:
             barriers_available = first_touch in {
                 "target", "stop", "neither", "ambiguous"}
         barriers_available = bool(barriers_available)
+        if barrier_mode and not barriers_available:
+            result = "ungraded"
         if not barriers_available:
             first_touch, ambiguous = "unavailable", False
         elif ambiguous or first_touch == "ambiguous":

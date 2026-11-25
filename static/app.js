@@ -1310,9 +1310,18 @@ function renderBook() {
     return;
   }
 
-  const pct = v => `${(Number(v || 0) * 100).toFixed(2)}%`;
-  const bp = v => (v == null ? "—" : `${Number(v) >= 0 ? "+" : ""}${Number(v).toFixed(1)} bp`);
-  const cls = v => (Number(v) > 0 ? "acc-up" : Number(v) < 0 ? "acc-dn" : "dim");
+  // Bug fixed 2026-11-26: these three formatters disagreed with each other
+  // and with the global fx(). `bp(NaN)` printed the literal string "NaN bp"
+  // into the panel, `pct(NaN)` printed "0.00%" - which reads as a REAL
+  // measured zero rather than missing data - and `pct(null)` invented 0.
+  // A number that failed to compute must render as "—" (unknown), never as
+  // a zero and never as the word NaN. All three now share one rule.
+  const _unknown = v => v == null || !isFinite(Number(v));
+  const pct = v => (_unknown(v) ? "—" : `${(Number(v) * 100).toFixed(2)}%`);
+  const bp = v => (_unknown(v) ? "—"
+    : `${Number(v) >= 0 ? "+" : ""}${Number(v).toFixed(1)} bp`);
+  const cls = v => (_unknown(v) ? "dim"
+    : Number(v) > 0 ? "acc-up" : Number(v) < 0 ? "acc-dn" : "dim");
 
   // ---- observe vs enforced: the single most important honesty label ----
   const enforced = book.monitors_enforced !== false;
