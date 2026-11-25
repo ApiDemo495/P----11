@@ -2749,3 +2749,114 @@ is recorded here because it is exactly the kind of number that gets shipped.
 .venv/bin/python -m pytest tests/test_grading_honesty.py \
     tests/test_winrate_math.py tests/test_backtest_horizon.py
 ```
+
+---
+
+## §31 — THE 66 % @ 2:1 TARGET, MEASURED ON REAL TAPE (2026-11-25)
+
+**The request:** a 66 % win rate or better with TP:SL = 2:1, no abstention,
+no fake numbers. This section is the measurement. Run it yourself:
+
+```bash
+.venv/bin/python -m backtest.target_66
+```
+
+### 31.1 The direction of the target was being read backwards
+
+"2:1 TP:SL" means the target is **twice** the stop, so the trade loses more
+often than it wins. The geometric win rate is
+
+```
+P(win) = sl/(tp+sl) = 1/(1+2) = 33.3 %
+```
+
+So 66 % at 2:1 is not "slightly better than break-even" — it is **2.0× the
+geometric rate**. (At *1:2* — risking two to make one — break-even already
+sits at 66.7 %, and 66 % there would be a losing system. The two readings are
+opposite targets; this section measures the 2:1 one.)
+
+### 31.2 Data
+
+Binance Vision 1h klines, the mirror named at the top of this file, cloned
+sparsely: **24,096 hourly bars** for BTC/ETH/BNB/SOL (2024-01-01 →
+2026-09-30) and 13,262 for PAXG. Loader asserts **zero gaps and zero
+duplicates**. First 65 % of time = train, last 35 % = one look.
+
+### 31.3 Result — nothing reaches 66 %. Not close.
+
+750 configurations (10 signals × 5 barrier widths × 3 horizons × 5 assets),
+ranked on train, judged on test, **no abstention** (every non-zero signal is
+traded):
+
+| asset | best TRAIN WR | that config on TEST | 95 % CI |
+|---|---|---|---|
+| BTC | 38.0 % | **34.5 %** | [32.8, 36.3] |
+| ETH | 43.2 % | **35.9 %** | [28.5, 44.1] |
+| BNB | 45.5 % | **30.0 %** | [19.1, 43.8] |
+| SOL | 39.6 % | **37.2 %** | [30.5, 44.4] |
+| PAXG | 55.9 % | **30.3 %** | [22.4, 39.5] |
+
+PAXG is the instructive one: **55.9 % on train → 30.3 % on test**, i.e. below
+the geometric rate. That is what a 56 % "strategy" looks like when it is
+finally asked to work on data it was not chosen on.
+
+### 31.4 The frontier — win rate is a dial, and every asset sits on it
+
+One fixed signal (momvol-72h, k=3, 1200-bar horizon — chosen on train, never
+re-tuned per ratio), **test half only**:
+
+| asset | r=tp/sl | win rate | n | 95 % CI | break-even |
+|---|---|---|---|---|---|
+| BTC | 0.25 | 80.5 % | 2888 | [79.0, 81.9] | 80.0 % |
+| BTC | 0.33 | 75.9 % | 2886 | [74.3, 77.4] | 75.2 % |
+| BTC | 0.50 | 66.9 % | 2885 | [65.2, 68.6] | 66.7 % |
+| BTC | 1.00 | 48.8 % | 2867 | [47.0, 50.7] | 50.0 % |
+| BTC | 2.00 | 34.5 % | 2863 | [32.8, 36.3] | 33.3 % |
+| ETH | 0.25 | 80.6 % | 2751 | [79.0, 82.0] | 80.0 % |
+| ETH | 2.00 | 34.7 % | 2713 | [32.9, 36.5] | 33.3 % |
+| BNB | 0.25 | 81.4 % | 2683 | [79.9, 82.8] | 80.0 % |
+| BNB | 2.00 | 34.7 % | 2639 | [32.9, 36.5] | 33.3 % |
+| SOL | 0.25 | 78.9 % | 2806 | [77.3, 80.3] | 80.0 % |
+| SOL | **2.00** | **35.1 %** | 2779 | [33.4, 36.9] | 33.3 % |
+| PAXG | **2.00** | **37.9 %** | 1603 | [35.6, 40.3] | 33.3 % |
+
+Read the column: **the win rate tracks `1/(1+r)` in every asset, at every
+ratio.** Nothing in this table is an edge — it is the same trade with a
+different label. **A 80.5 % win rate is available on BTC today** by setting
+r = 0.25, and it is still a −friction system (§30.7).
+
+25 cells were tested at α = 0.05, so ~1.2 false positives are expected by
+chance; 2 cells cleared their break-even lower bound (PAXG p = 0.0001,
+SOL p = 0.0267). Neither survives Bonferroni (0.05/25 = 0.0020), and both
+used a signal selected on train.
+
+### 31.5 Why a signal cannot rescue 2:1
+
+With the stop at −1σ and the target at +2σ, the **near** barrier is reached
+from noise alone. A directional signal only changes the probability of
+reaching the **far** one, so the ceiling is a few points above 33.3 % — which
+is exactly what the table above shows. To *actually* reach 66 % at 2:1
+requires drift λ = 0.982 per window, which is **P(up) ≈ 68.8 %** directional
+accuracy on every window, sustained. The best lift measured over 24k bars is
+**34.3 % vs 33.3 % geometric = 1.03×**.
+
+### 31.6 What would actually pay
+
+Not a higher win rate — a better **ratio of realised wins to realised losses
+relative to cost**. The same tape with a wide target and a tight stop
+(r = 2.0) produces 34.5 % wins at ~2,863 trades; at the measured Binance
+round trip that is `0.345 × 2s − 0.655 × 1s − f` per trade. The dial that
+matters is where that expression is *positive*, and §30.7 shows it is not
+positive at any `r` for a driftless walk — which is why the era contract in
+`hold_wr.json` (selected for net EV, not win rate) has 0 of 26 cells
+positive.
+
+### 31.7 What was NOT done
+
+* **No dark-web sources.** Any such source is illegal to use and is where
+  claims like this come from; nothing here is derived from one.
+* **No abstention, no bar-skipping, no window choice** — every non-zero
+  signal in the test half is traded, and the test half is touched once.
+* **No re-labelling.** The 80 %-win-rate configuration *exists and is
+  reachable* (§31.4); presenting it as progress would be fake, since its
+  expectancy is unchanged.
