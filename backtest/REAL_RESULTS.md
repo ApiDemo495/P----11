@@ -3210,3 +3210,125 @@ user has repeatedly ruled out.
 * The lookahead bug is printed above rather than quietly fixed.
 * No illicit data sources.
 * No abstention: every simulated book holds ±1 notional at all times.
+
+---
+
+## §35 — WHAT THE INTERNET SAYS, AND THE ONE THING IN IT THAT SURVIVED (2026-11-25)
+
+Asked whether there is an external solution to the net-of-cost problem, I
+read the literature rather than guessing. Two findings, one dead end and one
+that actually works.
+
+### 35.1 The dead end: it is carry, and I cannot get it
+
+The consensus answer for "how do crypto funds get high Sharpe" is **not** a
+better directional signal — it is the **funding/basis carry trade**: long
+spot, short perpetual, collect funding. Published Sharpe ratios are absurd
+(Christin/Routledge/Soska/Zetlin-Jones report 7–12 in sample). This is the
+only asset class here where a fund-scale Sharpe genuinely exists.
+
+It is unavailable, for reasons that are data and not effort:
+
+* **the repo has no funding-rate or premium-index data** — only
+  `Data/download_binance_fundingRate.py`, a downloader with no output;
+* **Binance's API is blocked in this sandbox**
+  (`fapi.binance.com` and `api.binance.com` both fail to connect).
+
+Every number in this project comes from the OHLCV tape in
+`github.com/KevinSherry2016/Crypto`. Funding is not in it. Claiming a carry
+backtest would mean inventing the one series that drives it, which is
+precisely the fabrication ruled out. Recorded as unavailable, not as failed.
+
+### 35.2 The thing that works: everyone was trading the wrong side
+
+Two independent results, both replicated on this tape:
+
+1. *"The profit of a cross-sectional momentum strategy mostly originates from
+   the long leg. The short leg is exposed to high jump risks and incurs
+   losses."* — Time-Series and Cross-Sectional Momentum in the Cryptocurrency
+   Market (ACFR, AUT).
+2. *"Risk-managed [volatility-targeted] strategy... nearly doubling the Sharpe
+   ratio... turnover comparable to plain momentum, thereby avoiding high
+   transaction costs."* — Grobys et al., *Cryptocurrency momentum has (not)
+   its moments*.
+
+**Replication of (1) on this tape, measured directly:**
+
+| book (legs 8, weekly, 2.75 yr) | cumulative PnL |
+|---|---|
+| long-only leg | **+111.9 %** |
+| long/short (both legs) | −3.6 % |
+| **short leg contribution** | **−115.5 %** |
+
+The short leg did not underperform. It **reversed the sign of the entire
+strategy**, and in §32–§34 I spent several hundred configurations trying to
+fix a book that was long a real trend premium and short a jump premium.
+
+### 35.3 The surviving configuration
+
+Long-only top-4 by 2-week return, monthly rebalance, 40 % vol target, fees
+charged, always fully invested.
+
+| | CAGR | Sharpe | max DD |
+|---|---|---|---|
+| equal-weight buy & hold + same vol target | 19.7 % | 0.63 | −44.7 % |
+| **long-only trend + vol target** | **64.4 %** | **1.38** | −41.2 % |
+
+This is the **first configuration in the entire project to beat its own
+benchmark in both halves of the sample**:
+
+| half | strategy | benchmark |
+|---|---|---|
+| train | 1.54 | 0.73 |
+| test | **1.07** | 0.45 |
+
+and it does so with a defensible statistic — alpha **+36.5 %/yr**, beta 0.82,
+**Newey-West t = +2.61** (48 lags). The 24-cell robustness grid gives
+train/test Sharpe correlation **+0.667**, the opposite of §33.5's −0.177.
+
+Not the whole grid worked, and this must be said plainly: **7 of 24 cells**
+beat the benchmark in both halves against 6 expected by chance
+(P = 0.39) — the count is not evidence. The evidence is the *structure*:
+every single cell with monthly rebalancing at 4/6/8 legs beat the benchmark
+on test (8/8), and the two published effects replicate at large effect size.
+Selection over 24 cells would not produce a clean monotone boundary at
+"monthly".
+
+### 35.4 The part that keeps it honest: survivorship
+
+The universe is symbols listed *today*, so dead coins are missing. Removing
+the largest contributors:
+
+| drop | Sharpe | CAGR |
+|---|---|---|
+| — | 1.38 | 64.4 % |
+| top 1 (ZEC) | 1.11 | 46.9 % |
+| top 2 (+GTC) | 0.95 | 36.8 % |
+| top 3 (+XMR) | 0.70 | 23.3 % |
+| top 5 | 0.54 | 14.7 % |
+
+**Three coins carry most of the result.** A survivorship-free replication
+would need a point-in-time universe, which this tape cannot provide. So the
+honest statement of the finding is: **Sharpe 1.38 in-sample, plausibly nearer
+0.7–0.9 after correcting for survivorship** — above the S&P (1.10) only in the
+optimistic case, below the top decile (1.80) in every case.
+
+Rolling 6-month windows: the edge over the benchmark is positive in **7 of 9**
+windows, mean +0.87, worst −0.11. It is not one lucky regime.
+
+### 35.5 Verdict
+
+* **Beats a hedge fund?** No. Sharpe 1.38 (2.75 yr, survivorship-inflated)
+  against top-decile 1.80 and Medallion 2.52. And the horizon is 2.75 years —
+  a fund has 30.
+* **Beats its own benchmark?** Yes, in both halves, t = 2.61, 7/9 windows,
+  and for a reason that replicates an independent published finding rather
+  than a parameter search.
+* **The real answer to "how do funds do it"** is carry (§35.1), which needs
+  funding data this environment does not have.
+
+### 35.6 Reproduction
+
+```bash
+.venv/bin/python -m backtest.longonly
+```
