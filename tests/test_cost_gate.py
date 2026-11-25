@@ -27,13 +27,19 @@ def test_horizon_buckets_are_contiguous_and_ordered():
     assert bucket(1e9) == "position"
 
 
-def test_unmeasured_lane_is_zero_gross_and_blocked():
+def test_unmeasured_lane_reports_unmeasured_not_blocked():
+    """2026-11-26: an unmeasured lane used to be reported as `blocked`, which
+    the UI renders as "FEE NOT COVERED" - a claim about evidence the app
+    does not have. Zero measurement is its own state."""
     m = measured("DOGE", "intraday")
     assert m["gross_bp"] == 0.0 and m["n"] == 0
     g = gate("DOGE", "intraday", 12.0)
-    assert g["state"] == "blocked"
-    assert g["evidence"] == "insufficient"
-    assert "no oof measurement" in g["note"].lower()
+    assert g["state"] == "unmeasured"
+    assert g["evidence"] == "none"
+    assert g["expected_net_bp"] is None
+    assert "no out-of-fold measurement" in g["note"].lower()
+    # and it must not assert the fee is uncovered
+    assert "not covered" not in g["note"].lower()
 
 
 def test_gate_state_follows_measured_net_expectancy(monkeypatch):
@@ -73,7 +79,10 @@ def test_every_registry_lane_reports_its_evidence():
         g = gate(asset, tf, 12.0)
         assert g["asset"] == asset and g["tf"] == tf
         assert g["gross_bp"] == pytest.approx(m["gross_bp"])
-        assert g["state"] in ("open", "thin", "blocked")
+        assert g["state"] in ("open", "thin", "blocked", "unproven",
+                              "unmeasured")
+        if not m["n"]:
+            assert g["state"] == "unmeasured"
         assert g["note"], "a verdict without a reason is not a verdict"
         if m["n"] and abs(m["t_stat"]) < 2.0:
             assert g["evidence"] == "insufficient"

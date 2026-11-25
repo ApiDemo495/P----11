@@ -272,10 +272,28 @@ def classify_tape(closes: list[float],
                 "legacy": "transitional", "reason":
                 f"VR(5) {vr:.2f} — trending variance, weak efficiency",
                 "metrics": metrics, "risk_throttle": False}
-    return {"state": "MEAN_REVERTING_RANGE", "confidence": 0.25,
-            "legacy": "calm_ranging", "reason":
-            f"no state extreme vs this tape (ER {er30:.2f}, VR {vr:.2f})",
-            "metrics": metrics, "risk_throttle": False}
+    # FINAL FALLBACK — must NOT hardcode the range state.
+    #
+    # Bug fixed 2026-11-26: this branch used to return MEAN_REVERTING_RANGE
+    # unconditionally, which is the *yellow "SIDEWAYS — trade with caution"*
+    # chip in the UI. Every tape that was merely ordinary (no state extreme,
+    # ER < 0.25, |drift_z| < 0.5, VR < 1.30) therefore painted the caution
+    # flag. A flag that fires on ordinary conditions is not a warning, it is
+    # noise, and users correctly reported it appearing on every open.
+    #
+    # The honest answer here is "this tape is unremarkable". Represent that
+    # as the neutral transitional state rather than inventing a range.
+    # A genuine range is only declared by branch 4 above, which requires an
+    # actual variance-ratio collapse (VR <= 0.65) AND dead efficiency on both
+    # horizons. Being unremarkable is not the same thing as mean-reverting.
+    neutral = "IMPULSE_BULL" if drift > 0 else "IMPULSE_BEAR"
+    return {"state": neutral, "confidence": 0.10,
+            "legacy": "transitional", "reason":
+            f"unremarkable tape — no state extreme (ER {er30:.2f}, "
+            f"VR {vr:.2f}, z {drift_z:+.2f}); direction from sign of drift "
+            f"only, confidence 0.10",
+            "metrics": metrics, "risk_throttle": False,
+            "neutral": True}
 
 # [removed 2026-11-23] legacy_label — dead code: zero references anywhere
 

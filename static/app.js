@@ -669,7 +669,18 @@ function drawOwnChart() {
   }
   const minVisibleBars = S.focusTf === "tf1" ? 90 : 30;
   if (tapeArr.length < minVisibleBars) {
-    notes.push(`history warming: ${tapeArr.length}/${minVisibleBars} source candles; showing available data`);
+    // Say WHICH of the two situations this is. "history warming" used to be
+    // printed for both, so a genuinely empty tape (backfill never landed)
+    // looked like a normal few-second warm-up and the user had no way to
+    // tell that no bars were coming. Measured complaints: "history bars are
+    // not there" while the banner read "warming".
+    const why = tapeArr.length === 0
+      ? `no source bars for ${S.symbol} ${S.focusTf.toUpperCase()} — ` +
+        `backfill has not delivered any candles (feed: ${S.tfBarsMode || "unknown"}). ` +
+        `This is missing data, not a slow load.`
+      : `history partial: ${tapeArr.length}/${minVisibleBars} source candles — ` +
+        `showing the ${tapeArr.length} that arrived; the rest is still loading`;
+    notes.push(why);
     inst.stale.textContent = notes.join(" · ");
     inst.stale.style.display = "block";
   }
@@ -1257,8 +1268,10 @@ function _pWinRow(res) {
   // is read from the out-of-fold registry (never the live fit), so a lane
   // that cannot pay its own fees says so instead of printing a nice score.
   const edgeRow = eg.state
-    ? `<div class="kv"><span>cost gate</span><b class="${eg.state === "open" ? "" : eg.state === "thin" ? "acc-warn" : "acc-dn"}">${esc(eg.state)}
-        <span class="dim" style="font-size:11px">OOF gross ${fx(eg.gross_bp, 1)}bp vs ${fx(eg.friction_bps, 1)}bp cost · net ${fx(eg.expected_net_bp, 1)}bp${eg.state === "blocked" ? ` · needs ${fx(eg.required_gross_bp, 1)}bp` : ""} · ${esc(eg.state === "blocked" ? "fee not covered" : eg.source || "")}</span></b></div>`
+    ? `<div class="kv"><span>cost gate</span><b class="${eg.state === "open" ? "" : eg.state === "unmeasured" ? "dim" : eg.state === "thin" ? "acc-warn" : "acc-dn"}">${esc(eg.state)}
+        <span class="dim" style="font-size:11px">${eg.state === "unmeasured"
+          ? `${esc(eg.note || "no measurement yet")}`
+          : `OOF gross ${fx(eg.gross_bp, 1)}bp vs ${fx(eg.friction_bps, 1)}bp cost · net ${fx(eg.expected_net_bp, 1)}bp${eg.state === "blocked" ? ` · needs ${fx(eg.required_gross_bp, 1)}bp` : ""} · ${esc(eg.state === "blocked" ? "fee not covered" : eg.source || "")}`}</span></b></div>`
     : "";
   const sv = (res?.sleeves || []).filter(x => x && x.state !== "blocked");
   // event sleeves carry their own verdict; "unproven" is shown as such
@@ -1436,7 +1449,23 @@ function verdictOf(cyc, res) {
 }
 /* issue 9 — sideways/choppy market caution: Kaufman efficiency ratio on
    the card's own tape. ER ≈ |net move| / Σ|Δ| — near 0 = pure chop
-   (whipsaw), near 1 = clean trend. Trades in chop get a yellow flag. */
+   (whipsaw), near 1 = clean trend.
+
+   Bug fixed 2026-11-26: the threshold used to be ABSOLUTE (ER < 0.20 =
+   caution). ER is not scale-free in the sample size — for a pure random
+   walk E[ER(n)] = 1/sqrt(n). At the 60 bars this function looks at, a
+   random walk averages ER 0.13, which is *below* 0.20, so the "sideways"
+   flag fired on ~78 % of tapes that had no trend AND no range. Measured:
+
+     n= 20  mean ER 0.232   P(ER<0.20) = 50.0 %
+     n= 60  mean ER 0.129   P(ER<0.20) = 78.1 %
+     n=120  mean ER 0.093   P(ER<0.20) = 91.7 %
+     n=240  mean ER 0.065   P(ER<0.20) = 98.6 %
+
+   A caution flag that fires on three quarters of all conditions carries no
+   information. The threshold is now RELATIVE to the random-walk baseline
+   for the number of bars actually used: cautious only when ER falls well
+   below what noise alone would produce. */
 function chopInfo(tf) {
   try {
     const bars = S.tfBars?.[tf] || [];
@@ -1451,9 +1480,11 @@ function chopInfo(tf) {
     const net = Math.abs(win[win.length - 1].close - win[0].close);
     if (!(gross > 0)) return null;
     const er = net / gross;
-    // < 0.20 = sideways/choppy (caution), < 0.10 = severe whipsaw
-    const level = er < 0.10 ? "severe" : er < 0.20 ? "chop" : null;
-    return { er, level, n };
+    // random-walk baseline for this many bars
+    const base = 1 / Math.sqrt(n);
+    // cautious only when the tape is meaningfully less efficient than noise
+    const level = er < base * 0.5 ? "severe" : er < base * 0.8 ? "chop" : null;
+    return { er, base, level, n, rel: base > 0 ? er / base : 1 };
   } catch { return null; }
 }
 function chopChip(tf) {
@@ -1480,7 +1511,7 @@ function chopChip(tf) {
   // fallback: local Kaufman ER chip when the server regime is absent
   const c = chopInfo(tf);
   if (!c || !c.level) return "";
-  return `<span class="chip-warn" title="Kaufman efficiency ratio ${c.er.toFixed(2)} over ${c.n} bars — price is going nowhere; whipsaw risk high, expect stopped-out trades"
+  return `<span class="chip-warn" title="Kaufman efficiency ratio ${c.er.toFixed(2)} vs ${c.base.toFixed(2)} expected from noise over ${c.n} bars (${(c.rel * 100).toFixed(0)}% of random-walk efficiency) — price is going nowhere faster than chance; whipsaw risk high"
     >⚠ SIDEWAYS${c.level === "severe" ? " (SEVERE)" : ""} — trade with caution</span>`;
 }
 function renderHero() {
