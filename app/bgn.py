@@ -42,6 +42,20 @@ class BgnSynchronizer:
         # Section 10 deep-cycle anchor (full 247-minute RPIC history)
         self._deep_anchor: dict[str, dict[str, float]] = {}
         self._anchor_ts: float = 0.0
+        #: number of (tf_i, tf_j) pairs evaluated with NO evidence at all.
+        #: Non-zero means the matrix is bootstrapping and the UI should say
+        #: "coherence unmeasured" rather than present it as a measurement.
+        self.unmeasured: int = 0
+
+    def status(self) -> dict:
+        """How much of the coupling matrix is actually measured."""
+        total = len(TF_ORDER) * (len(TF_ORDER) - 1)
+        return {"unmeasured_pairs": int(self.unmeasured),
+                "total_offdiagonal": total,
+                "measured": bool(self.unmeasured == 0),
+                "note": ("coherence unmeasured — matrix is neutral"
+                         if self.unmeasured else
+                         "coherence measured from RPIC history")}
 
     def force_anchor(self, anchor: dict[str, dict[str, float]]) -> None:
         """Installed by the deep learning cycle; live coherence blends with it."""
@@ -74,7 +88,22 @@ class BgnSynchronizer:
             return pearson_or_default(ri, rj)
         if anchor_ok:
             return self._deep_anchor[tf_i][tf_j]
-        return 1.0
+        # NO EVIDENCE YET — do not claim perfect coherence.
+        #
+        # Bug fixed 2026-11-26: this used to `return 1.0`, so on a cold start
+        # (the `n=0` rows users see in the MEASURED WIN-RATE panel) the
+        # matrix asserted that every timeframe agreed with every other one.
+        # That is the strongest possible cross-timeframe statement made with
+        # zero observations: it silences the disagreement penalty exactly
+        # when the app knows least, and it silently inflates the fused CCI.
+        #
+        # The honest bootstrap is the BASE coupling with no coherence bonus
+        # and no penalty — i.e. coherence = 0.0, so s_ij = base_ij * 0.0 is
+        # too harsh; instead return the neutral 0.5 so the matrix neither
+        # rewards nor punishes unmeasured agreement, and flag it so callers
+        # can label the state as unmeasured rather than measured.
+        self.unmeasured += 1
+        return 0.5
 
     def matrix(self, symbol: str) -> dict[str, dict[str, float]]:
         """Final coupling s_ij = base_coupling_ij * coherence_ij (diagonal = 1.0)."""

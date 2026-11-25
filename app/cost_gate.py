@@ -223,11 +223,13 @@ def gate(asset: str, tf: str, friction_bps: float,
     """Tradeability verdict for one lane at the live cost level.
 
     state
-      open     measured net expectancy clears the margin *and* the evidence
-               is strong (|t| >= 2)
-      thin     positive net, inside the margin
-      unproven positive net but |t| < 2 — a hypothesis, not an edge
-      blocked  measured net is negative — the fee is not covered
+      open       measured net expectancy clears the margin *and* the evidence
+                 is strong (|t| >= 2)
+      thin       positive net, inside the margin
+      unproven   positive net but |t| < 2 — a hypothesis, not an edge
+      blocked    measured net is negative — the fee is not covered
+      unmeasured nothing measured yet (n == 0) — the gate cannot answer, and
+                 must never render as "fee not covered"
     """
     m = measured(asset, tf)
     gross = float(m["gross_bp"])
@@ -238,6 +240,32 @@ def gate(asset: str, tf: str, friction_bps: float,
                 if (m["n"] < 100 or abs(float(m["t_stat"])) < 2.0)
                 else "supported")
     net = gross - float(friction_bps)
+    # NO MEASUREMENT IS NOT A FAILED MEASUREMENT.
+    #
+    # Bug fixed 2026-11-26: with n == 0 the gross is assumed 0, so net comes
+    # out negative and the lane was reported as `blocked` — the UI renders
+    # that as "COST GATE: FEE NOT COVERED", which asserts the fee has been
+    # measured against a real edge and lost. On a cold start nothing has been
+    # measured at all, and users saw that "fee not covered" banner on every
+    # open. Reporting an unmeasured lane as a failed lane is a false
+    # statement about evidence the app does not have.
+    if m["n"] == 0:
+        return {
+            "state": "unmeasured",
+            "asset": str(asset).upper(),
+            "tf": tf,
+            "gross_bp": 0.0,
+            "fee_bp": float(friction_bps),
+            "expected_net_bp": None,
+            "margin_bp": float(margin_bp),
+            "required_gross_bp": required_gross_bp(friction_bps, margin_bp),
+            "evidence": "none",
+            "note": (f"no out-of-fold measurement for {asset} {tf} yet — "
+                     f"the cost gate cannot say whether the "
+                     f"{friction_bps:.1f}bp fee is covered. "
+                     f"Needs {required_gross_bp(friction_bps, margin_bp):+.1f}bp "
+                     f"gross over n>=100 rounds to answer."),
+        }
     if net >= margin_bp:
         state = "open"
     elif net > 0:
@@ -247,12 +275,9 @@ def gate(asset: str, tf: str, friction_bps: float,
     if state in ("open", "thin") and evidence == "insufficient":
         state = "unproven"
     need = required_gross_bp(friction_bps, margin_bp)
-    if m["n"] == 0:
-        note = f"no OOF measurement for {asset} {tf}; gross assumed 0"
-    else:
-        note = (f"OOF gross {gross:+.1f}bp (n={m['n']}, t={m['t_stat']:+.1f}, "
-                f"evidence {evidence}) vs {friction_bps:.1f}bp friction — "
-                f"needs {need:+.1f}bp")
+    note = (f"OOF gross {gross:+.1f}bp (n={m['n']}, t={m['t_stat']:+.1f}, "
+            f"evidence {evidence}) vs {friction_bps:.1f}bp friction — "
+            f"needs {need:+.1f}bp")
     return {
         "state": state,
         "asset": str(asset).upper(),

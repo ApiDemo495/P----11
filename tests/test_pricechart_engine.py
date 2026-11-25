@@ -89,7 +89,12 @@ def test_own_chart_keeps_at_least_30_real_candles():
     # or the cycle end did not sit where the time window expected
     assert "setVisibleLogicalRange" in JS
     assert "const futureBars = Math.max(2," in JS
-    assert "history warming: ${tapeArr.length}/${minVisibleBars} source candles" in JS
+    # 2026-11-26: the banner must distinguish MISSING data from SLOW load -
+    # "history warming" was printed for a genuinely empty tape too, so users
+    # could not tell that no bars were coming.
+    assert "no source bars for" in JS
+    assert "history partial: ${tapeArr.length}/${minVisibleBars}" in JS
+    assert "notes.push(`history warming" not in JS
 
 
 def test_own_chart_shows_existing_median_forecast_by_default():
