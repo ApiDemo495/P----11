@@ -91,7 +91,14 @@ def barrier_book(C, H, L, tp_bps, sl_bps, rt_bps, tie="stop"):
     fu = np.where(up.any(axis=1), up.argmax(axis=1), k)
     fd = np.where(dn.any(axis=1), dn.argmax(axis=1), k)
     close_bps = (C[:, -1] / e - 1.0) * 1e4
-    tie_mask = fu == fd
+    # A "tie" means BOTH barriers were touched in the SAME bar (unknown
+    # intra-bar order).  When NEITHER is touched the window simply ran out —
+    # it must settle at the close, NOT be scored as a stop.  That distinction
+    # was missing: fu == fd is true both when both barriers fall in one bar
+    # AND when neither is ever touched (both sentinels == k), so a flat
+    # window that closed +12 bps was booked as a full -80 bps loss.  It also
+    # made "tie_rate" meaningless on 1d/7d windows.
+    tie_mask = (fu == fd) & (fu < k)
     if tie == "stop":
         tie_val = np.full(n, -sl_bps)
     elif tie == "tp":

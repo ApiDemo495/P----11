@@ -67,7 +67,9 @@ def short_book(C, H, L, tp_bps, sl_bps, rt_bps, tie="stop"):
     fd = np.where(dn.any(axis=1), dn.argmax(axis=1), k)
     fu = np.where(up.any(axis=1), up.argmax(axis=1), k)
     close_bps = (1.0 - C[:, -1] / e) * 1e4
-    tie_mask = fd == fu
+    # see geometry_scan.barrier_book: a tie is BOTH barriers in one bar, never
+    # "neither barrier was reached" (that must settle at the close)
+    tie_mask = (fd == fu) & (fd < k)
     tie_val = {"stop": -sl_bps, "tp": float(tp_bps),
                "half": 0.5 * tp_bps - 0.5 * sl_bps}[tie]
     r = np.where(fd < fu, float(tp_bps),
