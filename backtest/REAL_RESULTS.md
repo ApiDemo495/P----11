@@ -2979,3 +2979,116 @@ The gap is not a missing trick, it is a missing *business*:
   the verdict requires beating both return and Sharpe, which leverage cannot
   do — it scales both.
 * **No dark-web or illicit sources.**
+
+---
+
+## §33 — BREADTH: THE ONE LEVER THAT WORKED, AND WHY IT STILL WASN'T ENOUGH (2026-11-25)
+
+§32 left exactly one untested lever: **breadth** (more assets → higher
+Sharpe for a market-neutral book). This section tests it on a real
+cross-section instead of arguing about it.
+
+```bash
+.venv/bin/python -m backtest.breadth_test
+```
+
+### 33.1 The universe
+
+**22 symbols** with a 1h tape starting 2024-01-01, aligned on the common
+timestamp grid: 1000PEPE, AAVE, ARB, AVAX, BNB, BTC, DOGE, DOT, ETH, FIL,
+GTC, INJ, LINK, QNT, SAND, SOL, SUI, UNI, WLD, XMR, XRP, ZEC.
+**24,096 aligned hourly bars** (2.75 yr). Book: dollar-neutral, long top-N
+/ short bottom-N, weekly rebalance, every leg always invested.
+
+### 33.2 Breadth does raise Sharpe — the lever is real
+
+| legs | names | CAGR | Sharpe | max DD | portfolio vol |
+|---|---|---|---|---|---|
+| 2 | 4 | −78.5 % | **−1.08** | −92.2 % | 97.8 % |
+| 4 | 8 | −53.5 % | −0.98 | −80.9 % | 59.9 % |
+| 8 | 16 | −24.9 % | −0.57 | −57.5 % | 37.7 % |
+| 12 | 24 | −20.0 % | **−0.59** | −47.4 % | 30.3 % |
+
+Two effects, both measured and both as expected:
+
+* **volatility collapses** 97.8 % → 30.3 % as names go 4 → 24 (diversification);
+* **max drawdown improves** −92.2 % → −47.4 %.
+
+Sharpe improves too (−1.08 → −0.59, **+0.49**), but stays negative. Breadth
+is a real lever and it is not close to being sufficient.
+
+### 33.3 The decomposition — it is the fee bill, not the signal
+
+legs = 12, weekly, 168 h lookback, same book with and without fees:
+
+| | CAGR | Sharpe |
+|---|---|---|
+| **gross** (no fees) | **+4.9 %** | **0.31** |
+| **net** (real Binance round trip) | **−20.0 %** | **−0.59** |
+| fee drag | **24.9 %/yr** | |
+
+The signal is *weakly positive before costs*. It dies entirely at 25 %/yr of
+turnover cost. This is the same wall as §32.2, now quantified on a
+market-neutral book.
+
+### 33.4 Attacking turnover: the best cell, and then the honest check
+
+Monthly rebalance cuts the fee bill to ~10 %/yr:
+
+| rebalance | band | CAGR | Sharpe | max DD | turnover/yr |
+|---|---|---|---|---|---|
+| weekly | 0 | −20.0 % | −0.59 | −47.4 % | 46 |
+| weekly | 4 | −10.4 % | −0.21 | −41.7 % | 31 |
+| **monthly** | **0** | **+28.0 %** | **0.97** | **−23.1 %** | 10 |
+
+**+28.0 % CAGR at Sharpe 0.97** — short of the S&P's 1.10, and well short of a
+fund. But the honest question is whether that cell is *real* or merely the
+best of a grid. It was chosen after seeing weekly fail, so it must be
+treated as a post-hoc selection until proven otherwise.
+
+### 33.5 It is not real. The full grid proves it.
+
+36 configurations (legs 6/8/12 × rebalance 168/336/720 × lookback 72/168/336/720),
+every one measured on both halves:
+
+| | count |
+|---|---|
+| positive on TRAIN | **33 / 36** |
+| positive on TEST | **10 / 36** |
+| positive on BOTH | 10 / 36 |
+| train/test sign agreement | 28 % (coin flip ≈ 25 %) |
+
+and the decisive statistic:
+
+```
+corr(train Sharpe, test Sharpe) across the 36 configs = -0.177
+mean train Sharpe +0.74   ->   mean test Sharpe -0.35
+```
+
+**A config's train Sharpe does not predict its test Sharpe — it is slightly
+*negative*.** The +28 % / 0.97 cell has train Sharpe 0.31, i.e. it was one of
+the *worse* cells on train; it printed on test by luck. Any process that
+picked by train performance would have excluded it.
+
+### 33.6 What this settles
+
+Breadth was the right lever and it moved the two things it should move
+(vol and drawdown), by the right amounts. What it could not do is create
+edge that isn't there:
+
+* 25 %/yr of turnover cost swamps a ~5 %/yr gross signal;
+* cutting turnover to ~10 %/yr gets the cost out of the way but the
+  remaining signal is indistinguishable from noise out of sample;
+* nothing in this cross-section reaches a top-decile fund (Sharpe 1.80),
+  let alone Medallion (2.52), and 0 of 36 configurations survive an honest
+  train/test check.
+
+The fund comparison at the top of §32 stands.
+
+### 33.7 What was NOT done
+
+* No abstention: every leg always invested.
+* No fitting on the test half: all grid parameters are literals; the grid is
+  reported *including* its selection bias, not as a result.
+* No leverage: Sharpe is leverage-invariant (§32.6) and that was retested.
+* No withdrawal of the losing cells — all 36 are printed.
