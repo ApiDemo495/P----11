@@ -3092,3 +3092,121 @@ The fund comparison at the top of §32 stands.
   reported *including* its selection bias, not as a result.
 * No leverage: Sharpe is leverage-invariant (§32.6) and that was retested.
 * No withdrawal of the losing cells — all 36 are printed.
+
+---
+
+## §34 — ALTERNATIVES TESTED: EXECUTION, AND A NEW INFORMATION SET (2026-11-25)
+
+§33 ended by naming two possible escapes: better execution, or a different
+edge class. Both were tested. Neither works, and the reason is now
+arithmetic rather than a matter of trying harder.
+
+### 34.1 Escape #1 — execution. Bounded before it was attempted.
+
+If fees are the problem, remove them completely and measure the ceiling.
+Across the same 36-cell grid, with **zero fees and zero slippage**:
+
+| best cell (8 legs, 720 h rebalance, 168 h lookback) | Sharpe | CAGR |
+|---|---|---|
+| **gross — perfect free execution** | **1.33** | 50.6 % |
+| net — real Binance round trip | 1.10 | 38.5 % |
+
+So the *entire* fee problem is worth **0.23 Sharpe**. Solving execution
+perfectly — maker rebates, mid fills, zero slippage, which is not achievable
+at retail — buys 0.23 and lands at 1.33.
+
+**1.33 < 1.80 (top-decile fund) < 2.52 (Medallion).**
+
+This is the important result of §34: **fees are not what stands between this
+and a hedge fund.** Even with the fee problem magically solved, the best
+signal in a 36-cell grid does not reach the benchmark. Execution is
+necessary-but-insufficient, and the insufficiency is large.
+
+### 34.2 Escape #2 — a different information set. Order flow.
+
+The Binance Vision klines carry `taker_buy_volume`, which is **not**
+contained in the OHLC. Order-flow imbalance is the canonical short-horizon
+edge in market microstructure, so it is the right alternative to test.
+
+First pass looked spectacular — information coefficient 0.10–0.29 against
+forward returns, t-statistics of **25–47**, sign-consistent on **10/10**
+symbols in **6/6** cells.
+
+**That result was my own bug, and it is recorded here rather than deleted.**
+
+`np.convolve(x, np.ones(w), 'same')` is a *centered* window — it averages
+bars on both sides, so the "signal" at bar *i* contained bars *i+1 … i+w/2*.
+The flow measure was reading the future price move it was being correlated
+with. Caught by noticing that a t-stat of 47 on ten different assets is not
+a discovery but a symptom, then auditing the windowing directly:
+
+```
+x      : 0  1  2  3  4  5  6  7  8  9
+'same' : 1  3  6 10 14 18 22 26 30 24   <- at i=4 uses x[5],x[6]
+causal : 0  1  3  6 10 14 18 22 26 30   <- uses only past
+```
+
+Rebuilt with a strictly causal rolling sum, unit-asserted before use:
+
+| pooled across 10 symbols | mean rho | mean t | \|t\|>3 |
+|---|---|---|---|
+| 24 h flow → 6 h return | −0.006 | −1.0 | 2/10 |
+| 24 h flow → 24 h return | +0.012 | +1.9 | 3/10 |
+| 72 h flow → 6 h return | −0.015 | −2.3 | 2/10 |
+| 72 h flow → 72 h return | −0.007 | −1.1 | 7/10 |
+
+**t-statistics collapse from 25–47 to ±1–2.** The flow signal is not there.
+(The one consistent feature is a slight *reversal* — heavy taker buying
+predicts mildly negative returns — a real microstructure effect, and the
+next section prices it.)
+
+### 34.3 The arithmetic that explains every previous failure
+
+Priced as basis points per trade against the round-trip cost:
+
+| signal | hold | edge (bps) | cost (bps) | net |
+|---|---|---|---|---|
+| flow reversal 24 h | 6 h | −0.44 | 28.87 | −29.31 |
+| flow reversal 24 h | 24 h | −0.36 | 28.87 | −29.23 |
+| flow reversal 72 h | 24 h | +0.13 | 28.87 | −28.75 |
+| flow reversal 72 h | 168 h | −0.05 | 28.87 | −28.93 |
+
+**0 of 32 cells have edge > cost.** The measured flow edge is ~**0.1 bps**;
+the round trip is **28.9 bps**. Off by a factor of ~**300–500**.
+
+This is the single number behind §31, §32 and §33. A momentum edge of ~2 bps
+per trade against a 29 bps fee is not a strategy with a bad parameter — it is
+a strategy that is short by a factor of fifteen before any question of skill
+arises. No amount of grid search, breadth, or cleverness closes a 15× cost
+gap; the constraint is arithmetic.
+
+### 34.4 So: is there a solution?
+
+Not within this problem as posed, and the reasons are now measured rather
+than asserted:
+
+* **Execution** — even perfect free execution caps at **Sharpe 1.33**
+  (§34.1). Below top-decile, far below Medallion.
+* **New information** — order flow, the standard alternative, has **no
+  causal edge** (§34.2); ~0.1 bps against a 29 bps cost.
+* **Breadth** — real effect, +0.49 Sharpe, lands negative (§33.2).
+* **Turnover** — cuts cost 25 %/yr → 10 %/yr, but the surviving signal fails
+  train/test (§33.5).
+
+The structural reason a fund beats this is not a better indicator. It is
+that Medallion's cost per unit of edge is near zero because it *is* the
+liquidity provider, running thousands of weakly-correlated bets at
+co-located speed and capped size. Taking liquidity on four-to-twenty-four
+crypto majors at 29 bps is the opposite end of that trade: the fee we pay is
+the revenue of the desk we are being compared to.
+
+That is a business-model difference, not a modelling difference, and it
+cannot be closed by search. Stating otherwise would be the fabrication the
+user has repeatedly ruled out.
+
+### 34.5 What was NOT done
+
+* No claim of a working strategy. 0 of 32 flow cells, 0 of 36 momentum cells.
+* The lookahead bug is printed above rather than quietly fixed.
+* No illicit data sources.
+* No abstention: every simulated book holds ±1 notional at all times.
