@@ -113,18 +113,37 @@ class HistoryDB:
 
 
 def _day_stats(day: str, rows: list[dict]) -> dict:
-    hits = sls = preds = 0
+    """Day P&L and hit counts, from RESOLVED windows only.
+
+    Two things this used to get wrong: ``accuracy`` divided hits by
+    (hits + sls), so an unresolved window simply left the denominator — the
+    headline was computed over a hand-picked subset of finished trades; and
+    ``pnl_pct`` was summed nowhere, so the realised number the user asked
+    about was never published. Coverage is now reported beside accuracy.
+    """
+    hits = sls = preds = resolved = 0
+    pnl = 0.0
     for r in rows:
         for tf_row in (r.get("outcomes") or {}).values():
             preds += 1
-            if tf_row.get("target_hit"):
+            _win = bool(tf_row.get("target_hit"))
+            _loss = bool(tf_row.get("sl_hit"))
+            if _win:
                 hits += 1
-            if tf_row.get("sl_hit"):
+            if _loss:
                 sls += 1
-    total = hits + sls
-    acc = hits / total if total else None
+            if _win or _loss or tf_row.get("resolved"):
+                resolved += 1
+                try:
+                    pnl += float(tf_row.get("pnl_pct") or 0.0)
+                except (TypeError, ValueError):
+                    pass
+    acc = hits / resolved if resolved else None
     return {"date": day, "grcs": len(rows), "predictions": preds,
-            "targets_hit": hits, "sls_hit": sls, "accuracy": acc}
+            "resolved": resolved,
+            "targets_hit": hits, "sls_hit": sls, "accuracy": acc,
+            "coverage": (resolved / preds) if preds else None,
+            "pnl_pct": round(pnl, 4)}
 
 
 def empty_record(now: float | None = None) -> dict:

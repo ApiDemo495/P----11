@@ -263,3 +263,90 @@ def divergences(panels: dict, contract: dict | None,
                 bad.append(key)
         out[name] = bad
     return out
+
+
+def rung_level(entry: float, direction: int, horizon_tp: float,
+               minutes, horizon_minutes=None, k: int = 1,
+               sl: float | None = None) -> float | None:
+    """The canonical price of rung ``k`` — and never a price past the stop.
+
+    The GRC refresh used to re-project rung 1 with
+    ``price + dir·|conf|·ATR·√minutes·SCALE`` from the CURRENT price, with no
+    reference to the contract at all. That is unbounded drift: on the live
+    lock file 11 of 16 lanes carried a rung 1 on the WRONG SIDE of their own
+    entry (BNB tf4: short at 443.06, rung 1 at 493.50, stop at 466.46), and
+    the drifted level was then written back onto the rung's direction — so
+    the lane's displayed target argued with the lane's own contract.
+
+    Rungs belong to the frozen entry → horizon-TP span (``build_ladder``);
+    a refresh may only move them along that span. If ``sl`` is supplied the
+    level is additionally clamped inside (entry, sl) so a rung can never sit
+    beyond the barrier that ends the trade.
+    """
+    e = _num(entry)
+    tp = _num(horizon_tp)
+    if e is None or e <= 0 or tp is None or tp <= 0:
+        return None
+    d = 1 if int(direction or 0) >= 0 else -1
+    mins = [int(m) for m in (minutes or []) if m]
+    if not mins:
+        return None
+    rows = build_ladder(e, d, tp, mins, horizon_minutes)
+    if not rows:
+        return None
+    row = rows[min(max(int(k), 1), len(rows)) - 1]
+    level = _num(row.get("level"))
+    if level is None:
+        return None
+    stop = _num(sl)
+    if stop is not None and stop > 0:
+        # A rung is unreachable if the STOP is already inside it: for a long
+        # the stop sits BELOW the entry, for a short ABOVE it. Keep a hair on
+        # the profitable side of the stop, and never place a rung on the wrong
+        # side of its own entry.
+        head = abs(stop - e) * 0.02
+        if d > 0 and level <= stop:                 # long: rung behind the stop
+            level = max(e, stop + head)
+        elif d < 0 and level >= stop:               # short: rung behind the stop
+            level = min(e, stop - head)
+    return float(level)
+
+
+def clamp_rung(level: float | None, entry: float, direction: int,
+               sl: float | None = None, fallback: float | None = None,
+               fallback_sl: float | None = None) -> float | None:
+    """Keep a projected rung inside (entry, stop] on the trade's own side.
+
+    Rung 1 refreshes at every GRC by design (it is the lowest lock
+    strength), so its price is allowed to move — but it must stay on the
+    profitable side of the entry and reachable before the stop. Without this
+    the refresh wrote rung 1 to the WRONG side of the trade: 11 of 16 lanes
+    in data/locks.json carried a target that argued with their own contract
+    (BNB tf4: short at 443.06, rung 1 at 493.50, stop at 466.46).
+    """
+    lv = _num(level)
+    e = _num(entry)
+    if lv is None or e is None or e <= 0:
+        return None
+    d = 1 if int(direction or 0) >= 0 else -1
+    stop = _num(sl)
+    # The stop always sits on the LOSING side of the entry (below it for a
+    # long, above it for a short), so a rung is unreachable when it is not
+    # beyond the entry AND beyond the stop in the profitable direction.
+    bad = (lv <= e) if d > 0 else (lv >= e)
+    if not bad and stop is not None and stop > 0:
+        bad = (lv <= stop) if d > 0 else (lv >= stop)
+    if not bad:
+        return lv
+    # Prefer the canonical ladder point for this rung. Never return the entry
+    # itself: a rung AT the entry is an instant zero-profit "hit", which the
+    # lock path then treats as a target that was reached.
+    fb = _num(fallback)
+    if fb is not None and ((fb > e) if d > 0 else (fb < e)):
+        fstop = _num(fallback_sl if fallback_sl is not None else sl)
+        if (fstop is None or fstop <= 0
+                or ((fb > fstop) if d > 0 else (fb < fstop))):
+            return fb
+    if stop is not None and stop > 0:
+        return e + d * abs(stop - e) * 0.5
+    return e + d * abs(e) * 1e-4 if e else None

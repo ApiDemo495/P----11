@@ -64,6 +64,7 @@ from .config import (
     UFP_ALPHA_IDS,
     WEIGHT_IDS,
 )
+from .contracts import clamp_rung, rung_level   # canonical rung prices
 from .brain import BrainSystem
 from .rlsys import damp_all, damp_shares
 from .emotion import EmotionSystem
@@ -4938,12 +4939,52 @@ class PredictionEngine:
                     if fid in w:
                         w[fid] = max(1e-3, min(0.5, w[fid] * float(mult)))
 
+    def _sync_display(self, symbol: str, res_pack: dict[str, dict],
+                      now: float | None = None) -> None:
+        """Mirror the final per-pass result onto the dashboard snapshot.
+
+        Called after the lock rules so the card and the record cannot
+        disagree; the panel is display-only state, never a decision input.
+        """
+        for tf, res in (res_pack or {}).items():
+            disp = self.display_systems.get((symbol, tf))
+            if disp is None or not isinstance(res, dict):
+                continue
+            try:
+                if res.get("confidence") is not None:
+                    disp["confidence"] = round(float(res["confidence"]), 4)
+                if res.get("direction") is not None:
+                    disp["direction"] = res["direction"]
+                disp["issued"] = bool(res.get("issued"))
+                disp["cci_adjusted"] = res.get("cci_adjusted")
+                if res.get("double_check"):
+                    disp["double_check"] = res["double_check"]
+                # the LANE's cycle is the settled value: the SAFE protocol and
+                # the last-gate verdict both write there, after _apply_agents
+                # already mirrored the pre-lock number onto the card
+                cyc = self.cycles.get((symbol, tf))
+                if cyc is not None and bool(getattr(cyc, "issued", False)):
+                    disp["confidence"] = round(float(cyc.confidence or 0.0), 4)
+                    disp["direction"] = int(cyc.direction or 0)
+                    disp["issued"] = bool(cyc.issued)
+                    disp["tier"] = getattr(cyc, "tier", disp.get("tier"))
+                    if getattr(cyc, "verdict", ""):
+                        disp["verdict"] = cyc.verdict
+            except Exception:                     # display must never break a pass
+                log.exception("display sync failed for %s/%s", symbol, tf)
+
     def _record_learning(self, symbol: str, res_pack: dict[str, dict],
                          now: float, *, record_id: str | None = None) -> None:
         """Section 10/13 bookkeeping after the lock rules ran."""
         prices = self.feed.prices()
         price = prices.get(symbol, 0.0)
         record = empty_record(now)
+        # WHICH ASSET IS THIS? The pass writes one record per asset
+        # (SYMBOL_ORDER), so four rows share a timestamp. Without a symbol
+        # field the graded history could not attribute a hit or a miss to an
+        # asset at all. Stamped here; readers tolerate its absence for rows
+        # written before this change.
+        record["symbol"] = symbol
         record["prices"] = {s: round(p, 6) for s, p in prices.items()}
         # GRADE THE PREVIOUS PASS, not this one. The old code read
         # cci.prev_price AFTER this pass's compute had overwritten
@@ -4959,8 +5000,16 @@ class PredictionEngine:
             cyc = self.cycles.get((symbol, tf))
             evs = [e for e in (cyc.events if cyc else [])
                    if e.get("ts", 0) > now - 260]
-            target_hit = any(e["type"] == "target_hit" for e in evs)
-            sl_hit = any(e["type"] == "sl_hit" for e in evs)
+            # FIRST-TOUCH grading (app/grading.py). Two `any()` scans were
+            # wrong in three ways, all of them optimistic: "sl_hit" is never
+            # emitted (the SL path emits "sl_crossed"), so the ledger booked
+            # 0 stops in 80 snapshots; any() is order-blind, so SL-then-TP
+            # booked as a WIN; and "target_hit" also fires for the TP1..TP3
+            # rungs rather than the contract target.
+            from .grading import resolve as _resolve_pass
+            _verdict = _resolve_pass(evs, tp=(cyc.tp if cyc else None))
+            target_hit = bool(_verdict["win"])
+            sl_hit = bool(_verdict["loss"])
             sub = {
                 "emotion": _sign(res.get("emotion", {}).get("aggregate", 0)),
                 "physics": _sign(res.get("physics", {}).get("ufp", 0)),
@@ -5055,12 +5104,33 @@ class PredictionEngine:
                 } if cyc else {}),
                 "issued": bool(cyc.issued) if cyc else False,
             }
+            # REALIZED MOVE from the frozen entry. The old expression was
+            # (price / cyc.tp - 1) * 100 — the distance REMAINING to the
+            # target — so a just-hit target scored ~0 and the tape shows
+            # "target_hit True, pnl -8.14"; its `direction > 0` guard also
+            # made every SHORT print 0.0.
+            _entry = 0.0
+            try:
+                _entry = float((cyc.canonical or {}).get("entry")
+                               or (cyc.risk or {}).get("entry") or 0.0)
+            except (TypeError, ValueError):
+                _entry = 0.0
+            _dir = int(cyc.direction or 0) if cyc else 0
+            if target_hit or sl_hit:
+                if _entry > 0 and price > 0 and _dir:
+                    _pnl = round(_dir * (price / _entry - 1.0) * 100, 4)
+                elif cyc and (cyc.tp if target_hit else cyc.sl):
+                    _hit = float(cyc.tp if target_hit else cyc.sl)
+                    _pnl = round(abs(_hit - price) / max(price, 1e-9) * 100, 4)
+                else:
+                    _pnl = 0.0
+            else:
+                _pnl = 0.0
             record["outcomes"][tf] = {
                 "target_hit": target_hit,
                 "sl_hit": sl_hit,
-                "pnl_pct": (round((price / cyc.tp - 1.0) * 100, 4)
-                            if target_hit and cyc and cyc.direction > 0 and cyc.tp
-                            else 0.0),
+                "pnl_pct": _pnl,
+                "resolved": bool(target_hit or sl_hit),
             }
             record["formula_outputs"][tf] = {
                 str(f): round(v, 5) for f, v in (res.get("adj") or {}).items()
@@ -5080,8 +5150,13 @@ class PredictionEngine:
                 "local": self.agents.status().get("local", {}).get("last") or {},
             }
             w = self.cci.get_weights(symbol, tf)
+            # Namespaced by asset. This used to land in record["weights"][tf],
+            # which every asset in the pass overwrote — the stored weights were
+            # silently the LAST asset's, applied to all four.
             record["weights"][tf] = {str(f): round(w.get(f, 0.0), 5)
                                      for f in WEIGHT_IDS}
+            record.setdefault("weights_by_symbol", {}).setdefault(symbol, {})[tf] = {
+                str(f): round(w.get(f, 0.0), 5) for f in WEIGHT_IDS}
         try:
             self.historydb.append(record)
         except Exception:
@@ -7862,6 +7937,13 @@ class PredictionEngine:
                     await run_pass(self._record_learning, symbol, res_pack, now)
                 except Exception:
                     log.exception("learning bookkeeping failed for %s", symbol)
+                # The display snapshot is synced inside _apply_agents, which
+                # runs BEFORE the lock rules — so any lock event that moves
+                # the number (an SL SAFE penalty, a confidence refresh, a
+                # direction override) left the card showing the pre-lock
+                # value while the graded record carried the new one. Re-sync
+                # once the per-asset pass is complete.
+                self._sync_display(symbol, res_pack)
             _t("compute+agents+locks+learning", now)
             _mark = time.time()
             # Section 10 macro (every 15 GRCs) + deep (every 247 min)
@@ -7976,9 +8058,24 @@ class PredictionEngine:
         t1 = cyc.target(1)
         if t1.status == "locked":
             _side1 = int(cyc.direction or t1.direction or 0)
-            t1.level = self._project_level(
-                price, _side1, res["confidence"], res["atr"], t1.minutes,
-            )
+            # Rung 1 stays free to adjust (lowest lock strength, by design)
+            # but is CLAMPED into the trade's own region. The old write was
+            # unconstrained and produced targets on the LOSING side of their
+            # own trade — 11 of 16 lanes in data/locks.json (BNB tf4: short at
+            # 443.06, rung 1 at 493.50, stop at 466.46).
+            _rc = cyc.level_contract or {}
+            _e1 = float(_rc.get("entry") or (cyc.risk or {}).get("entry")
+                        or price)
+            _tp1 = float(_rc.get("tp") or cyc.tp or 0.0)
+            _sl1 = float(_rc.get("sl") or cyc.sl or 0.0) or None
+            _m1 = [t.minutes for t in cyc.targets]
+            _fall1 = rung_level(_e1, _side1, _tp1, _m1,
+                                (_m1[-1] if _m1 else None), 1, _sl1)
+            t1.level = clamp_rung(
+                self._project_level(
+                    price, _side1, res["confidence"], res["atr"], t1.minutes),
+                _e1, _side1, _sl1, fallback=_fall1, fallback_sl=_sl1,
+            ) or t1.level
             t1.direction = _side1
             t1.locked_at = now
             t1.locked_cci = new_cci
@@ -8305,24 +8402,30 @@ class PredictionEngine:
                             ):
                                 await self._on_target_hit(symbol, tf, t.k, now)
                                 cyc = self.cycles.get((symbol, tf))
-                        if cyc.sl is not None:
-                            against = (price <= cyc.sl and cyc.direction > 0) or (
-                                price >= cyc.sl and cyc.direction < 0
+                        # THE STOP CANNOT BE THE ONLY BARRIER MEASURED. This
+                        # block tested SL first (and `continue`d), then TP —
+                        # so a tick that touched BOTH always booked the loss,
+                        # and a contract TP could only be booked inside this
+                        # branch. Resolve the pair, then dispatch; a genuine
+                        # same-tick tie still goes to the stop (app/grading.py).
+                        _sl_touched = cyc.sl is not None and not cyc.sl_observed and (
+                            (price <= cyc.sl and cyc.direction > 0)
+                            or (price >= cyc.sl and cyc.direction < 0))
+                        _tp_touched = cyc.tp is not None and not cyc.contract_tp_hit and (
+                            (price >= cyc.tp and cyc.direction > 0)
+                            or (price <= cyc.tp and cyc.direction < 0))
+                        if _sl_touched:
+                            await self._on_sl_hit(symbol, tf, now)
+                            # a resolved loss ends this lane's window: the TP
+                            # of a dead contract must not be booked afterwards
+                            continue
+                        if _tp_touched:
+                            cyc.contract_tp_hit = True
+                            cyc.execution_eligible = False
+                            cyc.events.append(
+                                {"ts": now, "type": "tp_hit", "tp": cyc.tp}
                             )
-                            if against and not cyc.sl_observed:
-                                await self._on_sl_hit(symbol, tf, now)
-                                continue
-                        if cyc.tp is not None and not cyc.contract_tp_hit:
-                            hit_tp = (price >= cyc.tp and cyc.direction > 0) or (
-                                price <= cyc.tp and cyc.direction < 0
-                            )
-                            if hit_tp:
-                                cyc.contract_tp_hit = True
-                                cyc.execution_eligible = False
-                                cyc.events.append(
-                                    {"ts": now, "type": "tp_hit", "tp": cyc.tp}
-                                )
-                                self._save_cycle_lock_state(cyc)
+                            self._save_cycle_lock_state(cyc)
                     elif not cyc.issued:
                         # NOT issued (below the confidence floor): the
                         # locked TP/SL levels are still displayed, so

@@ -2573,3 +2573,179 @@ taker delay is exactly the kind of cost that lands in this table.
 .venv/bin/python -m backtest.path_risk
 .venv/bin/python -m pytest tests/test_path_risk.py
 ```
+
+---
+
+## §30 — FIVE DEFECTS THAT WERE MAKING THE RECORD LOOK BETTER THAN IT WAS (2026-11-24)
+
+Everything below was found by re-deriving from files the app itself wrote —
+`data/locks.json` (16 live lane contracts) and
+`data/history/history_2026-11-24.json` (80 graded snapshots) — plus the
+committed per-TF tape. Each defect moved the recorded outcome in the
+optimistic direction only. All are fixed, with tests that pin them.
+
+### 30.1 The graded record could not record a loss
+
+`Engine._record_learning` graded each pass with
+
+```python
+sl_hit = any(e["type"] == "sl_hit" for e in evs)
+```
+
+**the engine never emits an event of type `"sl_hit"`** — `_on_sl_hit`
+appends `"sl_crossed"`. So `sl_hit` was `False` on every pass, in every
+lane, forever. Measured on the shipped ledger:
+
+| tf | snapshots | `target_hit` | `sl_hit` |
+|---|---|---|---|
+| tf1 | 80 | 12 | **0** |
+| tf2 | 80 | 8 | **0** |
+| tf3 | 80 | 6 | **0** |
+| tf4 | 80 | 7 | **0** |
+
+The same two `any()` scans had two further optimistic failures:
+
+* **Order-blind.** The SL "SAFE, BE CAUTIOUS" branch deliberately keeps the
+  cycle alive, so a lane that stopped out and later printed TP1 was booked
+  as a **target hit**. Only the first touch may resolve a position.
+* **Rung ≠ target.** `"target_hit"` also fires for the TP1..TP3 rungs.
+  Reaching rung 1 is not a win; only `cyc.tp` is.
+
+Fixed by `app/grading.py` (`resolve()`): first terminal barrier wins, the
+stop wins same-tick ties (matching `hold_era.py`), and a rung only counts
+when it *is* the contract target.
+
+### 30.2 `pnl_pct` was the distance remaining to the target, and long-only
+
+```python
+"pnl_pct": (round((price / cyc.tp - 1.0) * 100, 4)
+            if target_hit and cyc and cyc.direction > 0 and cyc.tp else 0.0)
+```
+
+* `price / tp - 1` is how far price still is FROM the target, so a just-hit
+  target scored ≈ 0 and partial progress scored **negative** — the tape
+  literally contains `target_hit: true, pnl_pct: -8.1441`.
+* the `direction > 0` guard made **every short print 0.0**, so a short win
+  was unrepresentable.
+
+Now: realised move from the contract's frozen entry, signed by the side
+taken, plus an explicit `resolved` flag. `historydb._day_stats` also gained
+`resolved`, `coverage` and a real `pnl_pct` sum — and its `accuracy` now
+divides by *resolved* windows instead of quietly dropping open ones from
+the denominator.
+
+### 30.3 The stop was checked before the target, so both-touched booked the loss
+
+In the tick loop the SL test ran first and `continue`d; the contract-TP test
+ran second. A tick that touched both barriers always recorded the stop, and
+the app's barrier ORDER differed from the backtest's. The pair is now
+resolved before dispatch (stop still wins a genuine same-tick tie). This one
+makes the record worse, not better — it makes it *consistent*.
+
+### 30.4 Rung 1 was re-projected with no bound — 11 of 16 live lanes had a target on the losing side of their own trade
+
+`_apply_grc_lock_rules` rebuilds TP1 at every GRC from the *current* price:
+
+```python
+t1.level = self._project_level(price, side, confidence, atr, t1.minutes)
+```
+
+`_project_level` is `price ± conf·ATR·√minutes·SCALE` with no reference to
+the contract. On the shipped lock file:
+
+| lane | side | entry | rung 1 | stop | |
+|---|---|---|---|---|---|
+| BNB tf4 | SHORT | 443.06 | **493.50** | 466.46 | past the stop |
+| BNB tf1 | SHORT | 495.86 | **499.32** | 500.25 | wrong side |
+| PAXG tf3 | SHORT | 2646.61 | **2652.21** | — | wrong side |
+| … 11 of 16 lanes | | | | | |
+
+A short whose target sits above its entry is arithmetically unprofitable.
+Fixed with `contracts.clamp_rung()`: the projection keeps its freedom (TP1
+must still adjust every GRC — `test_tp1_adjusts_every_grc…` pins that), but
+it is clamped inside (entry → stop); when the projection is invalid it falls
+back to the canonical ladder point, never to the entry itself.
+
+### 30.5 Unattributable history
+
+`_record_learning` wrote four rows per pass — one per asset — with **no
+symbol field**, and namespaced weights as `record["weights"][tf]`, which
+each asset overwrote. The stored learning weights were silently the *last*
+asset's, applied to all four. Now `record["symbol"]` and
+`weights_by_symbol[symbol][tf]` are written (the flat key is kept for old
+readers).
+
+### 30.6 The per-TF backtest graded every call 60×–670× past its stated horizon
+
+`backtest/per_tf_real.py` loads **hourly** bars (`-1h-`, and `load_bars`
+asserts `b.t - a.t == 3600`) while `TF_W` is in **minutes**, then settles at
+`bars[t + W]`:
+
+| tf | stated window | actually graded | median abs move |
+|---|---|---|---|
+| tf1 | 22 min | **22 hours** | 76 bps |
+| tf2 | 44 min | 44 hours | 116 bps |
+| tf3 | 130 min | 130 hours (5.4 d) | 206 bps |
+| tf4 | 247 min | 247 hours (10.3 d) | 296 bps |
+
+That is also why the file's time grid steps 79,200 s = 22 h and why
+`settle(t, tf1) == entry(t+1)` in 44/46 BTC and 45/50 BNB rows. Fixed with
+`bars_for()`, which converts minutes to bars on the tape's own bar size.
+
+**`backtest/results/*.json` were built on this tape and on the barrier
+bug of §29's predecessor; they must be re-generated where the bar cache
+exists.** This sandbox has no `backtest/cache/`, so nothing here re-runs
+them — that is a limitation of the environment, not a result.
+
+### 30.7 What the win-rate numbers actually are
+
+With the geometry-only first-touch rule (`P(win) = sl/(tp+sl)`) and the
+repo's measured full round trip (BTC 28.87, ETH 29.81, BNB 30.96,
+PAXG 37.40 bps, `app/horizon.py`):
+
+```
+EV = P(win)(tp - f) - (1-P(win))(sl + f) = -f     for EVERY tp/sl ratio
+```
+
+| ratio tp/sl | win rate | net win | net loss | EV |
+|---|---|---|---|---|
+| 0.25 | **80.0 %** | −3.9 bps | −128.9 bps | −28.87 bps |
+| 0.50 | 66.7 % | +21.1 | −128.9 | −28.87 |
+| 1.00 | 50.0 % | +71.1 | −128.9 | −28.87 |
+| 2.00 | 33.3 % | +171.1 | −128.9 | −28.87 |
+| 3.00 | 25.0 % | +271.1 | −128.9 | −28.87 |
+
+**80 % is exactly `r = 0.25`** — risk 4 to make 1 — and it does not change
+expectancy by a single basis point. To raise the win rate *at fixed
+geometry* requires edge. Required drift per window, in units of the window's
+own σ, for a 1:1 pair: **55 % → 0.10 σ; 66 % → 0.66 σ; 80 % → 1.39 σ.**
+
+The shipped `hold_wr.json` row contract reaches 0.71–0.85 WR in **24 of 24**
+cells with the *same* `k=0.15, m=0.55` — i.e. 44 bps of target against 164
+bps of stop, a **24 % win-rate-per-unit-risk** geometry. Selected for
+maximum win rate over a grid, gross of friction, it is not a claim of edge.
+The same file's era contract (the real TP/SL, selected for net EV after the
+full round trip) has **0 of 26 cells** with a positive train EV.
+
+### 30.8 One confidence band looked real and was not
+
+`per_tf_full_engine_real.csv` shows a non-monotone confidence profile, with
+0.40–0.55 at 67.1 % (n=143) against 45.6 % at the bottom and 49.5 % at the
+top. Split time-ordered 65/35 it collapses:
+
+| band | train | TEST |
+|---|---|---|
+| 0.40–0.55 | 82.9 % (n=82) | **45.9 % (n=61)** |
+| 0.45–0.60 | 83.9 % (n=87) | **41.7 % (n=60)** |
+| everything | 57.3 % (n=578) | 44.4 % (n=313) |
+
+The band was also long-tilted (LONG 71.9 %, SHORT 48.3 %) in an up-drifting
+window, and that tape's horizon is wrong anyway (§30.6). **Not adopted.** It
+is recorded here because it is exactly the kind of number that gets shipped.
+
+### 30.9 Reproduce
+
+```bash
+.venv/bin/python -m pytest tests/test_grading_honesty.py \
+    tests/test_winrate_math.py tests/test_backtest_horizon.py
+```
