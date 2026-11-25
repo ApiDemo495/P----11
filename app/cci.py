@@ -191,9 +191,21 @@ class CCIEngine:
         )
         cci_adjusted = cci
         if abs(cci) > 1e-9 and abs(cci_reversed) > DOUBLE_CHECK_RATIO * abs(cci):
-            cci_adjusted = cci * (
-                1.0 - DOUBLE_CHECK_PENALTY * abs(cci_reversed) / abs(cci)
-            )
+            # Bug fixed 2026-11-26: this was
+            #   cci * (1 - PENALTY * |rev| / |cci|)
+            # which turns NEGATIVE once |rev| > |cci| / PENALTY (0.5). A
+            # "penalty" then INVERTED the sign of the fused signal and grew
+            # its magnitude — measured: cci = -0.120 (net bearish) produced
+            # adjusted = +0.130, and `direction` reads `cci_adjusted`, so the
+            # app issued a BUY off a net-bearish vote. A second case went
+            # from -0.050 to +0.400, i.e. 8x larger after being "penalised".
+            #
+            # A disagreement penalty may only ever REDUCE the magnitude, and
+            # must never cross zero. Clamping the factor into [0, 1] keeps
+            # the intended meaning: heavy disagreement shrinks the call
+            # toward no-call (factor 0), it does not reverse it.
+            shrink = DOUBLE_CHECK_PENALTY * abs(cci_reversed) / abs(cci)
+            cci_adjusted = cci * max(0.0, min(1.0, 1.0 - shrink))
 
         confidence = abs(cci_adjusted) * min(1.0, max(0.0, drhe))
         # strength = agreement purity: |net| / gross weighted mass.
@@ -327,7 +339,24 @@ def finalize_confidence(
         8. clamp >= 0, issue when > 0.35
     Neutral physics defaults (WFCP=1, DRPT=0, GSPI=0) leave steps 1-4 exact.
     """
-    conf = max(0.0, pack["confidence"])
+    # Bug fixed 2026-11-26: `pack["confidence"]` raised KeyError whenever the
+    # caller passed a pack without that key (e.g. a raw CCI dict carrying only
+    # `cci_adjusted`/`drhe`), and a NaN there propagated to the caller as a
+    # NaN confidence that the UI renders as a blank or "—" mid-panel. A
+    # missing or non-finite input is "no confidence", not a crash and not a
+    # silent NaN.
+    raw_conf = pack.get("confidence")
+    if raw_conf is None:
+        raw_conf = pack.get("cci_adjusted", 0.0)
+    try:
+        conf = float(raw_conf)
+    except (TypeError, ValueError):
+        conf = 0.0
+    if not math.isfinite(conf):
+        return {"confidence": 0.0, "issued": False, "penalty_capped": False,
+                "penalty": 0.0, "pcv": pcv, "conflicting": False,
+                "wfcp": wfcp, "drpt": drpt, "gspi": gspi, "invalid": True}
+    conf = max(0.0, conf)
     conf *= 0.7 + 0.3 * max(0.0, min(1.0, experience_quality))
     if state_aligned and p_dominant > 0.0:
         conf += 0.1 * p_dominant
@@ -421,6 +450,19 @@ def calibrate_confidence(
     cci_adj = float(pack.get("cci_adjusted") or 0.0)
     drhe = _clamp01(float(pack.get("drhe", 1.0) or 1.0))
     floor = max(float(noise_floor or NOISE_FLOOR), 1e-4)
+    # Bug fixed 2026-11-26: a non-finite CCI (NaN/inf from any upstream
+    # division or over/underflow) used to propagate into `snr` and then into
+    # tanh, producing confidence 0.98 - the HIGHEST possible - because
+    # math.tanh(inf) == 1.0 and `max(0.02, min(0.98, nan))` returns 0.98
+    # (min/max silently discard NaN). So a broken calculation was displayed
+    # as maximum conviction, which is the worst possible failure mode for a
+    # prediction panel: it looks like the most confident call the system can
+    # make. A failed computation must yield NO confidence, not all of it.
+    if not math.isfinite(cci_adj):
+        return {"confidence": 0.0, "base": 0.0, "cci_adjusted": None,
+                "snr": 0.0, "modulator": 0.0,
+                "steps": [("input", "non-finite CCI — confidence withheld")],
+                "invalid": True}
     snr = abs(cci_adj) / floor
     base = math.tanh(BASE_GAIN * snr) * min(1.0, drhe)
 
