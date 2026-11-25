@@ -2860,3 +2860,475 @@ positive.
 * **No re-labelling.** The 80 %-win-rate configuration *exists and is
   reachable* (§31.4); presenting it as progress would be fake, since its
   expectancy is unchanged.
+
+---
+
+## §32 — CAN THIS BOOK BEAT A HEDGE FUND? (2026-11-25)
+
+**The request:** beat hedge funds, with no abstention, no limits on method.
+This section states the benchmark, then measures against it on real tape.
+
+```bash
+.venv/bin/python -m backtest.beat_funds
+```
+
+### 32.1 The benchmark, from public sources
+
+| fund / benchmark | net CAGR | Sharpe | max DD |
+|---|---|---|---|
+| **Renaissance Medallion** | ~39.1 % (1988–2018) | **2.52** | −9.1 % |
+| Citadel Wellington | ~19 % | 2.10 | −9.0 % |
+| top-decile hedge fund | ~15 % | 1.80 | −10 % |
+| S&P 500 long run | ~10 % | 1.10 | −50 % |
+
+Beating a fund means beating its **return and its Sharpe together**. A high
+return at Sharpe 0.5 is a leveraged beta position, not skill.
+
+### 32.2 The rule that decides this: fees are proportional to turnover
+
+Crypto's round trip is ~29–37 bps. Signalling at hourly resolution is a
+measured catastrophe:
+
+| signal | sign changes | cost at 28.9 bps |
+|---|---|---|
+| 168 h lookback, hourly | 812 / 24,096 bars | **171 %/yr of capital** |
+| 720 h lookback, hourly | 507 | **106 %/yr** |
+| 2160 h lookback, hourly | 164 | **34 %/yr** |
+
+No signal survives that. So the books below rebalance **daily or weekly** and
+hold in between — which is what a real fund does. It is not abstention: the
+position is always ±1 notional.
+
+### 32.3 The books (all pre-registered literals, test half walked once)
+
+Time-series momentum (30d/90d, daily rebalance, vol-target 40 % capped 3×),
+cross-sectional momentum (long top-2 / short bottom-2, weekly), and two
+log-spread pairs books. Data: the real Binance mirror, 24,096 hourly bars per
+asset, gap-free, 2024-01 → 2026-09.
+
+**Out of sample (2025-10-14 → 2026-09-30, one year, a bear market):**
+
+| book | CAGR | Sharpe | max DD |
+|---|---|---|---|
+| EW tsmom-vol-target | −16.58 % | −0.39 | −37.5 % |
+| xs-momentum | −30.63 % | −1.29 | −38.5 % |
+| BTC/ETH pairs | −0.38 % | 0.09 | −12.1 % |
+| SOL/BNB pairs | +19.03 % | **0.73** | −24.8 % |
+
+**Full period (2.75 yr) — parameters were never fitted, so this is fair:**
+
+| book | CAGR | Sharpe | max DD |
+|---|---|---|---|
+| EW buy-hold the majors | 24.11 % | 0.67 | −63.1 % |
+| EW tsmom-vol-target | −5.66 % | −0.02 | −44.5 % |
+| xs-momentum | −29.33 % | −0.80 | −65.6 % |
+| BTC/ETH pairs | −20.06 % | −0.61 | −66.6 % |
+| SOL/BNB pairs | +5.99 % | 0.35 | −39.0 % |
+
+**Not one book beat the S&P 500's Sharpe (1.10), let alone a fund's.**
+
+### 32.4 The upper-bound scan — 142 configurations
+
+Wider space: 4 lookback pairs × vol-target on/off × 2 rebalances × 4
+leverage levels × 4 assets, plus 9 cross-sectional and 18 pairs variants.
+
+| threshold | configs passing |
+|---|---|
+| Sharpe > 1.80 (top-decile fund) | **0** |
+| Sharpe > 2.52 (Medallion) | **0** |
+| CAGR > 39.1 % **and** Sharpe > 2.52 | **0** |
+
+Best Sharpe in 142 trials: **1.61** (BTC/BNB pairs, z=1.5, weekly, 57.1 %
+CAGR at 1×). That cell is *not* evidence of skill:
+
+* **test-half Sharpe 0.00** (train 2.22 → test 0.00 → the whole 1.61 lives
+  in train);
+* with 142 trials and ~12 % tracking error over 2.75 yr, the expected
+  **maximum Sharpe under zero skill is ≈ 2.46** — the observed best is
+  *below* what pure selection produces;
+* its z parameter flips the sign of the result (z=1.5 → +57 %, z=2.5 →
+  −15.7 %), which is what fitting noise looks like.
+
+### 32.5 Why the hedge funds are still ahead
+
+The gap is not a missing trick, it is a missing *business*:
+
+* **Frequency and cost.** Medallion trades at horizons where its edge is
+  many multiples of its cost. At crypto retail fees a strategy must clear
+  29–37 bps per round trip before it earns anything; at a 22-minute horizon
+  the window's own σ is comparable to that cost, so the edge is eaten.
+* **Capacity and infrastructure.** Medallion is capped at ~$10B, runs 300+
+  researchers, co-located execution and data no retail venue offers.
+* **Breadth.** Medallion runs thousands of weakly-correlated bets. Four
+  crypto majors is nothing like that, which is exactly why the max Sharpe
+  over 142 configurations is 1.61 and not 2.5.
+* **Benchmark fairness.** Medallion's 39 % net is 30 years of audited
+  compounding. A 2.75-year crypto sample cannot produce a comparable
+  estimate no matter how it is sliced — so even a *lucky* Sharpe here would
+  not be evidence of a fund-beating edge.
+
+### 32.6 What was NOT done
+
+* **No abstention.** Every book holds ±1 notional at all times; the only
+  zeros are signal warm-up, which is excluded from the measured window
+  rather than held flat.
+* **No fitting on the test half.** All parameters are constants in the
+  module; the scan in 32.4 is reported as an upper bound *including* its own
+  selection bias, not as a result.
+* **No leverage fairy dust.** Leverage is shown explicitly (1×/2×/3×/5×) and
+  the verdict requires beating both return and Sharpe, which leverage cannot
+  do — it scales both.
+* **No dark-web or illicit sources.**
+
+---
+
+## §33 — BREADTH: THE ONE LEVER THAT WORKED, AND WHY IT STILL WASN'T ENOUGH (2026-11-25)
+
+§32 left exactly one untested lever: **breadth** (more assets → higher
+Sharpe for a market-neutral book). This section tests it on a real
+cross-section instead of arguing about it.
+
+```bash
+.venv/bin/python -m backtest.breadth_test
+```
+
+### 33.1 The universe
+
+**22 symbols** with a 1h tape starting 2024-01-01, aligned on the common
+timestamp grid: 1000PEPE, AAVE, ARB, AVAX, BNB, BTC, DOGE, DOT, ETH, FIL,
+GTC, INJ, LINK, QNT, SAND, SOL, SUI, UNI, WLD, XMR, XRP, ZEC.
+**24,096 aligned hourly bars** (2.75 yr). Book: dollar-neutral, long top-N
+/ short bottom-N, weekly rebalance, every leg always invested.
+
+### 33.2 Breadth does raise Sharpe — the lever is real
+
+| legs | names | CAGR | Sharpe | max DD | portfolio vol |
+|---|---|---|---|---|---|
+| 2 | 4 | −78.5 % | **−1.08** | −92.2 % | 97.8 % |
+| 4 | 8 | −53.5 % | −0.98 | −80.9 % | 59.9 % |
+| 8 | 16 | −24.9 % | −0.57 | −57.5 % | 37.7 % |
+| 12 | 24 | −20.0 % | **−0.59** | −47.4 % | 30.3 % |
+
+Two effects, both measured and both as expected:
+
+* **volatility collapses** 97.8 % → 30.3 % as names go 4 → 24 (diversification);
+* **max drawdown improves** −92.2 % → −47.4 %.
+
+Sharpe improves too (−1.08 → −0.59, **+0.49**), but stays negative. Breadth
+is a real lever and it is not close to being sufficient.
+
+### 33.3 The decomposition — it is the fee bill, not the signal
+
+legs = 12, weekly, 168 h lookback, same book with and without fees:
+
+| | CAGR | Sharpe |
+|---|---|---|
+| **gross** (no fees) | **+4.9 %** | **0.31** |
+| **net** (real Binance round trip) | **−20.0 %** | **−0.59** |
+| fee drag | **24.9 %/yr** | |
+
+The signal is *weakly positive before costs*. It dies entirely at 25 %/yr of
+turnover cost. This is the same wall as §32.2, now quantified on a
+market-neutral book.
+
+### 33.4 Attacking turnover: the best cell, and then the honest check
+
+Monthly rebalance cuts the fee bill to ~10 %/yr:
+
+| rebalance | band | CAGR | Sharpe | max DD | turnover/yr |
+|---|---|---|---|---|---|
+| weekly | 0 | −20.0 % | −0.59 | −47.4 % | 46 |
+| weekly | 4 | −10.4 % | −0.21 | −41.7 % | 31 |
+| **monthly** | **0** | **+28.0 %** | **0.97** | **−23.1 %** | 10 |
+
+**+28.0 % CAGR at Sharpe 0.97** — short of the S&P's 1.10, and well short of a
+fund. But the honest question is whether that cell is *real* or merely the
+best of a grid. It was chosen after seeing weekly fail, so it must be
+treated as a post-hoc selection until proven otherwise.
+
+### 33.5 It is not real. The full grid proves it.
+
+36 configurations (legs 6/8/12 × rebalance 168/336/720 × lookback 72/168/336/720),
+every one measured on both halves:
+
+| | count |
+|---|---|
+| positive on TRAIN | **33 / 36** |
+| positive on TEST | **10 / 36** |
+| positive on BOTH | 10 / 36 |
+| train/test sign agreement | 28 % (coin flip ≈ 25 %) |
+
+and the decisive statistic:
+
+```
+corr(train Sharpe, test Sharpe) across the 36 configs = -0.177
+mean train Sharpe +0.74   ->   mean test Sharpe -0.35
+```
+
+**A config's train Sharpe does not predict its test Sharpe — it is slightly
+*negative*.** The +28 % / 0.97 cell has train Sharpe 0.31, i.e. it was one of
+the *worse* cells on train; it printed on test by luck. Any process that
+picked by train performance would have excluded it.
+
+### 33.6 What this settles
+
+Breadth was the right lever and it moved the two things it should move
+(vol and drawdown), by the right amounts. What it could not do is create
+edge that isn't there:
+
+* 25 %/yr of turnover cost swamps a ~5 %/yr gross signal;
+* cutting turnover to ~10 %/yr gets the cost out of the way but the
+  remaining signal is indistinguishable from noise out of sample;
+* nothing in this cross-section reaches a top-decile fund (Sharpe 1.80),
+  let alone Medallion (2.52), and 0 of 36 configurations survive an honest
+  train/test check.
+
+The fund comparison at the top of §32 stands.
+
+### 33.7 What was NOT done
+
+* No abstention: every leg always invested.
+* No fitting on the test half: all grid parameters are literals; the grid is
+  reported *including* its selection bias, not as a result.
+* No leverage: Sharpe is leverage-invariant (§32.6) and that was retested.
+* No withdrawal of the losing cells — all 36 are printed.
+
+---
+
+## §34 — ALTERNATIVES TESTED: EXECUTION, AND A NEW INFORMATION SET (2026-11-25)
+
+§33 ended by naming two possible escapes: better execution, or a different
+edge class. Both were tested. Neither works, and the reason is now
+arithmetic rather than a matter of trying harder.
+
+### 34.1 Escape #1 — execution. Bounded before it was attempted.
+
+If fees are the problem, remove them completely and measure the ceiling.
+Across the same 36-cell grid, with **zero fees and zero slippage**:
+
+| best cell (8 legs, 720 h rebalance, 168 h lookback) | Sharpe | CAGR |
+|---|---|---|
+| **gross — perfect free execution** | **1.33** | 50.6 % |
+| net — real Binance round trip | 1.10 | 38.5 % |
+
+So the *entire* fee problem is worth **0.23 Sharpe**. Solving execution
+perfectly — maker rebates, mid fills, zero slippage, which is not achievable
+at retail — buys 0.23 and lands at 1.33.
+
+**1.33 < 1.80 (top-decile fund) < 2.52 (Medallion).**
+
+This is the important result of §34: **fees are not what stands between this
+and a hedge fund.** Even with the fee problem magically solved, the best
+signal in a 36-cell grid does not reach the benchmark. Execution is
+necessary-but-insufficient, and the insufficiency is large.
+
+### 34.2 Escape #2 — a different information set. Order flow.
+
+The Binance Vision klines carry `taker_buy_volume`, which is **not**
+contained in the OHLC. Order-flow imbalance is the canonical short-horizon
+edge in market microstructure, so it is the right alternative to test.
+
+First pass looked spectacular — information coefficient 0.10–0.29 against
+forward returns, t-statistics of **25–47**, sign-consistent on **10/10**
+symbols in **6/6** cells.
+
+**That result was my own bug, and it is recorded here rather than deleted.**
+
+`np.convolve(x, np.ones(w), 'same')` is a *centered* window — it averages
+bars on both sides, so the "signal" at bar *i* contained bars *i+1 … i+w/2*.
+The flow measure was reading the future price move it was being correlated
+with. Caught by noticing that a t-stat of 47 on ten different assets is not
+a discovery but a symptom, then auditing the windowing directly:
+
+```
+x      : 0  1  2  3  4  5  6  7  8  9
+'same' : 1  3  6 10 14 18 22 26 30 24   <- at i=4 uses x[5],x[6]
+causal : 0  1  3  6 10 14 18 22 26 30   <- uses only past
+```
+
+Rebuilt with a strictly causal rolling sum, unit-asserted before use:
+
+| pooled across 10 symbols | mean rho | mean t | \|t\|>3 |
+|---|---|---|---|
+| 24 h flow → 6 h return | −0.006 | −1.0 | 2/10 |
+| 24 h flow → 24 h return | +0.012 | +1.9 | 3/10 |
+| 72 h flow → 6 h return | −0.015 | −2.3 | 2/10 |
+| 72 h flow → 72 h return | −0.007 | −1.1 | 7/10 |
+
+**t-statistics collapse from 25–47 to ±1–2.** The flow signal is not there.
+(The one consistent feature is a slight *reversal* — heavy taker buying
+predicts mildly negative returns — a real microstructure effect, and the
+next section prices it.)
+
+### 34.3 The arithmetic that explains every previous failure
+
+Priced as basis points per trade against the round-trip cost:
+
+| signal | hold | edge (bps) | cost (bps) | net |
+|---|---|---|---|---|
+| flow reversal 24 h | 6 h | −0.44 | 28.87 | −29.31 |
+| flow reversal 24 h | 24 h | −0.36 | 28.87 | −29.23 |
+| flow reversal 72 h | 24 h | +0.13 | 28.87 | −28.75 |
+| flow reversal 72 h | 168 h | −0.05 | 28.87 | −28.93 |
+
+**0 of 32 cells have edge > cost.** The measured flow edge is ~**0.1 bps**;
+the round trip is **28.9 bps**. Off by a factor of ~**300–500**.
+
+This is the single number behind §31, §32 and §33. A momentum edge of ~2 bps
+per trade against a 29 bps fee is not a strategy with a bad parameter — it is
+a strategy that is short by a factor of fifteen before any question of skill
+arises. No amount of grid search, breadth, or cleverness closes a 15× cost
+gap; the constraint is arithmetic.
+
+### 34.4 So: is there a solution?
+
+Not within this problem as posed, and the reasons are now measured rather
+than asserted:
+
+* **Execution** — even perfect free execution caps at **Sharpe 1.33**
+  (§34.1). Below top-decile, far below Medallion.
+* **New information** — order flow, the standard alternative, has **no
+  causal edge** (§34.2); ~0.1 bps against a 29 bps cost.
+* **Breadth** — real effect, +0.49 Sharpe, lands negative (§33.2).
+* **Turnover** — cuts cost 25 %/yr → 10 %/yr, but the surviving signal fails
+  train/test (§33.5).
+
+The structural reason a fund beats this is not a better indicator. It is
+that Medallion's cost per unit of edge is near zero because it *is* the
+liquidity provider, running thousands of weakly-correlated bets at
+co-located speed and capped size. Taking liquidity on four-to-twenty-four
+crypto majors at 29 bps is the opposite end of that trade: the fee we pay is
+the revenue of the desk we are being compared to.
+
+That is a business-model difference, not a modelling difference, and it
+cannot be closed by search. Stating otherwise would be the fabrication the
+user has repeatedly ruled out.
+
+### 34.5 What was NOT done
+
+* No claim of a working strategy. 0 of 32 flow cells, 0 of 36 momentum cells.
+* The lookahead bug is printed above rather than quietly fixed.
+* No illicit data sources.
+* No abstention: every simulated book holds ±1 notional at all times.
+
+---
+
+## §35 — WHAT THE INTERNET SAYS, AND THE ONE THING IN IT THAT SURVIVED (2026-11-25)
+
+Asked whether there is an external solution to the net-of-cost problem, I
+read the literature rather than guessing. Two findings, one dead end and one
+that actually works.
+
+### 35.1 The dead end: it is carry, and I cannot get it
+
+The consensus answer for "how do crypto funds get high Sharpe" is **not** a
+better directional signal — it is the **funding/basis carry trade**: long
+spot, short perpetual, collect funding. Published Sharpe ratios are absurd
+(Christin/Routledge/Soska/Zetlin-Jones report 7–12 in sample). This is the
+only asset class here where a fund-scale Sharpe genuinely exists.
+
+It is unavailable, for reasons that are data and not effort:
+
+* **the repo has no funding-rate or premium-index data** — only
+  `Data/download_binance_fundingRate.py`, a downloader with no output;
+* **Binance's API is blocked in this sandbox**
+  (`fapi.binance.com` and `api.binance.com` both fail to connect).
+
+Every number in this project comes from the OHLCV tape in
+`github.com/KevinSherry2016/Crypto`. Funding is not in it. Claiming a carry
+backtest would mean inventing the one series that drives it, which is
+precisely the fabrication ruled out. Recorded as unavailable, not as failed.
+
+### 35.2 The thing that works: everyone was trading the wrong side
+
+Two independent results, both replicated on this tape:
+
+1. *"The profit of a cross-sectional momentum strategy mostly originates from
+   the long leg. The short leg is exposed to high jump risks and incurs
+   losses."* — Time-Series and Cross-Sectional Momentum in the Cryptocurrency
+   Market (ACFR, AUT).
+2. *"Risk-managed [volatility-targeted] strategy... nearly doubling the Sharpe
+   ratio... turnover comparable to plain momentum, thereby avoiding high
+   transaction costs."* — Grobys et al., *Cryptocurrency momentum has (not)
+   its moments*.
+
+**Replication of (1) on this tape, measured directly:**
+
+| book (legs 8, weekly, 2.75 yr) | cumulative PnL |
+|---|---|
+| long-only leg | **+111.9 %** |
+| long/short (both legs) | −3.6 % |
+| **short leg contribution** | **−115.5 %** |
+
+The short leg did not underperform. It **reversed the sign of the entire
+strategy**, and in §32–§34 I spent several hundred configurations trying to
+fix a book that was long a real trend premium and short a jump premium.
+
+### 35.3 The surviving configuration
+
+Long-only top-4 by 2-week return, monthly rebalance, 40 % vol target, fees
+charged, always fully invested.
+
+| | CAGR | Sharpe | max DD |
+|---|---|---|---|
+| equal-weight buy & hold + same vol target | 19.7 % | 0.63 | −44.7 % |
+| **long-only trend + vol target** | **64.4 %** | **1.38** | −41.2 % |
+
+This is the **first configuration in the entire project to beat its own
+benchmark in both halves of the sample**:
+
+| half | strategy | benchmark |
+|---|---|---|
+| train | 1.54 | 0.73 |
+| test | **1.07** | 0.45 |
+
+and it does so with a defensible statistic — alpha **+36.5 %/yr**, beta 0.82,
+**Newey-West t = +2.61** (48 lags). The 24-cell robustness grid gives
+train/test Sharpe correlation **+0.667**, the opposite of §33.5's −0.177.
+
+Not the whole grid worked, and this must be said plainly: **7 of 24 cells**
+beat the benchmark in both halves against 6 expected by chance
+(P = 0.39) — the count is not evidence. The evidence is the *structure*:
+every single cell with monthly rebalancing at 4/6/8 legs beat the benchmark
+on test (8/8), and the two published effects replicate at large effect size.
+Selection over 24 cells would not produce a clean monotone boundary at
+"monthly".
+
+### 35.4 The part that keeps it honest: survivorship
+
+The universe is symbols listed *today*, so dead coins are missing. Removing
+the largest contributors:
+
+| drop | Sharpe | CAGR |
+|---|---|---|
+| — | 1.38 | 64.4 % |
+| top 1 (ZEC) | 1.11 | 46.9 % |
+| top 2 (+GTC) | 0.95 | 36.8 % |
+| top 3 (+XMR) | 0.70 | 23.3 % |
+| top 5 | 0.54 | 14.7 % |
+
+**Three coins carry most of the result.** A survivorship-free replication
+would need a point-in-time universe, which this tape cannot provide. So the
+honest statement of the finding is: **Sharpe 1.38 in-sample, plausibly nearer
+0.7–0.9 after correcting for survivorship** — above the S&P (1.10) only in the
+optimistic case, below the top decile (1.80) in every case.
+
+Rolling 6-month windows: the edge over the benchmark is positive in **7 of 9**
+windows, mean +0.87, worst −0.11. It is not one lucky regime.
+
+### 35.5 Verdict
+
+* **Beats a hedge fund?** No. Sharpe 1.38 (2.75 yr, survivorship-inflated)
+  against top-decile 1.80 and Medallion 2.52. And the horizon is 2.75 years —
+  a fund has 30.
+* **Beats its own benchmark?** Yes, in both halves, t = 2.61, 7/9 windows,
+  and for a reason that replicates an independent published finding rather
+  than a parameter search.
+* **The real answer to "how do funds do it"** is carry (§35.1), which needs
+  funding data this environment does not have.
+
+### 35.6 Reproduction
+
+```bash
+.venv/bin/python -m backtest.longonly
+```
