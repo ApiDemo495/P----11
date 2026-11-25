@@ -80,10 +80,19 @@ class AppPredictor:
         if direction == 0:
             return None
         from app.moves_risk import risk_block
-        entry = bars[-1].c
+        # `bars`/`st` used to be read here, but they are locals of pack()
+        # — every predict() call died with NameError, which the CLI
+        # swallowed as "no signal" (a silent zero-trade backtest).
+        bars = list(view.bars)
+        if not bars:
+            return None
+        entry = float(bars[-1].c)
+        closes = [float(b.c) for b in bars]
+        highs = [float(b.h) for b in bars]
+        lows = [float(b.l) for b in bars]
         blk = risk_block(entry, direction, HORIZON,
                          float(res.get("confidence") or 0.0),
-                         st.closes, st.highs, st.lows,
+                         closes, highs, lows,
                          atr=float(res.get("atr") or 0.0))
         if blk.get("tp") is None or blk.get("sl") is None:
             return None

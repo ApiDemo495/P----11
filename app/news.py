@@ -655,7 +655,7 @@ class NewsSystem:
             if 0.0 <= (now - it["ts"]) / 60.0 < NEWS_AGGREGATE_WINDOW
         ]
 
-    def stats(self) -> Dict:
+    def stats(self) -> dict[str, Any]:
         """Honesty stats for the news pipe (advice item 6): per-source
         heartbeats + dupe counter. Used by NIV + the UI source table."""
         now = time.time()

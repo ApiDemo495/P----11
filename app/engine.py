@@ -64,6 +64,7 @@ from .config import (
     UFP_ALPHA_IDS,
     WEIGHT_IDS,
 )
+from .contracts import clamp_rung, rung_level   # canonical rung prices
 from .brain import BrainSystem
 from .rlsys import damp_all, damp_shares
 from .emotion import EmotionSystem
@@ -386,6 +387,11 @@ def _metacog_block() -> dict:
         return {}
 
 
+def _verdict_rule(*a, **k):
+    from .verdict import public_verdict as _pv
+    return _pv(*a, **k)
+
+
 def _committee_block() -> dict:
     """§5 four-agent committee: the last vote each prediction cast."""
     try:
@@ -395,6 +401,38 @@ def _committee_block() -> dict:
                 "last": last.as_dict() if last else None}
     except Exception:
         return {"vote_count": 0, "last": None}
+
+
+def public_verdict(symbol: str, tf: str, direction: int, confidence: float,
+                   tier: str | None, issue_note: str | None = None,
+                   ) -> tuple[bool, str, str]:
+    """Backwards-compatible re-export — the rule lives in app/verdict.py."""
+    return _verdict_rule(symbol, tf, direction, confidence, tier, issue_note)
+
+
+def calib_should_record(done: dict, key: tuple[str, str], move: float) -> bool:
+    """True once per settled window, whichever grading path asks first.
+
+    Two paths grade the same window at the same boundary (the paired
+    ``calib_p``/``calib_h`` rings and the lock-learning pass), and both used
+    to append — so every window was counted twice in the calibration panel
+    and in its Brier score. The wake is identified by the realised move,
+    which is frozen for a settled window.
+    """
+    prev = done.get(key)
+    if prev is not None and abs(float(prev) - float(move)) < 1e-12:
+        return False
+    done[key] = float(move)
+    return True
+
+
+def _trend_evidence(symbol: str, tf: str, side: int) -> dict:
+    """The trend gate's own reading, for the card's evidence block."""
+    try:
+        from . import trend_gate
+        return trend_gate.check(symbol, tf, side)
+    except Exception:
+        return {}
 
 
 class PredictionEngine:
@@ -505,6 +543,9 @@ class PredictionEngine:
         self._fw_last_vote: dict[tuple[str, str], float] = {}
         self._last_raws: dict[tuple[str, str], dict] = {}
         self._calib_pending: dict[tuple[str, str], float] = {}
+        # last realised move already counted in the calibration rings, so the
+        # two grading paths cannot book the same window twice
+        self._calib_done: dict[tuple[str, str], float] = {}
         # RL controllers (error-finder + issue bandit) + tracer last value
         from .rlsys import get_rl
         self.rl = get_rl()
@@ -1216,7 +1257,9 @@ class PredictionEngine:
                 # calibration panel plots hit-rate vs stated confidence
                 _cb = self._calib_pending.pop((symbol, tf), None)
                 pdir = self.prev_cci_dir.get((symbol, tf), 0)
-                if move != 0 and pdir != 0 and _cb is not None and _cb > 0:
+                if (move != 0 and pdir != 0 and _cb is not None and _cb > 0
+                        and calib_should_record(self._calib_done,
+                                                (symbol, tf), move)):
                     _bucket = round(min(1.0, max(0.0, _cb)) * 20) / 20.0
                     self.hist.ring(
                         self.hist.tf_key(symbol, tf, "calib_p"), 400
@@ -1786,6 +1829,7 @@ class PredictionEngine:
                 fin["gate_ok"] = bool(_dir_final != 0 and
                                       float(fin["confidence"])
                                       > float(fin["asset_floor"]))
+                # 3-dp, the same rounding the card prints confidence with
                 fin["issue_note"] = (
                     f"cleared the {float(fin['asset_floor']):.3f} floor"
                     if fin["gate_ok"] else
@@ -2001,7 +2045,6 @@ class PredictionEngine:
                 "score_floor_ratio": fin.get("score_floor_ratio"),
                 "calib_n": fin.get("calib_n"),
                 "calib_source": fin.get("calib_source"),
-                "noise_floor_s": fin.get("noise_floor_s"),
                 "tier_rule": fin.get("tier_rule"),
                 "calib_provisional": fin.get("calib_provisional"),
                 "asset_floor": fin.get("asset_floor"),
@@ -2270,7 +2313,6 @@ class PredictionEngine:
                     "winrate_n": results[tf].get("winrate_n", 0),
                     "issue_note": results[tf].get("issue_note"),
                     "gate_ok": results[tf].get("gate_ok"),
-                    "issued": results[tf].get("issued"),
                     "tps": results[tf].get("tps"),
                     "horizon": results[tf].get("horizon"),
                     "edge": results[tf].get("edge"),
@@ -2284,7 +2326,6 @@ class PredictionEngine:
                     "score_floor_ratio": results[tf].get("score_floor_ratio"),
                     "calib_n": results[tf].get("calib_n"),
                     "calib_source": results[tf].get("calib_source"),
-                    "noise_floor_s": results[tf].get("noise_floor_s"),
                     "tier_rule": results[tf].get("tier_rule"),
                     "calib_provisional": results[tf].get("calib_provisional"),
                     "lock": dict(self.locks.get((symbol, tf)) or {}),
@@ -3669,8 +3710,22 @@ class PredictionEngine:
             # and the timeframe cards read one answer (not "ISSUED" + a lock
             # that says NO CALL)
             if cyc is not None:
-                cyc.verdict = str(final.get("verdict") or "NO CALL")
+                # ONE derivation for the GRC card and the ANALYSE card: the
+                # analyse final and the cycle badge come from the same rule,
+                # so the hero can never print a verdict its cycle contradicts.
+                _ok_a, _verdict_a, _note_a = public_verdict(
+                    symbol, tf, int(final.get("direction") or 0),
+                    float(final.get("confidence") or 0.0),
+                    cyc.tier, final.get("issue_note") or cyc.issue_note)
+                final["gate_ok"] = _ok_a
+                final["issue_note"] = _note_a
+                if _verdict_a != "ISSUE" and str(final.get("verdict")) == "ISSUE":
+                    final["verdict"] = _verdict_a
+                cyc.verdict = str(final.get("verdict") or _verdict_a)
                 cyc.gate_ok = bool(final.get("gate_ok"))
+                cyc.issue_note = str(final.get("issue_note") or _note_a)
+                cyc.trend_gate = _trend_evidence(
+                    symbol, tf, int(final.get("direction") or 0))
                 cyc.prediction_lock = dict(final.get("prediction_lock") or {})
                 if _conflict is not None:
                     # watch-only ⇒ execution_eligible flips False on the
@@ -4890,6 +4945,8 @@ class PredictionEngine:
         prices = self.feed.prices()
         price = prices.get(symbol, 0.0)
         record = empty_record(now)
+        record["symbol"] = symbol      # 4 rows share a ts; without this the
+        # graded history cannot attribute a hit or a miss to an asset at all
         record["prices"] = {s: round(p, 6) for s, p in prices.items()}
         # GRADE THE PREVIOUS PASS, not this one. The old code read
         # cci.prev_price AFTER this pass's compute had overwritten
@@ -4905,8 +4962,13 @@ class PredictionEngine:
             cyc = self.cycles.get((symbol, tf))
             evs = [e for e in (cyc.events if cyc else [])
                    if e.get("ts", 0) > now - 260]
-            target_hit = any(e["type"] == "target_hit" for e in evs)
-            sl_hit = any(e["type"] == "sl_hit" for e in evs)
+            # FIRST-TOUCH grading — see app/grading.py: the old two `any()`
+            # scans read an event type that is never emitted, were
+            # order-blind, and counted TP1 rungs as targets.
+            from .grading import resolve as _resolve_pass
+            _verdict = _resolve_pass(evs, tp=(cyc.tp if cyc else None))
+            target_hit = bool(_verdict["win"])
+            sl_hit = bool(_verdict["loss"])
             sub = {
                 "emotion": _sign(res.get("emotion", {}).get("aggregate", 0)),
                 "physics": _sign(res.get("physics", {}).get("ufp", 0)),
@@ -5001,12 +5063,30 @@ class PredictionEngine:
                 } if cyc else {}),
                 "issued": bool(cyc.issued) if cyc else False,
             }
+            # realised move from the frozen entry (app/grading.py explains
+            # why the old (price/cyc.tp - 1) was the distance REMAINING).
+            _entry = 0.0
+            try:
+                _entry = float((cyc.canonical or {}).get("entry")
+                               or (cyc.risk or {}).get("entry") or 0.0)
+            except (TypeError, ValueError):
+                _entry = 0.0
+            _dir = int(cyc.direction or 0) if cyc else 0
+            if target_hit or sl_hit:
+                if _entry > 0 and price > 0 and _dir:
+                    _pnl = round(_dir * (price / _entry - 1.0) * 100, 4)
+                elif cyc and (cyc.tp if target_hit else cyc.sl):
+                    _hit = float(cyc.tp if target_hit else cyc.sl)
+                    _pnl = round(abs(_hit - price) / max(price, 1e-9) * 100, 4)
+                else:
+                    _pnl = 0.0
+            else:
+                _pnl = 0.0
             record["outcomes"][tf] = {
                 "target_hit": target_hit,
                 "sl_hit": sl_hit,
-                "pnl_pct": (round((price / cyc.tp - 1.0) * 100, 4)
-                            if target_hit and cyc and cyc.direction > 0 and cyc.tp
-                            else 0.0),
+                "pnl_pct": _pnl,
+                "resolved": bool(target_hit or sl_hit),
             }
             record["formula_outputs"][tf] = {
                 str(f): round(v, 5) for f, v in (res.get("adj") or {}).items()
@@ -5026,12 +5106,50 @@ class PredictionEngine:
                 "local": self.agents.status().get("local", {}).get("last") or {},
             }
             w = self.cci.get_weights(symbol, tf)
+            # namespaced by asset: the flat key was overwritten by each
+            # asset in the pass, so all four read the LAST one's weights.
             record["weights"][tf] = {str(f): round(w.get(f, 0.0), 5)
                                      for f in WEIGHT_IDS}
+            record.setdefault("weights_by_symbol", {}).setdefault(symbol, {})[tf] = {
+                str(f): round(w.get(f, 0.0), 5) for f in WEIGHT_IDS}
         try:
             self.historydb.append(record)
         except Exception:
             log.exception("history append failed")
+
+    def _sync_display(self, symbol: str, res_pack: dict[str, dict],
+                      now: float | None = None) -> None:
+        """Mirror the final per-pass result onto the dashboard snapshot.
+
+        Called after the lock rules so the card and the record cannot
+        disagree; the panel is display-only state, never a decision input.
+        """
+        for tf, res in (res_pack or {}).items():
+            disp = self.display_systems.get((symbol, tf))
+            if disp is None or not isinstance(res, dict):
+                continue
+            try:
+                if res.get("confidence") is not None:
+                    disp["confidence"] = round(float(res["confidence"]), 4)
+                if res.get("direction") is not None:
+                    disp["direction"] = res["direction"]
+                disp["issued"] = bool(res.get("issued"))
+                disp["cci_adjusted"] = res.get("cci_adjusted")
+                if res.get("double_check"):
+                    disp["double_check"] = res["double_check"]
+                # the LANE's cycle is the settled value: the SAFE protocol and
+                # the last-gate verdict both write there, after _apply_agents
+                # already mirrored the pre-lock number onto the card
+                cyc = self.cycles.get((symbol, tf))
+                if cyc is not None and bool(getattr(cyc, "issued", False)):
+                    disp["confidence"] = round(float(cyc.confidence or 0.0), 4)
+                    disp["direction"] = int(cyc.direction or 0)
+                    disp["issued"] = bool(cyc.issued)
+                    disp["tier"] = getattr(cyc, "tier", disp.get("tier"))
+                    if getattr(cyc, "verdict", ""):
+                        disp["verdict"] = cyc.verdict
+            except Exception:                     # display must never break a pass
+                log.exception("display sync failed for %s/%s", symbol, tf)
 
     def _project_level(
         self, price: float, direction: int, confidence: float, atr: float, minutes: int
@@ -6003,9 +6121,11 @@ class PredictionEngine:
                 symbol, tf, move_sign, signals, subs, brain,
                 1 if outcome == "won" else None,
                 1 if outcome == "lost" else None)
-            # calibration ring: stated confidence vs realised sign
+            # calibration ring: stated confidence vs realised sign — the same
+            # once-per-window rule as the paired rings above
             conf = float(lock.get("confidence") or 0.0)
-            if conf > 0:
+            if conf > 0 and calib_should_record(self._calib_done,
+                                                (symbol, tf), move_sign):
                 self.hist.ring(self.hist.tf_key(symbol, tf, "calib_p"),
                                400).append(round(min(1.0, conf) * 20) / 20.0)
                 self.hist.ring(self.hist.tf_key(symbol, tf, "calib_h"),
@@ -6824,6 +6944,16 @@ class PredictionEngine:
         inside the halt used to return before the ledger was written and
         that window was lost forever (the all-zero settlement history)."""
         prev = self.locks.get((symbol, tf))
+        # TREND GATE bookkeeping: one sampled decision close per settled
+        # window, recorded BEFORE the next window is priced, so the gate's
+        # "trend" is the engine's own decision series (what the interaction
+        # was measured on) and never a reading it has not yet seen.
+        try:
+            from . import trend_gate as _tg
+            if prev is not None and float(prev.get("price") or 0.0) > 0:
+                _tg.observe(symbol, tf, float(prev["price"]))
+        except Exception:
+            log.exception("trend-gate observe failed for %s|%s", symbol, tf)
         # Prediction, contract, probability audit and settlement all share
         # the same lock-anchored [start, end) interval (W from issuance).
         start = float(now)
@@ -7136,6 +7266,7 @@ class PredictionEngine:
 
         Everything here is labelled `provisional` — the UI prints PREVIEW
         and never treats these levels as a contract."""
+        from .verdict import describe as vd_describe
         res = (self.last_result.get((symbol, tf))
                or self.display_systems.get((symbol, tf)) or {})
         if not res:
@@ -7152,14 +7283,22 @@ class PredictionEngine:
                     "hit_ts": None, "locked_cci": None}
                    for i, m in enumerate(mins)]
         end = next_grc_ts(now)
+        # ONE call to the shared rule, so the four published fields describe
+        # the same decision (they were three separate calls before).
+        _pv_pre = vd_describe(symbol, tf, direction, conf, res.get("tier"))
         return {
             "provisional": True,
             "symbol": symbol, "tf": tf, "W": int(TIMEFRAMES[tf]["minutes"]),
             "direction": direction, "confidence": round(conf, 4),
             "strength": float(res.get("strength") or 0.0),
             "issued": bool(res.get("issued")),
-            "verdict": ("WATCH" if res.get("gate_ok") else "NO CALL"),
-            "gate_ok": bool(res.get("gate_ok")),
+            # same rule as a locked card (app/verdict.py) — a PREVIEW that
+            # reads WATCH while its own confidence is below the floor was the
+            # other half of the same reported contradiction
+            "verdict": _pv_pre["verdict"],
+            "gate_ok": _pv_pre["gate_ok"],
+            "issue_note": _pv_pre["issue_note"],
+            "trend_gate": _pv_pre["trend_gate"],
             "prediction_lock": {},
             "tier": res.get("tier") or "watch-only",
             "p_side": res.get("p_side"),
@@ -7382,6 +7521,10 @@ class PredictionEngine:
             elif _k == 1:
                 _level, _status = _rung1, "locked"
             else:
+                # TP2/TP3 stay level-less on the cycle BY DESIGN (a rung is
+                # only tracked once the one before it is hit) — their frozen
+                # price is published on the canonical contract instead, so no
+                # panel prints "OPEN" for a level the lock already knows.
                 _level, _status = None, "pending"
             targets.append(TargetState(
                 k=_k, minutes=_minutes, level=_level, status=_status,
@@ -7395,11 +7538,10 @@ class PredictionEngine:
         _g_start, _g_end = now, now + W * 60
         # public verdict for the card: the contract keeps `issued` true so a
         # call can be graded, but the badge must say what actually cleared.
-        _gate_ok = bool(res.get("gate_ok", res.get("issued")))
-        _verdict = ("ISSUE" if _gate_ok and str(res.get("tier")
-                                                or "watch-only") != "watch-only"
-                    else "WATCH" if _gate_ok and res.get("direction")
-                    else "NO CALL")
+        _gate_ok, _verdict, _issue_note = public_verdict(
+            symbol, tf, int(res.get("direction") or 0),
+            float(res.get("confidence") or 0.0), res.get("tier"),
+            res.get("issue_note"))
         cyc = TFCycle(
             symbol=symbol,
             tf=tf,
@@ -7411,6 +7553,9 @@ class PredictionEngine:
             issued=res["issued"],
             verdict=_verdict,
             gate_ok=_gate_ok,
+            issue_note=_issue_note,
+            trend_gate=_trend_evidence(symbol, tf,
+                                       int(res.get("direction") or 0)),
             tier=str(res.get("tier") or "watch-only"),
             p_side=float(res.get("p_side") or 0.5),
             calib_n=int(res.get("calib_n") or 0),
@@ -7781,6 +7926,13 @@ class PredictionEngine:
                     await run_pass(self._record_learning, symbol, res_pack, now)
                 except Exception:
                     log.exception("learning bookkeeping failed for %s", symbol)
+                # The display snapshot is synced inside _apply_agents, which
+                # runs BEFORE the lock rules — so any lock event that moves
+                # the number (an SL SAFE penalty, a confidence refresh, a
+                # direction override) left the card showing the pre-lock
+                # value while the graded record carried the new one. Re-sync
+                # once the per-asset pass is complete.
+                self._sync_display(symbol, res_pack)
             _t("compute+agents+locks+learning", now)
             _mark = time.time()
             # Section 10 macro (every 15 GRCs) + deep (every 247 min)
@@ -7836,7 +7988,8 @@ class PredictionEngine:
                 # Tp4 (macro thesis) changes ONLY here
                 t4.direction = res["direction"] or t4_dir
                 t4.level = self._project_level(
-                    price, t4.direction, res["confidence"], res["atr"], t4.minutes
+                    price, int(cyc.direction or t4.direction or 0),
+                    res["confidence"], res["atr"], t4.minutes
                 )
                 t4.locked_at = now
                 t4.locked_cci = res["cci_adjusted"]
@@ -7861,6 +8014,15 @@ class PredictionEngine:
             cyc.drhe = res["drhe"]
             cyc.active_k = None
             cyc.refreshed_at = now
+            # BADGE + CONFIDENCE ARE ONE NUMBER. This branch refreshed the
+            # confidence every GRC but never re-derived the badge, so a card
+            # could read "ISSUED / cleared the floor" while its own number was
+            # 0.009 against a 0.385 floor (the reported mismatch error).
+            cyc.gate_ok, cyc.verdict, cyc.issue_note = public_verdict(
+                symbol, tf, int(cyc.direction or 0), cyc.confidence, cyc.tier,
+                None)
+            cyc.trend_gate = _trend_evidence(symbol, tf,
+                                             int(cyc.direction or 0))
             self._save_cycle_lock_state(cyc)
             return
 
@@ -7874,13 +8036,36 @@ class PredictionEngine:
         shift = abs(new_cci - prev_cci)
 
         # --- Tp1: lowest lock strength — adjusts at every GRC before being hit
+        #
+        # SIDE IS FROZEN. This used to project rung 1 on
+        # `res["direction"] or t1.direction` — the LIVE lean — and then write
+        # that lean back onto the rung. On a live SHORT the tape leaned long,
+        # so rung 1 was rebuilt ABOVE the entry (BNB|tf1: short at 439.47 with
+        # TP1 at 439.64), i.e. a target on the losing side of its own trade,
+        # and every later rung inherited the flipped side. A cycle's side is
+        # the locked prediction (§3): rungs may move in PRICE, never in SIDE.
         t1 = cyc.target(1)
         if t1.status == "locked":
-            t1.level = self._project_level(
-                price, res["direction"] or t1.direction, res["confidence"],
-                res["atr"], t1.minutes,
-            )
-            t1.direction = res["direction"] or t1.direction
+            _side1 = int(cyc.direction or t1.direction or 0)
+            # Rung 1 stays free to adjust (lowest lock strength, by design)
+            # but is CLAMPED into the trade's own region. The old write was
+            # unconstrained and produced targets on the LOSING side of their
+            # own trade — 11 of 16 lanes in data/locks.json (BNB tf4: short at
+            # 443.06, rung 1 at 493.50, stop at 466.46).
+            _rc = cyc.level_contract or {}
+            _e1 = float(_rc.get("entry") or (cyc.risk or {}).get("entry")
+                        or price)
+            _tp1 = float(_rc.get("tp") or cyc.tp or 0.0)
+            _sl1 = float(_rc.get("sl") or cyc.sl or 0.0) or None
+            _m1 = [t.minutes for t in cyc.targets]
+            _fall1 = rung_level(_e1, _side1, _tp1, _m1,
+                                (_m1[-1] if _m1 else None), 1, _sl1)
+            t1.level = clamp_rung(
+                self._project_level(
+                    price, _side1, res["confidence"], res["atr"], t1.minutes),
+                _e1, _side1, _sl1, fallback=_fall1, fallback_sl=_sl1,
+            ) or t1.level
+            t1.direction = _side1
             t1.locked_at = now
             t1.locked_cci = new_cci
             # The measured rung may be refreshed; the cycle side and its
@@ -7913,6 +8098,21 @@ class PredictionEngine:
         cyc.drhe = res["drhe"]
         cyc.issued = True
         cyc.refreshed_at = now
+        # The badge is re-derived from the number it sits next to — it used to
+        # be skipped whenever a cycle stayed open, so a card kept the badge
+        # from its FIRST analysis forever ("ISSUED" at conf 0.009).
+        #
+        # NOTE: the trend gate is deliberately NOT fed here. A GRC repeats the
+        # SAME price for an open window, and its ring only holds three
+        # samples, so observing per GRC filled it with [p, p, p] — the trend
+        # became 0 on every cell within minutes and the gate silently stopped
+        # withholding anything (caught on the live board: 16/16 cells
+        # "trend 0"). The gate's sampled series is one entry per SETTLED
+        # window (see _settle_and_lock) plus the warm replay, and nothing else.
+        cyc.gate_ok, cyc.verdict, cyc.issue_note = public_verdict(
+            symbol, tf, int(cyc.direction or 0), cyc.confidence, cyc.tier,
+            res.get("issue_note"))
+        cyc.trend_gate = _trend_evidence(symbol, tf, int(cyc.direction or 0))
         self._apply_risk(symbol, tf, cyc, res)
         self._save_cycle_lock_state(cyc)
 
@@ -7963,6 +8163,12 @@ class PredictionEngine:
             cyc.active_k = k + 1
             cyc.confidence = res["confidence"]
             cyc.cci = res["cci_adjusted"]
+            # the badge describes the number beside it — re-derive it here too
+            cyc.gate_ok, cyc.verdict, cyc.issue_note = public_verdict(
+                symbol, tf, int(cyc.direction or 0), cyc.confidence, cyc.tier,
+                None)
+            cyc.trend_gate = _trend_evidence(symbol, tf,
+                                             int(cyc.direction or 0))
             self._apply_risk(symbol, tf, cyc, res)
             await self.emit({
                 "type": "event",
@@ -8030,6 +8236,12 @@ class PredictionEngine:
                     )
                     t.locked_at = now
                     t.locked_cci = res["cci_adjusted"]
+            # the penalty above changed the number; the badge follows it
+            cyc.gate_ok, cyc.verdict, cyc.issue_note = public_verdict(
+                symbol, tf, int(cyc.direction or 0), cyc.confidence, cyc.tier,
+                None)
+            cyc.trend_gate = _trend_evidence(symbol, tf,
+                                             int(cyc.direction or 0))
             self._apply_risk(symbol, tf, cyc, res)
             cyc.refreshed_at = now
             cyc.safe_alert = True
@@ -8179,24 +8391,30 @@ class PredictionEngine:
                             ):
                                 await self._on_target_hit(symbol, tf, t.k, now)
                                 cyc = self.cycles.get((symbol, tf))
-                        if cyc.sl is not None:
-                            against = (price <= cyc.sl and cyc.direction > 0) or (
-                                price >= cyc.sl and cyc.direction < 0
+                        # THE STOP CANNOT BE THE ONLY BARRIER MEASURED. This
+                        # block tested SL first (and `continue`d), then TP —
+                        # so a tick that touched BOTH always booked the loss,
+                        # and a contract TP could only be booked inside this
+                        # branch. Resolve the pair, then dispatch; a genuine
+                        # same-tick tie still goes to the stop (app/grading.py).
+                        _sl_touched = cyc.sl is not None and not cyc.sl_observed and (
+                            (price <= cyc.sl and cyc.direction > 0)
+                            or (price >= cyc.sl and cyc.direction < 0))
+                        _tp_touched = cyc.tp is not None and not cyc.contract_tp_hit and (
+                            (price >= cyc.tp and cyc.direction > 0)
+                            or (price <= cyc.tp and cyc.direction < 0))
+                        if _sl_touched:
+                            await self._on_sl_hit(symbol, tf, now)
+                            # a resolved loss ends this lane's window: the TP
+                            # of a dead contract must not be booked afterwards
+                            continue
+                        if _tp_touched:
+                            cyc.contract_tp_hit = True
+                            cyc.execution_eligible = False
+                            cyc.events.append(
+                                {"ts": now, "type": "tp_hit", "tp": cyc.tp}
                             )
-                            if against and not cyc.sl_observed:
-                                await self._on_sl_hit(symbol, tf, now)
-                                continue
-                        if cyc.tp is not None and not cyc.contract_tp_hit:
-                            hit_tp = (price >= cyc.tp and cyc.direction > 0) or (
-                                price <= cyc.tp and cyc.direction < 0
-                            )
-                            if hit_tp:
-                                cyc.contract_tp_hit = True
-                                cyc.execution_eligible = False
-                                cyc.events.append(
-                                    {"ts": now, "type": "tp_hit", "tp": cyc.tp}
-                                )
-                                self._save_cycle_lock_state(cyc)
+                            self._save_cycle_lock_state(cyc)
                     elif not cyc.issued:
                         # NOT issued (below the confidence floor): the
                         # locked TP/SL levels are still displayed, so
@@ -8494,6 +8712,20 @@ class PredictionEngine:
                     # analysis had a call, a confidence and a preview
                     # ladder. Publish those, explicitly flagged preview.
                     d = self._provisional_cycle_dict(symbol, tf, now, price)
+                if d:
+                    # BADGE INVARIANT at the one place every card is printed.
+                    # Confidence can change between analyses (SL penalties,
+                    # tier cuts, ageing), so the published badge is checked
+                    # against the published number here: it may be
+                    # DOWNGRADED (ISSUE -> WATCH -> NO CALL) and never
+                    # upgraded, and gate_ok/verdict/issue_note are always
+                    # shipped together with the confidence they describe.
+                    try:
+                        from .verdict import reconcile_card as _vcard
+                        _vcard(symbol, tf, d)
+                    except Exception:
+                        log.exception("verdict reconcile failed for %s|%s",
+                                      symbol, tf)
                 # LEVELS GATE (rewrite): the snapshot NEVER invents a
                 # level from the current price. Levels come only from
                 # the cycle's frozen block anchored at the LOCKED entry
@@ -8844,7 +9076,12 @@ class PredictionEngine:
             # which is rebuilt at GRC — so a window that had not been
             # re-analysed yet painted "brain offline" over a healthy
             # connectome (the "brain disconnects at random" report).
-            "brain": self._brain_live(),
+            # (This dict used to declare "brain" twice — the AUTHORITATIVE
+            # block above was silently overwritten by this one, and the
+            # connectome's own vote was dropped. One entry now carries
+            # both; the duplicate key is gone.)
+            "brain": {**self._brain_live(),
+                      "vote": getattr(self.brains, "last_vote", None)},
             "flat_watch": self._flat_payload(),
             # §10.3 status chips: every subsystem's honesty state on top
             "chips": {
@@ -8907,16 +9144,6 @@ class PredictionEngine:
                 },
                 "probation_count": len(self.learning.probation),
             },
-            # AUTHORITATIVE BRAIN STATE (one source): the per-TF display
-            # entries can lag the connectome, which made the header say
-            # "brain offline — vote withheld" while the BRAIN tab showed
-            # FlyWire ready with 138k neurons.
-            "brain": (lambda _fw: {
-                "state": getattr(_fw, "state", "absent"),
-                "ready": getattr(_fw, "state", "absent") == "ready",
-                "chip": (_fw.chip() if _fw is not None else None),
-                "vote": getattr(self.brains, "last_vote", None),
-            })(getattr(self.brains, "fw", None)),
             "agents": self.agents.status(),
             # cosmetic settings the dashboard needs live (haptics off must
             # actually stop the vibration). NEVER the secret key fields.

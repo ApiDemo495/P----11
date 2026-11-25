@@ -284,6 +284,17 @@ def warm_history(engine, *, hours: int = 168,
                 # The replay already walks the tape walk-forward — its scores
                 # ARE that history, so record them (labelled seeded, exactly
                 # like the replayed ledger rows).
+                # TREND GATE: the replay IS this cell's sampled decision
+                # series, so it seeds the gate's tiny ring too. Without this
+                # the gate had no reading until two LIVE windows had settled
+                # (hours after a restart on tf4), and a restart silently
+                # switched the measured lever off.
+                try:
+                    from . import trend_gate as _tg_w
+                    _tg_w.observe(symbol, tf, float(closes[start_i]))
+                except Exception:
+                    log.exception("warm trend-gate seed failed %s/%s",
+                                  symbol, tf)
                 try:
                     import collections as _coll
                     _hist = engine.score_hist.setdefault(

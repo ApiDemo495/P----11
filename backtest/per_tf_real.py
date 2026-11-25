@@ -54,6 +54,18 @@ KEEP_BARS = 3500          # context + evaluation window
 EVAL_BARS = 2000          # decisions live in the last ~2000 bars
 STEP = 22
 
+def bars_for(minutes: int, bar_seconds: int = 3600) -> int:
+    """How many BARS of ``bar_seconds`` a window of ``minutes`` spans.
+
+    The tape this module loads is HOURLY (``-1h-`` files, and load_bars
+    asserts ``b.t - a.t == 3600``), while TF_W is in MINUTES.  The settle bar
+    used to be indexed as ``bars[t + W]``, i.e. t + 22 *hours* for a
+    22-*minute* window — the same unit error the old docstring complained
+    about elsewhere.  That is why every "tf" row was graded 60x-670x past its
+    stated horizon: tf1 traded 22 hours, tf4 traded 10 days.
+    """
+    return max(1, int(round(minutes * 60 / max(1, bar_seconds))))
+
 
 def load_bars(root: str, pair: str) -> list[Bar]:
     bars: list[Bar] = []
@@ -141,7 +153,12 @@ def main() -> None:
                 direction = int(res.get("direction") or 0)
                 if direction == 0:
                     continue
-                settle = bars[t + W].c
+                # W is MINUTES; the tape is hourly. Convert, and never grade
+                # past the end of the tape.
+                _nb = bars_for(W)
+                if t + _nb >= len(bars):
+                    continue
+                settle = bars[t + _nb].c
                 move_bps = direction * (settle / entry - 1.0) * 1e4
                 win = 1 if move_bps > 0 else 0      # tie = loss
                 # TP/SL first-touch, app risk block, SL wins ties
@@ -157,7 +174,7 @@ def main() -> None:
                         atr=float(res.get("atr") or 0.0))
                     tp, sl = blk.get("tp"), blk.get("sl")
                     if tp and sl:
-                        for fb in bars[t + 1:t + W + 1]:
+                        for fb in bars[t + 1:t + _nb + 1]:
                             if direction > 0:
                                 if fb.l <= sl:
                                     lvl = "SL"; break
