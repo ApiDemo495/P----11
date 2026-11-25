@@ -2860,3 +2860,122 @@ positive.
 * **No re-labelling.** The 80 %-win-rate configuration *exists and is
   reachable* (§31.4); presenting it as progress would be fake, since its
   expectancy is unchanged.
+
+---
+
+## §32 — CAN THIS BOOK BEAT A HEDGE FUND? (2026-11-25)
+
+**The request:** beat hedge funds, with no abstention, no limits on method.
+This section states the benchmark, then measures against it on real tape.
+
+```bash
+.venv/bin/python -m backtest.beat_funds
+```
+
+### 32.1 The benchmark, from public sources
+
+| fund / benchmark | net CAGR | Sharpe | max DD |
+|---|---|---|---|
+| **Renaissance Medallion** | ~39.1 % (1988–2018) | **2.52** | −9.1 % |
+| Citadel Wellington | ~19 % | 2.10 | −9.0 % |
+| top-decile hedge fund | ~15 % | 1.80 | −10 % |
+| S&P 500 long run | ~10 % | 1.10 | −50 % |
+
+Beating a fund means beating its **return and its Sharpe together**. A high
+return at Sharpe 0.5 is a leveraged beta position, not skill.
+
+### 32.2 The rule that decides this: fees are proportional to turnover
+
+Crypto's round trip is ~29–37 bps. Signalling at hourly resolution is a
+measured catastrophe:
+
+| signal | sign changes | cost at 28.9 bps |
+|---|---|---|
+| 168 h lookback, hourly | 812 / 24,096 bars | **171 %/yr of capital** |
+| 720 h lookback, hourly | 507 | **106 %/yr** |
+| 2160 h lookback, hourly | 164 | **34 %/yr** |
+
+No signal survives that. So the books below rebalance **daily or weekly** and
+hold in between — which is what a real fund does. It is not abstention: the
+position is always ±1 notional.
+
+### 32.3 The books (all pre-registered literals, test half walked once)
+
+Time-series momentum (30d/90d, daily rebalance, vol-target 40 % capped 3×),
+cross-sectional momentum (long top-2 / short bottom-2, weekly), and two
+log-spread pairs books. Data: the real Binance mirror, 24,096 hourly bars per
+asset, gap-free, 2024-01 → 2026-09.
+
+**Out of sample (2025-10-14 → 2026-09-30, one year, a bear market):**
+
+| book | CAGR | Sharpe | max DD |
+|---|---|---|---|
+| EW tsmom-vol-target | −16.58 % | −0.39 | −37.5 % |
+| xs-momentum | −30.63 % | −1.29 | −38.5 % |
+| BTC/ETH pairs | −0.38 % | 0.09 | −12.1 % |
+| SOL/BNB pairs | +19.03 % | **0.73** | −24.8 % |
+
+**Full period (2.75 yr) — parameters were never fitted, so this is fair:**
+
+| book | CAGR | Sharpe | max DD |
+|---|---|---|---|
+| EW buy-hold the majors | 24.11 % | 0.67 | −63.1 % |
+| EW tsmom-vol-target | −5.66 % | −0.02 | −44.5 % |
+| xs-momentum | −29.33 % | −0.80 | −65.6 % |
+| BTC/ETH pairs | −20.06 % | −0.61 | −66.6 % |
+| SOL/BNB pairs | +5.99 % | 0.35 | −39.0 % |
+
+**Not one book beat the S&P 500's Sharpe (1.10), let alone a fund's.**
+
+### 32.4 The upper-bound scan — 142 configurations
+
+Wider space: 4 lookback pairs × vol-target on/off × 2 rebalances × 4
+leverage levels × 4 assets, plus 9 cross-sectional and 18 pairs variants.
+
+| threshold | configs passing |
+|---|---|
+| Sharpe > 1.80 (top-decile fund) | **0** |
+| Sharpe > 2.52 (Medallion) | **0** |
+| CAGR > 39.1 % **and** Sharpe > 2.52 | **0** |
+
+Best Sharpe in 142 trials: **1.61** (BTC/BNB pairs, z=1.5, weekly, 57.1 %
+CAGR at 1×). That cell is *not* evidence of skill:
+
+* **test-half Sharpe 0.00** (train 2.22 → test 0.00 → the whole 1.61 lives
+  in train);
+* with 142 trials and ~12 % tracking error over 2.75 yr, the expected
+  **maximum Sharpe under zero skill is ≈ 2.46** — the observed best is
+  *below* what pure selection produces;
+* its z parameter flips the sign of the result (z=1.5 → +57 %, z=2.5 →
+  −15.7 %), which is what fitting noise looks like.
+
+### 32.5 Why the hedge funds are still ahead
+
+The gap is not a missing trick, it is a missing *business*:
+
+* **Frequency and cost.** Medallion trades at horizons where its edge is
+  many multiples of its cost. At crypto retail fees a strategy must clear
+  29–37 bps per round trip before it earns anything; at a 22-minute horizon
+  the window's own σ is comparable to that cost, so the edge is eaten.
+* **Capacity and infrastructure.** Medallion is capped at ~$10B, runs 300+
+  researchers, co-located execution and data no retail venue offers.
+* **Breadth.** Medallion runs thousands of weakly-correlated bets. Four
+  crypto majors is nothing like that, which is exactly why the max Sharpe
+  over 142 configurations is 1.61 and not 2.5.
+* **Benchmark fairness.** Medallion's 39 % net is 30 years of audited
+  compounding. A 2.75-year crypto sample cannot produce a comparable
+  estimate no matter how it is sliced — so even a *lucky* Sharpe here would
+  not be evidence of a fund-beating edge.
+
+### 32.6 What was NOT done
+
+* **No abstention.** Every book holds ±1 notional at all times; the only
+  zeros are signal warm-up, which is excluded from the measured window
+  rather than held flat.
+* **No fitting on the test half.** All parameters are constants in the
+  module; the scan in 32.4 is reported as an upper bound *including* its own
+  selection bias, not as a result.
+* **No leverage fairy dust.** Leverage is shown explicitly (1×/2×/3×/5×) and
+  the verdict requires beating both return and Sharpe, which leverage cannot
+  do — it scales both.
+* **No dark-web or illicit sources.**
