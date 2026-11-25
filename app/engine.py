@@ -4939,52 +4939,14 @@ class PredictionEngine:
                     if fid in w:
                         w[fid] = max(1e-3, min(0.5, w[fid] * float(mult)))
 
-    def _sync_display(self, symbol: str, res_pack: dict[str, dict],
-                      now: float | None = None) -> None:
-        """Mirror the final per-pass result onto the dashboard snapshot.
-
-        Called after the lock rules so the card and the record cannot
-        disagree; the panel is display-only state, never a decision input.
-        """
-        for tf, res in (res_pack or {}).items():
-            disp = self.display_systems.get((symbol, tf))
-            if disp is None or not isinstance(res, dict):
-                continue
-            try:
-                if res.get("confidence") is not None:
-                    disp["confidence"] = round(float(res["confidence"]), 4)
-                if res.get("direction") is not None:
-                    disp["direction"] = res["direction"]
-                disp["issued"] = bool(res.get("issued"))
-                disp["cci_adjusted"] = res.get("cci_adjusted")
-                if res.get("double_check"):
-                    disp["double_check"] = res["double_check"]
-                # the LANE's cycle is the settled value: the SAFE protocol and
-                # the last-gate verdict both write there, after _apply_agents
-                # already mirrored the pre-lock number onto the card
-                cyc = self.cycles.get((symbol, tf))
-                if cyc is not None and bool(getattr(cyc, "issued", False)):
-                    disp["confidence"] = round(float(cyc.confidence or 0.0), 4)
-                    disp["direction"] = int(cyc.direction or 0)
-                    disp["issued"] = bool(cyc.issued)
-                    disp["tier"] = getattr(cyc, "tier", disp.get("tier"))
-                    if getattr(cyc, "verdict", ""):
-                        disp["verdict"] = cyc.verdict
-            except Exception:                     # display must never break a pass
-                log.exception("display sync failed for %s/%s", symbol, tf)
-
     def _record_learning(self, symbol: str, res_pack: dict[str, dict],
                          now: float, *, record_id: str | None = None) -> None:
         """Section 10/13 bookkeeping after the lock rules ran."""
         prices = self.feed.prices()
         price = prices.get(symbol, 0.0)
         record = empty_record(now)
-        # WHICH ASSET IS THIS? The pass writes one record per asset
-        # (SYMBOL_ORDER), so four rows share a timestamp. Without a symbol
-        # field the graded history could not attribute a hit or a miss to an
-        # asset at all. Stamped here; readers tolerate its absence for rows
-        # written before this change.
-        record["symbol"] = symbol
+        record["symbol"] = symbol      # 4 rows share a ts; without this the
+        # graded history cannot attribute a hit or a miss to an asset at all
         record["prices"] = {s: round(p, 6) for s, p in prices.items()}
         # GRADE THE PREVIOUS PASS, not this one. The old code read
         # cci.prev_price AFTER this pass's compute had overwritten
@@ -5000,12 +4962,9 @@ class PredictionEngine:
             cyc = self.cycles.get((symbol, tf))
             evs = [e for e in (cyc.events if cyc else [])
                    if e.get("ts", 0) > now - 260]
-            # FIRST-TOUCH grading (app/grading.py). Two `any()` scans were
-            # wrong in three ways, all of them optimistic: "sl_hit" is never
-            # emitted (the SL path emits "sl_crossed"), so the ledger booked
-            # 0 stops in 80 snapshots; any() is order-blind, so SL-then-TP
-            # booked as a WIN; and "target_hit" also fires for the TP1..TP3
-            # rungs rather than the contract target.
+            # FIRST-TOUCH grading — see app/grading.py: the old two `any()`
+            # scans read an event type that is never emitted, were
+            # order-blind, and counted TP1 rungs as targets.
             from .grading import resolve as _resolve_pass
             _verdict = _resolve_pass(evs, tp=(cyc.tp if cyc else None))
             target_hit = bool(_verdict["win"])
@@ -5104,11 +5063,8 @@ class PredictionEngine:
                 } if cyc else {}),
                 "issued": bool(cyc.issued) if cyc else False,
             }
-            # REALIZED MOVE from the frozen entry. The old expression was
-            # (price / cyc.tp - 1) * 100 — the distance REMAINING to the
-            # target — so a just-hit target scored ~0 and the tape shows
-            # "target_hit True, pnl -8.14"; its `direction > 0` guard also
-            # made every SHORT print 0.0.
+            # realised move from the frozen entry (app/grading.py explains
+            # why the old (price/cyc.tp - 1) was the distance REMAINING).
             _entry = 0.0
             try:
                 _entry = float((cyc.canonical or {}).get("entry")
@@ -5150,9 +5106,8 @@ class PredictionEngine:
                 "local": self.agents.status().get("local", {}).get("last") or {},
             }
             w = self.cci.get_weights(symbol, tf)
-            # Namespaced by asset. This used to land in record["weights"][tf],
-            # which every asset in the pass overwrote — the stored weights were
-            # silently the LAST asset's, applied to all four.
+            # namespaced by asset: the flat key was overwritten by each
+            # asset in the pass, so all four read the LAST one's weights.
             record["weights"][tf] = {str(f): round(w.get(f, 0.0), 5)
                                      for f in WEIGHT_IDS}
             record.setdefault("weights_by_symbol", {}).setdefault(symbol, {})[tf] = {
@@ -5161,6 +5116,40 @@ class PredictionEngine:
             self.historydb.append(record)
         except Exception:
             log.exception("history append failed")
+
+    def _sync_display(self, symbol: str, res_pack: dict[str, dict],
+                      now: float | None = None) -> None:
+        """Mirror the final per-pass result onto the dashboard snapshot.
+
+        Called after the lock rules so the card and the record cannot
+        disagree; the panel is display-only state, never a decision input.
+        """
+        for tf, res in (res_pack or {}).items():
+            disp = self.display_systems.get((symbol, tf))
+            if disp is None or not isinstance(res, dict):
+                continue
+            try:
+                if res.get("confidence") is not None:
+                    disp["confidence"] = round(float(res["confidence"]), 4)
+                if res.get("direction") is not None:
+                    disp["direction"] = res["direction"]
+                disp["issued"] = bool(res.get("issued"))
+                disp["cci_adjusted"] = res.get("cci_adjusted")
+                if res.get("double_check"):
+                    disp["double_check"] = res["double_check"]
+                # the LANE's cycle is the settled value: the SAFE protocol and
+                # the last-gate verdict both write there, after _apply_agents
+                # already mirrored the pre-lock number onto the card
+                cyc = self.cycles.get((symbol, tf))
+                if cyc is not None and bool(getattr(cyc, "issued", False)):
+                    disp["confidence"] = round(float(cyc.confidence or 0.0), 4)
+                    disp["direction"] = int(cyc.direction or 0)
+                    disp["issued"] = bool(cyc.issued)
+                    disp["tier"] = getattr(cyc, "tier", disp.get("tier"))
+                    if getattr(cyc, "verdict", ""):
+                        disp["verdict"] = cyc.verdict
+            except Exception:                     # display must never break a pass
+                log.exception("display sync failed for %s/%s", symbol, tf)
 
     def _project_level(
         self, price: float, direction: int, confidence: float, atr: float, minutes: int

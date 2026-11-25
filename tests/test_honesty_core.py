@@ -218,7 +218,12 @@ def test_learning_grades_previous_pass_not_current():
     src = (ROOT / "app" / "engine.py").read_text()
     assert "_grade_prev" in src
     i = src.index("def _record_learning")
-    seg = src[i:i + 4000]
+    # bound the slice at the NEXT method rather than a byte count: the body
+    # legitimately grew (symbol stamp, first-touch grading, resolved/pnl
+    # fields) and a fixed 4000-char window started missing the call it is
+    # meant to prove exists
+    j = src.find("\n    def ", i + 10)
+    seg = src[i:j if j > i else i + 12000]
     assert "record_micro(" in seg
     assert "_prev[0]" in seg and "_prev[1]" in seg
 
