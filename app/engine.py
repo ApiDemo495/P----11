@@ -5779,10 +5779,17 @@ class PredictionEngine:
                 _restored = float(lock_row["contract_confidence"])
                 _fresh_conf = float(getattr(cyc, "confidence", 0.0) or 0.0)
                 if _fresh_conf > 0 and _restored > _fresh_conf + 0.10:
+                    # `_install_cycle_contract` does not take a symbol/tf —
+                    # naming them here raised NameError on EVERY initial
+                    # lock, which the caller caught and logged as "initial
+                    # lock failed", so no cycle was ever installed and the
+                    # board fell back to preview ladders. Read them off the
+                    # cycle instead of inventing a scope.
                     log.info("restored confidence refused %s/%s: stored "
                              "%.3f would inflate this window's measured "
                              "%.3f — keeping the measurement",
-                             symbol, tf, _restored, _fresh_conf)
+                             getattr(cyc, "symbol", "?"),
+                             getattr(cyc, "tf", "?"), _restored, _fresh_conf)
                     cyc.restore_note = (
                         f"stored confidence {_restored:.3f} refused; this "
                         f"window measured {_fresh_conf:.3f}")
@@ -8032,8 +8039,27 @@ class PredictionEngine:
                 _b["envelope"] = "raised to keep SL increasing with the timeframe"
             if (not _mandate_cell and _prev_tp > 0
                     and _b["tp_bps"] < _prev_tp * 1.03):
-                _b["tp_bps"] = round(_prev_tp * 1.03, 3)
-                _b["envelope"] = "raised to keep TP increasing with the timeframe"
+                # ── THE ENVELOPE RAN ON TP ALONE AND BROKE THE RATIO ────
+                # This raised TP to keep targets increasing with the
+                # timeframe but left SL where it was, so the PUBLISHED
+                # reward:risk collapsed. Live: BTC tf2 shipped TP 7 bps
+                # against SL 7 bps (1.00:1) and BNB tf4 1.28:1, while tf1
+                # showed 2.00:1 — the same badge quoting three strategies.
+                # Break-even is 62.5 % at 0.6:1 and 33.3 % at 2:1, so this
+                # is not cosmetic.
+                #
+                # The monotone-timeframe rule is kept, but it is now applied
+                # to the RANGE and the target is then re-derived from it:
+                # SL is widened with the timeframe, and TP follows at
+                # exactly RR_TARGET x the resulting stop. The measured q80
+                # MAE stays in `measured_*_bps`, so the envelope is still
+                # visible and nothing is hidden.
+                from .moves_risk import RR_TARGET as _RRT_ENV
+                _b["sl_bps"] = round(max(_b["sl_bps"], _prev_sl * 1.03), 3)
+                _b["tp_bps"] = round(_RRT_ENV * _b["sl_bps"], 3)
+                _b["envelope"] = ("range raised to keep SL increasing with "
+                                  f"the timeframe; TP re-fixed at {_RRT_ENV:g}x "
+                                  "the stop")
             _b["tp"] = round(_price0 * (1 + _dir * _b["tp_bps"] / 1e4), 6)
             _b["sl"] = round(_price0 * (1 - _dir * _b["sl_bps"] / 1e4), 6)
             _b["rr"] = (round(_b["tp_bps"] / _b["sl_bps"], 3)

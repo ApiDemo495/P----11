@@ -261,3 +261,74 @@ def test_atr_fallback_scales_volatility_by_sqrt_of_time():
     assert 40.0 < block["sl_bps"] < 60.0, block["sl_bps"]
     # NOT the old sqrt(22)=4.69 inflation, which would give ~375 bps
     assert block["sl_bps"] < 100.0
+
+
+def test_the_tf_envelope_may_not_break_the_ratio():
+    """The monotone-timeframe rule ran on TP ALONE and collapsed the ratio.
+
+    `_prev_tp * 1.03` raised TP to keep targets increasing with the
+    timeframe while leaving SL untouched, so the PUBLISHED reward:risk
+    drifted off 2:1. Live: BTC tf2 shipped TP 7 bps against SL 7 bps
+    (1.00:1) and BNB tf4 1.28:1 beside tf1's 2.00:1 — the same badge
+    quoting three different strategies, when break-even is 62.5 % at 0.6:1
+    and 33.3 % at 2:1.
+
+    A display-side clamp could not fix this (the board must print the FROZEN
+    contract's exact levels — tests/test_engine.py asserts that), so the
+    envelope itself now widens the RANGE and re-derives TP from the stop.
+    """
+    import inspect
+    from app import engine as _eng
+    src = inspect.getsource(_eng.PredictionEngine)
+    assert "THE ENVELOPE RAN ON TP ALONE AND BROKE THE RATIO" in src
+    # the envelope no longer nudges tp_bps in isolation
+    assert '_b["tp_bps"] = round(_prev_tp * 1.03, 3)' not in src
+    # it widens the stop, then fixes the target at RR x that stop
+    assert '_RRT_ENV * _b["sl_bps"]' in src
+
+
+def test_the_initial_lock_survives_the_restore_guard():
+    """A `symbol`/`tf` NameError in the restore guard killed EVERY lock.
+
+    `_install_cycle_contract` takes no symbol/tf. Naming them in the new
+    restore-refusal log line raised NameError each time, and the caller
+    swallows it as "initial lock failed" — so no cycle was ever installed,
+    the board fell back to preview ladders, and the published ratios became
+    arbitrary (1:1 at 7 bps). Pinned here because the failure mode is
+    entirely silent: the app boots, serves, and looks merely "wrong".
+    """
+    import inspect
+    from app import engine as _eng
+    fn = _eng.PredictionEngine._install_cycle_contract
+    src = inspect.getsource(fn)
+    # the function's own parameter names, straight from its code object
+    assert "symbol" not in fn.__code__.co_varnames[:fn.__code__.co_argcount]
+    assert "tf" not in fn.__code__.co_varnames[:fn.__code__.co_argcount]
+    # so the log line must not name them bare
+    assert "symbol, tf, _restored" not in src
+    assert 'getattr(cyc, "symbol"' in src and 'getattr(cyc, "tf"' in src
+
+
+def test_risk_block_honours_the_two_to_one_contract():
+    """A measured block must come out at exactly RR_TARGET, not near it."""
+    import random
+    from app.moves_risk import RR_TARGET, risk_block
+
+    rng = random.Random(12)
+    p, c, h, l = 100.0, [], [], []
+    for _ in range(1200):
+        p *= 1.0 + rng.gauss(0, 0.0007)
+        c.append(p)
+        w = abs(rng.gauss(0, 0.0006)) * p
+        h.append(p + w)
+        l.append(p - w)
+    for d in (1, -1):
+        for win in (22, 44, 130, 247):
+            b = risk_block(100.0, d, win, 0.5, c, h, l, atr=0.05,
+                           bar_minutes=1.0)
+            assert abs(b["rr"] - RR_TARGET) < 1e-6, (d, win, b["rr"])
+            # and the levels are on the right side of the entry
+            if d > 0:
+                assert b["tp"] > b["entry"] > b["sl"]
+            else:
+                assert b["tp"] < b["entry"] < b["sl"]
