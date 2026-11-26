@@ -517,7 +517,22 @@ def warm_history(engine, *, hours: int = 168,
                         engine.hist.ring(engine.hist.tf_key(
                             symbol, tf, f"facc{cid}"), 50).append(
                             1.0 if s == move_sign else -1.0)
-                    st = sub_totals.setdefault(name, {"n": 0, "hits": 0})
+                    # ── AN ABSTENTION IS NOT A LOSS (2026-11-26) ────────
+                    # `s == 0` means the subsystem had NO OPINION on this
+                    # window (e.g. the hedge tape had no qualifying prints).
+                    # The counter incremented `n` for it and scored it as a
+                    # miss, so a subsystem that spoke on 40 % of windows and
+                    # was RIGHT on them still graded below 50 % — live
+                    # measurement showed hf at 0.036 accuracy, which is not a
+                    # predictor quality, it is the arithmetic of counting
+                    # silences as errors. Only real votes are graded, and the
+                    # count of silences is reported separately so the
+                    # coverage is still visible.
+                    st = sub_totals.setdefault(name, {"n": 0, "hits": 0,
+                                                      "abstained": 0})
+                    if s == 0:
+                        st["abstained"] += 1
+                        continue
                     st["n"] += 1
                     st["hits"] += 1 if s == move_sign else 0
 
@@ -589,8 +604,15 @@ def warm_history(engine, *, hours: int = 168,
     except Exception:
         status["learning_persisted"] = False
 
+    # `n` is the number of windows the subsystem actually VOTED on, and
+    # `acc` is over those votes only; `abstained` keeps the silence visible
+    # so a thin subsystem cannot look fully-covered.
     status["subsystems"] = {
-        k: {"n": v["n"], "acc": round(v["hits"] / v["n"], 4) if v["n"] else None}
+        k: {"n": v["n"],
+            "acc": round(v["hits"] / v["n"], 4) if v["n"] else None,
+            "abstained": int(v.get("abstained") or 0),
+            "coverage": (round(v["n"] / (v["n"] + v.get("abstained", 0)), 4)
+                         if (v["n"] + v.get("abstained", 0)) else None)}
         for k, v in sub_totals.items()}
     for name, cid in (("brain", 97), ("emotion", 98), ("physics", 99),
                       ("news", 100), ("hf", 101)):

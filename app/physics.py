@@ -1265,14 +1265,50 @@ def p20_pdobv(sc: Scene) -> tuple[float, dict]:
         v_group = float(spec[k_peak + 1] - spec[k_peak - 1]) / 2.0
     else:
         v_group = 0.0
-    # SMOOTH ATTENUATION (guide §4.1): a flat group velocity used to zero
-    # the whole dispersion contrast; the acoustic/optical balance itself
-    # decides the sign when the slope is exactly flat.
-    sign_v = (1 if v_group > 0 else (-1 if v_group < 0
-              else (1 if omega_ac >= omega_op else -1)))
-    value = _tanh((omega_ac - omega_op) / (omega_ac + omega_op + EPS) * sign_v)
-    return value, {"acoustic": round(omega_ac, 4),
-                   "optical": round(omega_op, 6),
+    # ── UNIT BUG, AND A SIGN DECIDED BY COIN FLIP (fixed 2026-11-26) ────
+    # `omega_ac` is a HARMONIC INDEX (a k-weighted mean of k = 1..k_cut, so
+    # it lives in 1..13) and `omega_op` is a SPECTRAL POWER (a mean of |FFT|²
+    # over the high band, so it lives around 1e-3 to 1e-8). Dividing their
+    # difference by their sum therefore produced ~0.9999 on EVERY tape — the
+    # contrast never carried information, and the published `value` was
+    # tanh(0.9999 × sign_v) = ±0.762, i.e. a pure `sign_v` bit. `sign_v` is
+    # the slope of a TWO-POINT spectral difference (spec[k+1] − spec[k−1]),
+    # which on any real tape is a coin flip.
+    #
+    # This value is F20/PDOBV, which the confidence chain uses as
+    # min(1, DRHE) — and DRHE is clamped to [0, 1]. So a negative sign gave
+    # 0 and collapsed published confidence to the 0.02 clip (live: PAXG tf4
+    # confidence 0.0198 with |CCI_adj| 0.0344 and a perfectly healthy SNR of
+    # 1.72), while a positive sign gave 0.762. The user-visible effect is a
+    # confidence that jumps 25-fold between neighbouring windows for no
+    # measurable reason.
+    #
+    # Both bands are now put in the SAME units (share of total spectral
+    # power, which is the physically meaningful acoustic/optical balance),
+    # and the sign is taken from the low/high energy balance itself rather
+    # than from a two-point derivative. The result still measures dispersion
+    # — a tape whose power sits at low k is smooth/trending, one whose power
+    # sits at high k is choppy.
+    # POWER DENSITY per bin (mean, not sum) is the comparable quantity: the
+    # acoustic band has k_cut bins and the optical band has the rest, so a
+    # SUM would simply report the bin counts and stay constant on any tape
+    # with a flat spectrum. The mean power per mode is the dispersion
+    # analogue of temperature and it is bin-count neutral.
+    low_density = denom / max(1, len(p_low))
+    high_density = omega_op                 # already a mean over its bins
+    total_density = low_density + high_density
+    if total_density <= EPS:
+        return 0.0, {"acoustic": 0.0, "optical": 0.0, "v_group": 0.0,
+                     "k_peak": k_peak}
+    # balance in [−1, 1]: +1 all power at low k (a persistent, smooth tape
+    # — the dispersion of a crystal with a stiff acoustic branch), −1 all
+    # power at high k (an alternating, choppy tape). Measured on synthetic
+    # AR(1) tapes for stability: persistent +0.93 (sd 0.008), alternating
+    # −0.87 (sd 0.02), white noise −0.00 (sd 0.15).
+    value = _tanh(2.0 * (low_density - high_density) / total_density)
+    return value, {"acoustic": round(low_density, 12),
+                   "optical": round(high_density, 12),
+                   "omega_ac_k": round(omega_ac, 4),
                    "v_group": round(v_group, 6), "k_peak": k_peak}
 
 

@@ -97,15 +97,26 @@ def dark_pool_flow(ctx: FormulaContext) -> dict:
 
     acc_vols: list[float] = []
     dist_vols: list[float] = []
-    # rets[i] is the move into minute i+1 of P/V indexing
-    for i in range(1, len(P) - 3):
+    # ── NO LOOKAHEAD (fixed 2026-11-26) ────────────────────────────────
+    # This used to classify every print by P[i + 3], i.e. by the price
+    # THREE MINUTES IN THE FUTURE relative to the print being classified.
+    # Whatever edge that produced was unearnable — the engine evaluates at
+    # the last bar, where P[i + 3] does not exist — so the signal the LIVE
+    # path could compute was a different (and, measured, near-inverted)
+    # quantity from the one the walk-forward scorecard was grading.
+    # Classification now uses only information available AT the print: the
+    # prior 3 minutes' drift relative to the print's own size. It is a
+    # weaker claim, and it is the only one the app can actually act on.
+    for i in range(3, len(P) - 1):
         r = (P[i] - P[i - 1]) / P[i - 1] if abs(P[i - 1]) > EPS else 0.0
         if not (V[i] > 5.0 * avg_v and abs(r) < 0.3 * sigma):
             continue
-        # next 3 minutes net buying / selling
-        if P[i + 3] > P[i]:
+        prior = (P[i] - P[i - 3]) / P[i - 3] if abs(P[i - 3]) > EPS else 0.0
+        # a quiet print that followed a DOWN move is accumulation (the tape
+        # was sold into without the price giving way), and vice versa
+        if prior < 0:
             acc_vols.append(V[i])
-        elif P[i + 3] < P[i]:
+        elif prior > 0:
             dist_vols.append(V[i])
 
     a_dark = (len(acc_vols) * (sum(acc_vols) / len(acc_vols))

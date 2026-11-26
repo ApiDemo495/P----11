@@ -2828,6 +2828,16 @@ function renderWhy() {
       </div>
       <div>
         <h5>CONFIDENCE CHAIN — spec order</h5>
+        ${(() => {
+          // The chain is now regenerated on the CCI that ACTUALLY SHIPPED
+          // (it used to describe the pre-fusion score while the card printed
+          // a rescaled one). When even that final pass is moved by a later
+          // stage, `chain_gap` says so instead of letting two numbers sit
+          // side by side unexplained.
+          const cg = s.chain_gap;
+          if (!cg) return "";
+          return `<div class="kv"><span class="acc-warn" title="the chain below is regenerated on the published CCI; these later stages (fusion / asset behaviour / advanced layer) moved the final number">⚠ chain total ${fmt(cg.chain, 3)} vs published ${fmt(cg.published, 3)}</span><b class="dim">${esc(cg.why || "")}</b></div>`;
+        })()}
         <div class="kv"><span>1 · |CCI_adj| × min(1, DRHE ${fmt(m.drhe, 2)})</span><b>${fx(bd.base_confidence, 4)}</b></div>
         <div class="kv"><span>2 · × (0.7 + 0.3 × EQ ${fmt(m.eq, 2)})</span><b>brain B2</b></div>
         <div class="kv"><span>3 · state "${m.dominant || "—"}" ${m.state_aligned ? "aligned → +" + fmt(0.1 * (m.p_dominant || 0), 3) : "not aligned"}</span><b>${m.state_aligned ? "aligned" : "—"}</b></div>

@@ -215,7 +215,7 @@ def test_engine_tier_confluence_wiring():
     blocked = engine._tier_for("BNB", "tf2", 0.5, direction=1,
                                dirs_by_tf={"tf1": 1, "tf3": -1})
     assert blocked["tier"] == "full", blocked
-    assert "hold policy" in (blocked.get("tier_rule") or ""), blocked
+    assert "hold-policy certification" in (blocked.get("tier_rule") or ""), blocked
     clear = engine._tier_for("BNB", "tf2", 0.5, direction=1,
                              dirs_by_tf={"tf1": 1, "tf3": 1})
     assert clear["tier"] == "full", clear.get("tier_rule")

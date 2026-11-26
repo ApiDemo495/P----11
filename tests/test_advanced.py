@@ -452,8 +452,14 @@ def test_confidence_chain_telemetry_reaches_the_api_payload():
     from app import engine as _eng
     src = inspect.getsource(_eng)
     for field in ("confidence_base_snr", "confidence_modulator",
-                  "confidence_chain", "snr", "adv_conf_mult"):
+                  "snr", "adv_conf_mult"):
         assert f'"{field}": fin.get("{field}")' in src, field
+    # the chain published is the one regenerated ON the CCI that ships —
+    # it used to describe the pre-fusion score while the card printed a
+    # rescaled one (live: `cci_adjusted −0.1436` beside `|+0.0000| / floor`)
+    assert '"confidence_chain": (fin.get("published_chain")' in src
+    assert '"chain_gap": fin.get("chain_gap")' in src
+    assert '"chain_confidence": fin.get("published_chain_conf")' in src
     # and the display_systems dict must start from the producer's own fields
     # instead of a hand-maintained whitelist that silently drops new ones
     assert "_ds_base = {k: v for k, v in results[tf].items()" in src

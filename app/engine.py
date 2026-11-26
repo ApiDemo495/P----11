@@ -1540,6 +1540,22 @@ class PredictionEngine:
             fin["snr"] = _cal["snr"]
             fin["noise_floor"] = _cal["noise_floor"]
             fin["issued"] = _cal["issued"]
+            # The INPUTS of the chain, published with it. A later stage
+            # (the agent/brain fusion at the GRC) rescales `cci_adjusted`
+            # and must be able to re-run this exact calibration on the
+            # fused number instead of leaving the published confidence
+            # describing a stale CCI. Without these, the recompute would
+            # silently use defaults and invent a different chain.
+            fin["fusion_inputs"] = {
+                "experience_quality": br["experience"],
+                "p_dominant": br["p_dominant"],
+                "state_aligned": bool(aligned),
+                "rtp": em["rtp"], "pcv": pcv,
+                "wfcp": phys["wfcp"], "drpt": phys["drpt"],
+                "gspi": phys["gspi"],
+            }
+            fin["_pack"] = {"cci_adjusted": float(pack["cci_adjusted"]),
+                            "drhe": float(pack.get("drhe", 1.0))}
             fin["strength"] = pack.get("strength", 0.0)
             _wr, _wrn = self._measured_winrate(
                 symbol, tf, float(fin["confidence"]))
@@ -2101,6 +2117,64 @@ class PredictionEngine:
                     }
             except Exception:
                 _cell_cert = {}
+            # ── ONE FINAL CHAIN, ON THE NUMBER THAT SHIPS (2026-11-26) ──
+            # Three later stages rescale this window's CCI (the volatility
+            # factor, the RL deepening pass, and the agent/brain fusion at
+            # the GRC), and each of them used to leave `confidence_chain`
+            # describing the ORIGINAL score. Live symptom: a card printing
+            # `cci_adjusted −0.1436` beside a chain whose step 1 read
+            # `|+0.0000| / floor 0.020 = snr 0.00` — the panel built to let
+            # a user audit the confidence was auditing a different number.
+            # Rather than replicate the recompute at every mutation site
+            # (each one a chance to forget it again), the chain is
+            # regenerated ONCE here from the values that are actually about
+            # to be published, so agreement is structural.
+            try:
+                _fk_f = fin.get("fusion_inputs") or {}
+                _pack_f = fin.get("_pack") or {}
+                if _fk_f and _pack_f:
+                    _final_cci = float(fin.get("cci_adjusted")
+                                       or pack["cci_adjusted"])
+                    _final_drhe = float(fin.get("drhe")
+                                        or _pack_f.get("drhe") or 1.0)
+                    _fcal_f = calibrate_confidence(
+                        {"cci_adjusted": _final_cci, "drhe": _final_drhe},
+                        experience_quality=_fk_f.get("experience_quality", 0.5),
+                        p_dominant=_fk_f.get("p_dominant", 0.0),
+                        state_aligned=_fk_f.get("state_aligned", False),
+                        rtp=_fk_f.get("rtp", 0.0),
+                        pcv=_fk_f.get("pcv", 0.0),
+                        wfcp=_fk_f.get("wfcp", 1.0),
+                        drpt=_fk_f.get("drpt", 0.0),
+                        gspi=_fk_f.get("gspi", 0.0),
+                    )
+                    _bfac_f = float((fin.get("behavior") or {})
+                                    .get("factor") or 1.0)
+                    if _bfac_f != 1.0:
+                        _fcal_f = dict(_fcal_f)
+                        _fcal_f["confidence"] = (
+                            float(_fcal_f["confidence"]) * _bfac_f
+                            if _bfac_f < 1.0 else
+                            float(_fcal_f["confidence"])
+                            * (1.0 + (_bfac_f - 1.0) * 0.5))
+                    fin["published_chain"] = _fcal_f["steps"]
+                    fin["published_chain_conf"] = round(
+                        float(_fcal_f["confidence"]), 4)
+                    fin["published_chain_snr"] = _fcal_f["snr"]
+                    if abs(float(_fcal_f["confidence"])
+                           - float(fin.get("confidence") or 0.0)) > 0.02:
+                        # say so rather than pretend the chain equals the
+                        # published number
+                        fin["chain_gap"] = {
+                            "chain": round(float(_fcal_f["confidence"]), 4),
+                            "published": round(float(
+                                fin.get("confidence") or 0.0), 4),
+                            "why": "later stages (fusion/behaviour/advanced "
+                                   "layer) moved confidence after the chain",
+                        }
+            except Exception:
+                log.exception("final chain regeneration failed %s|%s",
+                              symbol, tf)
             results[tf] = {
                 "raw": raws[tf],
                 "adj": adj[tf],
@@ -2125,7 +2199,16 @@ class PredictionEngine:
                 # was blank while the number it audits shipped fine.
                 "confidence_base_snr": fin.get("confidence_base_snr"),
                 "confidence_modulator": fin.get("confidence_modulator"),
-                "confidence_chain": fin.get("confidence_chain"),
+                # the chain ON THE PUBLISHED NUMBERS (falls back to the
+                # original when the final pass could not run)
+                "confidence_chain": (fin.get("published_chain")
+                                     or fin.get("confidence_chain")),
+                "chain_gap": fin.get("chain_gap"),
+                "chain_confidence": fin.get("published_chain_conf"),
+                "chain_snr": fin.get("published_chain_snr"),
+                "fusion_inputs": fin.get("fusion_inputs"),
+                "fusion_conf": fin.get("fusion_conf"),
+                "_pack": fin.get("_pack"),
                 "confidence_raw": fin.get("confidence_raw"),
                 "snr": fin.get("snr"),
                 "noise_floor": fin.get("noise_floor"),
@@ -3001,8 +3084,12 @@ class PredictionEngine:
                 _wr_txt = (f"wr {100 * _wr:.1f}%, wilson lo {100 * _lo:.1f}%"
                            if _wr and _lo else
                            "no certified wr — warmup")
-                _mandate_note += (f" · hold policy [{_hs.get('tier')}] "
-                                  f"{_wr_txt}")
+                # `_hs['tier']` is the HOLD POLICY'S certification badge
+                # ("ROWS VERIFIED · SHIP GATE FAIL"), not this card's size
+                # tier — printing it as "tier" put a status sentence in a
+                # field every panel reads as full/half/quarter. Name it.
+                _mandate_note += (f" · hold-policy certification "
+                                  f"[{_hs.get('tier')}] {_wr_txt}")
         except Exception:
             pass
         return {"tier": tier, "p_side": round(p_side, 4),
@@ -4695,6 +4782,67 @@ class PredictionEngine:
                         and _mcfg_g.allows(symbol, tf))
             if factor != 1.0 and not _md_lock:
                 res["cci_adjusted"] = res["cci_adjusted"] * factor
+                # ── THE PUBLISHED FUSION MUST REACH THE CONFIDENCE
+                #    (fixed 2026-11-26) ─────────────────────────────────
+                # The confidence chain was computed earlier from the
+                # pre-fusion CCI, and this block then scales the CCI by the
+                # agent/brain factor WITHOUT recomputing it. Live proof:
+                # PAXG tf4 published `cci_adjusted −0.1436` while its own
+                # chain read step 1 = `|+0.0000| / floor 0.020 = snr 0.00`
+                # and published confidence 0.020 — a card whose confidence
+                # describes a number it is not showing, in the one panel
+                # built to audit that. (It also meant a window with a real
+                # −0.14 net bearish signal could never clear the floor.)
+                # The chain is recomputed on the fused CCI so the two agree
+                # by construction, and `fusion_conf` records the shift.
+                try:
+                    _pre_c = float(res.get("confidence") or 0.0)
+                    _fk = res.get("fusion_inputs") or {}
+                    if not _fk:
+                        # no inputs were carried (an older cycle shape) —
+                        # skip rather than recalibrate against DEFAULTS,
+                        # which would silently invent a different chain.
+                        raise KeyError("fusion_inputs not carried")
+                    _beh_pre = res.get("behavior") or {}
+                    _fcal = calibrate_confidence(
+                        {**(res.get("_pack") or {}),
+                         "cci_adjusted": float(res["cci_adjusted"]),
+                         "drhe": float(res.get("drhe") or 1.0)},
+                        experience_quality=_fk.get("experience_quality", 0.5),
+                        p_dominant=_fk.get("p_dominant", 0.0),
+                        state_aligned=_fk.get("state_aligned", False),
+                        rtp=_fk.get("rtp", 0.0),
+                        pcv=_fk.get("pcv", 0.0),
+                        wfcp=_fk.get("wfcp", 1.0),
+                        drpt=_fk.get("drpt", 0.0),
+                        gspi=_fk.get("gspi", 0.0),
+                    )
+                    # the asset-personality temper ran AFTER the original
+                    # chain and is a stated multiplication (0.78–1.12) —
+                    # apply the SAME factor so the recompute is a re-run of
+                    # the same formula, not a second opinion
+                    _bfac = float(_beh_pre.get("factor") or 1.0)
+                    if _bfac != 1.0:
+                        _fcal = dict(_fcal)
+                        _fcal["confidence"] = (
+                            min(1.0, float(_fcal["confidence"]) * _bfac)
+                            if _bfac < 1.0 else
+                            min(1.0, float(_fcal["confidence"])
+                                * (1.0 + (_bfac - 1.0) * 0.5)))
+                    res["confidence"] = _fcal["confidence"]
+                    res["confidence_base_snr"] = _fcal["base_confidence"]
+                    res["confidence_modulator"] = _fcal["modulator"]
+                    res["confidence_chain"] = _fcal["steps"]
+                    res["snr"] = _fcal["snr"]
+                    res["noise_floor"] = _fcal["noise_floor"]
+                    res["fusion_conf"] = {
+                        "before": round(_pre_c, 4),
+                        "after": round(float(_fcal["confidence"]), 4),
+                        "factor": round(float(factor), 4),
+                    }
+                except Exception:
+                    log.exception("fusion confidence recompute failed %s/%s",
+                                  symbol, tf)
                 _lad2, _src2, _fl2 = self._direction_ladder(
                     symbol, tf, float(res["cci_adjusted"]),
                     (res.get("breakdown") or {}).get("components") or [],
@@ -5243,6 +5391,10 @@ class PredictionEngine:
                 "emotion": _sign(res.get("emotion", {}).get("aggregate", 0)),
                 "physics": _sign(res.get("physics", {}).get("ufp", 0)),
                 "news": _sign(res.get("news_value", 0)),
+                # an ABSENT hedge signal is 0 = "no opinion", never a -1
+                # "short": scoring the gap as a miss is what drove the
+                # leaderboard's hf accuracy to 0.036 while the committee was
+                # still counting the abstention as a vote.
                 "hf": _sign(res.get("hedge", {}).get("combined", 0)),
                 "brain": _sign(res.get("brain", {}).get("polarity", 0)),
                 "adv": _sign(float((res.get("advanced") or {})
@@ -5415,7 +5567,38 @@ class PredictionEngine:
                     disp["confidence"] = round(float(cyc.confidence or 0.0), 4)
                     disp["direction"] = int(cyc.direction or 0)
                     disp["issued"] = bool(cyc.issued)
-                    disp["tier"] = getattr(cyc, "tier", disp.get("tier"))
+                    _tier_before = getattr(cyc, "tier", disp.get("tier"))
+                    disp["tier"] = _tier_before
+                    # ── THE TIER AGES WITH THE CONFIDENCE (2026-11-26) ────
+                    # This mirror copies the cycle's tier AFTER the SAFE
+                    # protocol and the last-gate verdict have moved the
+                    # confidence, and it never re-derived it. Live result:
+                    # `BNB tf3 · conf 0.019 · tier full · NO CALL` — a card
+                    # advertising FULL SIZE on a window 19x below its own
+                    # issue floor, while the same rule inside _tier_for had
+                    # already decided to cap it. It is the exact drift this
+                    # module's own docstrings describe for the BADGE (a
+                    # number changed after its label was written), just on
+                    # the size hint. Re-derive here, on the same numbers the
+                    # card is about to print.
+                    try:
+                        from .config import asset_issue_floor as _aif_d
+                        _dfloor = float(_aif_d(symbol))
+                        _dconf = float(cyc.confidence or 0.0)
+                        if _dconf <= _dfloor and _tier_before != "watch-only":
+                            disp["tier"] = "watch-only"
+                            disp["tier_rule"] = (
+                                str(disp.get("tier_rule") or "")
+                                + f" · tier capped at watch-only at publish: "
+                                  f"confidence {_dconf:.3f} <= issue floor "
+                                  f"{_dfloor:.3f} (the size hint may never "
+                                  f"outrank the published gate)")
+                            if cyc is not None:
+                                # the cycle is what the next tick reads
+                                cyc.tier = "watch-only"
+                    except Exception:
+                        log.exception("tier re-derivation failed for %s/%s",
+                                      symbol, tf)
                     if getattr(cyc, "verdict", ""):
                         disp["verdict"] = cyc.verdict
             except Exception:                     # display must never break a pass
@@ -7979,6 +8162,62 @@ class PredictionEngine:
         _eff_dir = 1 if _eff_dir >= 0 else -1
         _eff_tp = float(cyc.tp or _horizon_block.get("tp") or 0.0)
         _eff_sl = float(cyc.sl or _horizon_block.get("sl") or 0.0)
+        # ── SIDE/LEVEL CONSISTENCY (live defect 2026-11-26) ─────────────
+        # 9 of 16 cells shipped a TP/SL on the WRONG side of their own
+        # entry: e.g. BTC tf1 published direction −1 with tp 67521 > entry
+        # 66467 > sl 65836, i.e. the levels of a BUY under a SELL badge. A
+        # user reading that sees a target ABOVE the market on a short — the
+        # exact "TP/SL/entry don't match" complaint, and it is unfixable by
+        # any amount of chart explanation.
+        #
+        # Cause: the paper trail showed risk["direction"] = +1 while the
+        # cycle published −1, so the pair was frozen for one side and
+        # stamped with the other. Rather than chase every writer, the
+        # single site that builds the contract now VERIFIES the pair against
+        # the side it is about to publish and re-prices it for that side at
+        # the SAME entry when they disagree. The measured distances are
+        # preserved (app/levels.mirror reflects the pair about its entry);
+        # re-pricing is the fallback, and `levels_repaired` records which
+        # happened so a silent correction can never look like a measurement.
+        _pair_ok = (_eff_tp > 0 and _eff_sl > 0 and _price0 > 0 and
+                    ((_eff_tp > _price0 > _eff_sl) if _eff_dir > 0
+                     else (_eff_tp < _price0 < _eff_sl)))
+        if _price0 > 0 and not _pair_ok and _eff_tp > 0 and _eff_sl > 0:
+            _mir = None
+            try:
+                from .levels import mirror as _mirror
+                _mir = _mirror({"entry": _price0, "tp": _eff_tp,
+                                "sl": _eff_sl,
+                                "direction": -_eff_dir}, _eff_dir)
+            except Exception:
+                _mir = None
+            if _mir:
+                _eff_tp, _eff_sl = float(_mir["tp"]), float(_mir["sl"])
+                _repair = "mirrored about the entry (distances preserved)"
+            else:
+                _fresh = _risk_block(_price0, _eff_dir, _mins[-1], _edge,
+                                     _closes, _highs, _lows,
+                                     atr=res.get("atr", 0.0),
+                                     spread_bps=_spread)
+                _eff_tp, _eff_sl = float(_fresh["tp"]), float(_fresh["sl"])
+                _repair = ("re-measured for the published side (the inherited "
+                           "pair could not be mirrored)")
+            cyc.tp, cyc.sl = _eff_tp, _eff_sl
+            cyc.tp_dist = abs(_eff_tp - _price0)
+            cyc.sl_dist = abs(_price0 - _eff_sl)
+            cyc.ratio = (round(cyc.tp_dist / cyc.sl_dist, 6)
+                         if cyc.sl_dist else None)
+            cyc.risk = {**(cyc.risk or {}), "tp": _eff_tp, "sl": _eff_sl,
+                        "tp_dist": cyc.tp_dist, "sl_dist": cyc.sl_dist,
+                        "ratio": cyc.ratio, "direction": _eff_dir,
+                        "tp_bps": round(cyc.tp_dist / _price0 * 1e4, 2),
+                        "sl_bps": round(cyc.sl_dist / _price0 * 1e4, 2)}
+            cyc.levels_repaired = _repair
+            cyc.events.append({"ts": now, "type": "levels_repaired",
+                               "direction": _eff_dir, "how": _repair})
+            log.warning("levels repaired %s/%s: side %+d, pair was on the "
+                        "wrong side of %.6f — %s", symbol, tf, _eff_dir,
+                        _price0, _repair)
         cyc.canonical = _build_contract(
             symbol=symbol, timeframe=tf, direction=_eff_dir,
             entry=_price0, horizon_tp=_eff_tp, sl=_eff_sl,
@@ -9078,11 +9317,52 @@ class PredictionEngine:
                     d["contract_state"] = ("locked" if lv and cyc.level_contract
                                             else "legacy" if lv else "unavailable")
                     if lv:
+                        # ── THE SCREEN'S OWN GUARANTEE (2026-11-26) ──────
+                        # The contract layer now repairs a pair that arrives
+                        # on the wrong side of the entry, but a display must
+                        # not depend on an upstream fix having run: if this
+                        # pair is still inverted against the side the card is
+                        # about to print, mirror it (distances preserved) and
+                        # SAY SO. Nine of sixteen live cells were shipping
+                        # `SELL` above an entry with its targets on the buy
+                        # side — a screen must never be the place where a
+                        # trader discovers that.
+                        _lv_side = int(d.get("direction") or 0) or \
+                            int(cyc.direction or 0)
+                        _lv_ok = (_lv_side == 0
+                                  or (float(lv["tp"]) > float(lv["entry"])
+                                      > float(lv["sl"]) if _lv_side > 0
+                                      else float(lv["tp"]) < float(lv["entry"])
+                                      < float(lv["sl"])))
+                        _lv_note = ""
+                        if not _lv_ok:
+                            try:
+                                from .levels import mirror as _mir2
+                                _fix = _mir2(
+                                    {"entry": lv["entry"], "tp": lv["tp"],
+                                     "sl": lv["sl"], "direction": -_lv_side},
+                                    _lv_side)
+                            except Exception:
+                                _fix = None
+                            if _fix:
+                                lv = {**lv, "tp": _fix["tp"], "sl": _fix["sl"],
+                                      "tp_dist": _fix["tp_dist"],
+                                      "sl_dist": _fix["sl_dist"],
+                                      "ratio": _fix["ratio"],
+                                      "mirrored": True}
+                                _lv_note = (" · levels mirrored onto the "
+                                            "published side (the stored pair "
+                                            "was inverted)")
                         d["tp"], d["sl"] = lv["tp"], lv["sl"]
                         d["tp_dist"], d["sl_dist"] = lv["tp_dist"], lv["sl_dist"]
                         d["ratio"] = lv["ratio"]
                         d["entry"] = lv["entry"]
-                        d["levels_ok"] = True
+                        d["levels_ok"] = bool(_lv_ok or _lv_note)
+                        d["levels_mirrored"] = lv.get("mirrored") is True
+                        if _lv_note:
+                            d["levels_note"] = _lv_note.strip(" ·")
+                            d["issue_note"] = ((d.get("issue_note") or "")
+                                               + _lv_note)
                         _live_tape = getattr(self.feed, "mode", None) == "binance"
                         _open = bool(cyc.issued
                                      and cyc.tier != "watch-only"

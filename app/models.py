@@ -106,6 +106,11 @@ class TFCycle:
     #: engine's own side stood. Published so no card can print a side without
     #: saying it was reversed, and so the measurement travels with the call.
     trend_flip: dict = field(default_factory=dict)
+    #: how a TP/SL pair that arrived on the wrong side of this window's entry
+    #: was corrected (mirrored about the entry, or re-measured). Empty is the
+    #: normal case; a non-empty value means the published pair is a REPAIR,
+    #: not a raw measurement, and the UI must be able to say so.
+    levels_repaired: str = ""
     prediction_lock: dict = field(default_factory=dict)
     tier: str = "watch-only"         # full|half|quarter|watch-only (size hint)
     p_side: float = 0.5              # calibrated P(side) in [0.50, 1)
@@ -188,6 +193,7 @@ class TFCycle:
             "issue_note": self.issue_note,
             "trend_gate": self.trend_gate,
             "trend_flip": self.trend_flip,
+            "levels_repaired": self.levels_repaired,
             "prediction_lock": self.prediction_lock,
             "cycle_start": self.cycle_start,
             "cycle_end": self.cycle_end,
