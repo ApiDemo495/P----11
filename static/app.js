@@ -2220,12 +2220,16 @@ function renderCells() {
     return `<div class="hcell ${active ? "active" : ""}" data-cell="${key}" title="${esc(key)} — ${esc(c.rule || c.tier || "")}">
       <div class="hc-top"><span class="hc-sym">${sym} ${tf.toUpperCase()} · ${(a.tf_minutes || c.minutes)}m</span>
         <span class="hc-tier ${_tierCls(c.tier)}">${esc(c.tier)}</span></div>
-      <div class="hc-wr">${wr}${wrLabel} <span class="hc-conf">WR${conf ? " · " + conf : ""}${c.cannot_pay_at_any_target
-          ? ` · <span class="acc-dn" title="${esc(String(c.cost_note || ""))}">CANNOT PAY at any target</span>`
-          : c.enforced_tp_bps != null
-            ? ` · net needs target ≥ ${num(c.enforced_tp_bps, 0)}bp <span class="dim" style="font-size:10px">(break-even at its own ${num((c.win_rate ?? 0) * 100, 1)}% / rr ${num(c.reward_risk, 2)})</span>`
-            : c.round_trip_bps != null && c.win_rate != null
-              ? ` · round trip ${num(c.round_trip_bps, 1)}bp` : ""}</span></div>
+      <div class="hc-wr">${wr}${wrLabel} <span class="hc-conf">WR${conf ? " · " + conf : ""}${c.cost_infeasible
+          ? ` · <span class="acc-dn">round trip ${num(c.round_trip_bps, 1)}bp &gt; the whole target</span>`
+          : c.cannot_pay_at_any_target
+            ? ` · <span class="hc-cost">COST: ${num(c.round_trip_bps, 1)}bp RT vs a `
+              + `${num(c.reward_risk, 2)}x TP/SL → needs ${num((c.win_rate ?? 0) * 100 + 0, 0)}%· vs `
+              + `${num(c.tp_multiple_of_rt_needed, 1)}x RT to pay</span>`
+            : c.enforced_tp_bps != null
+              ? ` · <span class="hc-cost">break-even target ${num(c.enforced_tp_bps, 0)}bp</span>`
+              : c.round_trip_bps != null
+                ? ` · <span class="hc-cost">round trip ${num(c.round_trip_bps, 1)}bp` + `${c.cost_note ? ` — ${esc(String(c.cost_note).slice(0, 80))}` : ""}</span>` : ""}</span></div>
       <div class="hc-side">${dir} · ${esc(c.rule || (c.certified ? "" : "no rule"))}</div>
       <div class="hc-era">${esc(eraTxt)}</div>
       <div class="hc-lock">${esc(lock)}</div>

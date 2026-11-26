@@ -379,7 +379,8 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
     # the fee-multiple floor AND the honest break-even for this cell's own
     # gross rate and payoff. The panel shows both; they differ whenever
     # reward:risk is not 1.0, and the break-even is the one that pays.
-    base["min_tp_bps"] = round(MIN_TP_OVER_RT * rt, 3)
+    _fee_floor = round(MIN_TP_OVER_RT * rt, 3)
+    base["min_tp_bps"] = _fee_floor
     _wr = base.get("win_rate")
     _rr = base.get("reward_risk")
     _be = (breakeven_tp_bps(_wr, rt, _rr)
@@ -398,16 +399,40 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
     # the fee floor — every shipped cell carries row_k = 0.15, i.e. a target
     # one-seventh of its stop, which needs an 87 % hit rate to break even.
     # Printing 43 bp there is a floor that funds the exchange.
+    _fee_mult = ((_wr + (1.0 - float(_wr)) / float(_rr))
+                 if (_wr is not None and _rr) else None)
+    base["tp_multiple_of_rt_needed"] = (round(_fee_mult, 3)
+                                        if _fee_mult is not None else None)
     base["enforced_tp_bps"] = _be
     base["cannot_pay_at_any_target"] = bool(
         _wr is not None and _rr is not None and _be is None)
+    #: NO target can satisfy the 1.5x fee rule, because the ROUND TRIP ALONE
+    #: moves the stop by more than 1.5x the target. That is a stronger and
+    #: much rarer failure than the one below, and it must not be conflated
+    #: with it (it fired on all 12 graded cells before this split).
+    base["cost_infeasible"] = bool(_be is None and rt > 0 and _rr
+                                   and _rr / (1.0 + float(_rr)) > 0.5)
     if base["cannot_pay_at_any_target"]:
+        _need = round(100.0 / (1.0 + float(_rr)), 1)
+        _tp_bp = full.get("row_tp_bps_median")
         base["cost_note"] = (
-            "this geometry cannot pay at any target: reward:risk "
-            f"{_rr} needs a win rate above "
-            f"{round(100.0 / (1.0 + float(_rr)), 1)}% before the round trip "
-            f"of {rt:.1f} bps is covered, and the certified gross rate is "
-            f"{round(float(_wr) * 100, 1)}%")
+            "at the SHIPPED geometry the target is "
+            f"{float(_rr):g}x the stop, so a first-touch rate above {_need}% "
+            f"is needed before the {rt:.1f} bps round trip is covered, and "
+            f"the certified gross rate is {round(float(_wr) * 100, 1)}%")
+        base["cost_what_would_pay"] = (
+            "the certified win rate needs a target of at least "
+            f"{_fee_mult:.2f}x the round trip ({round(_fee_mult * rt, 1)} bps)"
+            if _fee_mult is not None else None)
+        base["target_verdict"] = base["cost_note"]
+    elif _be is not None and _fee_floor > _be:
+        # The distance is the honest one (the stop is where the measurement
+        # put it), but no target that is 1.5x the round trip can also be the
+        # break-even. Say that precisely instead of "cannot pay".
+        base["cost_note"] = (
+            f"break-even at this hit rate and payoff needs {_be:.1f} bps, "
+            f"which is wider than the {_fee_floor:.1f} bps the cost rule "
+            "allows — the target cannot satisfy both")
     else:
         base["cost_note"] = (
             "win_rate is the gross first-touch hit rate; the target must be "

@@ -95,12 +95,16 @@ def test_summary_reports_the_break_even_not_a_fee_multiple():
     assert s["cannot_pay_at_any_target"] is True
     assert s["enforced_tp_bps"] is None
     assert s["breakeven_tp_bps"] is None
-    assert "cannot pay at any target" in s["cost_note"]
+    assert "first-touch rate above" in s["cost_note"]
+    # and it must name what WOULD pay, not just refuse
+    assert s["cost_what_would_pay"] and "x the round trip" in s["cost_what_would_pay"]
 
 
 def test_the_cell_panel_does_not_print_the_fee_floor_as_the_requirement():
-    assert "net needs target ≥ ${num(c.enforced_tp_bps, 0)}bp" in JS
-    assert "CANNOT PAY at any target" in JS
+    # §41: the alarm was replaced by the two numbers that explain it
+    assert "break-even target ${num(c.enforced_tp_bps, 0)}bp" in JS
+    assert "COST: ${num(c.round_trip_bps, 1)}bp RT" in JS
+    assert "net needs target ≥" not in JS
 
 
 # ─────────────── 3. a stored key is not "not configured" ──────────────────
@@ -221,3 +225,56 @@ def test_ratio_is_recomputed_from_the_entry_and_stop_on_screen():
     assert "forecast target" in JS and "cycle target" in JS
     # the unchecked `cyc.ratio` print is gone
     assert '<div class="kv"><span>TP:SL ratio</span><b>${cyc?.ratio ?' not in JS
+
+
+# ─────────── 9. the yellow band: one caveat, not a wall of alarms ─────────
+def test_cost_caveat_is_structural_not_an_error_colour():
+    """§40 painted "CANNOT PAY at any target" in the error red on all 12
+    graded cells. The caveat is true for every shipped cell, so it read as a
+    red wall and said nothing about WHY. It is now muted amber text that
+    carries the two numbers that matter."""
+    css = (ROOT / "static" / "style.css").read_text()
+    assert ".hcell .hc-cost { font-size: 10px; color: #d8a13a; }" in css
+    assert 'CANNOT PAY at any target</span>' not in JS
+    assert "COST: ${num(c.round_trip_bps, 1)}bp RT" in JS
+
+
+def test_summary_separates_infeasible_from_unpayable():
+    """Two different failures, previously one label:
+    (a) the round trip alone exceeds 1.5x the target  -> cost_infeasible
+    (b) the geometry cannot pay at any target         -> cannot_pay_at_any_target
+    """
+    from app.hold_policy import summary
+    s = summary("BTC", "tf1")
+    assert s["cost_infeasible"] is False
+    assert s["cannot_pay_at_any_target"] is True
+
+
+def test_summary_quotes_the_multiple_of_round_trip_needed():
+    from app.hold_policy import summary
+    s = summary("BTC", "tf1")
+    wr, rr = s["win_rate"], s["reward_risk"]
+    expect = wr + (1 - wr) / rr
+    assert s["tp_multiple_of_rt_needed"] == pytest.approx(expect, abs=1e-3)
+    assert s["tp_multiple_of_rt_needed"] > 1.5      # the old fixed floor
+    assert "x the round trip" in s["cost_what_would_pay"]
+
+
+def test_every_graded_cell_gets_an_answer_not_just_an_alarm():
+    """No cell may show a cost verdict without the number that would pay."""
+    from app.hold_policy import summary, known_cells
+    checked = 0
+    for symbol, tf in known_cells():
+        s = summary(symbol, tf)
+        if s.get("win_rate") is None or s.get("reward_risk") is None:
+            continue
+        checked += 1
+        assert s.get("target_verdict") or s.get("cost_note"), (symbol, tf)
+        assert s.get("tp_multiple_of_rt_needed") is not None, (symbol, tf)
+    assert checked >= 8, checked
+
+
+def test_hc_cost_text_reports_both_numbers():
+    """The chip must read as 'this cost vs this geometry', not an alarm."""
+    assert 'num(c.reward_risk, 2)}x TP/SL' in JS
+    assert "num(c.tp_multiple_of_rt_needed, 1)}x RT to pay" in JS

@@ -645,6 +645,10 @@ canvas { max-width: 100%; }
 .hcell .tier-warm { color: #f0a24a; }
 .hcell .hc-wr { font-size: 17px; font-weight: 700; color: #26c96f; margin-top: 3px; }
 .hcell .hc-conf { font-size: 10px; color: #8a8aa3; }
+/* A structural cost caveat that is true for EVERY certified cell is not an
+   alarm — painting it in the error red on 12 cards at once is noise. This is
+   the muted-amber "read the number" tone. */
+.hcell .hc-cost { font-size: 10px; color: #d8a13a; }
 .hcell .hc-side { margin-top: 3px; font-size: 11px; }
 .hcell .hc-side .buy { color: #26c96f; }
 .hcell .hc-side .sell { color: #f0385a; }
