@@ -177,24 +177,29 @@ def risk_block(entry: float, direction: int, minutes: int, edge: float,
         mae = st["mae_long_q80"] if s > 0 else st["mae_short_q80"]
         # the 1 unit: measured adverse excursion (robust q80 quantile)
         sl_bps = max(1.0, mae) + half_spread
-        # measured favourable excursion, edge-scaled, clipped to the
-        # asset's own q50..q95 move band (docstring design)
-        f_edge = 0.8 + 0.4 * max(0.0, min(1.0, edge))
-        tp_meas = 1.5 * sl_bps * f_edge
-        if st["q95"] > 0:
-            tp_meas = max(st["q50"], min(st["q95"], tp_meas))
-        tp_bps = tp_meas + half_spread
-        # band [1:1, 4:1]: above 4:1 the target is fantasy — cap it;
-        # below 1:1 keep the measured truth and flag it (watch-only)
-        if sl_bps > 0 and tp_bps / sl_bps > 4.0:
-            tp_bps = 4.0 * sl_bps
+        # ── THE USER'S 2:1 IS THE CONTRACT, NOT A PREFERENCE ────────────
+        # Live cards were shipping 0.59:1 (BTC tf4: 400 bps target / 400
+        # bps stop), 0.35:1 (PAXG tf1: 53/32) and 1:1 (BNB tf2: 109/109),
+        # each labelled "band 1:1–4:1, 2:1 preferred". A reward/risk that
+        # drifts to 0.6:1 is a DIFFERENT STRATEGY from the one the win-rate
+        # target was set against — at 0.6:1 break-even is 62.5 %, at 2:1 it
+        # is 33.3 %. Nothing was enforcing the ratio, so the number the
+        # user reads and the number the risk engine uses had diverged.
+        #
+        # The stop stays MEASURED (it is the q80 adverse excursion, the
+        # quantity that decides whether a trade survives noise). The target
+        # is then placed at exactly RR_TARGET x the stop, and is allowed to
+        # exceed the tape's own q95: a target beyond the 95th percentile
+        # move simply means most windows will not reach it, which is what a
+        # 2:1 payoff already implies. `tp_vs_q95` publishes that.
+        tp_bps = RR_TARGET * sl_bps
     tp = entry * (1 + s * tp_bps / 1e4)
     sl = entry * (1 - s * sl_bps / 1e4)
     rr = (tp_bps / sl_bps) if sl_bps > 0 else 0.0
     note = (f"{minutes}min window measured on {_bmin:g}-min bars "
             f"({st['n']} windows) · "
             f"{tp_bps:.0f} bps target / {sl_bps:.0f} bps stop = {rr:.2f}:1 "
-            f"(band 1:1–4:1, 2:1 preferred) — "
+            f"(target fixed at {RR_TARGET:g}× the measured stop) — "
             + (f"provisional ({_why_provisional}, ATR fallback "
                f"σ×√{minutes:g}/{_bmin:g})"
                if provisional else
@@ -208,7 +213,10 @@ def risk_block(entry: float, direction: int, minutes: int, edge: float,
             "window_min": int(minutes), "bar_minutes": round(_bmin, 3),
             "sigma_bps": round(st["sigma_bps"], 2),
             "q50": round(st["q50"], 2), "q80": round(st["q80"], 2),
-            "q95": round(st["q95"], 2), "note": note}
+            "q95": round(st["q95"], 2),
+            "tp_vs_q95": (round(tp_bps / st["q95"], 2)
+                          if st.get("q95") else None),
+            "note": note}
 
 
 def reanchor(block: dict[str, Any], new_entry: float) -> dict[str, Any]:

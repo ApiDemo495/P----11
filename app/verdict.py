@@ -113,7 +113,23 @@ def resolve(symbol: str, tf: str, direction: int, confidence: float,
     except Exception:                      # never break a card on the rule
         trend = {}
     if trend.get("blocked"):
-        gate_ok = False
+        # ── NO WINDOW MAY PRINT "NO CALL" FOR A SIDE IT HAS (2026-11-26) ──
+        # `blocked` only exists in the legacy TREND_GATE=abstain mode, which
+        # is kept for A/B. But the standing mandate is that every window
+        # carries a tradeable side and no panel withholds one, and live cards
+        # were printing `NO CALL` with a direction attached because this
+        # branch forced gate_ok False. The evidence behind the rule is that
+        # the trend-following side wins MORE often, so the honest resolution
+        # is the same one the default `flip` mode uses: INVERT the side
+        # rather than silence it. The abstain mode keeps its vocabulary
+        # (`why` still says withheld) and its measurement's direction; it no
+        # longer removes the call.
+        _flipped = int(trend.get("side_out") or 0)
+        if _flipped in (-1, 1):
+            side_out = _flipped
+        elif want in (-1, 1):
+            side_out = -want
+        gate_ok = bool(side_out != 0 and conf > floor)
     if trend.get("flipped"):
         # a flipped side is a NEW side: keep it only if it is a real side.
         _flipped = int(trend.get("side_out") or 0)
