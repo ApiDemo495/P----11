@@ -104,7 +104,7 @@ RELOCK_MIN_AGE_S = 15 * 60.0
 #: 0.70 is deliberately wider than either factor's own lower bound would
 #: produce on a normal tape, so the layer still damps a genuinely bad window
 #: without being able to silence the board.
-_ADV_CONF_FLOOR = 0.70
+_ADV_CONF_FLOOR = 0.60
 
 
 def _mean(xs):
@@ -1790,15 +1790,26 @@ class PredictionEngine:
             # issue. A calibration must stay inside its documented band; a
             # second unbounded product is exactly the failure
             # calibrate_confidence's docstring says it removed.
-            _adv_mult = max(_ADV_CONF_FLOOR,
+            # Both factors are now bounded INSIDE app/advanced.py —
+            # soft_gate in [0.85, 1.0] (mean of its three sub-gates, not
+            # their triple product) and RQA in [1.0, 1.15] (calibrated
+            # against the estimator's own null) — so the product lives in
+            # [0.85, 1.15] on its own. The old 0.70 floor chosen here was
+            # treating the symptom: it guaranteed a constant −30 % haircut
+            # on every window instead of fixing the component that was
+            # pinned at its lower bound. A bounding box around a broken
+            # measurement is still a broken measurement — the numbers are
+            # fixed at their source now, and this clamp only guards against
+            # a future regression in either factor.
+            _adv_mult = max(0.60,
                             min(1.35, float(_adv["soft_gate"] or 1.0)
                                 * float(_adv["rqa_mult"] or 1.0)))
             fin["adv_conf_mult"] = round(_adv_mult, 4)
             fin["adv_conf_mult_rule"] = (
-                f"soft_gate {float(_adv['soft_gate'] or 1.0):.2f} × RQA "
-                f"{float(_adv['rqa_mult'] or 1.0):.2f}, bounded to "
-                f"[{_ADV_CONF_FLOOR:.2f}, 1.35] so a calibration can never "
-                "collapse the published confidence")
+                f"soft_gate {float(_adv['soft_gate'] or 1.0):.3f} × RQA "
+                f"{float(_adv['rqa_mult'] or 1.0):.3f} = {_adv_mult:.3f} "
+                "(both factors measured in app/advanced.py; this is a "
+                "regression guard, not the calibration)")
             fin["confidence"] = max(0.0, min(1.0,
                 float(fin["confidence"]) * _adv_mult))
             _beh = dict(_beh)
@@ -2104,6 +2115,28 @@ class PredictionEngine:
                 "cci_adjusted": pack["cci_adjusted"],
                 "forward_probabilities": forward_probs[tf],
                 "confidence": fin["confidence"],
+                # ── THE CHAIN THAT PRODUCED IT (added 2026-11-26) ──────
+                # `finalize_confidence` returns the whole arithmetic
+                # (base SNR, modulator, the 8 ordered steps) and the
+                # confidence-chain panel renders exactly that spec order.
+                # Every one of these fields was previously dropped HERE, so
+                # the panel had nothing to draw and reported nulls — the one
+                # screen that can answer "why did this window publish 0.009"
+                # was blank while the number it audits shipped fine.
+                "confidence_base_snr": fin.get("confidence_base_snr"),
+                "confidence_modulator": fin.get("confidence_modulator"),
+                "confidence_chain": fin.get("confidence_chain"),
+                "confidence_raw": fin.get("confidence_raw"),
+                "snr": fin.get("snr"),
+                "noise_floor": fin.get("noise_floor"),
+                "adv_conf_mult": fin.get("adv_conf_mult"),
+                "adv_conf_mult_rule": fin.get("adv_conf_mult_rule"),
+                "emotion_band": fin.get("emotion_band"),
+                "micro_band": fin.get("micro_band"),
+                "microflow_band": fin.get("microflow_band"),
+                "calibration_factor": fin.get("calibration_factor"),
+                "direction_hold": fin.get("direction_hold"),
+                "direction_fallback": fin.get("direction_fallback"),
                 "strength": fin.get("strength", 0.0),
                 "winrate": fin.get("winrate"),
                 "winrate_n": fin.get("winrate_n", 0),
@@ -2387,7 +2420,25 @@ class PredictionEngine:
                     results[tf]["genesis"] = {"score": 0.0, "weight": 0.0,
                                               "n_active": 0}
                 self.prev_cci_dir[(symbol, tf)] = _lad
+                # ── WHY THIS DICT IS NO LONGER A HAND-WRITTEN WHITELIST ──
+                # A whitelist that is maintained by hand next to a producer
+                # that keeps gaining fields can only ever fall behind, and
+                # every field it drops fails SILENTLY (it ships as `None`).
+                # That is exactly what happened twice: the P(win)/spillover
+                # rows read "insufficient" forever even when calibrated, and
+                # — found 2026-11-26, still live — `confidence`, `snr`,
+                # `confidence_chain`, `confidence_base_snr`,
+                # `confidence_modulator` and `adv_conf_mult` were ALL null in
+                # /api/systems, so the CONFIDENCE CHAIN panel (the one place
+                # a user can audit WHY 0.009 was published) had nothing to
+                # draw. The dict now STARTS from the producer's own fields
+                # and then overlays the curated/derived ones below, so a new
+                # telemetry field is published by default instead of being
+                # forgotten. Explicit entries below still win.
+                _ds_base = {k: v for k, v in results[tf].items()
+                            if not str(k).startswith("_")}
                 self.display_systems[(symbol, tf)] = {
+                    **_ds_base,
                     # fields the analysis FINAL writes into results[tf]
                     # (p_correct / calib_iso / spillover / winrate …)
                     # used to be dropped by this whitelist, so the hero's
@@ -2425,6 +2476,11 @@ class PredictionEngine:
                         "vote": _adv.get("vote"),
                         "soft_gate": _adv.get("soft_gate"),
                         "rqa_mult": _adv.get("rqa_mult"),
+                        # the estimator's own null (chance level) and the
+                        # excess that actually moved the multiplier — a
+                        # multiplier printed alone cannot be audited
+                        "rqa_det": _adv.get("rqa_det"),
+                        "rqa_null": _adv.get("rqa_null"),
                         "size_mult": _adv.get("size_mult"),
                         "modules": {
                             k: {"vote": (v or {}).get("vote"),

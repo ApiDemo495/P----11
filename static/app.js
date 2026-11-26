@@ -2854,7 +2854,7 @@ function renderWhy() {
           <div class="kv-row">
             <div class="kv"><span>advanced vote (blended in)</span><b class="${a.vote > 0 ? "up" : a.vote < 0 ? "down" : ""}">${a.vote > 0 ? "+" : ""}${fmt(a.vote, 3)}</b></div>
             <div class="kv"><span>soft gate × (entropy·OU·BOCPD)</span><b>${fmt(a.soft_gate, 2)}</b></div>
-            <div class="kv"><span>RQA confidence ×</span><b>${fmt(a.rqa_mult, 2)}</b></div>
+            <div class="kv"><span>RQA confidence × <span class="dim" title="Raw RQA determinism is ~0.44 even on pure noise (small-sample diagonal bias), so the multiplier is measured AGAINST that null: only determinism above it counts. A multiplier pinned at a bound would be a constant, not a signal.">det ${fmt(a.rqa_det ?? s.advanced?.rqa_det, 2)} vs null ${fmt(a.rqa_null ?? s.advanced?.rqa_null, 2)}</span></span><b>${fmt(a.rqa_mult, 3)}</b></div>
             <div class="kv"><span>size × (HAR·EVT·RMT)</span><b>${fmt(a.size_mult, 2)}</b></div>
             ${a.rmt_mode_share != null ? `<div class="kv"><span>market-mode share</span><b>${fmt(a.rmt_mode_share, 2)}</b></div>` : ""}
             ${a.evt?.q99_bps ? `<div class="kv"><span>EVT 1-in-100 move</span><b>${fmt(a.evt.q99_bps, 0)} bps</b></div>` : ""}

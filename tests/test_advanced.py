@@ -336,3 +336,124 @@ def test_signed_scale_flips_module_contribution():
     from app.advanced import MODULE_WEIGHTS
     assert abs(tiny["weights"]["kalman"]) \
         >= 0.5 * MODULE_WEIGHTS["kalman"] - 1e-9
+
+
+def test_rqa_multiplier_is_calibrated_against_its_own_null():
+    """Second half of the same fix (2026-11-26). A raw `det` on an ORDINARY
+    tape is ~0.44, not 0 — that is the estimator's small-sample diagonal
+    bias. The first fix (1.0 + 0.4*det) therefore landed on the 1.15 CAP on
+    all 16 live cells, every window: a constant multiplier carries no
+    information and silently inflates every published confidence by 15 %,
+    which is the SAME defect as the old -25 % with the sign flipped.
+    The gate now measures its own null and only counts determinism above
+    it."""
+    import random as _rnd
+    from app.advanced import _DET_NULL, _det_on
+    # the published null must be a plausible chance level for this estimator
+    assert 0.30 < _DET_NULL < 0.60
+    # a fixed-seed random walk reports determinism at/near that null
+    rng = _rnd.Random(11)
+    px = [100.0]
+    for _ in range(700):
+        px.append(px[-1] * (1 + rng.gauss(0, 0.0013)))
+    out = rqa_multiplier(px)
+    assert abs(out["determinism"] - _DET_NULL) < 0.10
+    # and it is NEUTRAL, not capped high
+    assert out["mult"] < 1.02, out
+    assert out["det_excess"] < 0.1
+    # the null is published so the panel can show both numbers
+    assert out["determinism_null"] == round(_DET_NULL, 3)
+
+
+def test_a_truly_recurrent_tape_earns_more_than_an_ordinary_one():
+    """The multiplier must DISCRIMINATE — otherwise it is a constant and
+    should not exist. A periodic tape has to beat an ordinary walk on the
+    published mult, not just on raw det."""
+    import random as _rnd
+    per = [100.0]
+    for r in [0.002, -0.001, 0.0015, -0.002] * 60:
+        per.append(per[-1] * (1 + r))
+    rng = _rnd.Random(4)
+    noi = [100.0]
+    for _ in range(240):
+        noi.append(noi[-1] * (1 + rng.gauss(0, 0.0016)))
+    a, b = rqa_multiplier(per), rqa_multiplier(noi)
+    assert a["det_excess"] > b["det_excess"]
+    assert a["mult"] > b["mult"]
+    assert a["mult"] <= 1.15
+
+
+def test_soft_gate_is_a_bounded_scale_not_a_triple_product_veto():
+    """The advanced block multiplied three module gates and clamped at 0.45.
+    A product of three numbers in [0,1] is almost always below 0.45 on real
+    tape: measured live, 4 of 16 cells sat exactly on the floor and the rest
+    at 0.57-0.62 — a −38 % to −55 % confidence haircut on EVERY window,
+    justified by no measurement, applied after the published confidence had
+    already cleared its floor. (Same defect class as the RQA 0.75 fixed the
+    same day.) The gate is now one mean-based uncertainty penalty in
+    [0.85, 1.0], and the raw product is still published for audit."""
+    from app.advanced import advanced_block
+    import random as _rnd
+    out = None
+    for seed in (3, 17, 91):
+        rng = _rnd.Random(seed)
+        px, vol = [], []
+        p = 100.0
+        for _ in range(400):
+            p *= 1 + rng.gauss(0, 0.0015)
+            px.append(p)
+            vol.append(1000 + rng.random() * 200)
+        ctx = SimpleNamespace(P=px, V=vol, W=22, p=px[-1])
+        blk = advanced_block("BTCUSDT", "tf1", ctx, full_closes=px,
+                             minutes=22)
+        sg = blk["soft_gate"]
+        assert 0.85 <= sg <= 1.0, sg          # a scale, never a veto
+        assert blk["soft_gate_raw"] is not None  # the product is published
+        # with sub-gates near 1 the gate must NOT be pinned at a bound
+        mods = blk["modules"]
+        gs = [mods[n].get("gate", 1.0) for n in ("entropy", "ou_hurst", "bocpd")]
+        if all(g > 0.5 for g in gs):
+            assert sg > 0.85 + 1e-9, (sg, gs)
+        out = blk
+    assert out is not None
+    assert "one uncertainty penalty" in out["soft_gate_rule"]
+
+
+def test_advanced_confidence_multiplier_varies_across_tape():
+    """A multiplier that is the same constant on every cell carries no
+    information and is applied to every confidence in the app. Both factors
+    must be able to move."""
+    from app.advanced import advanced_block
+    import random as _rnd
+    vals = []
+    for seed in (1, 2, 3, 4, 5):
+        rng = _rnd.Random(seed)
+        px, vol = [], []
+        p = 100.0
+        drift = 0.0005 * (seed % 3)
+        for _ in range(400):
+            p *= 1 + rng.gauss(drift, 0.001 * (1 + seed % 4))
+            px.append(p)
+            vol.append(800 + rng.random() * 400)
+        ctx = SimpleNamespace(P=px, V=vol, W=22, p=px[-1])
+        blk = advanced_block("BTCUSDT", "tf1", ctx, full_closes=px,
+                             minutes=22)
+        vals.append((round(blk["soft_gate"], 4), round(blk["rqa_mult"], 4)))
+    assert len({v[0] for v in vals}) > 1, vals   # soft gate is not a constant
+
+
+def test_confidence_chain_telemetry_reaches_the_api_payload():
+    """The CONFIDENCE CHAIN panel is the only screen that can answer "why did
+    this window publish 0.009". Every field it renders was dropped inside
+    compute_asset when `results[tf]` was built, so the panel drew nulls while
+    the number it audits shipped fine. The producer's chain must reach
+    /api/systems."""
+    import inspect
+    from app import engine as _eng
+    src = inspect.getsource(_eng)
+    for field in ("confidence_base_snr", "confidence_modulator",
+                  "confidence_chain", "snr", "adv_conf_mult"):
+        assert f'"{field}": fin.get("{field}")' in src, field
+    # and the display_systems dict must start from the producer's own fields
+    # instead of a hand-maintained whitelist that silently drops new ones
+    assert "_ds_base = {k: v for k, v in results[tf].items()" in src
