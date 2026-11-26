@@ -2829,6 +2829,24 @@ function renderWhy() {
       <div>
         <h5>CONFIDENCE CHAIN — spec order</h5>
         ${(() => {
+          // The walk-forward edge model's own probability. It is the only
+          // directional component in this system with a measured
+          // out-of-sample edge at the published reward:risk (39.9% at 2:1,
+          // CI 38.8-41.1, vs 33.3% break-even), so its number belongs on the
+          // card beside the side it moved — not buried in a log.
+          const em = s.edge_model;
+          if (!em) return "";
+          const up = em.prob_up >= 0.5;
+          const col = up ? "acc-up" : "acc-down";
+          return `<div class="kv"><span>EDGE MODEL</span>`
+            + `<b class="${col}">P(up) ${fmt(em.prob_up, 3)} · `
+            + `${up ? "UP" : "DOWN"} · ±${fmt(em.confidence, 3)}</b></div>`
+            + `<div class="kv"><span class="dim" title="measured out-of-sample, `
+            + `walk-forward with purge; break-even at 2:1 is 33.3%">`
+            + `horizon ${esc(em.horizon_bars)}h · stop ${esc(em.stop_atr)}×ATR · `
+            + `${esc(em.source || "")}</span></div>`;
+        })()}
+        ${(() => {
           // The chain is now regenerated on the CCI that ACTUALLY SHIPPED
           // (it used to describe the pre-fusion score while the card printed
           // a rescaled one). When even that final pass is moved by a later
