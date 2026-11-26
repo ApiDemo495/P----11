@@ -68,6 +68,46 @@ def _norm_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
+def _norm_ppf(p: float) -> float:
+    """Inverse standard-normal CDF (Acklam's rational approximation).
+
+    Bug fixed 2026-11-26: `deflated_sharpe` needed a QUANTILE - the z at
+    which P(Z < z) = 1 - 1/N - and called `_norm_cdf` instead, which is the
+    CDF. For N = 10 .. 6600 that expression returns 0.82 .. 0.84 no matter
+    what N is, so the expected-maximum-Sharpe haircut `sr0` was a constant
+    ~0.019 and the Deflated Sharpe Ratio printed 1.0000 ("CONFIRMED") for a
+    single test and for a 6600-configuration search alike. Multiple-testing
+    correction that does not depend on the number of tests is not a
+    correction.
+    """
+    p = min(max(float(p), 1e-12), 1.0 - 1e-12)
+    a = (-3.969683028665376e+01, 2.209460984245205e+02,
+         -2.759285104469687e+02, 1.383577518672690e+02,
+         -3.066479806614716e+01, 2.506628277459239e+00)
+    b = (-5.447609879822406e+01, 1.615858368580409e+02,
+         -1.556989798598866e+02, 6.680131188771972e+01,
+         -1.328068155288572e+01)
+    c = (-7.784894002430293e-03, -3.223964580411365e-01,
+         -2.400758277161838e+00, -2.549732539343734e+00,
+          4.374664141464968e+00, 2.938163982698783e+00)
+    d = (7.784695709041462e-03, 3.224671290700398e-01,
+         2.445134137142996e+00, 3.754408661907416e+00)
+    plow, phigh = 0.02425, 1 - 0.02425
+    if p < plow:
+        q = math.sqrt(-2 * math.log(p))
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q
+                + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+    if p > phigh:
+        q = math.sqrt(-2 * math.log(1 - p))
+        return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q
+                 + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+    q = p - 0.5
+    r = q * q
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r
+            + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r
+                            + b[4]) * r + 1)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 1 · pillar audit — dispersion / cosine / KL
 # ══════════════════════════════════════════════════════════════════════
@@ -373,8 +413,8 @@ def deflated_sharpe(observed_sr: float, n_obs: int, n_trials: int,
         # expected max SR under N trials: SR0 = sqrt(V[SR*])·((1−γ)z₁+γz₂)
         v_sr = 1.0 / max(1.0, n_obs - 1)
         g = 0.5772156649
-        z1 = _norm_cdf(1 - 1.0 / n_trials)
-        z2 = _norm_cdf(1 - 1.0 / (n_trials * math.e))
+        z1 = _norm_ppf(1 - 1.0 / n_trials)
+        z2 = _norm_ppf(1 - 1.0 / (n_trials * math.e))
         sr0 = math.sqrt(v_sr) * ((1 - g) * z1 + g * z2)
     denom_base = 1.0 - skew * observed_sr + (kurt - 1) / 4.0 * observed_sr ** 2
     if denom_base <= 1e-12 or n_obs < 3:

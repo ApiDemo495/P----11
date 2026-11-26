@@ -1550,6 +1550,10 @@ class AgentManager:
     HTTP_TIMEOUT_S = 12.0
 
     def __init__(self) -> None:
+        #: set by save_settings() when a write failed; "" means the last save
+        #: reached disk. Read by the settings API so the UI can say "not saved"
+        #: instead of showing a value the server will forget on restart.
+        self.last_save_error: str = ""
         self.settings: dict[str, Any] = {
             "gemini_key": "", "backup1_key": "", "backup2_key": "",
             "backup3_key": "", "groq_key": "", "newsapi_key": "",
@@ -1642,13 +1646,26 @@ class AgentManager:
             if not self.settings.get(slot) and os.environ.get(env):
                 self.settings[slot] = os.environ[env]
 
-    def save_settings(self) -> None:
+    def save_ok(self) -> bool:
+        """True when the last save_settings() actually reached disk."""
+        return not getattr(self, "last_save_error", "")
+
+    def save_settings(self) -> bool:
         """Persist preferences and (separately, chmod 600) the user's keys.
 
         I-5 is honoured literally: no key is ever written into the repo's
         tracked files. `data/secrets.json` is git-ignored, owner-readable
         only, and never returned by any API.
+
+        Returns True only if everything that was supposed to be written
+        actually reached disk. Bug fixed 2026-11-26: every OSError in here
+        was swallowed with `pass`, so a read-only volume, a full disk or a
+        bad path made `configure()` return success while the setting was
+        lost on the next restart — the UI showed the new value and the
+        server quietly reverted to the old one. A failed save is now
+        recorded in `self.last_save_error` and reported.
         """
+        self.last_save_error = ""
         try:
             safe = {k: v for k, v in self.settings.items()
                     if k not in KEY_FIELDS and k != "keyring"}
@@ -1658,10 +1675,11 @@ class AgentManager:
             os.makedirs(os.path.dirname(SETTINGS_FILE) or ".", exist_ok=True)
             with open(SETTINGS_FILE, "w") as fh:
                 json.dump(safe, fh)
-        except OSError:
-            pass
+        except (OSError, TypeError, ValueError) as exc:
+            self.last_save_error = "settings: %s: %s" % (type(exc).__name__, exc)
+            return False
         if os.environ.get("PREDICT_NO_SECRET_FILE") == "1":
-            return
+            return True
         try:
             secrets = {k: v for k, v in self.settings.items()
                        if k in KEY_FIELDS and v}
@@ -1675,10 +1693,15 @@ class AgentManager:
             os.replace(tmp, SECRETS_FILE)
             try:
                 os.chmod(SECRETS_FILE, 0o600)
-            except OSError:
-                pass
-        except OSError:
-            pass
+            except OSError as exc:
+                # owner-only permissions are a stated guarantee (I-5); failing
+                # to apply them is reported, not hidden
+                self.last_save_error = "secrets chmod: %s" % exc
+                return False
+        except (OSError, TypeError, ValueError) as exc:
+            self.last_save_error = "secrets: %s: %s" % (type(exc).__name__, exc)
+            return False
+        return True
 
     def configure(self, **kv) -> None:
         """Apply a settings patch — keys included, aliases resolved.

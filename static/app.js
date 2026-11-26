@@ -127,6 +127,15 @@ function fx(v, d = 2) {
   return v.toExponential(2);
 }
 const fmt = (v, d = 2) => v == null || Number.isNaN(Number(v)) ? "—" : Number(v).toFixed(d);
+/* A missing number is never a measured zero. `|| 0` / `?? 0` written before
+   toFixed() silently turns "we have no reading" into "the reading is 0.00",
+   which is how the book panel once claimed a 0% win rate and PF 0.00 for
+   arms that had not traded yet. num() is the only sanctioned path. */
+const num = (v, d = 2) => {
+  if (v == null) return "—";
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(d) : "—";
+};
 const px = v => v >= 1000 ? Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 })
   : v >= 10 ? Number(v).toFixed(2) : Number(v).toFixed(4);
 function toast(msg, kind = "") {
@@ -1361,12 +1370,12 @@ function renderBook() {
     const st = String(r.status || "open").toUpperCase();
     const c = r.status === "open" ? "acc-up" : r.status === "halted" ? "acc-dn" : "acc-warn";
     const live = r.live_trades
-      ? `${bp(r.live_ev_bps)} · t ${Number(r.live_t).toFixed(2)} · n=${r.live_trades} · win ${(Number(r.live_win_rate || 0) * 100).toFixed(0)}%`
+      ? `${bp(r.live_ev_bps)} · t ${num(r.live_t)} · n=${r.live_trades} · win ${r.live_win_rate == null ? "—" : `${(Number(r.live_win_rate) * 100).toFixed(0)}%`}`
       : "no live fills yet";
     const why = (r.halt_reasons || [])[0];
     return `<div class="kv"><span>${r.sleeve_id}</span>`
       + `<b class="${c}">${st}</b>`
-      + `<span class="dim">certified ${bp(r.research_ev_bps)} · PF ${Number(r.research_pf || 0).toFixed(2)}</span>`
+      + `<span class="dim">certified ${bp(r.research_ev_bps)} · PF ${num(r.research_pf)}</span>`
       + `<span class="dim">${live}</span>`
       + (why ? `<span class="dim acc-warn" style="text-transform:none">${why}</span>` : "")
       + `</div>`;
@@ -1387,7 +1396,7 @@ function renderBook() {
         + `<span class="dim">entry ${px(p.entry_price)} · stop ${px(p.stop)}</span>`
         + `<span class="dim">${(Number(p.size) * 100).toFixed(1)}% · edge ${bp(p.expected_edge_bps)}</span>`
         + `<div class="bar" title="${left} of ${total} bars left"><i class="${tag}" style="width:${done}%"></i></div>`
-        + `<span class="dim">hold ${left}/${total} bars left · ${Number(p.age_hours || 0).toFixed(1)}h ago</span>`
+        + `<span class="dim">hold ${left}/${total} bars left · ${num(p.age_hours, 1)}h ago</span>`
         + `</div>`;
     }).join("");
     posWrap.innerHTML = open || `<div class="dim pad">no open paper positions</div>`;
@@ -1504,7 +1513,7 @@ function chopChip(tf) {
     const r = S.snap?.assets?.[S.symbol]?.tfs?.[tf]?.regime;
     if (r && r.state) {
       const conf = (r.confidence != null) ? ` · conf ${Number(r.confidence).toFixed(2)}` : "";
-      const title = esc(`${r.state} — ${r.label}. ER ${Number(r.er_fast ?? 0).toFixed(2)}, vol×${Number(r.vol_ratio ?? 0).toFixed(2)}${conf} (5-state regime engine, this asset's tape)`);
+      const title = esc(`${r.state} — ${r.label}. ER ${num(r.er_fast)}, vol×${num(r.vol_ratio)}${conf} (5-state regime engine, this asset's tape)`);
       if (r.state === "CHAOTIC_LIQUIDATION_SHOCK")
         return `<span class="chip-err" title="${title}">🔴 LIQUIDATION SHOCK — no entries</span>`;
       if (r.state === "MEAN_REVERTING_RANGE")
@@ -2162,7 +2171,7 @@ function renderCells() {
     const eraTxt = era.error ? "" :
       era.side ? `${era.in_position ? "IN" : "flat"} ${era.side > 0 ? "+" : "−"}${era.ride ? " ride" : ""}` +
         (era.unrealised_net != null ? ` · unreal ${(era.unrealised_net * 100).toFixed(2)}%` : "") +
-        ` · eras ${era.totals?.eras || 0} net ${((era.totals?.net || 0) * 100).toFixed(2)}%` +
+        ` · eras ${era.totals?.eras ?? "—"} net ${era.totals?.net == null ? "—" : `${(era.totals.net * 100).toFixed(2)}%`}` +
         (era.totals?.ambiguous ? ` · ambiguous ${era.totals.ambiguous} (friction unresolved)` : "")
       : "era — waiting first window";
     const lock = c.last_lock && c.last_lock.outcome
@@ -2171,7 +2180,7 @@ function renderCells() {
     return `<div class="hcell ${active ? "active" : ""}" data-cell="${key}" title="${esc(key)} — ${esc(c.rule || c.tier || "")}">
       <div class="hc-top"><span class="hc-sym">${sym} ${tf.toUpperCase()} · ${(a.tf_minutes || c.minutes)}m</span>
         <span class="hc-tier ${_tierCls(c.tier)}">${esc(c.tier)}</span></div>
-      <div class="hc-wr">${wr}${wrLabel} <span class="hc-conf">WR${conf ? " · " + conf : ""}${c.round_trip_bps != null && c.win_rate != null ? ` · net needs target ≥ ${(c.min_tp_bps ?? 0).toFixed(0)}bp` : ""}</span></div>
+      <div class="hc-wr">${wr}${wrLabel} <span class="hc-conf">WR${conf ? " · " + conf : ""}${c.round_trip_bps != null && c.win_rate != null ? ` · net needs target ≥ ${num(c.min_tp_bps, 0)}bp` : ""}</span></div>
       <div class="hc-side">${dir} · ${esc(c.rule || (c.certified ? "" : "no rule"))}</div>
       <div class="hc-era">${esc(eraTxt)}</div>
       <div class="hc-lock">${esc(lock)}</div>
@@ -2370,7 +2379,7 @@ function onAnalyseDone(msg) {
   // the BOX must never read as a trade — big word becomes NO CALL
   const bigWord = r.regime_conflict ? "NO CALL" : r.signal;
   const conflictBanner = r.regime_conflict
-    ? `<div class="conf acc-warn">⚠ REGIME CONFLICT — 5-state regime ${esc(r.regime_conflict.state)} (conf ${Number(r.regime_conflict.regime_conf ?? 0).toFixed(2)}) opposes the certified ${r.signal}: NO ORDER routed · window record kept for grading</div>`
+    ? `<div class="conf acc-warn">⚠ REGIME CONFLICT — 5-state regime ${esc(r.regime_conflict.state)} (conf ${num(r.regime_conflict.regime_conf)}) opposes the certified ${r.signal}: NO ORDER routed · window record kept for grading</div>`
     : "";
   const ai = r.ai || {};
   // The review object now always carries available/backend/note, so the
@@ -5136,7 +5145,8 @@ async function pollChartLink() {
       <td class="mono" style="color:${r.ok ? "var(--green)" : "var(--red)"}">${r.delta_bps == null ? "—" : r.delta_bps.toFixed(1) + " bps"}</td>
       <td class="mono">${r.bar_age_s == null ? "—" : Math.round(r.bar_age_s) + "s"}</td>
       <td class="mono" style="color:${r.foreign_bars ? "var(--red)" : "var(--green)"}">${r.foreign_bars ?? "?"}</td>
-      <td class="mono" style="color:${(r.history_jump_bps || 0) > (r.jump_limit_bps || 300) ? "var(--red)" : "var(--green)"}">${r.history_jump_bps == null ? "—" : r.history_jump_bps.toFixed(1) + " bps"}</td>
+      <td class="mono" style="color:${r.history_jump_bps == null ? "var(--dim)"
+        : r.history_jump_bps > (r.jump_limit_bps ?? 300) ? "var(--red)" : "var(--green)"}">${r.history_jump_bps == null ? "—" : r.history_jump_bps.toFixed(1) + " bps"}</td>
       <td>${r.ok ? "✓ linked" : "✗ UNTRUSTED"}</td></tr>`).join("");
     const inc = (d.watchdog?.incidents || []).slice(-3).reverse().map(i =>
       `<div class="hint">⚠ ${new Date(i.ts * 1000).toLocaleTimeString()} ${i.symbol} untrusted: ${esc((i.integrity_reasons || []).join(", "))}; quote delta ${i.delta_bps?.toFixed?.(1) ?? "—"} bps, candle jump ${i.history_jump_bps?.toFixed?.(1) ?? "—"} bps (${esc(i.mode)}/${esc(i.source)})</div>`).join("");

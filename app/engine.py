@@ -67,6 +67,7 @@ from .config import (
 from .contracts import clamp_rung, rung_level   # canonical rung prices
 from .brain import BrainSystem
 from .rlsys import damp_all, damp_shares
+from .silence import guard, report as _silence_report   # counted best-effort
 from .emotion import EmotionSystem
 from .feed import MarketFeed
 from .sleeves import evaluate_sleeves, load_registry as load_sleeve_registry
@@ -7159,20 +7160,22 @@ class PredictionEngine:
             # forward table: settle the PREVIOUS lock's frozen readings
             if prev.get("fv"):
                 try:
-                    self.forward.record(symbol, tf,
-                                        {int(k): float(v)
-                                         for k, v in prev["fv"].items()},
-                                        float(prev.get("price") or 0.0),
-                                        price, record_id=_record_id)
+                    with guard("settle.forward_record"):
+                        self.forward.record(symbol, tf,
+                                            {int(k): float(v)
+                                             for k, v in prev["fv"].items()},
+                                            float(prev.get("price") or 0.0),
+                                            price, record_id=_record_id)
                 except Exception:
                     pass
             # §7 genesis: score the admitted set walk-forward on the
             # settled move (never in-sample)
             if prev.get("genesis_values"):
                 try:
-                    self.genesis.score_walk_forward(
-                        prev["genesis_values"],
-                        price - float(prev.get("price") or 0.0))
+                    with guard("settle.genesis_score"):
+                        self.genesis.score_walk_forward(
+                            prev["genesis_values"],
+                            price - float(prev.get("price") or 0.0))
                 except Exception:
                     pass
             # meta-combiner + evidence ledger: settle the previous lock's
@@ -7180,8 +7183,9 @@ class PredictionEngine:
             if prev.get("inputs"):
                 try:
                     up = price > float(prev.get("price") or 0.0)
-                    self.meta.note_pick(prev["inputs"], up)
-                    self.meta.record(symbol, tf, prev["inputs"], up)
+                    with guard("settle.meta_learn"):
+                        self.meta.note_pick(prev["inputs"], up)
+                        self.meta.record(symbol, tf, prev["inputs"], up)
                 except Exception:
                     pass
             # graded exactly once — drop it so a halted pass below (or a
@@ -9151,7 +9155,15 @@ class PredictionEngine:
                 "haptics": self.agents.settings.get("haptics", True),
                 "sound": self.agents.settings.get("sound", True),
                 "theme": self.agents.settings.get("theme", "dark"),
+                # "" when the last write reached disk. A non-empty string means
+                # a setting is live in memory only and WILL be lost on restart,
+                # so the dashboard must say so instead of showing it as saved.
+                "save_error": getattr(self.agents, "last_save_error", ""),
             },
+            # exceptions swallowed by best-effort paths (learners, ring
+            # buffers). Zero is the healthy answer; a rising count means a
+            # panel is showing stale numbers.
+            "silence": _silence_report(),
             "feed": self.feed.stats(),
             "ledger": self.ledger.api_payload(SYMBOL_ORDER, TF_ORDER),
             "locks": [dict(v) for v in self.locks.values()],

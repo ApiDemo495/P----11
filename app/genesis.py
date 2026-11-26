@@ -195,9 +195,25 @@ def _d08_category(f: dict) -> list[tuple[str, Callable]]:
         if len(r) < 8:
             return 0.0
         # f = smooth (moving average), g = decimate; defect = ||f∘g − g∘f||
+        # The smoothing kernel is TRAILING, not centred. `mode="same"` puts
+        # half the kernel on t+1, so the score of a window ending at t was
+        # partly a function of a bar that had not happened yet, and the
+        # first sample was averaged against zero-padding that exists in no
+        # real series. `full[:len(x)]` makes sample j depend on j-2..j only,
+        # which is what a walk-forward scorer is allowed to use.
         def smooth(x):
+            x = np.asarray(x, dtype=float)
+            if x.size == 0:
+                return x
             k = np.ones(3) / 3.0
-            return np.convolve(x, k, mode="same")
+            out = np.convolve(x, k, mode="full")[:x.size]
+            # the first two samples have a shorter causal kernel; renormalise
+            # instead of diluting them with zeros
+            for j in (0, 1):
+                if j < x.size:
+                    w = k[2 - j:]
+                    out[j] = float(np.dot(x[: j + 1], w) / w.sum())
+            return out
         def decim(x):
             return x[::2]
         a = smooth(decim(r))
