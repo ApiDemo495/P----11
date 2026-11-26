@@ -43,3 +43,6 @@ backtest/cache/
 backtest/results/mandate_*.csv
 backtest/results/*.lock
 backtest/results/*.tmp
+
+# generated model artifacts (recreate with scripts/train_edge_model.py)
+data/models/

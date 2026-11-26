@@ -332,3 +332,81 @@ def test_risk_block_honours_the_two_to_one_contract():
                 assert b["tp"] > b["entry"] > b["sl"]
             else:
                 assert b["tp"] < b["entry"] < b["sl"]
+
+
+# ── 5. the walk-forward edge model ───────────────────────────────────────
+def test_edge_model_is_optional_and_never_abstains():
+    """A missing artifact must leave the app byte-identical.
+
+    The model is an EXTRA vote, not a dependency: no file means
+    `available()` is False, `predict()` returns None and the engine skips the
+    rung. When present it must always return a side (>= 0.5 is UP), never a
+    withheld window, because the standing rule is that every window carries
+    a tradeable side.
+    """
+    from app import edge_model
+
+    import numpy as np
+    if not edge_model.available():
+        assert edge_model.predict([1.0] * 500, [1.0] * 500, [1.0] * 500,
+                                  [1.0] * 500, list(range(500))) is None
+        return
+    rng = np.random.default_rng(3)
+    n = 600
+    p = 100.0
+    c = []
+    for _ in range(n):
+        p *= 1.0 + rng.normal(0, 0.004)
+        c.append(p)
+    h = [x * 1.001 for x in c]
+    l = [x * 0.999 for x in c]
+    out = edge_model.predict(c, h, l, [1.0] * n, list(range(n)))
+    assert out is not None
+    assert out["side"] in (-1, 1)
+    assert 0.0 <= out["prob_up"] <= 1.0
+    assert out["side"] == (1 if out["prob_up"] >= 0.5 else -1)
+    assert out["confidence"] == abs(out["prob_up"] - 0.5)
+
+
+def test_live_and_training_feature_transforms_are_identical():
+    """The live app must compute EXACTLY the features the model was fitted on.
+
+    They are implemented twice on purpose (app/ must not import the research
+    tree at runtime), so this test is the only thing keeping them in step. A
+    silent drift here would make every live prediction meaningless while
+    looking perfectly healthy.
+    """
+    import numpy as np
+    from app import edge_model as live
+    from backtest.edge_model import build_features as train_build
+
+    rng = np.random.default_rng(11)
+    n = 1200
+    p = 100.0
+    c = []
+    for _ in range(n):
+        p *= 1.0 + rng.normal(0, 0.003)
+        c.append(p)
+    c = np.array(c)
+    w = np.abs(rng.normal(0, 0.004, n)) * c
+    h = c + w
+    l = c - w
+    v = rng.random(n) * 1000
+    t = np.arange(n, dtype=np.int64) * 3600
+    a, na = train_build({"c": c, "h": h, "l": l, "v": v, "t": t})
+    b, nb = live.build_features(c, h, l, v, t)
+    assert na == nb
+    assert a.shape == b.shape
+    assert np.allclose(a, b, equal_nan=True, atol=1e-12)
+
+
+def test_the_engine_skips_the_edge_rung_without_an_artifact():
+    import inspect
+    from app import engine as _eng
+    src = inspect.getsource(_eng.PredictionEngine._direction_ladder)
+    assert "edge_model as _em" in src
+    assert "_em.available()" in src          # guard first
+    assert "return (_em_side," in src         # a real side, never a withhold
+    # and the vote is published with its probability
+    pub = inspect.getsource(_eng.PredictionEngine)
+    assert '"edge_model": self._edge_model' in pub

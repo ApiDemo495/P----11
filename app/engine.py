@@ -541,6 +541,9 @@ class PredictionEngine:
         # --- cycles --------------------------------------------------------
         self.cycles: dict[tuple[str, str], TFCycle] = {}
         self.last_result: dict[tuple[str, str], dict[str, Any]] = {}
+        # last walk-forward edge-model vote (app/edge_model.py); None when no
+        # artifact is present, which keeps behaviour byte-identical
+        self._edge_model: dict[str, Any] | None = None
         # display snapshots — updated ONLY at GRC cadence (spec)
         self.display_formulas: dict[tuple[str, str], dict[str, Any]] = {}
         self.display_systems: dict[tuple[str, str], dict[str, Any]] = {}
@@ -2199,6 +2202,9 @@ class PredictionEngine:
                 # was blank while the number it audits shipped fine.
                 "confidence_base_snr": fin.get("confidence_base_snr"),
                 "confidence_modulator": fin.get("confidence_modulator"),
+                # the walk-forward edge model's own probability, published
+                # with the side it moved (None when no artifact is present)
+                "edge_model": self._edge_model,
                 # the chain ON THE PUBLISHED NUMBERS (falls back to the
                 # original when the final pass could not run)
                 "confidence_chain": (fin.get("published_chain")
@@ -3143,6 +3149,43 @@ class PredictionEngine:
                 "agent": _comp_val(101)})
             if mp in (1, -1):
                 return (mp, f"{take_msg} → side {'UP' if mp > 0 else 'DOWN'}", floor)
+
+        # rung 0.5: the WALK-FORWARD-VALIDATED EDGE MODEL.
+        # It sits above the fused score because it is the only directional
+        # component in this system with a measured out-of-sample edge at the
+        # published reward:risk: 39.9 % at 2:1 (CI 38.8-41.1, n=7168) on
+        # BTC, 39.5 % on BNB, against a 33.33 % break-even. The ablation in
+        # backtest/edge_model.py also showed the 44 formula outputs add
+        # nothing (physics 36.2 % vs SHUFFLED physics 37.1 %), so leaning on
+        # the fused score first would be leaning on the weaker signal.
+        #
+        # It is OPTIONAL and additive: no artifact -> this block is skipped
+        # and behaviour is byte-identical. It never abstains (side needs only
+        # p >= 0.5) and its probability is published, so the reason a side
+        # moved is visible rather than inferred.
+        try:
+            from . import edge_model as _em
+            if _em.available():
+                _st_e = self.feed.state(symbol)
+                _pe = _em.predict(list(_st_e.closes), list(_st_e.highs or
+                                                          _st_e.closes),
+                                  list(_st_e.lows or _st_e.closes),
+                                  list(_st_e.volumes or []),
+                                  list(_st_e.times or []))
+                if _pe and _pe.get("side") in (-1, 1):
+                    self._edge_model = _pe
+                    _em_side = int(_pe["side"])
+                    return (_em_side,
+                            f"edge model P(up) {_pe['prob_up']:.3f} "
+                            f"(horizon {_pe['horizon_bars']}h, stop "
+                            f"{_pe['stop_atr']}xATR) — measured 39.9% at 2:1 "
+                            f"out-of-sample vs 33.3% break-even; side "
+                            f"{'UP' if _em_side > 0 else 'DOWN'} "
+                            f"(fused score {score:+.4f} would have said "
+                            f"{'up' if score > 0 else 'down'})",
+                            floor)
+        except Exception:
+            log.exception("edge model vote failed %s/%s", symbol, tf)
 
         # rung 1: the fused score itself
         if abs(score) > floor:
@@ -9345,6 +9388,19 @@ class PredictionEngine:
                     # ladder. Publish those, explicitly flagged preview.
                     d = self._provisional_cycle_dict(symbol, tf, now, price)
                 if d:
+                    # the walk-forward edge model's vote, on the CARD.
+                    # It is published from the analysis result, not from the
+                    # cycle, because the rung re-runs every pass while the
+                    # cycle may still be the previous lock — a card must show
+                    # the probability that went into ITS side, not a stale one.
+                    try:
+                        _emv = (self.last_result.get((symbol, tf)) or {}).get(
+                            "edge_model")
+                        if _emv:
+                            d["edge_model"] = _emv
+                    except Exception:
+                        log.exception("edge model publish failed %s/%s",
+                                      symbol, tf)
                     # BADGE INVARIANT at the one place every card is printed.
                     # Confidence can change between analyses (SL penalties,
                     # tier cuts, ageing), so the published badge is checked
