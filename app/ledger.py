@@ -340,14 +340,30 @@ class SettlementLedger:
         per = {f"{symbol}|{tf}": self.stats(symbol, tf)
                for symbol in symbols for tf in tfs}
         pooled = {tf: self.pooled(tf) for tf in tfs}
+        rows_total = sum(len(values) for values in self.rows.values())
+        # A zero here is a FACT, not a neutral default: the MIND panel printed
+        # "0 graded outcomes / not enough settled calls" and "0 settlements"
+        # with no reason, which reads as "the app is broken" when it can also
+        # mean "this process has not reached its first boundary yet". Name the
+        # cause so zero is never unexplained (user report, §40).
+        if rows_total:
+            why_zero = ""
+        elif not self.last_settle_ts:
+            why_zero = ("no window has reached its boundary in THIS process "
+                        "yet — the ledger is filled at the first settle, or "
+                        "by the 24h warm-history seed on the History tab")
+        else:
+            why_zero = ("a settle ran but wrote no gradable row — see "
+                        "ledger.settle_calls and the skip reasons")
         return {"per": per, "pooled": pooled, "min_n": MIN_N_RATE,
                 "rule": "strict sign · tie = loss · skips never count as wins",
+                "why_empty": why_zero,
                 "settle_calls": self.settle_calls,
                 "last_settle_ago_s": (round(time.time() - self.last_settle_ts, 1)
                                       if self.last_settle_ts else None),
                 "last_settle": self.last_settle,
                 "totals": dict(self.totals),
-                "rows_total": sum(len(values) for values in self.rows.values())}
+                "rows_total": rows_total}
 
 
 # ══════════════════════════════════════════════════════════════════════

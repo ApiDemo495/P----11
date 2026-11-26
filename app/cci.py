@@ -217,9 +217,17 @@ class CCIEngine:
                      for fid, val in scaled.items())
         strength = (abs(cci_adjusted) / _gross) if _gross > 1e-12 else 0.0
         issued = confidence > CONFIDENCE_FLOOR
+        # Bug fixed 2026-11-26: `direction` was `_sign(cci_adjusted)`, but the
+        # engine OVERWRITES `direction` afterwards with the mandate rule
+        # (fade / inv4g / mom44 / hold-policy side) and never rewrites
+        # `cci_adjusted`. The dashboard then printed a BULLISH banner beside
+        # a NEGATIVE "CCI ADJ" in the same viewport (user screenshot, §40).
+        # `direction_source` now records which rule produced the side so the
+        # UI can label the divergence instead of looking self-contradictory.
         return {
             "cci": cci,
             "cci_adjusted": cci_adjusted,
+            "direction_source": "cci",
             "cci_reversed": cci_reversed,
             "confidence": confidence,
             "strength": round(max(0.0, min(1.0, strength)), 4),

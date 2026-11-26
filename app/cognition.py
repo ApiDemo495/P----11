@@ -250,10 +250,23 @@ def _working_memory(store: dict, res: dict) -> dict:
         "unknown": [] if res.get("issued") is not None
         else ["whether this window was ISSUED"],
         "coverage": round(len(present) / total, 3) if total else 0.0,
-        "summary": (f"{len(present)}/{total} independent sources reached this "
-                    f"window's reasoning"
-                    + (f"; {len(withheld)} reading(s) withheld, each with its "
-                       f"reason" if withheld else "")),
+        "counts": {"present": len(present), "sources_withheld": n_declared,
+                    "channel_abstentions": len(withheld) - n_declared,
+                    "denominator": total},
+        # Bug fixed 2026-11-26: the total counted only the withheld SOURCES,
+        # while the sentence counted every withheld READING including the
+        # per-channel abstentions. The panel therefore printed
+        # "7/8 independent sources reached this window's reasoning;
+        # 2 reading(s) withheld" — 7 + 2 = 9 against a denominator of 8.
+        # Every withheld reading is now inside the denominator, and the
+        # channel abstentions are named separately so the two kinds of
+        # silence are not added together as if they were the same thing.
+        "summary": (f"{len(present)}/{total} reasoned on this window"
+                    + (f"; {n_declared} source(s) withheld"
+                       if n_declared else "")
+                    + (f"; {len(withheld) - n_declared} channel abstention(s) "
+                       f"declared" if len(withheld) > n_declared else "")
+                    + (" — each with its reason" if withheld else "")),
     }
 
 

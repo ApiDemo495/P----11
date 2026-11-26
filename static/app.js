@@ -1455,6 +1455,17 @@ function _pTag(cyc, res) {
     : " · measured —";
   return ` · P ${fmt(p, 2)} score-units${src}${meas}`;
 }
+/* slot-status CSS classes are a fixed vocabulary; the status STRINGS are not
+   (a stored-but-untested key must not render as the same grey as "no key"). */
+function _slotCls(st) {
+  const t = String(st || "").toLowerCase();
+  if (t === "connected") return "connected";
+  if (t === "disabled") return "disabled";
+  if (t === "rate-limited") return "rate-limited";
+  if (t.startsWith("key stored")) return "untested";
+  if (t === "error") return "error";
+  return "disconnected";
+}
 function verdictOf(cyc, res) {
   const v = cyc?.verdict || (cyc?.provisional ? "PREVIEW" : "");
   if (v === "ISSUE") return "ISSUED";
@@ -1538,7 +1549,17 @@ function renderHero() {
   const cyc = a.tfs?.[tf];
   const res = S.snap?.systems?.[`${S.symbol}|${tf}`] || {};
   const m = TF_META[tf];
-  const dir = cyc?.direction ?? res.direction ?? 0;
+  // Bug fixed 2026-11-26: the header badge said "▲ BULLISH*" while the chip
+  // right next to it said "📉 impulse bear · conf 0.10" - two panels, two
+  // different regime computations. The chip is `chopChip()`, which re-derives
+  // the regime locally; the engine computes its own on the TF tape and, when
+  // it opposes the certified side, sets `regime_conflict`, `gate_ok=false`
+  // and `verdict=NO CALL`. The hero never read that field, so it advertised a
+  // side the engine had already refused to route. A conflict is now a NO CALL
+  // everywhere in this panel.
+  const conflict = res.regime_conflict || cyc?.regime_conflict || null;
+  const rawDir = cyc?.direction ?? res.direction ?? 0;
+  const dir = conflict ? 0 : rawDir;
   // Backend now always publishes a card (provisional when no cycle is
   // locked yet); these fallbacks keep the hero honest even mid-boot.
   const issued = cyc?.issued ?? res.issued ?? false;
@@ -1561,12 +1582,13 @@ function renderHero() {
   const badge = $("#hero-badge");
   if (badge) {
     badge.className = "hero-badge " + (dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat");
-    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)} · ${verdict}${cyc?.tier ? ` · ${cyc.tier}` : ""}${_pTag(cyc, res)}${lockedId ? ` · lock ${lockedId.slice(-6)}` : ""}</small>${dir ? chopChip(tf) : ""}`;
+    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)} · ${verdict}${cyc?.tier ? ` · ${cyc.tier}` : ""}${_pTag(cyc, res)}${lockedId ? ` · lock ${lockedId.slice(-6)}` : ""}</small>${chopChip(tf)}${conflict ? `<span class="chip-err" title="the 5-state regime on this timeframe's tape opposes the side the formulas certified, so no order is routed">⚠ REGIME CONFLICT · side withheld</span>` : ""}`;
   }
   const stats = $("#hero-stats");
   if (stats) {
     stats.innerHTML = `
-      <div class="kv"><span>call</span><b class="${dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat"}">${dir > 0 ? "▲ BULL" : dir < 0 ? "▼ BEAR" : "● FLAT"}${weak && dir ? "*" : ""}</b></div>
+      <div class="kv"><span>call</span><b class="${dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat"}">${conflict ? "● WITHHELD" : dir > 0 ? "▲ BULL" : dir < 0 ? "▼ BEAR" : "● FLAT"}${weak && dir ? "*" : ""}</b></div>
+      ${conflict ? `<div class="kv"><span>why withheld</span><b class="acc-warn">regime ${esc(conflict.state)} (conf ${num(conflict.regime_conf)}) opposes ${rawDir > 0 ? "BUY" : "SELL"} — window still sealed and graded, nothing routed</b></div>` : ""}
       <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} · ${verdict}${res.issue_note ? ` <span class="dim" style="font-size:11px">${esc(res.issue_note)}</span>` : ""}${res.cell_certainty != null ? ` <span class="dim" style="font-size:11px">· certainty ${fx(res.cell_certainty, 3)} (n=${res.cell_certainty_n ?? "?"})</span>` : ""}</b></div>
       ${res.cell_win_rate_net != null ? `<div class="kv"><span>real win rate</span><b>${fx(res.cell_win_rate_net * 100, 1)}% after ${fx(res.cell_round_trip_bps ?? 0, 1)} bps RT <span class="dim" style="font-size:11px">(gross ${fx((res.cell_win_rate ?? 0) * 100, 1)}%)</span></b></div>` : ""}
       <div class="kv"><span>prediction lock</span><b class="${cyc?.prediction_lock?.locked ? "acc-up" : "dim"}">${cyc?.prediction_lock?.locked ? `🔒 ${esc(cyc.prediction_lock.side || "")} · ${esc(String(cyc.prediction_lock.id || "").slice(-8))}` : "not sealed yet"}</b></div>
@@ -1575,12 +1597,27 @@ function renderHero() {
       <div class="kv"><span>strength (voter agreement)</span><b>${fx(cyc?.strength ?? res.strength ?? 0, 2)}</b></div>
       <div class="kv"><span>measured win-rate (this conf)</span><b>${cyc?.winrate != null ? `${Math.round(cyc.winrate * 100)}% · n=${cyc.winrate_n}` : `collecting · n=${cyc?.winrate_n ?? 0}`}</b></div>
       ${cyc?.forecast?.price ? `<div class="kv"><span>${cyc.forecast.mode === "new" ? "🎯 FORECAST (target)" : "forecast if NEW"} ${cyc.forecast.minutes}m</span><b>${px(cyc.forecast.price)} (${cyc.forecast.move_bps} bp)</b></div>` : ""}
-      <div class="kv"><span>cci adj</span><b>${fx(res.cci_adjusted ?? 0, 4)}</b></div>
+      <div class="kv"><span>cci adj</span><b class="${dir && (res.cci_adjusted ?? 0) && Math.sign(dir) !== Math.sign(res.cci_adjusted) ? "acc-warn" : ""}">${num(res.cci_adjusted, 4)}${dir && res.cci_adjusted && Math.sign(dir) !== Math.sign(res.cci_adjusted)
+        ? ` <span class="dim" style="font-size:11px">· opposite sign to the ${esc(res.direction_source || "rule")} side — the side was set by a mandate/hold rule, the CCI is the raw formula vote</span>` : ""}</b></div>
       <div class="kv"><span>countdown</span><b>${cyc?.countdown_s != null ? `${Math.floor(cyc.countdown_s / 60)}m ${cyc.countdown_s % 60}s` : "—"}</b></div>
       <div class="kv"><span>${prov ? "entry (preview)" : "entry (locked contract)"}</span><b>${heroEntry ? px(heroEntry) : "—"}</b></div>
       <div class="kv"><span>price now</span><b>${a.price ? px(a.price) : "—"}</b></div>
       <div class="kv"><span>stop loss</span><b class="acc-dn">${heroSl ? px(heroSl) : "—"}${cyc?.sl_provisional ? ' <span class="dim" style="font-size:11px">prov</span>' : ""}${verdict === "NO CALL" && heroSl ? ' <span class="dim" style="font-size:11px">grading only — will not be traded</span>' : ""}</b></div>
-      <div class="kv"><span>TP:SL ratio</span><b>${cyc?.ratio ? Number(cyc.ratio).toFixed(2) + ":1" : "—"}</b></div>`;
+      ${(() => {
+        // The panel printed "TP:SL ratio 1.21:1" beside "TP 5.4bp / SL 3.4bp"
+        // (= 1.59) and a forecast target 0.57 above the entry — three
+        // numbers, three different ratios, no label saying which object each
+        // belongs to. Compute the ratio from the SAME entry and stop that are
+        // printed above and say which target it used.
+        if (!heroEntry || !heroSl) return `<div class="kv"><span>TP:SL ratio</span><b>—</b></div>`;
+        const tgt = cyc?.forecast?.price ?? cyc?.tp ?? res.contract_tp ?? null;
+        const risk = Math.abs(heroEntry - heroSl);
+        if (!tgt || !(risk > 0)) return `<div class="kv"><span>TP:SL ratio</span><b>—</b></div>`;
+        const rr = Math.abs(tgt - heroEntry) / risk;
+        const src = cyc?.forecast?.price != null ? "forecast target"
+          : cyc?.tp != null ? "cycle target" : "contract TP";
+        return `<div class="kv"><span>TP:SL ratio</span><b>${rr.toFixed(2)}:1 <span class="dim" style="font-size:11px">(${src} ${px(tgt)} vs stop ${px(heroSl)} from entry ${px(heroEntry)})</span></b></div>`;
+      })()}`;
   }
   // TP ladder — the TF's own horizon ALWAYS first (user rule)
   // provisional card / missing cycles: fall back to the measured preview
@@ -1887,7 +1924,10 @@ function renderQuads(opts = {}) {
   TF.forEach(tf => {
     const cyc = a.tfs?.[tf];
     const res = S.snap?.systems?.[`${S.symbol}|${tf}`];
-    const dir = cyc?.direction ?? res?.direction ?? 0;
+    // same rule as the hero: a regime conflict withholds the side here too,
+    // otherwise the quick bar advertises a call the hero just refused
+    const dir = (res?.regime_conflict || cyc?.regime_conflict)
+      ? 0 : (cyc?.direction ?? res?.direction ?? 0);
     const qd = $("#qd-" + tf);
     if (qd) {
       qd.className = "q-dir " + (dir > 0 ? "up" : dir < 0 ? "down" : "flat");
@@ -2180,7 +2220,12 @@ function renderCells() {
     return `<div class="hcell ${active ? "active" : ""}" data-cell="${key}" title="${esc(key)} — ${esc(c.rule || c.tier || "")}">
       <div class="hc-top"><span class="hc-sym">${sym} ${tf.toUpperCase()} · ${(a.tf_minutes || c.minutes)}m</span>
         <span class="hc-tier ${_tierCls(c.tier)}">${esc(c.tier)}</span></div>
-      <div class="hc-wr">${wr}${wrLabel} <span class="hc-conf">WR${conf ? " · " + conf : ""}${c.round_trip_bps != null && c.win_rate != null ? ` · net needs target ≥ ${num(c.min_tp_bps, 0)}bp` : ""}</span></div>
+      <div class="hc-wr">${wr}${wrLabel} <span class="hc-conf">WR${conf ? " · " + conf : ""}${c.cannot_pay_at_any_target
+          ? ` · <span class="acc-dn" title="${esc(String(c.cost_note || ""))}">CANNOT PAY at any target</span>`
+          : c.enforced_tp_bps != null
+            ? ` · net needs target ≥ ${num(c.enforced_tp_bps, 0)}bp <span class="dim" style="font-size:10px">(break-even at its own ${num((c.win_rate ?? 0) * 100, 1)}% / rr ${num(c.reward_risk, 2)})</span>`
+            : c.round_trip_bps != null && c.win_rate != null
+              ? ` · round trip ${num(c.round_trip_bps, 1)}bp` : ""}</span></div>
       <div class="hc-side">${dir} · ${esc(c.rule || (c.certified ? "" : "no rule"))}</div>
       <div class="hc-era">${esc(eraTxt)}</div>
       <div class="hc-lock">${esc(lock)}</div>
@@ -2570,7 +2615,9 @@ function renderWhy() {
   const s = S.snap?.systems?.[`${S.symbol}|${tf}`];
   if (!s) { el.innerHTML = `<div class="dim pad">warming up…</div>`; return; }
   const bd = s.breakdown || {}, m = bd.multipliers || {}, votes = bd.votes || {};
-  const dir = s.direction ?? 0;
+  // a regime conflict withholds the side here as well (see renderHero)
+  const _cf = s.regime_conflict || null;
+  const dir = _cf ? 0 : (s.direction ?? 0);
   const comps = (bd.components || []).slice(0, 10);
   const syn = s.synthesis;
   const synBlock = syn
@@ -2690,11 +2737,13 @@ function renderWhy() {
   el.innerHTML = lockBlock + priceBlock + ladderBlock + sparkHtml + ticksBlock + whoBlock + convBlock + exBlock + `
     <div class="why-head">
       <div class="why-dir ${dir > 0 ? "up" : dir < 0 ? "down" : "flat"}">
-        ${dir > 0 ? "▲ BULLISH" : "▼ BEARISH"}<span class="sym">${S.symbol} · ${tf.toUpperCase()} · ${TF_META[tf].mins}m</span></div>
+        ${_cf ? "● WITHHELD" : dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}<span class="sym">${S.symbol} · ${tf.toUpperCase()} · ${TF_META[tf].mins}m</span></div>
       <div class="why-conf">CONFIDENCE
         <div class="bar"><i class="${s.confidence > 0.35 ? "pos" : "neg"}" style="width:${clamp((s.confidence || 0) * 100, 0, 100)}%"></i></div>
         <b>${fx(s.confidence, 3)}</b> / floor ${bd.floor ?? 0.35}</div>
-      <div class="why-badge ${s.issued ? "ok" : ""}">${s.issued
+      <div class="why-badge ${s.issued && !_cf ? "ok" : ""}">${_cf
+        ? `⚠ REGIME CONFLICT · ${esc(_cf.state)} opposes the certified side — no order routed, window still graded`
+        : s.issued
         ? `✓ SIGNAL ${dir > 0 ? "BUY" : dir < 0 ? "SELL" : "—"} · ${esc(s.tier || "watch-only")} · P ${fmt(s.p_side, 2)} score-units${s.tier === "watch-only" ? ` · size 0${s.tier_why ? " — " + esc(s.tier_why) : " (below measured noise floor)"}` : ""}`
           + (s.calib_n != null ? `<span class="dim" title="${esc(s.calib_source || "")}"> · n=${s.calib_n}${s.calib_provisional ? " (provisional scale)" : ""}</span>` : "")
         : "side pending"}</div>
@@ -4173,11 +4222,13 @@ async function loadAgents() {
     const titles = ["Gemini primary", "Backup 1 · Gemini", "Backup 2 · GPT-4o", "Backup 3 · Claude"];
     $("#ag-slots").innerHTML = slots.map((s, i) => `
       <div class="card">
-        <h4><span>${titles[i] || s.status}</span><span class="slot-status ${s.status}">${s.status}</span></h4>
+        <h4><span>${titles[i] || s.status}</span><span class="slot-status ${_slotCls(s.status)}">${esc(s.status)}</span></h4>
         <div class="kv-row">
-          <div class="kv"><span>key</span><b>${s.key || "(none)"}</b></div>
+          <div class="kv"><span>key</span><b>${esc(s.key || "(none)")}</b></div>
           <div class="kv"><span>calls / h</span><b>${s.usage ?? 0} / ${s.limit ?? "—"}</b></div>
         </div>
+        ${s.reason ? `<div class="hint acc-warn">last error: ${esc(s.reason)} — press test to re-check</div>` : ""}
+        ${s.status === "key stored · untested" ? `<div class="hint">the key is saved; nothing has asked it a question yet. press <b>test</b>.</div>` : ""}
         ${s.last?.insight ? `<div class="logic">“${esc(s.last.insight)}”</div>` : ""}
         <button class="btn test-slot" data-slot="${["gemini", "backup1", "backup2", "backup3"][i]}" style="margin-top:10px">test</button>
       </div>`).join("");
@@ -4231,7 +4282,9 @@ async function loadAgents() {
       </div>
       ${stepsHtml}
       ${ins.installed
-        ? `<div class="hint" style="margin-top:8px">✓ local agent ready${lo.available ? " and loaded" : " — press re-probe to load it"}</div>
+        ? `${lo.available
+            ? `<div class="hint" style="margin-top:8px">✓ local agent ready and loaded</div>`
+            : `<div class="hint acc-warn" style="margin-top:8px">⚠ the runtime is INSTALLED but NOT answering${lo.error ? ` — ${esc(lo.error)}` : ""}. Nothing is being asked locally; every analysis runs on the Drosophila brain + formulas. Press re-probe.</div>`}
            <button class="btn test-slot" data-slot="local" style="margin-top:10px">test</button>
            <button class="btn" id="ag-retry" style="margin-top:10px">re-probe runtime</button>`
         : installing
@@ -4363,7 +4416,8 @@ function renderMind(t) {
       : c.trust === "underconfident" ? "acc-warn" : "dim";
     meta.innerHTML = `
       <div class="kv"><span>trust in itself</span><b class="${trustCls}">${esc(c.trust || "unknown")}</b></div>
-      <div class="kv"><span>graded outcomes</span><b>${c.n ?? 0}${c.state ? ` · ${esc(c.state)}` : ""}</b></div>
+      <div class="kv"><span>graded outcomes</span><b>${c.n ?? 0}${c.state ? ` · ${esc(c.state)}` : ""}${!(c.n)
+        ? ` <span class="dim" style="font-size:11px">${esc(S.snap?.ledger?.why_empty || "the ledger is written at the first window boundary")}</span>` : ""}</b></div>
       <div class="kv"><span>hit-rate</span><b>${c.hit_rate != null ? (c.hit_rate * 100).toFixed(0) + "%" : "—"}
         ${c.wilson_lo != null ? `<span class="dim" style="font-size:11px">95% floor ${(c.wilson_lo * 100).toFixed(0)}%</span>` : ""}</b></div>
       <div class="kv"><span>Brier</span><b>${c.brier != null

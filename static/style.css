@@ -266,6 +266,12 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 5px; bo
 .key-grid input { background: var(--panel2); border: 1px solid var(--line2); border-radius: 6px; color: var(--text); font-family: var(--mono); padding: 8px 10px; font-size: 12px; }
 .slot-status { font: 500 10px/1 var(--mono); color: var(--dim); }
 .slot-status.connected { color: var(--green); }
+/* a key that is SAVED but has never been asked a question is not the same
+   state as "no key at all" - it gets its own tone, never the grey of absent */
+.slot-status.untested { color: var(--cyan); }
+.slot-status.error { color: var(--red); }
+.slot-status.rate-limited { color: var(--gold); }
+.slot-status.disabled { color: var(--dim); }
 
 /* ── history ───────────────────────────────────────────────── */
 .day-row { display: grid; grid-template-columns: 90px 1fr 60px 60px 70px; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line);

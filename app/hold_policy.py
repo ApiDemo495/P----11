@@ -134,6 +134,47 @@ TIER_SHIPGATE = "ROWS VERIFIED · SHIP GATE FAIL"
 # what makes a reported win rate comparable to money.
 MIN_TP_OVER_RT = 1.5
 
+
+def breakeven_tp_bps(win_rate: float, rt_bps: float,
+                     reward_risk: float) -> float | None:
+    """The target a cell must ACTUALLY reach to net zero, given its own
+    hit rate and payoff.  ``None`` when the geometry cannot pay at all.
+
+    Bug fixed 2026-11-26: the dashboard printed "net needs target >= 43bp"
+    for an ETH cell at 72.9 % gross and 1.10 reward:risk with a 28.98 bp
+    round trip. 43 bp is just MIN_TP_OVER_RT (1.5x) x RT — a fee-multiple
+    rule, not a break-even calculation. It answers "does a win keep a
+    third of its gross move", which is a margin convention; it does not
+    ask what THIS cell's hit rate and payoff imply. A payoff of 1.10 needs
+    a wider target than a payoff of 1.0 does, and that cell's own 72.9 %
+    is a gross first-touch rate, not a cash rate.
+
+    With target T, stop S = T/rr, the net per trade is
+        p*T - (1-p)*S - RT   (p = the CASH win rate)
+    so the break-even target solves to
+        T* = RT / (p - (1-p)/rr)
+    At the panel's own numbers that is 60.0 bp, not 43. Following the 43 bp
+    floor still loses 8.2 bp per trade. A floor that is 28 % too low is a
+    floor that quietly funds the exchange.
+
+    ``win_rate`` here must be the probed CASH win rate for the widened
+    target (widening a target lowers the hit rate), so callers that only
+    hold the gross first-touch rate should pass an explicit ``None`` rather
+    than let this function pretend.
+    """
+    try:
+        p = float(win_rate)
+        rr = float(reward_risk)
+        rt = float(rt_bps)
+    except (TypeError, ValueError):
+        return None
+    if not (0.0 < p < 1.0) or rr <= 0.0 or rt <= 0.0:
+        return None
+    edge = p - (1.0 - p) / rr
+    if edge <= 1e-9:
+        return None                 # no target can pay at this hit rate
+    return round(rt / edge, 3)
+
 #: A geometry whose target is a smaller fraction of its stop than this is a
 #: lottery ticket: it wins often and loses the account. Measured on 3 years
 #: of tape, every >=66 % win-rate geometry had reward:risk below 0.2.
@@ -293,6 +334,11 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
         era_k=sel.get("era_k"), era_m=sel.get("era_m"),
         ride=bool(float(sel.get("era_m") or 0) >= 999.0),
         win_rate=full.get("row_wr"),
+        # reward:risk of the certified row geometry (target / stop). Needed by
+        # breakeven_tp_bps below — without it the panel can only show the
+        # fee-multiple floor, which is wrong whenever rr != 1.0.
+        reward_risk=(round(float(sel["row_k"]), 4)
+                     if sel.get("row_k") is not None else None),
         win_rate_label=("gross first-touch hit rate (does NOT include "
                         "costs)"),
         win_rate_wilson=wil,
@@ -330,12 +376,43 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
     rt = max(2.0 * float(c.get("friction_bps_per_side") or 0.0),
              round_trip_bps(symbol))
     base["round_trip_bps"] = round(rt, 3)
+    # the fee-multiple floor AND the honest break-even for this cell's own
+    # gross rate and payoff. The panel shows both; they differ whenever
+    # reward:risk is not 1.0, and the break-even is the one that pays.
     base["min_tp_bps"] = round(MIN_TP_OVER_RT * rt, 3)
+    _wr = base.get("win_rate")
+    _rr = base.get("reward_risk")
+    _be = (breakeven_tp_bps(_wr, rt, _rr)
+           if _wr is not None and _rr is not None else None)
+    base["breakeven_tp_bps"] = _be
     base["win_rate_is_money"] = None
-    base["cost_note"] = (
-        "win_rate is the gross first-touch hit rate; the target must be "
-        f">= {MIN_TP_OVER_RT}x the {rt:.1f} bps round trip before a win "
-        "pays. Live locks enforce that floor (see geometry_cost_check).")
+    base["min_tp_note"] = (
+        f"{MIN_TP_OVER_RT}x round trip (fee-multiple convention)"
+        + (f"; this cell's own break-even is {_be} bp at "
+           f"{round(float(_wr) * 100, 1)}% and rr {_rr}"
+           if _be is not None else
+           "; no break-even exists at this hit rate and payoff"))
+    # The floor that is actually enforced must be the break-even, never the
+    # fee multiple: 43 bp does not pay a 1.10 payoff. When NO break-even
+    # exists the honest answer is None ("no target pays"), not a fallback to
+    # the fee floor — every shipped cell carries row_k = 0.15, i.e. a target
+    # one-seventh of its stop, which needs an 87 % hit rate to break even.
+    # Printing 43 bp there is a floor that funds the exchange.
+    base["enforced_tp_bps"] = _be
+    base["cannot_pay_at_any_target"] = bool(
+        _wr is not None and _rr is not None and _be is None)
+    if base["cannot_pay_at_any_target"]:
+        base["cost_note"] = (
+            "this geometry cannot pay at any target: reward:risk "
+            f"{_rr} needs a win rate above "
+            f"{round(100.0 / (1.0 + float(_rr)), 1)}% before the round trip "
+            f"of {rt:.1f} bps is covered, and the certified gross rate is "
+            f"{round(float(_wr) * 100, 1)}%")
+    else:
+        base["cost_note"] = (
+            "win_rate is the gross first-touch hit rate; the target must be "
+            f">= {MIN_TP_OVER_RT}x the {rt:.1f} bps round trip before a win "
+            "pays. Live locks enforce that floor (see geometry_cost_check).")
     return base
 
 

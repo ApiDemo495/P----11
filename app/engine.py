@@ -2027,6 +2027,10 @@ class PredictionEngine:
                 "winrate_n": fin.get("winrate_n", 0),
                 "base_confidence": pack["confidence"],
                 "direction": pack["direction"],
+                # the side the CCI arithmetic itself produced, preserved
+                # before any mandate rule overwrites `direction`
+                "direction_cci": pack.get("direction"),
+                "direction_source": pack.get("direction_source", "cci"),
                 "issued": fin["issued"],
                 "gate_ok": fin.get("gate_ok"),
                 "p_correct": fin.get("p_correct"),
@@ -2622,6 +2626,12 @@ class PredictionEngine:
                                             self.feed)
             if _newd == _oldd:
                 continue
+            # the mandate rule overwrote the CCI side: say so, and keep the
+            # CCI sign visible so the UI can label a fade/inv4g divergence
+            # instead of printing BULLISH next to a negative CCI ADJ
+            _res["direction_source"] = "mandate:%s" % (
+                _mcfg_i.direction_rule(symbol, _tf))
+            _res["cci_side"] = _res.get("direction_cci")
             _res["direction"] = _newd
             if _tf in _mandate_comps:
                 _res["mass"] = self._mass_for_against(

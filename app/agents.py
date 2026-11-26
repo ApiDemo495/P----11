@@ -2120,12 +2120,31 @@ class AgentManager:
         def slot_status(slot: str, key: str) -> dict:
             used, limit = self.usage(key) if key else (0, AGENT_FREE_RPH)
             reply = self.last_replies.get(slot) or {}
-            st = ("disabled" if (slot == "gemini" and
-                                 not self.settings.get("gemini_enabled", True))
-                  else "connected" if reply.get("ok")
-                  else "rate-limited" if reply.get("reason") == "rate limited"
-                  else "disconnected" if key else "not configured")
-            return {"key": _mask(key), "status": st,
+            kr = self.keyring.get(slot) or {}
+            flag = {"gemini": "gemini_enabled", "backup1": "gemini_enabled",
+                    "backup2": "openai_enabled",
+                    "backup3": "anthropic_enabled"}.get(slot, "gemini_enabled")
+            enabled = bool(self.settings.get(flag, True))
+            reason = str(reply.get("reason") or kr.get("last_error") or "")
+            if not key:
+                st = "not configured"
+            elif not enabled:
+                st = "disabled"
+            elif reply.get("ok"):
+                st = "connected"
+            elif reason == "rate limited":
+                st = "rate-limited"
+            elif reason:
+                # a stored key that has been TESTED and failed is not
+                # "disconnected" by accident - carry the actual error so the
+                # panel can say HTTP 400 vs a dead network instead of a
+                # bare grey chip the user has to guess at (user report:
+                # "I pasted a gemini key but the agent never runs")
+                st = "error"
+            else:
+                st = "key stored · untested"
+            return {"key": _mask(key), "status": st, "enabled": enabled,
+                    "reason": reason,
                     "last": {k: reply.get(k) for k in
                              ("direction", "confidence", "insight", "reason")},
                     "usage": used, "limit": limit}
