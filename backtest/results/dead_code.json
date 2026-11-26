@@ -1,122 +1,12 @@
 {
  "dead": [
   {
-   "name": "get_status",
+   "name": "boot_state",
    "kind": "function",
    "file": "app/agents.py",
-   "line": 2518,
+   "line": 2556,
    "decorators": [],
-   "end_line": 2520,
-   "verdict": "DEAD",
-   "refs": 0,
-   "ref_files": []
-  },
-  {
-   "name": "zscore",
-   "kind": "function",
-   "file": "app/alpha_lab.py",
-   "line": 117,
-   "decorators": [],
-   "end_line": 120,
-   "verdict": "DEAD",
-   "refs": 0,
-   "ref_files": []
-  },
-  {
-   "name": "fit_ridge",
-   "kind": "function",
-   "file": "app/alpha_lab.py",
-   "line": 227,
-   "decorators": [],
-   "end_line": 257,
-   "verdict": "DEAD",
-   "refs": 0,
-   "ref_files": []
-  },
-  {
-   "name": "empty_brain_consensus",
-   "kind": "function",
-   "file": "app/brain.py",
-   "line": 1210,
-   "decorators": [],
-   "end_line": 1215,
-   "verdict": "DEAD",
-   "refs": 0,
-   "ref_files": []
-  },
-  {
-   "name": "levels_for_display",
-   "kind": "function",
-   "file": "app/contracts.py",
-   "line": 238,
-   "decorators": [],
-   "end_line": 252,
-   "verdict": "DEAD",
-   "refs": 0,
-   "ref_files": []
-  },
-  {
-   "name": "squeeze_score",
-   "kind": "function",
-   "file": "app/derivs.py",
-   "line": 214,
-   "decorators": [],
-   "end_line": 227,
-   "verdict": "DEAD",
-   "refs": 0,
-   "ref_files": []
-  },
-  {
-   "name": "reset_all",
-   "kind": "function",
-   "file": "app/hold_era.py",
-   "line": 427,
-   "decorators": [],
-   "end_line": 429,
-   "verdict": "DEAD",
-   "refs": 0,
-   "ref_files": []
-  },
-  {
-   "name": "is_warmup_cell",
-   "kind": "function",
-   "file": "app/hold_policy.py",
-   "line": 257,
-   "decorators": [],
-   "end_line": 260,
-   "verdict": "DEAD",
-   "refs": 0,
-   "ref_files": []
-  },
-  {
-   "name": "geometry_for_live",
-   "kind": "function",
-   "file": "app/hold_policy.py",
-   "line": 869,
-   "decorators": [],
-   "end_line": 896,
-   "verdict": "DEAD",
-   "refs": 0,
-   "ref_files": []
-  },
-  {
-   "name": "bucket_neff",
-   "kind": "function",
-   "file": "app/portfolio.py",
-   "line": 284,
-   "decorators": [],
-   "end_line": 286,
-   "verdict": "DEAD",
-   "refs": 0,
-   "ref_files": []
-  },
-  {
-   "name": "legacy_label",
-   "kind": "function",
-   "file": "app/regime.py",
-   "line": 281,
-   "decorators": [],
-   "end_line": 282,
+   "end_line": 2557,
    "verdict": "DEAD",
    "refs": 0,
    "ref_files": []
@@ -280,25 +170,12 @@
    ]
   },
   {
-   "name": "boot_state",
-   "kind": "function",
-   "file": "app/agents.py",
-   "line": 2514,
-   "decorators": [],
-   "end_line": 2515,
-   "verdict": "dead?:same-file-only",
-   "refs": 1,
-   "ref_files": [
-    "app/agents.py"
-   ]
-  },
-  {
    "name": "rankdata",
    "kind": "function",
    "file": "app/alpha_lab.py",
-   "line": 123,
+   "line": 119,
    "decorators": [],
-   "end_line": 141,
+   "end_line": 137,
    "verdict": "dead?:same-file-only",
    "refs": 2,
    "ref_files": [
@@ -309,9 +186,9 @@
    "name": "calib_slope",
    "kind": "function",
    "file": "app/alpha_lab.py",
-   "line": 182,
+   "line": 178,
    "decorators": [],
-   "end_line": 194,
+   "end_line": 190,
    "verdict": "dead?:same-file-only",
    "refs": 3,
    "ref_files": [
@@ -322,9 +199,9 @@
    "name": "fit_logistic",
    "kind": "function",
    "file": "app/alpha_lab.py",
-   "line": 206,
+   "line": 202,
    "decorators": [],
-   "end_line": 224,
+   "end_line": 220,
    "verdict": "dead?:same-file-only",
    "refs": 1,
    "ref_files": [
@@ -335,9 +212,9 @@
    "name": "vol_sigma",
    "kind": "function",
    "file": "app/alpha_lab.py",
-   "line": 472,
+   "line": 437,
    "decorators": [],
-   "end_line": 480,
+   "end_line": 445,
    "verdict": "dead?:same-file-only",
    "refs": 2,
    "ref_files": [
@@ -348,9 +225,9 @@
    "name": "feat_ic_get",
    "kind": "function",
    "file": "app/alpha_lab.py",
-   "line": 700,
+   "line": 665,
    "decorators": [],
-   "end_line": 706,
+   "end_line": 671,
    "verdict": "dead?:same-file-only",
    "refs": 2,
    "ref_files": [
@@ -419,9 +296,9 @@
    "name": "fear_greed_index",
    "kind": "function",
    "file": "app/emotion.py",
-   "line": 402,
+   "line": 401,
    "decorators": [],
-   "end_line": 444,
+   "end_line": 443,
    "verdict": "dead?:same-file-only",
    "refs": 1,
    "ref_files": [
@@ -432,11 +309,24 @@
    "name": "np_var",
    "kind": "function",
    "file": "app/engine.py",
-   "line": 103,
+   "line": 114,
    "decorators": [],
-   "end_line": 107,
+   "end_line": 118,
    "verdict": "dead?:same-file-only",
    "refs": 4,
+   "ref_files": [
+    "app/engine.py"
+   ]
+  },
+  {
+   "name": "resolve_verdict",
+   "kind": "function",
+   "file": "app/engine.py",
+   "line": 423,
+   "decorators": [],
+   "end_line": 428,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
    "ref_files": [
     "app/engine.py"
    ]
@@ -468,12 +358,25 @@
    ]
   },
   {
+   "name": "breakeven_tp_bps",
+   "kind": "function",
+   "file": "app/hold_policy.py",
+   "line": 138,
+   "decorators": [],
+   "end_line": 176,
+   "verdict": "dead?:same-file-only",
+   "refs": 3,
+   "ref_files": [
+    "app/hold_policy.py"
+   ]
+  },
+  {
    "name": "geometry_cost_check",
    "kind": "function",
    "file": "app/hold_policy.py",
-   "line": 346,
+   "line": 444,
    "decorators": [],
-   "end_line": 377,
+   "end_line": 475,
    "verdict": "dead?:same-file-only",
    "refs": 1,
    "ref_files": [
@@ -484,9 +387,9 @@
    "name": "window_entry_index",
    "kind": "function",
    "file": "app/hold_policy.py",
-   "line": 648,
+   "line": 746,
    "decorators": [],
-   "end_line": 654,
+   "end_line": 752,
    "verdict": "dead?:same-file-only",
    "refs": 1,
    "ref_files": [
@@ -536,11 +439,11 @@
    "name": "PillarReport",
    "kind": "class",
    "file": "app/metacognition.py",
-   "line": 85,
+   "line": 125,
    "decorators": [
     "dataclass"
    ],
-   "end_line": 96,
+   "end_line": 136,
    "verdict": "dead?:same-file-only",
    "refs": 4,
    "ref_files": [
@@ -551,9 +454,9 @@
    "name": "platt_step",
    "kind": "function",
    "file": "app/metacognition.py",
-   "line": 203,
+   "line": 243,
    "decorators": [],
-   "end_line": 210,
+   "end_line": 250,
    "verdict": "dead?:same-file-only",
    "refs": 1,
    "ref_files": [
@@ -564,11 +467,11 @@
    "name": "CellCalibration",
    "kind": "class",
    "file": "app/metacognition.py",
-   "line": 214,
+   "line": 254,
    "decorators": [
     "dataclass"
    ],
-   "end_line": 229,
+   "end_line": 269,
    "verdict": "dead?:same-file-only",
    "refs": 2,
    "ref_files": [
@@ -579,9 +482,9 @@
    "name": "sharpe_ratio",
    "kind": "function",
    "file": "app/metacognition.py",
-   "line": 346,
+   "line": 386,
    "decorators": [],
-   "end_line": 356,
+   "end_line": 396,
    "verdict": "dead?:same-file-only",
    "refs": 2,
    "ref_files": [
@@ -592,11 +495,11 @@
    "name": "CellVerdict",
    "kind": "class",
    "file": "app/metacognition.py",
-   "line": 389,
+   "line": 429,
    "decorators": [
     "dataclass"
    ],
-   "end_line": 402,
+   "end_line": 442,
    "verdict": "dead?:same-file-only",
    "refs": 8,
    "ref_files": [
@@ -607,26 +510,13 @@
    "name": "nested_purged_walk_forward",
    "kind": "function",
    "file": "app/metacognition.py",
-   "line": 431,
+   "line": 471,
    "decorators": [],
-   "end_line": 519,
+   "end_line": 559,
    "verdict": "dead?:same-file-only",
    "refs": 1,
    "ref_files": [
     "app/metacognition.py"
-   ]
-  },
-  {
-   "name": "hawkes_branching",
-   "kind": "function",
-   "file": "app/micro_alpha.py",
-   "line": 201,
-   "decorators": [],
-   "end_line": 218,
-   "verdict": "dead?:same-file-only",
-   "refs": 1,
-   "ref_files": [
-    "app/micro_alpha.py"
    ]
   },
   {
@@ -799,19 +689,6 @@
    ]
   },
   {
-   "name": "p20_pdobv",
-   "kind": "function",
-   "file": "app/physics.py",
-   "line": 1242,
-   "decorators": [],
-   "end_line": 1276,
-   "verdict": "dead?:same-file-only",
-   "refs": 1,
-   "ref_files": [
-    "app/physics.py"
-   ]
-  },
-  {
    "name": "RealCircuit",
    "kind": "class",
    "file": "app/real_brains.py",
@@ -916,6 +793,19 @@
    ]
   },
   {
+   "name": "window_sigma",
+   "kind": "function",
+   "file": "app/trend_gate.py",
+   "line": 242,
+   "decorators": [],
+   "end_line": 244,
+   "verdict": "dead?:same-file-only",
+   "refs": 1,
+   "ref_files": [
+    "app/trend_gate.py"
+   ]
+  },
+  {
    "name": "factorial",
    "kind": "function",
    "file": "app/formulas/f22_f31.py",
@@ -942,5 +832,5 @@
    ]
   }
  ],
- "scanned": 789
+ "scanned": 815
 }

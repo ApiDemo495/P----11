@@ -111,6 +111,7 @@ class TFCycle:
     #: normal case; a non-empty value means the published pair is a REPAIR,
     #: not a raw measurement, and the UI must be able to say so.
     levels_repaired: str = ""
+    restore_note: str = ""
     prediction_lock: dict = field(default_factory=dict)
     tier: str = "watch-only"         # full|half|quarter|watch-only (size hint)
     p_side: float = 0.5              # calibrated P(side) in [0.50, 1)
@@ -194,6 +195,7 @@ class TFCycle:
             "trend_gate": self.trend_gate,
             "trend_flip": self.trend_flip,
             "levels_repaired": self.levels_repaired,
+            "restore_note": self.restore_note,
             "prediction_lock": self.prediction_lock,
             "cycle_start": self.cycle_start,
             "cycle_end": self.cycle_end,

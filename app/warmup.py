@@ -328,7 +328,7 @@ def warm_history(engine, *, hours: int = 168,
                             closes[start_i - min(1000, start_i):start_i + 1],
                             highs[start_i - min(1000, start_i):start_i + 1],
                             lows[start_i - min(1000, start_i):start_i + 1],
-                            atr=0.0)
+                            atr=0.0, bar_minutes=1.0)
                         tp, sl = block.get("tp"), block.get("sl")
                     except Exception:
                         tp = sl = None

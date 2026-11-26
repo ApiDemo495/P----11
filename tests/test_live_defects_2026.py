@@ -163,3 +163,101 @@ def test_an_abstention_is_not_scored_as_a_miss():
     # and the silence stays visible in the published status
     assert '"abstained": int(v.get("abstained") or 0)' in src
     assert '"coverage":' in src
+
+
+# ── 4. the units bug behind "tp 551 on BNB at market 556" ────────────────
+def test_window_is_minutes_not_bars():
+    """`moves_stats(window_min)` read its window as a BAR COUNT.
+
+    Every in-repo backtest feeds a 1-HOUR tape (backtest/data.py). Reading
+    tf1's 22 minutes as 22 BARS means measuring 22 HOURS of excursion for a
+    22-minute horizon. Live proof from the project's own trade log
+    (backtest/results/mode_a_trades_real_1h.csv): the median BTC stop was
+    181 bps — exactly the 22-hour q80 excursion of that tape — while 22
+    minutes of BTC moves ~32 bps. The stop was 5.7x too wide in distance,
+    32x too wide in variance, and the trade could not resolve inside its own
+    horizon: 158 of 206 real trades never touched either barrier.
+
+    This builds an HOURLY-volatility tape and reads the same 22-minute
+    window under both declarations. Declaring the truth (60-min bars) must
+    give a SMALL excursion; declaring the historical 1-min default must
+    inflate it by roughly sqrt(22) ≈ 4.7x.
+    """
+    import random
+    from app.moves_risk import moves_stats
+
+    rng = random.Random(4)
+    # an HOURLY tape: 0.4 % per bar
+    p, c, h, l = 100.0, [], [], []
+    for _ in range(2000):
+        p *= 1.0 + rng.gauss(0, 0.004)
+        c.append(p)
+        w = abs(rng.gauss(0, 0.004)) * p
+        h.append(p + w)
+        l.append(p - w)
+
+    # declared truthfully: 22 minutes on 60-min bars is ONE bar
+    honest = moves_stats(c, h, l, 22, bar_minutes=60.0)
+    # declared as the old default (1-min): 22 BARS = 22 hours of excursion
+    inflated = moves_stats(c, h, l, 22, bar_minutes=1.0)
+
+    ratio = inflated["q80"] / max(honest["q80"], 1e-9)
+    # sqrt(22) ≈ 4.69 — allow the sampling spread of a q80 estimate
+    assert 3.0 < ratio < 7.0, f"expected ~sqrt(22)≈4.7x, got {ratio:.2f}x"
+    # and in absolute terms, 22 minutes of a 0.4 %-per-hour tape is small
+    assert honest["q80"] < 200.0, honest["q80"]
+    assert inflated["q80"] > honest["q80"]
+
+
+def test_a_window_shorter_than_the_bar_is_declared_provisional():
+    """An unmeasurable window must SAY SO, not borrow a wider one.
+
+    On 1h bars, 22 minutes and 44 minutes both collapse to a single bar,
+    and a single bar is an HOUR of excursion. The block is returned
+    provisional (and the note names the reason) so nothing can present an
+    hour-wide stop as a 22-minute one.
+    """
+    import random
+    from app.moves_risk import risk_block
+
+    rng = random.Random(9)
+    p, c, h, l = 100.0, [], [], []
+    for _ in range(2000):
+        p *= 1.0 + rng.gauss(0, 0.004)
+        c.append(p)
+        w = abs(rng.gauss(0, 0.003)) * p
+        h.append(p + w)
+        l.append(p - w)
+
+    hourly = risk_block(100.0, 1, 22, 0.5, c, h, l, atr=1.0, bar_minutes=60.0)
+    assert hourly["provisional"] is True
+    assert "shorter than the tape's bar spacing" in hourly["note"]
+    assert hourly["bar_minutes"] == 60.0 and hourly["window_min"] == 22
+    # a window WIDER than the bar is a real measurement
+    wide = risk_block(100.0, 1, 247, 0.5, c, h, l, atr=1.0, bar_minutes=60.0)
+    assert wide["provisional"] is False
+
+
+def test_atr_fallback_scales_volatility_by_sqrt_of_time():
+    """The fallback scaled σ by sqrt(MINUTES) as if minutes were bar counts.
+
+    σ_horizon = σ_bar · sqrt(horizon / bar). On a 60-minute tape a
+    22-minute horizon is 0.37 of a bar, not 22 bars — the old code inflated
+    the provisional stop by sqrt(60) ≈ 7.7x.
+    """
+    import random
+    from app.moves_risk import risk_block
+
+    rng = random.Random(3)
+    c = [100.0]
+    for _ in range(200):
+        c.append(c[-1] * (1 + rng.gauss(0, 0.004)))
+    h = [x * 1.001 for x in c]
+    l = [x * 0.999 for x in c]
+    # 22 minutes on a 60-minute tape: scale = sqrt(22/60) = 0.606
+    block = risk_block(100.0, 1, 22, 0.5, c[:20], h[:20], l[:20],
+                       atr=1.0, bar_minutes=60.0)
+    # atr=1.0 on price 100 is 100 bps; 0.8 * 100 * sqrt(22/60) ≈ 48.5 bps
+    assert 40.0 < block["sl_bps"] < 60.0, block["sl_bps"]
+    # NOT the old sqrt(22)=4.69 inflation, which would give ~375 bps
+    assert block["sl_bps"] < 100.0

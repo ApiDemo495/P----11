@@ -11,12 +11,20 @@ Anything that wins only in-sample is rejected here, visibly.
 """
 from __future__ import annotations
 
+import os
 import json
 import math
 
 from .data import FRICTION_BPS, Bar
 from .predictor import HORIZON, AppPredictor
 from .slice import DataSlice
+# Spacing of the tape this harness walks, in MINUTES. The TP/SL
+# block measures a HOLDING PERIOD; without this it measured a
+# BAR COUNT, so a 1h tape silently produced 22-HOUR stops for a
+# 22-minute horizon (app/moves_risk.moves_stats, 2026-11-26).
+_BAR_MINUTES = {"1m": 1.0, "5m": 5.0, "15m": 15.0, "30m": 30.0,
+                "1h": 60.0, "2h": 120.0, "4h": 240.0}.get(
+                    os.environ.get("BACKTEST_TF", "15m"), 15.0)
 
 KS = (0.5, 0.75, 1.0, 1.5)
 HS = (22, 44)
@@ -86,7 +94,8 @@ def collect(series, predictor: AppPredictor, warmup=80, step=22):
                 if d == 0:
                     continue
                 blk = risk_block(entry, d, HORIZON, 0.5, closes,
-                                 view.highs, view.lows)
+                                 view.highs, view.lows,
+                                 bar_minutes=_BAR_MINUTES)
                 if blk.get("sl") is not None:
                     risks[d] = abs(entry - float(blk["sl"]))
             rules = {"tf1": dirs["tf1"], "tf2": dirs["tf2"],

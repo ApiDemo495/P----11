@@ -22,6 +22,13 @@ import os
 
 from .data import FRICTION_BPS, load_cache
 from .mandate import TF_W, settle_r, wilson
+# Spacing of the tape this harness walks, in MINUTES. The TP/SL
+# block measures a HOLDING PERIOD; without this it measured a
+# BAR COUNT, so a 1h tape silently produced 22-HOUR stops for a
+# 22-minute horizon (app/moves_risk.moves_stats, 2026-11-26).
+_BAR_MINUTES = {"1m": 1.0, "5m": 5.0, "15m": 15.0, "30m": 30.0,
+                "1h": 60.0, "2h": 120.0, "4h": 240.0}.get(
+                    os.environ.get("BACKTEST_TF", "15m"), 15.0)
 
 RESULTS = os.path.join(os.path.dirname(__file__), "results")
 ASSETS = ("BTC", "ETH", "BNB", "PAXG")
@@ -71,7 +78,7 @@ def _sl_bps(bars, i, direction, W):
         return None
     try:
         blk = risk_block(closes[-1], direction, W, 0.0,
-                         closes, highs, lows)
+                         closes, highs, lows, bar_minutes=_BAR_MINUTES)
         val = float(blk.get("sl_bps") or 0.0) or None
     except Exception:
         val = None

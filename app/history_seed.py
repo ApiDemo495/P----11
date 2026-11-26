@@ -294,7 +294,8 @@ def seed_history(engine, hours: int = 24, *, now: float | None = None) -> dict:
                             min(1.0, abs(float(pack.get("cci_adjusted") or 0.0)) / 0.35),
                             closes[risk_start:start_i + 1],
                             highs[risk_start:start_i + 1],
-                            lows[risk_start:start_i + 1], atr=0.0)
+                            lows[risk_start:start_i + 1], atr=0.0,
+                            bar_minutes=1.0)
                         tp, sl = block.get("tp"), block.get("sl")
                     except Exception:
                         log.exception("seed barrier calculation failed %s/%s", symbol, tf)

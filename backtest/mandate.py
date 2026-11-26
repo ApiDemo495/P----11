@@ -49,6 +49,13 @@ import time
 from .data import FRICTION_BPS, load_cache
 from .predictor import AppPredictor
 from .slice import DataSlice
+# Spacing of the tape this harness walks, in MINUTES. The TP/SL
+# block measures a HOLDING PERIOD; without this it measured a
+# BAR COUNT, so a 1h tape silently produced 22-HOUR stops for a
+# 22-minute horizon (app/moves_risk.moves_stats, 2026-11-26).
+_BAR_MINUTES = {"1m": 1.0, "5m": 5.0, "15m": 15.0, "30m": 30.0,
+                "1h": 60.0, "2h": 120.0, "4h": 240.0}.get(
+                    os.environ.get("BACKTEST_TF", "15m"), 15.0)
 
 TF_W = {"tf1": 22, "tf2": 44, "tf3": 130, "tf4": 247}
 STEP = 22
@@ -204,7 +211,7 @@ def walk_asset(asset: str, smoke: bool = False) -> str:
                     continue
                 blk = risk_block(entry, d, W, conf,
                                  closes, list(view.highs), list(view.lows),
-                                 atr=atr)
+                                 atr=atr, bar_minutes=_BAR_MINUTES)
                 if blk.get("sl") is None or blk.get("tp") is None:
                     continue
                 # ── OLD: measured ladder (policy variants at k=0.75) ──

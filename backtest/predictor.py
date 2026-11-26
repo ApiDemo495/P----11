@@ -14,6 +14,13 @@ import os
 from dataclasses import dataclass
 
 from .slice import SliceView
+# Spacing of the tape this harness walks, in MINUTES. The TP/SL
+# block measures a HOLDING PERIOD; without this it measured a
+# BAR COUNT, so a 1h tape silently produced 22-HOUR stops for a
+# 22-minute horizon (app/moves_risk.moves_stats, 2026-11-26).
+_BAR_MINUTES = {"1m": 1.0, "5m": 5.0, "15m": 15.0, "30m": 30.0,
+                "1h": 60.0, "2h": 120.0, "4h": 240.0}.get(
+                    os.environ.get("BACKTEST_TF", "15m"), 15.0)
 
 HORIZON = 22          # bars (app TF1 window)
 
@@ -93,7 +100,8 @@ class AppPredictor:
         blk = risk_block(entry, direction, HORIZON,
                          float(res.get("confidence") or 0.0),
                          closes, highs, lows,
-                         atr=float(res.get("atr") or 0.0))
+                         atr=float(res.get("atr") or 0.0),
+                         bar_minutes=_BAR_MINUTES)
         if blk.get("tp") is None or blk.get("sl") is None:
             return None
         return Signal(direction, entry, float(blk["sl"]), float(blk["tp"]),

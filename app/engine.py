@@ -5762,7 +5762,32 @@ class PredictionEngine:
                          else "half" if _rx <= 2.5 else "full")
                 cyc.tier = _rt if (_rx <= 0 or _rt == _band) else _band
             if lock_row.get("contract_confidence") is not None:
-                cyc.confidence = float(lock_row["contract_confidence"])
+                # ── A RESTORED CONFIDENCE MAY NOT INFLATE (2026-11-26) ──
+                # The tier three lines up is already protected ("a restored
+                # tier is accepted only when its own band agrees with this
+                # window's measured score/floor ratio") but the CONFIDENCE
+                # was adopted unconditionally. Live: BNB tf1 published
+                # 0.853 with its own regenerated chain reading 0.116 —
+                # a stored `contract_confidence` from an earlier window
+                # overwriting this window's measurement, and every panel
+                # reading the inflated one. Same rule as the tier, and the
+                # same asymmetry as the card badge: a restore may LOWER a
+                # confidence (a saved judgement of a worse setup is
+                # information) but may never RAISE it above the measured
+                # chain, because that is not a restore, it is a different
+                # window's number wearing this one's card.
+                _restored = float(lock_row["contract_confidence"])
+                _fresh_conf = float(getattr(cyc, "confidence", 0.0) or 0.0)
+                if _fresh_conf > 0 and _restored > _fresh_conf + 0.10:
+                    log.info("restored confidence refused %s/%s: stored "
+                             "%.3f would inflate this window's measured "
+                             "%.3f — keeping the measurement",
+                             symbol, tf, _restored, _fresh_conf)
+                    cyc.restore_note = (
+                        f"stored confidence {_restored:.3f} refused; this "
+                        f"window measured {_fresh_conf:.3f}")
+                else:
+                    cyc.confidence = _restored
             saved_targets = lock_row.get("contract_targets")
             if isinstance(saved_targets, list) and len(saved_targets) == len(cyc.targets):
                 for target, saved_target in zip(cyc.targets, saved_targets):
@@ -7924,9 +7949,15 @@ class PredictionEngine:
                             .get("spread_bps") or 0.0)
         except Exception:
             _spread = 0.0
+        # 1-MINUTE spacing declared explicitly: `minutes` is a HOLDING
+        # PERIOD, never a bar count. The backtest harness used to feed a 1h
+        # tape into this same function, which measured 22 HOURS of excursion
+        # for a 22-minute horizon (see app/moves_risk.moves_stats).
+        _BAR_MIN = 1.0
         _blocks = {m: _risk_block(_price0, _dir, m, _edge, _closes,
                                   _highs, _lows, atr=res.get("atr", 0.0),
-                                  spread_bps=_spread)
+                                  spread_bps=_spread,
+                                  bar_minutes=_BAR_MIN)
                    for m in dict.fromkeys(_mins)}
         # The trend rule's "is this move a trend or tick noise?" filter needs
         # THIS asset's measured σ for THIS window — the same measurement that
@@ -8198,7 +8229,7 @@ class PredictionEngine:
                 _fresh = _risk_block(_price0, _eff_dir, _mins[-1], _edge,
                                      _closes, _highs, _lows,
                                      atr=res.get("atr", 0.0),
-                                     spread_bps=_spread)
+                                     spread_bps=_spread, bar_minutes=1.0)
                 _eff_tp, _eff_sl = float(_fresh["tp"]), float(_fresh["sl"])
                 _repair = ("re-measured for the published side (the inherited "
                            "pair could not be mirrored)")
