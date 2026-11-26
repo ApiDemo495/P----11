@@ -109,48 +109,118 @@ def test_refresh_rederives_badge_from_the_refreshed_confidence():
 
 # ------------------------------------------------------------- trend gate
 
-def test_gate_needs_evidence_before_it_blocks():
+def test_rule_needs_evidence_before_it_acts():
+    assert tg.check("BTC", "tf1", 1)["flipped"] is False
     assert tg.check("BTC", "tf1", 1)["blocked"] is False
     tg.observe("BTC", "tf1", 100.0)
     tg.observe("BTC", "tf1", 101.0)
     r = tg.check("BTC", "tf1", 1)
-    assert r["blocked"] is False and "no trend reading" in r["why"]
+    assert r["flipped"] is False and r["blocked"] is False
+    assert "no trend reading" in r["why"]
 
 
-def test_gate_withholds_the_chase_and_keeps_the_fade():
+def test_rule_flips_the_chase_and_keeps_the_fade():
+    """WIN RATE WITHOUT ABSTENTION (2026-11-26): a chase is no longer
+    withheld — the side is REVERSED, so the window still ships a call."""
     for c in (100.0, 101.0, 102.0):
         tg.observe("BTC", "tf1", c)
     assert tg.trend("BTC", "tf1") == 1
     chase = tg.check("BTC", "tf1", 1)
     fade = tg.check("BTC", "tf1", -1)
-    assert chase["blocked"] is True and fade["blocked"] is False
+    assert chase["flipped"] is True and chase["side_out"] == -1
+    assert chase["blocked"] is False            # never an abstention
+    assert fade["flipped"] is False and fade["side_out"] == -1
+    assert fade["blocked"] is False
     # both branches carry their measurement and sample size
     for r in (chase, fade):
         assert r["measured"]["opposes_n"] > 0 and r["measured"]["agrees_n"] > 0
         assert 0.4 < r["measured"]["agrees_wr"] < r["measured"]["opposes_wr"] < 0.7
+        # the flipped policy's own measured record travels with the decision
+        assert r["measured"]["flip_n"] > 0
+        assert r["measured"]["flip_wr"] > r["measured"]["baseline_wr"]
 
 
-def test_gate_never_flips_a_side_and_never_invents_a_reading():
+def test_rule_never_mutates_the_callers_side_and_never_invents_a_reading():
     for c in (102.0, 101.0, 100.0):
         tg.observe("ETH", "tf3", c)
     for side in (-1, 0, 1):
         before = side
-        tg.check("ETH", "tf3", side)
-        assert side == before
+        out = tg.check("ETH", "tf3", side)
+        assert side == before               # caller's int is untouched
+        assert out["side_out"] in (-1, 1) or side == 0
     tg.reset()
     for _ in range(3):
         tg.observe("ETH", "tf3", 100.0)      # perfectly flat tape
     assert tg.trend("ETH", "tf3") == 0
-    assert tg.check("ETH", "tf3", 1)["blocked"] is False
+    out = tg.check("ETH", "tf3", 1)
+    assert out["flipped"] is False and out["blocked"] is False
 
 
-def test_gate_is_off_by_switch(monkeypatch):
+def test_noise_filter_is_disarmed_because_it_was_measured_and_failed():
+    """The tempting "only fade moves bigger than tick noise" filter was
+    audited and REJECTED: every level of it lowers both coverage and win
+    rate (0.5σ → 55.9 % on 74 % of windows vs 56.8 % on 100 %). It must
+    therefore be off by default, and a big σ must not silently disarm the
+    rule — that would be the abstention the user forbade, wearing a filter's
+    name. The knob survives only for a future A/B."""
+    assert tg.MIN_TREND_FRACTION == 0.0
+    for c in (100.0, 100.02, 100.04):       # +4 bps over two decisions
+        tg.observe("BTC", "tf4", c)
+    tg.set_window_sigma("BTC", "tf4", 60.0)     # 60 bps σ: would be "noise"
+    out = tg.check("BTC", "tf4", 1)
+    assert out["trend"] == 1
+    # disarmed → it acts anyway, and says the filter did not decide this
+    assert out["flipped"] is True and out["side_out"] == -1
+    assert out.get("below_noise") is not True
+
+
+def test_noise_filter_knob_still_works_when_armed(monkeypatch):
+    """Armed by hand, the filter must abstain from ACTING (never from
+    publishing) — so it can be A/B'd on fresh live tape without a code edit."""
+    import importlib
+    monkeypatch.setenv("TREND_GATE_MIN_FRACTION", "0.5")
+    try:
+        g = importlib.reload(tg)
+        for c in (100.0, 100.02, 100.04):
+            g.observe("BTC", "tf4", c)
+        g.set_window_sigma("BTC", "tf4", 60.0)
+        out = g.check("BTC", "tf4", 1)
+        assert out["flipped"] is False and out["blocked"] is False
+        assert out["below_noise"] is True and "inside the noise" in out["why"]
+        # the call still ships a side: no abstention, ever
+        assert out["side_out"] == 1
+        # on a quiet cell the same move IS acted on
+        g.set_window_sigma("BTC", "tf4", 2.0)
+        assert g.check("BTC", "tf4", 1)["flipped"] is True
+    finally:
+        monkeypatch.delenv("TREND_GATE_MIN_FRACTION", raising=False)
+        importlib.reload(tg)
+
+
+def test_abstain_mode_is_still_available_for_ab():
+    import os
+    for c in (100.0, 101.0, 102.0):
+        tg.observe("PAXG", "tf1", c)
+    os.environ["TREND_GATE"] = "abstain"
+    try:
+        out = tg.check("PAXG", "tf1", 1)
+        assert out["blocked"] is True and out["flipped"] is False
+        assert out["mode"] == "abstain"
+        # the same call under the default mode flips instead
+        os.environ.pop("TREND_GATE")
+        assert tg.check("PAXG", "tf1", 1)["flipped"] is True
+    finally:
+        os.environ.pop("TREND_GATE", None)
+
+
+def test_rule_is_off_by_switch(monkeypatch):
     for c in (100.0, 101.0, 102.0):
         tg.observe("BTC", "tf1", c)
-    assert tg.check("BTC", "tf1", 1)["blocked"] is True
+    assert tg.check("BTC", "tf1", 1)["flipped"] is True
     monkeypatch.setenv("TREND_GATE", "off")
     r = tg.check("BTC", "tf1", 1)
-    assert r["blocked"] is False and r["enabled"] is False
+    assert r["flipped"] is False and r["blocked"] is False
+    assert r["enabled"] is False and r["side_out"] == 1
 
 
 def test_gate_ignores_nonpositive_and_garbage_prices():
@@ -166,18 +236,36 @@ def test_gate_is_bounded_memory():
     assert tg.stats()["PAXG|tf4"] == tg.TREND_LAG_ROWS + 1
 
 
-def test_blocked_gate_forces_no_call_through_the_one_rule():
+def test_flip_reaches_the_badge_and_the_side():
+    """One rule, one flip: the badge rule now also REPORTS the resolved
+    side, so a card cannot print a side its own note just reversed."""
+    from app.verdict import resolve
     floor = config.asset_issue_floor("BTC")
     for c in (100.0, 101.0, 102.0):
         tg.observe("BTC", "tf4", c)
-    ok, verdict, note = eng_mod.public_verdict("BTC", "tf4", 1, floor + 0.05,
-                                               "full")
-    assert ok is False and verdict == "NO CALL"
-    assert "chases" in note
-    # the opposite side at the same moment still stands
-    ok2, verdict2, _ = eng_mod.public_verdict("BTC", "tf4", -1, floor + 0.05,
-                                              "full")
-    assert verdict2 == "ISSUE"
+    ok, verdict, note, side = resolve("BTC", "tf4", 1, floor + 0.05, "full")
+    assert side == -1                     # the flip
+    assert verdict == "ISSUE" and ok is True
+    assert "FLIPPED" in note
+    # the opposite side at the same moment is already correct: unchanged
+    ok2, verdict2, _, side2 = resolve("BTC", "tf4", -1, floor + 0.05, "full")
+    assert verdict2 == "ISSUE" and side2 == -1
+    # and the legacy three-tuple is unchanged for every existing caller
+    assert eng_mod.public_verdict("BTC", "tf4", 1, floor + 0.05,
+                                  "full") == (ok, verdict, note)
+
+
+def test_the_flip_is_fully_documented_in_the_payload():
+    for c in (100.0, 101.0, 102.0):
+        tg.observe("BTC", "tf2", c)
+    r = tg.check("BTC", "tf2", 1)
+    m = r["measured"]
+    for key in ("flip_n", "flip_wr", "flip_ci", "flip_folds", "flip_net_bps",
+                "baseline_wr", "agrees_wr", "opposes_wr"):
+        assert key in m, key
+    # the stated folds are the measured ones, including the losing fold
+    assert min(m["flip_folds"]) < 0.45
+    assert sum(1 for f in m["flip_folds"] if f > 0.5) == 4
 
 
 # ------------------------------------------------------------ payload shape
@@ -223,16 +311,17 @@ def test_audit_reproduces_the_numbers_the_gate_ships():
     assert rep["split"]["hold_wr"] > rep["baseline_wr"]
 
 
-def test_note_states_every_reason_a_call_was_withheld():
+def test_note_states_every_reason_a_call_was_held_back():
     from app import verdict as vd
     for c in (100.0, 101.0, 102.0):
         tg.observe("BTC", "tf4", c)
+    # below the floor AND flipped: say both
     ok, verdict, note = vd.public_verdict("BTC", "tf4", 1, 0.10, "full")
     assert verdict == "NO CALL"
-    assert "chases" in note and "below floor" in note
-    # a call that clears the floor but chases is withheld for ONE reason
+    assert "chased" in note and "below floor" in note
+    # clears the floor and is flipped: the flip is the whole story
     ok, verdict, note = vd.public_verdict("BTC", "tf4", 1, 0.90, "full")
-    assert verdict == "NO CALL" and "chases" in note and "floor" not in note
+    assert verdict == "ISSUE" and "FLIPPED" in note and "floor" not in note
 
 
 def test_rejected_confidence_filter_is_documented_not_shipped():
@@ -271,6 +360,9 @@ def test_rejected_confidence_filter_is_documented_not_shipped():
     from backtest import trend_gate_audit as a2
     rep = a2.build()
     assert rep["pooled"]["opp_wr"] - rep["pooled"]["agree_wr"] > 0.10
+    # and the module documents the rejection so it is not re-invented
+    src = open("app/trend_gate.py", encoding="utf-8").read()
+    assert "tested and REJECTED" in src
 
 
 def test_note_prints_the_same_number_the_card_prints():
@@ -358,24 +450,30 @@ def test_calibration_panel_is_honest_about_the_flat_hit_rate():
     assert "should RISE" in seg
 
 
-def test_deployed_stack_is_reproducible_and_documented():
-    """The number the user experiences must be regenerable, with coverage."""
+def test_deployed_stack_is_reproducible_and_keeps_every_window():
+    """The number the user experiences must be regenerable — and it must be
+    the FLIP, not the retired withhold-only policy: 100 % coverage, no
+    window silenced. (This test used to assert coverage < 0.40, i.e. it
+    pinned the abstention the user explicitly forbade.)"""
     from backtest import trend_gate_audit as aud
     import os
     if not os.path.exists(aud.CSV_PATH):        # pragma: no cover - offline
         pytest.skip("real per-cell record not checked out")
     rep = aud.build()
     dep = rep["deployed"]
-    # the composed rule is better than everything-shipped...
+    assert dep["mode"] == "flip"
+    # every window that has a reading gets a side — nothing is withheld
+    assert dep["coverage"] > 0.95
+    # the rule is better than everything-shipped on win rate...
     assert dep["wr"] > rep["baseline_wr"] + 0.03
-    # ...and it is honest about what it costs in silence
-    assert dep["coverage"] < 0.40
     assert dep["ci"][0] > rep["baseline_ci"][0]
+    # ...and the audit is honest that it is not a profitability gain
+    assert dep["net_bps"] < rep["baseline"]["net_bps"]
     # per-asset disagreement is reported rather than hidden
-    assert dep["per_asset"]["PAXG"]["wr"] < dep["per_asset"]["BTC"]["wr"]
-    doc = open("docs/docs11-doublecheck.md", encoding="utf-8").read()
-    assert "What the app actually issues, end to end" in doc
-    assert "77 % of windows now print NO CALL" in doc
+    assert dep["per_asset"]["ETH"]["net_bps"] < 0
+    doc = open("app/trend_gate.py", encoding="utf-8").read()
+    assert "Window filter (deliberately disarmed)" in doc
+    assert "net bps/row FALLS" in doc
 
 
 def test_grc_refresh_does_not_repeat_the_same_price_into_the_gate():
@@ -403,7 +501,7 @@ def test_observe_ignores_a_repeated_price():
 
 def test_stale_trend_note_is_regenerated_once_the_reading_is_gone():
     """Live symptom: ETH tf1 printed "chases the 2-decision trend (up) —
-    withheld" while its own trend field read 0. A note that describes a gate
+    withheld" while its own trend field read 0. A note that describes a rule
     decision must be re-derived like the floor note is."""
     from app import verdict as vd
     stale = ("chases the 2-decision trend (up) — measured 46.0 % on 478 "
@@ -417,7 +515,7 @@ def test_stale_trend_note_is_regenerated_once_the_reading_is_gone():
     for c in (100.0, 101.0, 102.0):
         g.observe("ETH", "tf1", c)
     ok, verdict, note = vd.public_verdict("ETH", "tf1", 1, 0.30, "half")
-    assert "chases" in note and ok is False
+    assert "chased" in note and ok is False
 
 
 def test_card_note_and_evidence_come_from_one_computation():

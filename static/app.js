@@ -1422,21 +1422,50 @@ function renderBook() {
 /* One honest label for every surface: the sealed verdict. `issued` is kept
    true by the contract (the card always exists) so it can no longer be the
    thing the UI prints as "ISSUED". */
-/* trend-interaction gate (app/trend_gate.py): the ONE measured abstention
-   rule. It can withhold a call but never flips a side, so the panel shows
-   the reading, both measured branches and their sample sizes rather than a
-   bare "blocked" — a withheld call must be as explained as an issued one. */
+/* trend-interaction RULE (app/trend_gate.py). 2026-11-26: it no longer
+   withholds a chasing call — it REVERSES the side, because the record says a
+   fade wins 56.2 % (95 % CI 52.9-59.5, n=861) while the chase it replaces
+   wins 46.0 % on 478. So this row must show three things a bare "stands"
+   would hide: (1) whether THIS call was flipped, (2) the reading and the
+   noise filter that decided it, and (3) the measurement behind the rule
+   INCLUDING its losing fold — the panel is where "we know" and "we assume"
+   are separated, and a flip printed without its fold-3 weakness would be a
+   quiet lie. `blocked` still renders (TREND_GATE=abstain keeps the old
+   semantic for A/B), but it is no longer the only action. */
 function _trendGateRow(cyc) {
   const g = cyc?.trend_gate;
   if (!g || typeof g !== "object") return "";
   const me = g.measured || {};
+  const fl = cyc?.trend_flip && typeof cyc.trend_flip === "object" && cyc.trend_flip.applied
+    ? cyc.trend_flip
+    : (g.flipped ? { from: g.side_in, to: g.side_out } : null);
   const tr = g.trend > 0 ? "up" : g.trend < 0 ? "down" : "no reading";
   const br = g.agrees === true
-    ? `chasing ${fx(me.agrees_wr * 100, 1)}% (n=${me.agrees_n ?? "?"})`
+    ? `chasing ${fx((me.agrees_wr ?? 0) * 100, 1)}% (n=${me.agrees_n ?? "?"})`
     : g.agrees === false
-      ? `fading ${fx(me.opposes_wr * 100, 1)}% (n=${me.opposes_n ?? "?"})`
+      ? `fading ${fx((me.opposes_wr ?? 0) * 100, 1)}% (n=${me.opposes_n ?? "?"})`
       : "—";
-  return `<div class="kv"><span>trend gate ${g.lag_rows ? `(${g.lag_rows} dec)` : ""}</span><b class="${g.blocked ? "acc-dn" : "dim"}">${g.blocked ? "WITHHELD" : "stands"} · trend ${tr} · ${br}<span class="dim" style="font-size:11px"> ${esc(g.why || "")}</span></b></div>`;
+  const state = fl
+    ? `FLIPPED ${fl.from > 0 ? "BUY" : "SELL"}→${fl.to > 0 ? "BUY" : "SELL"}`
+    : g.blocked ? "WITHHELD" : "stands";
+  const cls = fl ? "acc-up" : g.blocked ? "acc-dn" : "dim";
+  // the evidence block: policy win-rate, its CI, every fold (the losing one
+  // is the honesty), net bps, and whether the noise filter was even armed.
+  const ci = Array.isArray(me.flip_ci) && me.flip_ci.length === 2
+    ? ` (95 % CI ${fx(me.flip_ci[0], 1)}-${fx(me.flip_ci[1], 1)})` : "";
+  const folds = Array.isArray(me.flip_folds) && me.flip_folds.length
+    ? ` · folds ${me.flip_folds.map((f) => fx(f * 100, 0)).join("/")}`
+    : "";
+  const net = me.flip_net_bps != null ? ` · net ${fmt(me.flip_net_bps, 1)} bps` : "";
+  const ev = me.flip_n
+    ? `<span class="dim" style="font-size:11px"> flip policy ${fx(me.flip_wr * 100, 1)}%${ci} on ${me.flip_n} vs baseline ${fx((me.baseline_wr ?? 0) * 100, 1)}%${folds}${net}</span>`
+    : "";
+  const nz = g.noise_filter === false
+    ? `<span class="acc-warn" style="font-size:11px"> · noise filter unarmed: this cell's window σ is not measured yet, so the raw lag-${g.lag_rows ?? 2} sign decided</span>`
+    : (g.min_trend_bps != null
+      ? `<span class="dim" style="font-size:11px"> · trend ${fmt(g.trend_bps, 1)} bps vs ${fmt(g.min_trend_bps, 1)} bps noise floor (${fmt(g.window_sigma_bps, 0)} bps σ)</span>`
+      : "");
+  return `<div class="kv"><span>trend rule ${g.lag_rows ? `(${g.lag_rows} dec)` : ""}</span><b class="${cls}">${state} · trend ${tr} · ${br}<span class="dim" style="font-size:11px"> ${esc(g.why || "")}</span>${ev}${nz}</b></div>`;
 }
 /* WHERE the printed P comes from. `p_side` is the logistic of the score in
    floor units — a CONFIDENCE PROXY, not a calibrated probability. The board's
@@ -1552,14 +1581,19 @@ function renderHero() {
   // Bug fixed 2026-11-26: the header badge said "▲ BULLISH*" while the chip
   // right next to it said "📉 impulse bear · conf 0.10" - two panels, two
   // different regime computations. The chip is `chopChip()`, which re-derives
-  // the regime locally; the engine computes its own on the TF tape and, when
-  // it opposes the certified side, sets `regime_conflict`, `gate_ok=false`
-  // and `verdict=NO CALL`. The hero never read that field, so it advertised a
-  // side the engine had already refused to route. A conflict is now a NO CALL
-  // everywhere in this panel.
+  // the regime locally; the engine computes its own on the TF tape and marks
+  // the disagreement in `regime_conflict`.
+  //
+  // FIXED AGAIN 2026-11-26 (second pass, same day): the first fix made the
+  // disagreement a NO CALL *everywhere*, which answered a contradiction with
+  // an ABSTENTION — the one thing the user forbade, applied to a window whose
+  // side was already measured, sealed and graded. The disagreement now shows
+  // as a banner beside the real side: the hero prints the side the engine
+  // certified (flipped by app/trend_gate.py when it chases the impulse), and
+  // says plainly that routing is held back until the tape agrees with
+  // itself. Never silence a call to resolve a contradiction; explain it.
   const conflict = res.regime_conflict || cyc?.regime_conflict || null;
-  const rawDir = cyc?.direction ?? res.direction ?? 0;
-  const dir = conflict ? 0 : rawDir;
+  const dir = cyc?.direction ?? res.direction ?? 0;
   // Backend now always publishes a card (provisional when no cycle is
   // locked yet); these fallbacks keep the hero honest even mid-boot.
   const issued = cyc?.issued ?? res.issued ?? false;
@@ -1582,7 +1616,7 @@ function renderHero() {
   const badge = $("#hero-badge");
   if (badge) {
     badge.className = "hero-badge " + (dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat");
-    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)} · ${verdict}${cyc?.tier ? ` · ${cyc.tier}` : ""}${_pTag(cyc, res)}${lockedId ? ` · lock ${lockedId.slice(-6)}` : ""}</small>${chopChip(tf)}${conflict ? `<span class="chip-err" title="the 5-state regime on this timeframe's tape opposes the side the formulas certified, so no order is routed">⚠ REGIME CONFLICT · side withheld</span>` : ""}`;
+    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)} · ${verdict}${cyc?.tier ? ` · ${cyc.tier}` : ""}${_pTag(cyc, res)}${lockedId ? ` · lock ${lockedId.slice(-6)}` : ""}</small>${chopChip(tf)}${conflict ? `<span class="chip-err" title="the 5-state regime on this timeframe's tape disagrees with the certified side: the call is published and graded, only order routing is held back">⚠ REGIME DISAGREEMENT · routing held</span>` : ""}`;
   }
   const stats = $("#hero-stats");
   if (stats) {
@@ -1924,10 +1958,11 @@ function renderQuads(opts = {}) {
   TF.forEach(tf => {
     const cyc = a.tfs?.[tf];
     const res = S.snap?.systems?.[`${S.symbol}|${tf}`];
-    // same rule as the hero: a regime conflict withholds the side here too,
-    // otherwise the quick bar advertises a call the hero just refused
-    const dir = (res?.regime_conflict || cyc?.regime_conflict)
-      ? 0 : (cyc?.direction ?? res?.direction ?? 0);
+    // same rule as the hero: the quick bar shows the side the engine
+    // certified. A regime disagreement only holds ROUTING back — it never
+    // blanks the side (that was an abstention wearing a chip's clothes).
+    const dir = cyc?.direction ?? res?.direction ?? 0;
+    const _cf = res?.regime_conflict || cyc?.regime_conflict || null;
     const qd = $("#qd-" + tf);
     if (qd) {
       qd.className = "q-dir " + (dir > 0 ? "up" : dir < 0 ? "down" : "flat");
@@ -1935,13 +1970,36 @@ function renderQuads(opts = {}) {
       qd.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}
         <span class="iss">${cyc?.provisional
           ? "PREVIEW · no lock yet"
-          : `${v}${cyc?.tier ? ` · ${cyc.tier}` : ""}${_pTag(cyc, res)}`}</span>`;
+          : `${v}${cyc?.tier ? ` · ${cyc.tier}` : ""}${_pTag(cyc, res)}${
+            _cf ? ` · <span class="acc-warn" title="the 5-state regime on this tape disagrees with the certified side: the call is published and graded, only order routing is held back">⚠ no routing</span>` : ""
+          }`}</span>`;
     }
     const _rk = cyc?.risk || {};
     $("#qf-" + tf).textContent = res
       ? `CCI ${fmt(res.cci_adjusted, 4)} · conf ${fmt(res.confidence, 3)}`
         + (_rk.tp_bps != null ? ` · TP +${fmt(_rk.tp_bps, 0)}bp / SL −${fmt(_rk.sl_bps, 0)}bp` : "")
       : "";
+    // THE ANCHOR SENTENCE (user report: "I got tp of 551 on BNB when the
+    // market was on 556"). The TP/SL belong to the LOCKED entry, not to
+    // spot, and that is correct — but the card printed only the levels, so
+    // a target that looked "behind" the market had no explanation on
+    // screen. Print the anchor, the live price and the drift beside them.
+    const _qdrift = (() => {
+      const dr = res?.anchor_drift_bps ?? cyc?.anchor_drift_bps;
+      const lp = res?.live_price ?? cyc?.live_price;
+      const ent = cyc?.entry ?? res?.entry;
+      if (dr == null || !(lp > 0) || !(ent > 0)) return "";
+      const big = Math.abs(dr) > 25;
+      const stale = res?.tp_already_reached ?? cyc?.tp_already_reached;
+      return `anchor ${px(ent)} · now ${px(lp)} <b class="${big ? "acc-warn" : "dim"}">`
+        + `${dr >= 0 ? "+" : ""}${fmt(dr, 0)}bp</b> since the lock`
+        + (stale ? ` <b class="acc-warn">· TP already printed — behind spot, not ahead</b>` : "");
+    })();
+    if (_qdrift && res) {
+      const qf = $("#qf-" + tf);
+      if (qf) qf.insertAdjacentHTML("afterend",
+        `<span class="q-drift" style="font-size:11px" title="Levels are measured from the LOCKED entry, never from a later print. A target is where the trade was opened plus its measured excursion."> · ${_qdrift}</span>`);
+    }
     const ag = res?.agent;
     const _agMode = S.snap?.agents?.mode || S.snap?.agents?.active_slot || "";
     $("#qa-" + tf).textContent = ag && ag.source && ag.source !== "none"
@@ -2424,11 +2482,13 @@ function onAnalyseDone(msg) {
   if (!box) return;
   box.classList.remove("hidden");
   const dirCls = r.signal === "BUY" ? "buy" : r.signal === "SELL" ? "sell" : "flat";
-  // REGIME CONFLICT: the sealed record keeps the certified side but
-  // the BOX must never read as a trade — big word becomes NO CALL
-  const bigWord = r.regime_conflict ? "NO CALL" : r.signal;
+  // REGIME DISAGREEMENT: the certified side STANDS — the big word is the
+  // real side, and the disagreement is a banner beside it. (This used to
+  // print "NO CALL" over a live, graded call: the contradiction was resolved
+  // by deleting the answer.)
+  const bigWord = r.signal;
   const conflictBanner = r.regime_conflict
-    ? `<div class="conf acc-warn">⚠ REGIME CONFLICT — 5-state regime ${esc(r.regime_conflict.state)} (conf ${num(r.regime_conflict.regime_conf)}) opposes the certified ${r.signal}: NO ORDER routed · window record kept for grading</div>`
+    ? `<div class="conf acc-warn">⚠ REGIME DISAGREEMENT — the 5-state chip reads ${esc(r.regime_conflict.state)} (conf ${num(r.regime_conflict.regime_conf)}) while the certified side is ${esc(r.signal)}. The call stands and is graded; only ORDER ROUTING is held back until the tape agrees with itself. A withheld call is not a safer call — it is an ungraded one.</div>`
     : "";
   const ai = r.ai || {};
   // The review object now always carries available/backend/note, so the
@@ -2746,7 +2806,7 @@ function renderWhy() {
         <div class="bar"><i class="${s.confidence > 0.35 ? "pos" : "neg"}" style="width:${clamp((s.confidence || 0) * 100, 0, 100)}%"></i></div>
         <b>${fx(s.confidence, 3)}</b> / floor ${bd.floor ?? 0.35}</div>
       <div class="why-badge ${s.issued && !_cf ? "ok" : ""}">${_cf
-        ? `⚠ REGIME CONFLICT · ${esc(_cf.state)} opposes the certified side — no order routed, window still graded`
+        ? `⚠ REGIME DISAGREEMENT · ${esc(_cf.state)} vs the certified side — call stands and is graded, no order routed`
         : s.issued
         ? `✓ SIGNAL ${dir > 0 ? "BUY" : dir < 0 ? "SELL" : "—"} · ${esc(s.tier || "watch-only")} · P ${fmt(s.p_side, 2)} score-units${s.tier === "watch-only" ? ` · size 0${s.tier_why ? " — " + esc(s.tier_why) : " (below measured noise floor)"}` : ""}`
           + (s.calib_n != null ? `<span class="dim" title="${esc(s.calib_source || "")}"> · n=${s.calib_n}${s.calib_provisional ? " (provisional scale)" : ""}</span>` : "")
@@ -2768,6 +2828,16 @@ function renderWhy() {
       </div>
       <div>
         <h5>CONFIDENCE CHAIN — spec order</h5>
+        ${(() => {
+          // The chain is now regenerated on the CCI that ACTUALLY SHIPPED
+          // (it used to describe the pre-fusion score while the card printed
+          // a rescaled one). When even that final pass is moved by a later
+          // stage, `chain_gap` says so instead of letting two numbers sit
+          // side by side unexplained.
+          const cg = s.chain_gap;
+          if (!cg) return "";
+          return `<div class="kv"><span class="acc-warn" title="the chain below is regenerated on the published CCI; these later stages (fusion / asset behaviour / advanced layer) moved the final number">⚠ chain total ${fmt(cg.chain, 3)} vs published ${fmt(cg.published, 3)}</span><b class="dim">${esc(cg.why || "")}</b></div>`;
+        })()}
         <div class="kv"><span>1 · |CCI_adj| × min(1, DRHE ${fmt(m.drhe, 2)})</span><b>${fx(bd.base_confidence, 4)}</b></div>
         <div class="kv"><span>2 · × (0.7 + 0.3 × EQ ${fmt(m.eq, 2)})</span><b>brain B2</b></div>
         <div class="kv"><span>3 · state "${m.dominant || "—"}" ${m.state_aligned ? "aligned → +" + fmt(0.1 * (m.p_dominant || 0), 3) : "not aligned"}</span><b>${m.state_aligned ? "aligned" : "—"}</b></div>
@@ -2794,7 +2864,7 @@ function renderWhy() {
           <div class="kv-row">
             <div class="kv"><span>advanced vote (blended in)</span><b class="${a.vote > 0 ? "up" : a.vote < 0 ? "down" : ""}">${a.vote > 0 ? "+" : ""}${fmt(a.vote, 3)}</b></div>
             <div class="kv"><span>soft gate × (entropy·OU·BOCPD)</span><b>${fmt(a.soft_gate, 2)}</b></div>
-            <div class="kv"><span>RQA confidence ×</span><b>${fmt(a.rqa_mult, 2)}</b></div>
+            <div class="kv"><span>RQA confidence × <span class="dim" title="Raw RQA determinism is ~0.44 even on pure noise (small-sample diagonal bias), so the multiplier is measured AGAINST that null: only determinism above it counts. A multiplier pinned at a bound would be a constant, not a signal.">det ${fmt(a.rqa_det ?? s.advanced?.rqa_det, 2)} vs null ${fmt(a.rqa_null ?? s.advanced?.rqa_null, 2)}</span></span><b>${fmt(a.rqa_mult, 3)}</b></div>
             <div class="kv"><span>size × (HAR·EVT·RMT)</span><b>${fmt(a.size_mult, 2)}</b></div>
             ${a.rmt_mode_share != null ? `<div class="kv"><span>market-mode share</span><b>${fmt(a.rmt_mode_share, 2)}</b></div>` : ""}
             ${a.evt?.q99_bps ? `<div class="kv"><span>EVT 1-in-100 move</span><b>${fmt(a.evt.q99_bps, 0)} bps</b></div>` : ""}

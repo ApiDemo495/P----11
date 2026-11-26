@@ -8,12 +8,20 @@ judged only on the last 45%. No number here is in-sample.
 """
 from __future__ import annotations
 
+import os
 import json
 
 from .data import FRICTION_BPS, Bar
 from .experiment import _atr_pct, _ema, _m, _rsi, settle_dir
 from .predictor import AppPredictor
 from .slice import DataSlice
+# Spacing of the tape this harness walks, in MINUTES. The TP/SL
+# block measures a HOLDING PERIOD; without this it measured a
+# BAR COUNT, so a 1h tape silently produced 22-HOUR stops for a
+# 22-minute horizon (app/moves_risk.moves_stats, 2026-11-26).
+_BAR_MINUTES = {"1m": 1.0, "5m": 5.0, "15m": 15.0, "30m": 30.0,
+                "1h": 60.0, "2h": 120.0, "4h": 240.0}.get(
+                    os.environ.get("BACKTEST_TF", "15m"), 15.0)
 
 H4 = 247                      # tf4 window / TP4 horizon (bars)
 YEAR_START = 1759276800       # 2025-10-01 00:00 UTC
@@ -108,7 +116,8 @@ def collect_tp4(series, predictor: AppPredictor, warmup=600,
             risks = {}
             for d in (1, -1):
                 blk = risk_block(entry, d, H4, 0.5, closes,
-                                 view.highs, view.lows)
+                                 view.highs, view.lows,
+                                 bar_minutes=_BAR_MINUTES)
                 if blk.get("sl") is not None:
                     risks[str(d)] = abs(entry - float(blk["sl"]))
             if len(risks) == 2:
@@ -336,4 +345,3 @@ if __name__ == "__main__":
     print(f"decisions: {len(rows)}")
     print(json.dumps(grid(rows), indent=1))
     print(json.dumps(ablation_report(rows), indent=1))
-

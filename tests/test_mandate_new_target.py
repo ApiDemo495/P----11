@@ -65,7 +65,12 @@ def test_mandate_tiers_follow_measured_cells():
     for sym, tf in hp.known_cells():
         out = engine._tier_for(sym, tf, 0.5)     # a huge score
         assert out["tier"] == "full", (sym, tf, out.get("tier_rule"))
-        assert "hold policy" in out["tier_rule"], (sym, tf)
+        # the hold-policy CERTIFICATION badge is labelled as such — it used
+        # to be printed as "hold policy [TIER]" inside a field every panel
+        # reads as a size tier, so a status sentence ("ROWS VERIFIED ·
+        # SHIP GATE FAIL") could be rendered as a size.
+        assert "hold-policy certification" in out["tier_rule"], (sym, tf)
+        assert "hold policy [" not in out["tier_rule"], (sym, tf)
         assert f"[{hp.tier(sym, tf)}]" in out["tier_rule"], (sym, tf)
     # the certified tier distribution is exact — and it is now gated by
     # the artifact's own ship verdict.  The shipped hold_wr.json FAILS

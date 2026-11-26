@@ -22,6 +22,15 @@ from __future__ import annotations
 
 from .predictor import HORIZON, AppPredictor, Signal
 from .slice import SliceView
+import os
+
+# Spacing of the tape this harness walks, in MINUTES. The TP/SL
+# block measures a HOLDING PERIOD; without this it measured a
+# BAR COUNT, so a 1h tape silently produced 22-HOUR stops for a
+# 22-minute horizon (app/moves_risk.moves_stats, 2026-11-26).
+_BAR_MINUTES = {"1m": 1.0, "5m": 5.0, "15m": 15.0, "30m": 30.0,
+                "1h": 60.0, "2h": 120.0, "4h": 240.0}.get(
+                    os.environ.get("BACKTEST_TF", "15m"), 15.0)
 
 K = 0.75
 GATE_LOOKBACK = 120
@@ -62,7 +71,8 @@ class PolicyPredictor(AppPredictor):
         entry = view.bars[-1].c
         blk = risk_block(entry, d, HORIZON,
                          float(pack["tf1"].get("confidence") or 0.0),
-                         view.closes, view.highs, view.lows)
+                         view.closes, view.highs, view.lows,
+                         bar_minutes=_BAR_MINUTES)
         if blk.get("sl") is None:
             return None
         risk = abs(entry - float(blk["sl"]))

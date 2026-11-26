@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_lock_created_before_levels_anchor():
     src = (ROOT / "app" / "engine.py").read_text()
     i = src.index("def fresh_cycle")
-    seg = src[i:i + 3400]   # anchor-sanity guard lives between them now
+    seg = src[i:i + 7000]   # anchor-sanity guard + trend rule live between them
     assert seg.index("self._settle_and_lock") < seg.index("_risk_block(")
     assert '_lock_now.get("price")' in seg
 

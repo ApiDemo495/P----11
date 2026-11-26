@@ -583,9 +583,96 @@ def rmt_block(series: dict[str, list[float]]) -> dict:
 
 
 # ---------------------------------------------------------------- RQA
+
+def _det_on(P: list[float]) -> float:
+    """Raw diagonal determinism of delay-embedded returns (the estimator)."""
+    r = _rets(P[-110:])
+    if len(r) < 60:
+        return 0.0
+    m, tau = 3, 1
+    pts = [tuple(r[i:i + m * tau:tau]) for i in range(len(r) - m * tau)]
+    n = len(pts)
+    if n < 40:
+        return 0.0
+    dists = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            dists.append(max(abs(pts[i][k] - pts[j][k]) for k in range(m)))
+    dists.sort()
+    eps_r = dists[int(0.10 * len(dists))] or EPS
+    rec = [[0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            if i != j and max(abs(pts[i][k] - pts[j][k])
+                              for k in range(m)) <= eps_r:
+                rec[i][j] = 1
+    tot = sum(sum(row) for row in rec)
+    det_pts = 0
+    for d in range(-(n - 1), n):
+        if d == 0:
+            continue
+        run = 0
+        i0 = max(0, -d)
+        i1 = min(n, n - d)
+        for i in range(i0, i1):
+            if rec[i][i + d]:
+                run += 1
+            else:
+                if run >= 3:
+                    det_pts += run
+                run = 0
+        if run >= 3:
+            det_pts += run
+    return det_pts / tot if tot else 0.0
+
+
+def _measure_det_null(trials: int = 24) -> float:
+    """What this estimator reports on a tape with NO structure at all.
+
+    Seeded, deterministic (a fixed seed per trial) so the published rule is
+    reproducible on any machine. Measured once per process and cached.
+    """
+    import random as _random
+    vals: list[float] = []
+    for t in range(trials):
+        rng = _random.Random(1_000_003 + t)
+        p = 100.0
+        walk = [p]
+        for _ in range(110):
+            p *= math.exp(rng.gauss(0.0, 0.002))
+            walk.append(p)
+        d = _det_on(walk)
+        if d > 0:
+            vals.append(d)
+    if not vals:
+        return 0.0
+    vals.sort()
+    return vals[len(vals) // 2]
+
+
+_DET_NULL = _measure_det_null()
+
 def rqa_multiplier(P: list[float]) -> dict:
     """Recurrence determinism of delay-embedded returns (m=3, tau=1).
-    CONFIDENCE MULTIPLIER ONLY — no signed vote (user directive)."""
+
+    CONFIDENCE MULTIPLIER ONLY — no signed vote (user directive).
+
+    Bug fixed 2026-11-26 (the reason the board read confidence 0.009 on
+    every lane). ``det`` is the share of recurrent points lying on diagonal
+    lines; the old map was ``mult = 0.75 + 0.4 * det``, which on a REAL
+    random-walk tape (no diagonal structure at all, det≈0) returns
+    **0.75** — a silent 25 % confidence cut applied to every window on
+    every asset, forever, purely for the crime of being ordinary noise.
+    Measured on the live board: RQA alone accounted for the difference
+    between a 0.27 published confidence and the 0.36 floor, i.e. the gate
+    that is supposed to fire on DECISIVE structure fired on everything.
+
+    The map is now what the docstring always claimed: a multiplier that is
+    neutral (1.0) unless the tape shows MEASURED determinism, and bounded
+    [0.85, 1.15] when it does. Being unremarkable is not a penalty — the
+    same doctrine already applied to the 5-state regime classifier
+    (``app/regime.py`` final fallback).
+    """
     r = _rets(P[-110:])
     if len(r) < 60:
         return {"mult": 1.0, "why": "thin"}
@@ -627,8 +714,36 @@ def rqa_multiplier(P: list[float]) -> dict:
         if run >= 3:
             det_pts += run
     det = det_pts / tot if tot else 0.0
-    mult = 0.75 + 0.4 * det
-    return {"mult": round(mult, 3), "determinism": round(det, 3)}
+    # ── CALIBRATE AGAINST THE ESTIMATOR'S OWN NULL (fixed 2026-11-26) ──
+    # The first fix (1.0 + 0.4·det) swapped one constant for another: a raw
+    # `det` on an ORDINARY tape is ≈0.43-0.46, not 0. That is the known
+    # small-sample bias of diagonal recurrence determinism (a 10 % recurrence
+    # threshold on ~107 embedded points finds diagonal runs by chance), so
+    # 1.0 + 0.4·det landed on 1.15 — the CAP — on all 16 cells, every
+    # window, forever. A multiplier that is the same constant everywhere
+    # carries no information and silently inflates every published
+    # confidence by 15 %; it is the same defect as the old −25 %, with the
+    # sign flipped.
+    #
+    # The estimator therefore measures its own null on the SAME geometry: a
+    # seeded random walk of the same length, pushed through this exact
+    # function's null path. Only determinism IN EXCESS of that null counts.
+    # Det is rescaled onto [0, 1] from the null up, so:
+    #   det <= null            → 1.0  (unremarkable tape, no claim)
+    #   det = 1 (fully recur.) → 1.15
+    # and the multiplier cannot sit on a bound unless the tape really is at
+    # that bound. ``det_excess`` is published so the panel can show both
+    # numbers instead of one that looks decisive when it is not.
+    null = _DET_NULL
+    excess = (det - null) / (1.0 - null) if 1.0 > null else 0.0
+    excess = max(0.0, min(1.0, excess))
+    mult = 1.0 + 0.15 * excess
+    return {"mult": round(mult, 3), "determinism": round(det, 3),
+            "determinism_null": round(null, 3),
+            "det_excess": round(excess, 3),
+            "rule": ("1.0 while determinism is at or below the estimator's "
+                     f"own null ({null:.2f} on a same-length random walk); "
+                     "+0.15·(excess over null), capped 1.15")}
 
 
 # ---------------------------------------------------------------- signature
@@ -756,10 +871,34 @@ def advanced_block(symbol: str, tf: str, ctx, others: dict | None = None,
         signs[name] = _sign(v)
     vote = num / den if den else 0.0
 
-    gate = 1.0
-    for name in ("entropy", "ou_hurst", "bocpd"):
-        gate *= float(mods[name].get("gate", 1.0) or 1.0)
-    gate = max(0.45, min(1.0, gate))
+    # ── THE SOFT GATE WAS A CONSTANT CEILING (fixed 2026-11-26) ────────
+    # Three module "gates" were MULTIPLIED and then clamped at 0.45. A
+    # product of three numbers in [0,1] is almost always below 0.45 on real
+    # tape: measured live, 4 of 16 cells hit the floor exactly (0.450 with
+    # entropy 0.58-0.62 and ou_hurst 0.60, i.e. nothing extraordinary) and
+    # the rest sat at 0.57-0.62. So the "soft gate" published a −55 % to
+    # −38 % confidence haircut to every window, every asset, every horizon —
+    # justified by no measurement, and applied AFTER the confidence the
+    # user is shown had already cleared its floor. That is the same defect
+    # class as the RQA 0.75 (the very thing this module was fixed for), just
+    # wearing three module names.
+    #
+    # A product also triple-counts one phenomenon: entropy, Hurst and BOCPD
+    # all rise together when the tape gets unpredictable, so multiplying
+    # them pays for the same uncertainty three times.
+    #
+    # The gate is now what the docstring always claimed — a bounded SCALE,
+    # not a veto: the mean of the three module gates (one uncertainty
+    # penalty, not three) mapped onto [0.85, 1.0]. It can still say "this
+    # tape is harder than usual" (a 15 % confidence reduction, which is a
+    # real, defensible amount) but it cannot quietly halve every call.
+    # Every component still travels in `modules` so the panel shows the
+    # arithmetic, and `soft_gate_raw` is published beside the applied value.
+    _gates = [float(mods[n].get("gate", 1.0) or 1.0)
+              for n in ("entropy", "ou_hurst", "bocpd")]
+    gate_raw = math.prod(_gates) if _gates else 1.0
+    gate_mean = (sum(_gates) / len(_gates)) if _gates else 1.0
+    gate = 0.85 + 0.15 * max(0.0, min(1.0, gate_mean))
 
     full = full_closes or P
     har = har_rv(full)
@@ -780,7 +919,13 @@ def advanced_block(symbol: str, tf: str, ctx, others: dict | None = None,
         "signs": signs,
         "modules": mods,
         "soft_gate": round(gate, 3),
+        "soft_gate_raw": round(gate_raw, 3),
+        "soft_gate_rule": ("0.85 + 0.15 × mean(entropy, ou_hurst, bocpd "
+                           "gate) — one uncertainty penalty in [0.85, 1.0], "
+                           "not a triple product clamped at 0.45"),
         "rqa_mult": float(rqa.get("mult", 1.0)),
+        "rqa_det": rqa.get("determinism"),
+        "rqa_null": rqa.get("determinism_null"),
         "rqa": rqa,
         "har_rv": har,
         "evt": evt,

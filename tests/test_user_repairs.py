@@ -179,31 +179,71 @@ def test_sl_events_carry_full_identity():
 
 # ── 4. regime conflict: never the opposite trade ────────────────────
 
-def test_regime_conflict_gate_blocks_issue():
+def test_regime_conflict_holds_routing_but_never_silences_the_call():
+    """This test used to pin the OPPOSITE of the user's directive: it
+    required the regime conflict to set gate_ok=False, force verdict
+    "NO CALL" and demote the tier. That is exactly the abstention the user
+    told us to stop doing ("increase win rate without abstention"), applied
+    to windows that already had a measured, sealed, graded side. The gate
+    keeps its real job — no ORDER may be routed on a self-contradicting
+    tape — while the side, levels, contract and grading stand."""
     src = _read("app/engine.py")
     i = src.index("REGIME CONFLICT (user order)")
-    body = src[i:i + 3000]
+    j = src.index('final["verdict"] = ("ISSUE" if (final.get("gate_ok")', i)
+    body = src[i:j]
+    _verdict_src = src[j:j + 400]
     assert '"IMPULSE_BULL": 1' in body and '"IMPULSE_BEAR": -1' in body
-    assert 'final["gate_ok"] = False' in body
+    # routing is still held back...
     assert 'final["execution_eligible"] = False' in body
-    assert "REGIME CONFLICT — 5-state regime" in body
-    assert 'final["verdict"] = ("NO CALL" if _conflict is not None else' in body
-    # the sealed record keeps the side (continuous measurement)
-    # (the sentence is line-wrapped in source — match the whole line)
-    assert "window record keeps the certified side" in body
-    # cycle demotion blocks paper/live routing on the next tick
-    j = src.index("if _conflict is not None:\n                    # watch-only")
-    demote = src[j:j + 400]
-    assert 'cyc.tier = "watch-only"' in demote
-    assert "cyc.execution_eligible = False" in demote
+    # ...but the badge and the size are NOT silenced
+    assert 'final["gate_ok"] = False' not in body
+    assert '"NO CALL" if _conflict is not None' not in body
+    assert "REGIME DISAGREEMENT" in body
+    assert "The side " in body and "stands and is graded" in body
+    assert 'final["verdict"] = ("ISSUE" if (final.get("gate_ok")' in _verdict_src
+    # and the note must never read like an abstention is the safe choice
+    assert "it is an ungraded one" in body
+
+
+def test_regime_conflict_no_longer_demotes_the_tier_to_watch_only():
+    src = _read("app/engine.py")
+    seg = src[src.index("REGIME CONFLICT (user order)"):]
+    seg = seg[:seg.index('final["verdict"] = (')]
+    assert 'cyc.tier = "watch-only"' not in seg
+
+
+def test_no_side_collapses_the_tier_and_never_advertises_size():
+    """Live defect: `BTC tf4 · direction 0 · tier full · NO CALL`. A size
+    hint for a non-trade is a contradiction; it must collapse to watch-only
+    and explain itself."""
+    src = _read("app/engine.py")
+    assert 'if direction is not None and int(direction) == 0 \\' in src
+    assert 'and tier != "watch-only":' in src
+    assert "nothing to size" in src
+    # a caller that never states a side (pure tier maths) is NOT a flat call
+    assert "direction: int | None = None" in src
+
+
+def test_every_window_ships_a_side_never_a_flat_card():
+    """The core directive: no abstention. A fused score inside the noise gate
+    must still produce a side, labelled with where it came from."""
+    src = _read("app/engine.py")
+    assert "NO MORE FLAT CARDS" in src
+    assert 'fin["direction_fallback"]' in src
+    # the fallback prefers the one MEASURED reading left (fade the impulse)…
+    assert "the record says fade it" in src
+    # …and admits when it is trading a coin flip
+    assert "UNINFORMATIVE" in src
 
 
 def test_conflict_aware_signal_box():
     js = _read("static/app.js")
-    assert "REGIME CONFLICT: the sealed record keeps the certified side" in js
-    assert 'const bigWord = r.regime_conflict ? "NO CALL" : r.signal;' in js
+    # the banner explains the disagreement without replacing the side
+    assert "REGIME DISAGREEMENT" in js or "REGIME CONFLICT" in js
     assert "${conflictBanner}" in js
-    assert "⚠ REGIME CONFLICT" in js
+    # the big word must be the real side — a disagreeing chip may not
+    # overwrite it with "NO CALL" (that was the abstention defect)
+    assert 'const bigWord = r.regime_conflict ? "NO CALL" : r.signal;' not in js
 
 
 def test_conflict_check_uses_the_same_classifier_as_the_chip():

@@ -138,6 +138,64 @@ def guard(levels: dict | None, block: dict | None) -> dict | None:
     return None
 
 
+def mirror(levels: dict | None, side: int) -> dict | None:
+    """Mirror a frozen TP/SL pair onto the OPPOSITE side, around its entry.
+
+    Why this exists (2026-11-26): the trend interaction now FLIPS a chasing
+    call instead of withholding it (``app/trend_gate.py``). A flip is a new
+    side on the SAME entry, so its target and stop have to swap sides — and
+    they must swap at the measured distances that were already frozen for
+    this window, not at distances invented by a display layer. Reflecting
+    the pair about the entry does exactly that::
+
+        BUY  entry 100, TP 101, SL 99
+        SELL entry 100, TP  99, SL 101      (distances preserved)
+
+    The result is returned only if it passes :func:`valid`; otherwise
+    ``None``, and the caller must fall back to a freshly measured block at
+    the same entry. A wrong-side level is never produced here.
+    """
+    if not isinstance(levels, dict):
+        return None
+    try:
+        want = int(side)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if want not in (-1, 1):
+        return None
+    entry = _number(levels.get("entry"))
+    tp, sl = _number(levels.get("tp")), _number(levels.get("sl"))
+    try:
+        have = int(levels.get("direction") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if entry is None or entry <= 0 or tp is None or sl is None:
+        return None
+    if have == want and valid({"entry": entry, "tp": tp, "sl": sl,
+                               "direction": want}):
+        return {"entry": entry, "tp": tp, "sl": sl, "direction": want,
+                "tp_dist": abs(tp - entry), "sl_dist": abs(entry - sl),
+                "ratio": (abs(tp - entry) / abs(entry - sl)
+                          if abs(entry - sl) > 0 else None),
+                "mirrored": False}
+    # Reflect: the old TP becomes the new SL and vice versa.
+    out = {"entry": entry, "tp": sl, "sl": tp, "direction": want,
+           "tp_dist": abs(sl - entry), "sl_dist": abs(entry - tp),
+           "ratio": (abs(sl - entry) / abs(entry - tp)
+                     if abs(entry - tp) > 0 else None),
+           "mirrored": True, "mirrored_from": have}
+    if not valid(out):
+        return None
+    try:
+        ratio = float(out["ratio"])
+    except (TypeError, ValueError):
+        return None
+    if not (ratio > 0) or ratio > MAX_RR + 1e-6:
+        return None
+    out["ratio"] = round(ratio, 6)
+    return out
+
+
 def make_contract(levels: dict | None, *, symbol: str, timeframe: str,
                   cycle: str, side: int, revision: int, lock_id: str,
                   source: str = "measured-moves") -> dict | None:

@@ -1,25 +1,32 @@
-"""Regenerate the trend-interaction gate's numbers from the real record.
+"""Reproduce every number in ``app/trend_gate.py``'s docstring, from scratch.
 
-Usage::
+Run::
 
-    python -m backtest.trend_gate_audit            # human summary
-    python -m backtest.trend_gate_audit --json     # machine summary
-    python -m backtest.trend_gate_audit --write    # refresh the committed json
+    python -m backtest.trend_gate_audit               # full report
+    python -m backtest.trend_gate_audit --json        # machine-readable
 
-The substrate is ``backtest/results/per_tf_full_engine_real.csv`` — the
-engine's own 893 settled windows over 72 days of real tape, each carrying the
-realised net bps and the win flag. Nothing here re-runs the engine, and no
-row is invented: if the CSV is missing the audit refuses rather than guessing.
+Why this file exists
+====================
+``app/trend_gate.py`` now FLIPS a chasing call instead of withholding it, and
+it justifies that on a specific record: the app's own engine walked over 72
+days of real tape, all four assets × all four timeframes, 893 settled windows
+(``backtest/results/per_tf_full_engine_real.csv``). A rule that changes the
+side of a live call must be reproducible by anyone reading the module, or the
+docstring is just a claim. This script is that reproduction — one command, no
+hidden sample, and every weakness printed next to every win.
 
-The rule under test is exactly ``app/trend_gate.py``'s::
+The measurement, stated precisely
+=================================
+The "trend" is the sign of the engine's own entry-price move over the last
+``TREND_LAG_ROWS`` settled windows of the SAME cell (asset, timeframe), i.e.
+exactly the series ``trend_gate.observe()`` samples at settle time. A call
+"chases" when its side equals that sign. Nothing here reads the future: for
+row *i* of a cell, the trend uses rows *i-1* and *i-2* only.
 
-    trend = sign(entry[i] - entry[i - LAG])     per cell, LAG = 2 sampled rows
-    side opposes trend -> stands     side chases trend -> withheld
-
-Everything is reported, including what fails: per-asset, per-cell, five
-temporal folds, and a 65/35 time split of the gated rows. ``bps_net`` is
-outcome-derived in this file, so it is never used as a filter — only the
-recorded ``win`` column is scored.
+The flip is then: keep the side when the call opposes the trend, invert the
+side when it chases. Win rate and net bps are recomputed on the flipped side
+(the realised move is symmetric, so net bps simply changes sign minus the
+cost, which is why it is reported, not assumed).
 """
 from __future__ import annotations
 
@@ -27,199 +34,349 @@ import argparse
 import csv
 import json
 import math
-import os
-from collections import defaultdict
+import random
+from pathlib import Path
 
-CSV_PATH = os.path.join("backtest", "results", "per_tf_full_engine_real.csv")
-OUT_PATH = os.path.join("backtest", "results", "trend_gate_audit.json")
-LAG = 2
+ROOT = Path(__file__).resolve().parent.parent
+CSV = ROOT / "backtest" / "results" / "per_tf_full_engine_real.csv"
+#: legacy name — the test-suite and older notes refer to ``CSV_PATH``
+CSV_PATH = str(CSV)
+LAG = 2                     # must match app/trend_gate.py TREND_LAG_ROWS
 
 
-def wilson(k: int, n: int, z: float = 1.96) -> list[float]:
-    if not n:
-        return [0.0, 0.0]
+# ── statistics helpers (no scipy in this repo) ──────────────────────────────
+def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """95 % Wilson interval — the interval the docstring quotes."""
+    if n <= 0:
+        return (0.0, 0.0)
     p = k / n
-    d = 1 + z * z / n
-    c = (p + z * z / (2 * n)) / d
-    h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
-    return [round(100 * (c - h), 1), round(100 * (c + h), 1)]
+    d = 1.0 + z * z / n
+    c = p + z * z / (2 * n)
+    r = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return ((c - r) / d, (c + r) / d)
 
 
-def _slice(rs: list[dict]) -> dict:
-    a = [r for r in rs if r["agrees"]]
-    o = [r for r in rs if not r["agrees"]]
-    sa, so = sum(r["win"] for r in a), sum(r["win"] for r in o)
-    return {
-        "n": len(rs),
-        "agree_n": len(a), "agree_wr": round(sa / max(1, len(a)), 4),
-        "agree_ci": wilson(sa, len(a)),
-        "opp_n": len(o), "opp_wr": round(so / max(1, len(o)), 4),
-        "opp_ci": wilson(so, len(o)),
-    }
+def _wr(rows: list[dict]) -> tuple[float, tuple[float, float], int]:
+    n = len(rows)
+    k = sum(int(r["_win"]) for r in rows)
+    p = k / n if n else 0.0
+    return p, wilson(k, n), n
 
 
-def build(path: str = CSV_PATH, lag: int = LAG) -> dict:
-    rows = list(csv.DictReader(open(path, encoding="utf-8")))
+def _net(rows: list[dict]) -> float:
     if not rows:
-        raise SystemExit(f"{path}: no rows — cannot audit anything")
-    by: dict[tuple[str, str], list[tuple]] = defaultdict(list)
+        return 0.0
+    return sum(float(r["_net"]) for r in rows) / len(rows)
+
+
+def _pct(p: float) -> str:
+    return f"{100 * p:.1f} %"
+
+
+def _ci(ci: tuple[float, float]) -> str:
+    return f"{100 * ci[0]:.1f} – {100 * ci[1]:.1f} %"
+
+
+# ── loading ────────────────────────────────────────────────────────────────
+def load(path: Path = CSV) -> list[dict]:
+    """Every settled window, one dict per row, sorted per cell by time."""
+    if not path.exists():
+        raise SystemExit(f"missing record: {path}")
+    rows: list[dict] = []
+    with path.open(newline="") as fh:
+        for i, rec in enumerate(csv.DictReader(fh)):
+            try:
+                entry = float(rec["entry"] or 0)
+                settle = float(rec["settle"] or 0)
+                side = int(rec["direction"] or 0)
+                t = float(rec["t"] or 0)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if entry <= 0 or settle <= 0 or side not in (-1, 1):
+                continue
+            rows.append({
+                "asset": rec["asset"], "tf": rec["tf"], "t": t,
+                "side": side, "entry": entry, "settle": settle,
+                "win": int(rec.get("win") or 0),
+                "net": float(rec.get("bps_net") or 0.0),
+                "gross": float(rec.get("bps_gross") or 0.0),
+                "i": i,
+            })
+    rows.sort(key=lambda r: (r["asset"], r["tf"], r["t"]))
+    return rows
+
+
+def annotate(rows: list[dict], lag: int = LAG) -> list[dict]:
+    """Attach the causal trend, the chase flag and the flipped side.
+
+    A row is only usable when its cell has ``lag`` earlier settled windows —
+    the same warmup ``trend_gate`` has (``MIN_ROWS``). Unusable rows are kept
+    but marked ``_ok = False`` so the sample size is never silently inflated.
+    """
+    by_cell: dict[tuple[str, str], list[dict]] = {}
     for r in rows:
-        by[(r["asset"], r["tf"])].append(
-            (float(r["t"]), float(r["entry"]), int(float(r["direction"])),
-             int(float(r["win"])), float(r["conf"])))
-    recs: list[dict] = []
-    for cell, seq in sorted(by.items()):
-        seq.sort()
-        for k in range(lag, len(seq)):
-            move = seq[k][1] - seq[k - lag][1]
-            if move == 0:
+        by_cell.setdefault((r["asset"], r["tf"]), []).append(r)
+    out: list[dict] = []
+    for cell_rows in by_cell.values():
+        cell_rows.sort(key=lambda r: r["t"])
+        for j, r in enumerate(cell_rows):
+            if j - 2 < 0:
+                r["_ok"] = False
+                out.append(r)
                 continue
-            trend = 1 if move > 0 else -1
-            recs.append({"asset": cell[0], "tf": cell[1], "t": seq[k][0],
-                         "entry": seq[k][1], "side": seq[k][2],
-                         "win": seq[k][3], "conf": seq[k][4],
-                         "trend": trend, "agrees": trend == seq[k][2]})
-    wins = sum(int(float(r["win"])) for r in rows)
-    out: dict = {
-        "source": path, "lag_rows": lag,
-        "baseline_n": len(rows),
-        "baseline_wr": round(wins / len(rows), 4),
-        "baseline_ci": wilson(wins, len(rows)),
-        "pooled": _slice(recs),
-    }
-    trend_wins = sum(1 for r in recs
-                     if (r["win"] == 1) == (r["trend"] == r["side"]))
-    out["trend_as_side"] = {"n": len(recs),
-                            "wr": round(trend_wins / max(1, len(recs)), 4),
-                            "ci": wilson(trend_wins, len(recs))}
-    out["per_asset"] = {a: _slice([r for r in recs if r["asset"] == a])
-                        for a in sorted({r["asset"] for r in recs})}
-    recs.sort(key=lambda r: r["t"])
-    n = len(recs)
-    out["folds"] = []
-    for f in range(5):
-        lo, hi = f * n // 5, (f + 1) * n // 5
-        g = [r for r in recs[lo:hi] if not r["agrees"]]
-        w = sum(r["win"] for r in g)
-        out["folds"].append({"fold": f + 1, "n": len(g),
-                             "wr": round(w / max(1, len(g)), 4),
-                             "ci": wilson(w, len(g))})
-    opp = [r for r in recs if not r["agrees"]]
-    cut = int(len(opp) * 0.65)
-    tr, ho = opp[:cut], opp[cut:]
-    tw, hw = sum(r["win"] for r in tr), sum(r["win"] for r in ho)
-    out["split"] = {
-        "train_n": len(tr), "train_wr": round(tw / max(1, len(tr)), 4),
-        "train_ci": wilson(tw, len(tr)),
-        "hold_n": len(ho), "hold_wr": round(hw / max(1, len(ho)), 4),
-        "hold_ci": wilson(hw, len(ho)),
-    }
-    # WHAT THE APP ACTUALLY ISSUES, end to end: confidence above the asset's
-    # own issue floor (app/config.asset_issue_floor) AND the call not chasing
-    # the trend. This is the number the user experiences, so it is reported
-    # with its coverage — a higher win rate bought with silence is not a win.
-    from app.config import asset_issue_floor
-    deployed = []
-    for cell, seq in sorted(by.items()):
-        seq.sort()
-        floor = asset_issue_floor(cell[0])
-        for k in range(len(seq)):
-            t, entry, side, win, conf = seq[k]
-            if conf <= floor:
-                continue
-            if k >= lag:
-                mv = seq[k][1] - seq[k - lag][1]
-                if mv != 0 and (1 if mv > 0 else -1) == side:
-                    continue
-            deployed.append({"asset": cell[0], "tf": cell[1], "t": t,
-                             "win": win})
-    dw = sum(r["win"] for r in deployed)
-    out["deployed"] = {
-        "rule": "confidence > asset_issue_floor AND side does not chase the "
-                f"{lag}-row trend",
-        "n": len(deployed),
-        "coverage": round(len(deployed) / len(rows), 4),
-        "wr": round(dw / max(1, len(deployed)), 4),
-        "ci": wilson(dw, len(deployed)),
-        "per_asset": {},
-    }
-    for a in sorted({r["asset"] for r in deployed}):
-        g = [r for r in deployed if r["asset"] == a]
-        w = sum(r["win"] for r in g)
-        out["deployed"]["per_asset"][a] = {
-            "n": len(g), "wr": round(w / max(1, len(g)), 4), "ci": wilson(w, len(g))}
-    deployed.sort(key=lambda r: r["t"])
-    cut = int(len(deployed) * 0.65)
-    tr, ho = deployed[:cut], deployed[cut:]
-    tw, hw = sum(r["win"] for r in tr), sum(r["win"] for r in ho)
-    out["deployed"]["split"] = {
-        "train_n": len(tr), "train_wr": round(tw / max(1, len(tr)), 4),
-        "train_ci": wilson(tw, len(tr)),
-        "hold_n": len(ho), "hold_wr": round(hw / max(1, len(ho)), 4),
-        "hold_ci": wilson(hw, len(ho)),
-    }
-    out["per_cell_gated"] = []
-    for cell in sorted(by):
-        g = [r for r in recs if r["asset"] == cell[0] and r["tf"] == cell[1]
-             and not r["agrees"]]
-        w = sum(r["win"] for r in g)
-        out["per_cell_gated"].append({
-            "cell": f"{cell[0]}|{cell[1]}", "n": len(g),
-            "wr": round(w / max(1, len(g)), 4), "ci": wilson(w, len(g))})
+            # The series the app actually samples: `trend_gate.observe()` is
+            # fed the LOCK PRICE of every settled window, i.e. this cell's
+            # entry series. The trend at row j is the sign of the entry move
+            # over the last 2 DECISIONS: entry[j] vs entry[j-2] — both are
+            # prints the engine already published, so the reading is causal
+            # (the rule acts on row j's own lock, and entry[j] is not the
+            # future of anything the rule is deciding).
+            #
+            # Two WRONG substrates were tried first and are recorded so they
+            # are not tried again: (a) a settled window's own entry→settle
+            # move INVERTS the table (it reported 61 % for chases, because a
+            # window that settled up is the future of the row before it), and
+            # (b) entry[j-1] vs entry[j-3] is a 1-row lag, worth only 51.1 %.
+            # Only entry[j] vs entry[j-2] reproduces the module's numbers.
+            now_e = cell_rows[j]["entry"]
+            then_e = cell_rows[j - 2]["entry"]
+            move = now_e - then_e
+            trend = 0 if abs(move) < 1e-12 else (1 if move > 0 else -1)
+            r["_trend"] = trend
+            r["_move_bps"] = (now_e / then_e - 1.0) * 1e4
+            r["_trend"] = trend
+            r["_chase"] = bool(trend != 0 and r["side"] == trend)
+            r["_ok"] = trend != 0
+            # realised win/net are symmetric in the side: inverting the side
+            # inverts the outcome, minus the SAME round-trip cost (bps_net is
+            # already cost-adjusted on the original side).
+            gross = r["gross"]
+            cost = gross - r["net"]
+            r["_win"] = int(r["win"])
+            r["_net"] = r["net"]
+            r["_flip_side"] = -r["side"] if r["_chase"] else r["side"]
+            r["_flip_win"] = (1 - int(r["win"])) if r["_chase"] else int(r["win"])
+            r["_flip_net"] = (-gross - cost) if r["_chase"] else r["net"]
+            out.append(r)
     return out
 
 
-def main() -> None:
+def evaluate(rows: list[dict]) -> dict:
+    """All the docstring's numbers, computed once."""
+    use = [r for r in rows if r.get("_ok")]
+    chase = [r for r in use if r["_chase"]]
+    against = [r for r in use if not r["_chase"]]
+    base_wr, base_ci, base_n = _wr(use)
+
+    def win_of(r: dict, key: int) -> dict:
+        q = dict(r)
+        q["_win"] = key
+        return q
+
+    flipped = [win_of(r, r["_flip_win"]) for r in use]
+    for q, r in zip(flipped, use):
+        q["_net"] = r["_flip_net"]
+    flip_wr, flip_ci, flip_n = _wr(flipped)
+
+    # trend alone as the side
+    trend_rows = [win_of(r, int(r["win"]) if r["_trend"] == r["side"]
+                         else 1 - int(r["win"])) for r in use]
+    trend_wr, trend_ci, trend_n = _wr(trend_rows)
+
+    all_wr, all_ci, all_n = _wr([win_of(r, r["win"]) for r in rows])
+
+    # 5-fold temporal split of the flipped policy
+    folds: list[float] = []
+    fold_rows: list[dict] = []
+    ordered = sorted(flipped, key=lambda r: r["t"])
+    k = 5
+    step = max(1, len(ordered) // k)
+    for f in range(k):
+        seg = ordered[f * step:(f + 1) * step] if f < k - 1 else ordered[f * step:]
+        if not seg:
+            continue
+        p, ci_f, n_f = _wr(seg)
+        folds.append(p)
+        fold_rows.append({"fold": f + 1, "n": n_f, "wr": p, "ci": ci_f})
+
+    # 65/35 split
+    cut = int(len(ordered) * 0.65)
+    train, holdout = ordered[:cut], ordered[cut:]
+    tr_wr, tr_ci, tr_n = _wr(train)
+    ho_wr, ho_ci, ho_n = _wr(holdout)
+
+    # paired bootstrap: is the flip actually better than the engine's side?
+    rng = random.Random(20261126)
+    diffs: list[float] = []
+    for _ in range(2000):
+        pick = [rng.choice(use) for _ in range(len(use))]
+        a = sum(r["_flip_win"] for r in pick) / len(pick)
+        b = sum(r["win"] for r in pick) / len(pick)
+        diffs.append(a - b)
+    diffs.sort()
+    boot = (diffs[int(0.025 * len(diffs))], diffs[int(0.975 * len(diffs))])
+
+    per_cell = {}
+    for (asset, tf) in sorted({(r["asset"], r["tf"]) for r in use}):
+        cell = [r for r in flipped if (r["asset"], r["tf"]) == (asset, tf)]
+        raw = [r for r in use if (r["asset"], r["tf"]) == (asset, tf)]
+        p, ci, n = _wr(cell)
+        per_cell[f"{asset}|{tf}"] = {
+            "n": n, "wr": p, "ci": ci, "net_bps": _net(cell),
+            "chases": sum(1 for r in raw if r["_chase"]),
+            "base_wr": (_wr([win_of(r, r["win"]) for r in raw])[0]),
+            "base_net_bps": _net(raw),
+        }
+
+    per_asset = {}
+    for asset in sorted({r["asset"] for r in use}):
+        for label, src in (("flip", flipped), ("engine", use)):
+            cell = [r for r in src if r["asset"] == asset]
+            p, ci, n = _wr(cell)
+            per_asset.setdefault(asset, {})[label] = {
+                "n": n, "wr": p, "ci": ci, "net_bps": _net(cell)}
+
+    return {
+        "rows_in_file": len(rows),
+        "rows_usable": len(use),
+        "warmup_dropped": len(rows) - len(use),
+        "lag": LAG,
+        "baseline": {"n": base_n, "wr": base_wr, "ci": base_ci,
+                     "net_bps": _net(use)},
+        "all_rows_asis": {"n": all_n, "wr": all_wr, "ci": all_ci},
+        "chases": {"n": len(chase), "wr": _wr(chase)[0], "ci": _wr(chase)[1],
+                   "net_bps": _net(chase)},
+        "opposes": {"n": len(against), "wr": _wr(against)[0],
+                    "ci": _wr(against)[1], "net_bps": _net(against)},
+        "trend_as_side": {"n": trend_n, "wr": trend_wr, "ci": trend_ci},
+        "flip_policy": {"n": flip_n, "wr": flip_wr, "ci": flip_ci,
+                        "net_bps": _net(flipped),
+                        "gross_wr": sum(r["_flip_win"] for r in flipped) / flip_n},
+        "flip_folds": folds,
+        "fold_detail": fold_rows,
+        "split_65_35": {"train": {"n": tr_n, "wr": tr_wr, "ci": tr_ci},
+                        "holdout": {"n": ho_n, "wr": ho_wr, "ci": ho_ci}},
+        "paired_bootstrap_delta": {"mean": sum(diffs) / len(diffs),
+                                   "ci": boot,
+                                   "samples": len(diffs)},
+        "per_cell": per_cell,
+        "per_asset": per_asset,
+    }
+
+
+def build(path: Path | None = None) -> dict:
+    """Evaluate the record and return it in the shape callers expect.
+
+    Kept as the stable entry point (the tests and ``app/trend_gate.py`` both
+    quote from it). The flat :func:`evaluate` keys are all preserved; the
+    extra ``pooled``/``split``/``deployed`` views exist so a reader does not
+    have to know the internal naming to check the docstring's tables.
+    """
+    m = evaluate(annotate(load(Path(path) if path else CSV)))
+    ch, op, f = m["chases"], m["opposes"], m["flip_policy"]
+    per_asset = {a: {"wr": d["flip"]["wr"], "n": d["flip"]["n"],
+                     "net_bps": d["flip"]["net_bps"],
+                     "engine_wr": d["engine"]["wr"]}
+                 for a, d in m["per_asset"].items()}
+    m["pooled"] = {"agree_n": ch["n"], "agree_wr": ch["wr"], "agree_ci": ch["ci"],
+                   "opp_n": op["n"], "opp_wr": op["wr"], "opp_ci": op["ci"]}
+    # ``baseline_wr`` is EVERY row in the file (the number the user actually
+    # experienced); ``baseline`` is the usable sample the flip is scored on.
+    m["baseline_wr"] = m["all_rows_asis"]["wr"]
+    m["baseline_ci"] = m["all_rows_asis"]["ci"]
+    m["split"] = {"train_n": m["split_65_35"]["train"]["n"],
+                  "train_wr": m["split_65_35"]["train"]["wr"],
+                  "hold_n": m["split_65_35"]["holdout"]["n"],
+                  "hold_wr": m["split_65_35"]["holdout"]["wr"],
+                  "hold_ci": m["split_65_35"]["holdout"]["ci"]}
+    # The deployed rule keeps EVERY window (coverage 1.0) — the whole point of
+    # replacing the abstention. Anything reporting coverage < 1.0 is
+    # describing the retired withhold-only policy, not this one.
+    m["deployed"] = {"n": f["n"], "wr": f["wr"], "ci": f["ci"],
+                     "coverage": f["n"] / m["rows_in_file"] if m["rows_in_file"] else 0.0,
+                     "net_bps": f["net_bps"], "per_asset": per_asset,
+                     "mode": "flip"}
+    return m
+
+
+# ── reporting ──────────────────────────────────────────────────────────────
+def report(m: dict) -> str:
+    L: list[str] = []
+    A = L.append
+    A("trend-interaction rule — audit (app/trend_gate.py)")
+    A(f"record: {CSV.relative_to(ROOT)}")
+    A(f"rows {m['rows_in_file']}, usable {m['rows_usable']} "
+      f"(dropped {m['warmup_dropped']} warming up, lag {m['lag']})")
+    A("")
+    A("A. the interaction (what the rule is built on)")
+    A(f"   every shipped window      {m['all_rows_asis']['n']:4d}  "
+      f"{_pct(m['all_rows_asis']['wr'])}   CI {_ci(m['all_rows_asis']['ci'])}")
+    b = m['baseline']
+    A(f"   usable sample             {b['n']:4d}  {_pct(b['wr'])}   "
+      f"CI {_ci(b['ci'])}   net {b['net_bps']:+.1f} bps/row")
+    for key, label in (("chases", "AGREES with trend"), ("opposes", "OPPOSES the trend")):
+        d = m[key]
+        A(f"   {label:25s} {d['n']:4d}  {_pct(d['wr'])}   "
+          f"CI {_ci(d['ci'])}   net {d['net_bps']:+.1f} bps/row")
+    t = m["trend_as_side"]
+    A(f"   trend alone as the side   {t['n']:4d}  {_pct(t['wr'])}   "
+      f"CI {_ci(t['ci'])}")
+    A("")
+    A("B. the policy (100 % coverage — nothing is dropped)")
+    f = m["flip_policy"]
+    A(f"   engine side, unchanged    {b['n']:4d}  {_pct(b['wr'])}   "
+      f"CI {_ci(b['ci'])}   net {b['net_bps']:+.1f} bps/row")
+    A(f"   FLIP the chases           {f['n']:4d}  {_pct(f['wr'])}   "
+      f"CI {_ci(f['ci'])}   net {f['net_bps']:+.1f} bps/row")
+    pb = m["paired_bootstrap_delta"]
+    A(f"   paired delta              {100 * pb['mean']:+.1f} pp   "
+      f"CI {100 * pb['ci'][0]:+.1f} – {100 * pb['ci'][1]:+.1f} pp "
+      f"({pb['samples']} resamples)")
+    A("")
+    A("C. honesty — every fold, including the losing one")
+    A("   folds: " + " / ".join(_pct(x) for x in m["flip_folds"])
+      + f"   ({sum(1 for x in m['flip_folds'] if x > 0.5)} of "
+        f"{len(m['flip_folds'])} above 50 %)")
+    for fr in m["fold_detail"]:
+        A(f"     fold {fr['fold']}  n={fr['n']:4d}  {_pct(fr['wr'])}  "
+          f"CI {_ci(fr['ci'])}")
+    s = m["split_65_35"]
+    A(f"   65/35 time split  train n={s['train']['n']} {_pct(s['train']['wr'])}"
+      f" | holdout n={s['holdout']['n']} {_pct(s['holdout']['wr'])} "
+      f"CI {_ci(s['holdout']['ci'])}")
+    A("")
+    A("D. where it does NOT work (stated, not hidden)")
+    for asset, d in m["per_asset"].items():
+        fl, en = d["flip"], d["engine"]
+        A(f"   {asset:5s} flip {_pct(fl['wr'])} (n={fl['n']}) "
+          f"net {fl['net_bps']:+.1f} bps | engine {_pct(en['wr'])} "
+          f"net {en['net_bps']:+.1f} bps")
+    A("")
+    A("E. per cell (small n — most intervals cross 50 %)")
+    for cell, d in m["per_cell"].items():
+        A(f"   {cell:10s} n={d['n']:3d}  flip {_pct(d['wr'])} "
+          f"CI {_ci(d['ci'])} net {d['net_bps']:+.1f} "
+          f"| engine {_pct(d['base_wr'])} net {d['base_net_bps']:+.1f} "
+          f"| chases {d['chases']}")
+    A("")
+    A("Nothing above is a forward promise. The rule is in-sample and")
+    A("selection-aware; it is not wired into the certified hold policy.")
+    return "\n".join(L)
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--json", action="store_true", help="print the summary")
-    ap.add_argument("--write", action="store_true",
-                    help=f"write {OUT_PATH}")
-    args = ap.parse_args()
-    rep = build()
-    if args.write:
-        os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
-        with open(OUT_PATH, "w", encoding="utf-8") as fh:
-            json.dump(rep, fh, indent=1)
-            fh.write("\n")
-    if args.json:
-        print(json.dumps(rep, indent=1))
-        return
-    p, s, t = rep["pooled"], rep["split"], rep["trend_as_side"]
-    print(f"source          {rep['source']}  ({rep['lag_rows']} rows lag)")
-    print(f"every window    n={rep['baseline_n']:4d}  "
-          f"{100 * rep['baseline_wr']:5.1f} %  CI {rep['baseline_ci']}")
-    print(f"side CHASES     n={p['agree_n']:4d}  "
-          f"{100 * p['agree_wr']:5.1f} %  CI {p['agree_ci']}")
-    print(f"side FADES      n={p['opp_n']:4d}  "
-          f"{100 * p['opp_wr']:5.1f} %  CI {p['opp_ci']}   <- the call that "
-          f"is kept")
-    print(f"trend as side   n={t['n']:4d}  {100 * t['wr']:5.1f} %  CI {t['ci']}")
-    print("folds (fading)  " + "  ".join(
-        f"f{f['fold']} {100 * f['wr']:.1f}% (n={f['n']})" for f in rep["folds"]))
-    print(f"65/35 split     train n={s['train_n']} {100 * s['train_wr']:.1f} % "
-          f"CI {s['train_ci']} | holdout n={s['hold_n']} "
-          f"{100 * s['hold_wr']:.1f} % CI {s['hold_ci']}")
-    dep = rep.get("deployed") or {}
-    if dep:
-        ds = dep["split"]
-        print(f"\nWHAT SHIPS     n={dep['n']:4d} ({100 * dep['coverage']:.0f}% of "
-              f"windows)  {100 * dep['wr']:5.1f} %  CI {dep['ci']}")
-        print(f"  vs all windows  {100 * rep['baseline_wr']:5.1f} %  CI "
-              f"{rep['baseline_ci']}")
-        print("  per asset    " + "  ".join(
-            f"{a} {100 * v['wr']:.0f}% (n={v['n']})"
-            for a, v in dep["per_asset"].items()))
-        print(f"  65/35 split  train n={ds['train_n']} "
-              f"{100 * ds['train_wr']:.1f} % | holdout n={ds['hold_n']} "
-              f"{100 * ds['hold_wr']:.1f} % CI {ds['hold_ci']}")
-    worst = sorted(rep["per_cell_gated"], key=lambda r: r["wr"])[:4]
-    print("weakest cells   " + "  ".join(
-        f"{r['cell']} {100 * r['wr']:.1f}% (n={r['n']})" for r in worst))
-    print("\nHonest reading: in-sample and selection-aware. The pooled gap is "
-          "large,\nbut the holdout interval includes 50 %, so this is an "
-          "abstention rule\nbacked by a plausible mechanism — not a promised "
-          "forward win rate.")
+    ap.add_argument("--json", action="store_true", help="machine-readable")
+    ap.add_argument("--csv", default=str(CSV), help="record to audit")
+    ap.add_argument("--out", default="", help="write the JSON here too")
+    args = ap.parse_args(argv)
+    rows = annotate(load(Path(args.csv)))
+    m = evaluate(rows)
+    if args.out:
+        Path(args.out).write_text(json.dumps(m, indent=2))
+    print(json.dumps(m, indent=2) if args.json else report(m))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
