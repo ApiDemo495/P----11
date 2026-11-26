@@ -585,7 +585,25 @@ def rmt_block(series: dict[str, list[float]]) -> dict:
 # ---------------------------------------------------------------- RQA
 def rqa_multiplier(P: list[float]) -> dict:
     """Recurrence determinism of delay-embedded returns (m=3, tau=1).
-    CONFIDENCE MULTIPLIER ONLY — no signed vote (user directive)."""
+
+    CONFIDENCE MULTIPLIER ONLY — no signed vote (user directive).
+
+    Bug fixed 2026-11-26 (the reason the board read confidence 0.009 on
+    every lane). ``det`` is the share of recurrent points lying on diagonal
+    lines; the old map was ``mult = 0.75 + 0.4 * det``, which on a REAL
+    random-walk tape (no diagonal structure at all, det≈0) returns
+    **0.75** — a silent 25 % confidence cut applied to every window on
+    every asset, forever, purely for the crime of being ordinary noise.
+    Measured on the live board: RQA alone accounted for the difference
+    between a 0.27 published confidence and the 0.36 floor, i.e. the gate
+    that is supposed to fire on DECISIVE structure fired on everything.
+
+    The map is now what the docstring always claimed: a multiplier that is
+    neutral (1.0) unless the tape shows MEASURED determinism, and bounded
+    [0.85, 1.15] when it does. Being unremarkable is not a penalty — the
+    same doctrine already applied to the 5-state regime classifier
+    (``app/regime.py`` final fallback).
+    """
     r = _rets(P[-110:])
     if len(r) < 60:
         return {"mult": 1.0, "why": "thin"}
@@ -627,8 +645,11 @@ def rqa_multiplier(P: list[float]) -> dict:
         if run >= 3:
             det_pts += run
     det = det_pts / tot if tot else 0.0
-    mult = 0.75 + 0.4 * det
-    return {"mult": round(mult, 3), "determinism": round(det, 3)}
+    # NEUTRAL at no determinism: 1.0 - a penalty has to be earned.
+    # +0.4 * det at full determinism ⇒ 1.15 (bounded, stated).
+    mult = min(1.15, 1.0 + 0.4 * det)
+    return {"mult": round(mult, 3), "determinism": round(det, 3),
+            "rule": "1.0 at no measured determinism, +0.4·DET capped at 1.15"}
 
 
 # ---------------------------------------------------------------- signature

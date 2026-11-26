@@ -94,8 +94,24 @@ def test_har_and_evt_sizing_layers_bounded():
 
 def test_rqa_is_only_a_multiplier():
     out = rqa_multiplier(_chop())
-    assert 0.75 <= out["mult"] <= 1.15
+    assert 0.85 <= out["mult"] <= 1.15
     assert "vote" not in out
+
+
+def test_rqa_does_not_punish_ordinary_noise():
+    """The live defect: `0.75 + 0.4·DET` returned 0.75 (a silent −25 %
+    confidence cut) on a plain random walk, on every cell, forever. An
+    unremarkable tape must be NEUTRAL (mult 1.0), and only MEASURED
+    determinism may lift it."""
+    import random as _rnd
+    rng = _rnd.Random(9)
+    px = [100.0]
+    for _ in range(600):
+        px.append(px[-1] * (1 + rng.gauss(0, 0.0012)))
+    out = rqa_multiplier(px)
+    assert out["determinism"] < 0.5
+    assert out["mult"] >= 1.0, out          # never a penalty for being noise
+    assert out["mult"] <= 1.15
 
 
 def test_signature_floor_cap_declared():

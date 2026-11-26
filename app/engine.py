@@ -96,6 +96,15 @@ EMERGENCY_RELOCK_MIN_MOVE_ATR = 3.0
 #: at least 15 minutes since the lock) may re-anchor the contract.
 RELOCK_MIN_MOVE_ATR = 3.0
 RELOCK_MIN_AGE_S = 15 * 60.0
+#: Lower bound on the advanced layer's confidence multiplier (soft_gate ×
+#: RQA). Both are calibration factors with a documented band; multiplying
+#: them unchecked produced a ×0.34 collapse on live tapes (gate 0.45 ×
+#: RQA 0.75) AFTER the calibrated confidence had already cleared the floor —
+#: every lane printed 0.009 against a 0.366 bar and nothing could issue.
+#: 0.70 is deliberately wider than either factor's own lower bound would
+#: produce on a normal tape, so the layer still damps a genuinely bad window
+#: without being able to silence the board.
+_ADV_CONF_FLOOR = 0.70
 
 
 def _mean(xs):
@@ -409,6 +418,14 @@ def public_verdict(symbol: str, tf: str, direction: int, confidence: float,
                    ) -> tuple[bool, str, str]:
     """Backwards-compatible re-export — the rule lives in app/verdict.py."""
     return _verdict_rule(symbol, tf, direction, confidence, tier, issue_note)
+
+
+def resolve_verdict(symbol: str, tf: str, direction: int, confidence: float,
+                    tier: str | None, issue_note: str | None = None,
+                    ) -> tuple[bool, str, str, int]:
+    """Same rule, plus the SIDE it resolved to (the trend flip lives there)."""
+    from .verdict import resolve as _res
+    return _res(symbol, tf, direction, confidence, tier, issue_note)
 
 
 def calib_should_record(done: dict, key: tuple[str, str], move: float) -> bool:
@@ -1640,6 +1657,53 @@ class PredictionEngine:
             _gate = 0.02 * float(_prof.get("noise_mult") or 1.0)
             _dir_final = (1 if _beh["score"] > 0 else -1) \
                 if abs(_beh["score"]) >= _gate else 0
+            # ── NO MORE FLAT CARDS (2026-11-26) ──────────────────────────
+            # A fused score inside the noise gate used to yield direction 0,
+            # i.e. NO TRADE — an abstention, and the one the user encounters
+            # most often because scores are routinely ~0.01-0.03 against a
+            # 0.02 x asset-noise gate. "Continuous, without missing any
+            # minute" means every window must ship a side; the question is
+            # only WHICH side is the better bet when the fused score is not
+            # informative. That is answerable from the record instead of
+            # guessed:
+            #   * the 2-decision trend (app/trend_gate.py) carries a measured
+            #     edge of its own — fading it after a chase is worth 56.8 %
+            #     while FOLLOWING it as a raw side is only 43.2 %
+            #     (`backtest.trend_gate_audit`), so the informative side is
+            #     the fade of a chase;
+            #   * when even the trend has no reading (fresh boot, no
+            #     history), there is nothing measured to lean on and the
+            #     engine still must trade, so it takes the tape's own
+            #     last-closed-bar direction — the classic, documented
+            #     baseline — and SAYS it is uninformative.
+            # Both branches are labelled in the payload: a side that came
+            # from this fallback must never look like a measured edge.
+            if _dir_final == 0:
+                _fb = ""
+                try:
+                    from .trend_gate import trend as _tg_trend
+                    _tr = int(_tg_trend(symbol, tf) or 0)
+                except Exception:
+                    _tr = 0
+                if _tr in (-1, 1):
+                    # fade the impulse: the measured side of the record
+                    _dir_final = -_tr
+                    _fb = ("trend-fade (score inside the noise gate; the "
+                           "2-decision impulse is the only measured reading "
+                           "left, and the record says fade it)")
+                else:
+                    try:
+                        _cl = list(self.feed.state(symbol).closes or [])
+                        _last = (1 if _cl[-1] >= _cl[-2] else -1) \
+                            if len(_cl) >= 2 else 1
+                    except Exception:
+                        _last = 1
+                    _dir_final = _last
+                    _fb = ("last-bar direction (score inside the noise gate "
+                           "and no trend reading yet — UNINFORMATIVE: this is "
+                           "a coin flip shipped so the window is not skipped)")
+                fin["direction_source"] = "noise-gate fallback"
+                fin["direction_fallback"] = _fb
             # LOCK HYSTERESIS (the "analysis and chart are not in sync"
             # report): the fused score is routinely 0.03 against a 0.02
             # floor, so its SIGN flips on noise. The window's locked side
@@ -1717,9 +1781,26 @@ class PredictionEngine:
             _adv = self._advanced_for(symbol, tf, ctxs[tf])
             fin["advanced_vote"] = _adv["vote"]
             fin["adv_soft_gate"] = _adv["soft_gate"]
+            # BOUNDED LAYER (fixed 2026-11-26): the advanced block used to
+            # multiply confidence by soft_gate × rqa_mult with no floor of its
+            # own. On a live sim tape both landed near their lower bounds
+            # (gate 0.45, RQA 0.75 ⇒ ×0.34) *after* calibrate_confidence had
+            # already produced a floor-clearing 0.27 — so every lane printed
+            # confidence 0.009 against a 0.366 floor and no call could ever
+            # issue. A calibration must stay inside its documented band; a
+            # second unbounded product is exactly the failure
+            # calibrate_confidence's docstring says it removed.
+            _adv_mult = max(_ADV_CONF_FLOOR,
+                            min(1.35, float(_adv["soft_gate"] or 1.0)
+                                * float(_adv["rqa_mult"] or 1.0)))
+            fin["adv_conf_mult"] = round(_adv_mult, 4)
+            fin["adv_conf_mult_rule"] = (
+                f"soft_gate {float(_adv['soft_gate'] or 1.0):.2f} × RQA "
+                f"{float(_adv['rqa_mult'] or 1.0):.2f}, bounded to "
+                f"[{_ADV_CONF_FLOOR:.2f}, 1.35] so a calibration can never "
+                "collapse the published confidence")
             fin["confidence"] = max(0.0, min(1.0,
-                float(fin["confidence"]) * _adv["soft_gate"]
-                * _adv["rqa_mult"]))
+                float(fin["confidence"]) * _adv_mult))
             _beh = dict(_beh)
             _adv_k = self._adv_blend_k(symbol, tf)
             fin["adv_blend_k"] = round(_adv_k, 4)
@@ -1728,7 +1809,8 @@ class PredictionEngine:
                 symbol, tf, float(_beh["score"]),
                 strength=pack.get("strength"),
                 direction=int(_dir_final or 0),
-                dirs_by_tf=self._sibling_dirs(symbol, tf))
+                dirs_by_tf=self._sibling_dirs(symbol, tf),
+                confidence=float(fin["confidence"]))
             fin.update(_tier)
             fin["raw_score"] = round(float(_beh["score"]), 5)
             # ── volatility-scaled barriers (app/barriers.py) ──────────
@@ -2702,8 +2784,9 @@ class PredictionEngine:
 
     def _tier_for(self, symbol: str, tf: str, score: float,
                   strength: float | None = None, *,
-                  direction: int = 0,
-                  dirs_by_tf: dict | None = None) -> dict:
+                  direction: int | None = None,
+                  dirs_by_tf: dict | None = None,
+                  confidence: float | None = None) -> dict:
         """docs11-doublecheck §4: calibrated P(side) + tier. The noise
         floor lives in SCORE units and only sets the tier — it can
         never suppress the side. Provisional Platt: a = 1/median|s|
@@ -2768,6 +2851,58 @@ class PredictionEngine:
         # Non-measured cells are capped; the side still stands (the
         # ladder never suppresses it), only the tier caps.
         _mandate_note = ""
+        # TIER AND CONFIDENCE MUST AGREE (fixed 2026-11-26). The tier band is
+        # derived from |score|/floor, so a window can read "full size" on a
+        # score that is 4× its noise floor while its CALIBRATED confidence is
+        # 0.009 (the advanced multipliers, PCV and DRHE can all cut it) —
+        # the live board printed exactly that: `conf 0.01 · tier full ·
+        # verdict NO CALL`. A size hint that outranks the published gate is
+        # not a hint, it is a contradiction. The tier may now never be more
+        # optimistic than the verdict rule allows.
+        try:
+            from .config import asset_issue_floor as _aif_t
+            _band_floor = float(_aif_t(symbol))
+        except Exception:
+            _band_floor = 0.35
+        # NO SIDE, NO SIZE (fixed 2026-11-26, live defect). The board printed
+        # `BTC tf4 · direction 0 · tier full · verdict NO CALL` — a card
+        # advertising FULL SIZE on a window where the engine had not even
+        # picked a side. A tier is a size hint for a trade; with no direction
+        # there is no trade to size, so the hint must collapse to watch-only
+        # and say why. (The tier never suppresses the side — it never could:
+        # this branch only runs when there is nothing to suppress.)
+        # ``direction is None`` means the caller did not tell us a side (a
+        # pure tier-math probe); only a CALLER-DECLARED flat is a non-trade.
+        if direction is not None and int(direction) == 0 \
+                and tier != "watch-only":
+            tier = "watch-only"
+            _mandate_note += (
+                " · watch-only: no side was derived this window (the fused "
+                "score sat inside the noise gate), so there is nothing to "
+                "size — the card must not advertise a tier for a non-trade; "
+                "there is nothing to size in a window with no side")
+        _conf_for_tier = float(confidence) if confidence is not None else None
+        if _conf_for_tier is not None and tier != "watch-only":
+            # watch-only at/below the floor; quarter in (floor, floor×1.1]
+            if _conf_for_tier <= _band_floor:
+                tier = "watch-only"
+                _mandate_note += (
+                    f" · tier capped at watch-only: confidence "
+                    f"{_conf_for_tier:.3f} <= issue floor {_band_floor:.3f} "
+                    "(the size hint may never outrank the published gate)")
+            elif _conf_for_tier <= _band_floor * 1.1 and tier in (
+                    "half", "full"):
+                tier = "quarter"
+                _mandate_note += (
+                    f" · tier cut to quarter: confidence {_conf_for_tier:.3f} "
+                    f"is within 10 % of the {_band_floor:.3f} issue floor")
+        # ── per-asset mandate (2y real measurement, mandate_search):
+        # a configured asset only issues on its measured TFs and past
+        # its measured filter (§10: all four assets ≥ +0.070R full
+        # sample, 6/6 folds positive — PAXG recovered from the engine
+        # direction's −0.21R via the 44h-momentum rule on tf3/tf4).
+        # Non-measured cells are capped; the side still stands (the
+        # ladder never suppresses it), only the tier caps.
         if tier != "watch-only":
             from . import mandate_cfg as _mcfg
             if not _mcfg.allows(symbol, tf):
@@ -3375,9 +3510,41 @@ class PredictionEngine:
             # card publishes. Recomputing produced a second, different
             # answer (card 0.176 BULL vs analysis 0.055 FLAT), so the
             # engine shouted NO TRADE at a signal it had just issued.
-            res = ((self.last_result.get((symbol, tf)))
-                   or getattr(self, "display_systems", {}).get((symbol, tf))
-                   or res_pack.get(tf) or {})
+            # DISPLAY FALLBACK (fixed 2026-11-26): `display_systems` is a
+            # whitelist built in compute_asset, and the FINAL analysis box
+            # was reading richer fields off it than it carries. When
+            # `last_result` was cold (first manual ANALYSE, or a lane whose
+            # cycle was just rebuilt) `res` came from the whitelist, so
+            # `res["direction"]`/`res["confidence"]` were 0 and `tier` was
+            # absent — the result box printed `tp: null · tier: null` next to
+            # a perfectly valid locked contract. Fill the gaps from the fresh
+            # per-TF pass and, failing that, from the LIVE CYCLE (which always
+            # has the sealed side + tier), instead of publishing blanks.
+            res = dict(self.last_result.get((symbol, tf)) or {})
+            _disp = getattr(self, "display_systems", {}).get((symbol, tf)) or {}
+            _fresh = res_pack.get(tf) or {}
+            _cyc_pre = self.cycles.get((symbol, tf))
+            _fill = {
+                "direction": (getattr(_cyc_pre, "direction", None)
+                              or _fresh.get("direction")
+                              or _disp.get("direction")),
+                "confidence": (_fresh.get("confidence")
+                               if _fresh.get("confidence") is not None
+                               else getattr(_cyc_pre, "confidence", None)),
+                "tier": (_fresh.get("tier") or _disp.get("tier")
+                         or getattr(_cyc_pre, "tier", None)),
+                "issue_note": (_fresh.get("issue_note")
+                               or _disp.get("issue_note")
+                               or getattr(_cyc_pre, "issue_note", None)),
+                "gate_ok": (_fresh.get("gate_ok")
+                            if _fresh.get("gate_ok") is not None
+                            else getattr(_cyc_pre, "gate_ok", None)),
+                "atr": _fresh.get("atr"),
+                "ladder": _fresh.get("ladder") or _disp.get("ladder"),
+            }
+            for _k, _v in _fill.items():
+                if res.get(_k) is None and _v is not None:
+                    res[_k] = _v
             price = self.feed.prices().get(symbol, 0.0)
             atr = float(res.get("atr") or self._atr(self.build_ctx(symbol, tf)))
             direction = int(res.get("direction") or 0)
@@ -3540,7 +3707,28 @@ class PredictionEngine:
                 "entry": round(entry_used, 6),
                 "atr": round(atr, 6),
                 "tps": tps,
+                # THE HEADLINE TP (fixed 2026-11-26): this box never carried
+                # a `tp`/`tier` at all — the UI read `tp: null · tier: null`
+                # beside a valid sealed contract (`contract_tp`), which reads
+                # as "no target" on the one panel the user opens on purpose.
+                # Publish the same number the ladder ends at, and the tier
+                # the size hint actually resolved to.
+                "tp": (float(_tp_lv) if _tp_lv else
+                       (float(tps[-1]["level"]) if tps else None)),
                 "sl": round(sl, 6) if sl else None,
+                "tp_source": ("locked contract — horizon target"
+                              if _lv else
+                              "preview ladder — measured, no lock"),
+                "tier": (res.get("tier")
+                         or getattr(cyc, "tier", None) or "watch-only"),
+                "verdict_snapshot": {
+                    "verdict": (getattr(cyc, "verdict", None)
+                                if cyc is not None else None),
+                    "gate_ok": (getattr(cyc, "gate_ok", None)
+                                if cyc is not None else None),
+                    "issue_note": (getattr(cyc, "issue_note", None)
+                                   if cyc is not None else None),
+                },
                 "ratio": ratio_used,
                 "levels_source": levels_source,
                 "contract_state": ("locked" if _lv and cyc and cyc.level_contract
@@ -3669,23 +3857,40 @@ class PredictionEngine:
                 _conflict = None
             if _conflict is not None:
                 final["regime_conflict"] = _conflict
-                final["gate_ok"] = False
+                # NOT A NO CALL ANY MORE (2026-11-26). This used to set
+                # gate_ok=False, which forced verdict NO CALL and tier
+                # watch-only: a window with a measured, sealed, graded side
+                # was published as nothing at all. The user's standing
+                # directive is "raise the win rate WITHOUT abstention", and
+                # the disagreement it was reacting to is now handled where it
+                # was MEASURED — the certified side that chases the recent
+                # impulse is flipped by app/trend_gate.py (56.8 % vs 52.4 %
+                # on 861 windows). A regime chip is a STATE, not a measured
+                # predictor: flipping on it would invent 2y of evidence we do
+                # not have, so this gate keeps its real job — it demotes
+                # EXECUTION (no paper/live order) and says so in the note,
+                # while the side, the levels, the contract and the grading
+                # all stand. Silence was never the honest version of a
+                # disagreement; a published, graded, explained side is.
+                # ROUTING IS BLOCKED BY `execution_eligible`, WHICH IS THE
+                # FIELD THE TRADER ACTUALLY READS — the published tier is a
+                # SIZE HINT and stays as measured. Demoting the tier here as
+                # well double-counted one decision into two visible fields
+                # (the board read "watch-only" and stopped sizing a call it
+                # also stopped routing: the same signal, said twice, and the
+                # window read like a non-call).
                 final["execution_eligible"] = False
-                # demote BEFORE the seal so contract_tier is persisted
-                # as watch-only too (a restart must not restore a
-                # tradable band over a regime-conflicted window)
                 if cyc is not None:
-                    cyc.tier = "watch-only"
                     cyc.execution_eligible = False
                 final["issue_note"] = (
-                    f"REGIME CONFLICT — 5-state regime "
+                    f"REGIME DISAGREEMENT — the 5-state chip reads "
                     f"{_conflict['state']} (conf "
-                    f"{_conflict.get('regime_conf')}) opposes "
-                    f"{'BUY' if direction > 0 else 'SELL'} "
-                    f"(certified hold side): NO ORDER routed; the sealed "
-                    f"window record keeps the certified side for grading")
-            final["verdict"] = ("NO CALL" if _conflict is not None else
-                                "ISSUE" if (final.get("gate_ok")
+                    f"{_conflict.get('regime_conf')}) while the certified "
+                    f"side is {'BUY' if direction > 0 else 'SELL'}. The side "
+                    f"stands and is graded; only ORDER ROUTING is held back "
+                    f"until the tape agrees with itself. A withheld call is "
+                    f"not a safer call — it is an ungraded one")
+            final["verdict"] = ("ISSUE" if (final.get("gate_ok")
                                             and recheck["passed"])
                                 else "WATCH" if final.get("direction")
                                 else "NO CALL")
@@ -3739,10 +3944,8 @@ class PredictionEngine:
                     symbol, tf, int(final.get("direction") or 0))
                 cyc.prediction_lock = dict(final.get("prediction_lock") or {})
                 if _conflict is not None:
-                    # watch-only ⇒ execution_eligible flips False on the
-                    # next tick (paper AND live both check tier) while
-                    # the sealed side stays on the record for grading
-                    cyc.tier = "watch-only"
+                    # routing held on the next tick; the tier, the side and
+                    # the sealed contract are untouched (see the note above)
                     cyc.execution_eligible = False
             # COGNITION: produce and record the thinking trace for the call
             # that was just made (signature + metacognitive snapshot). Failure
@@ -7426,7 +7629,52 @@ class PredictionEngine:
         # barely changed window to window. USER RULE kept: the TF's
         # own horizon TP (LAST target) is calculated FIRST.
         from .moves_risk import risk_block as _risk_block
-        _dir = res["direction"] or 1
+        # ── TREND INTERACTION: FLIP, NEVER WITHHOLD (2026-11-26) ────────
+        # The user directive is "raise the win rate WITHOUT abstention". The
+        # measured interaction in app/trend_gate.py says a call that chases
+        # the recent 2-decision trend wins 46.0 % while its fade wins 56.2 %
+        # on 861 real windows. This is the ONE place the side of a new lock
+        # is written, so it is the one place the flip is applied: the side
+        # changes, the entry does not, and every level below is re-measured
+        # for the new side from the same locked anchor. Grading stays
+        # continuous (every window still gets exactly one sealed side), and
+        # the deciding evidence travels on the cycle.
+        _dir_raw = res["direction"] or 1
+        _dir = int(_dir_raw)
+        _trend_flip: dict | None = None
+        try:
+            from .trend_gate import check as _tg_check
+            _tdec = _tg_check(symbol, tf, int(_dir))
+            if _tdec.get("flipped") and int(_tdec.get("side_out") or 0) in (-1, 1):
+                _dir = int(_tdec["side_out"])
+                _trend_flip = {
+                    "applied": True, "from": int(_dir_raw), "to": _dir,
+                    "why": str(_tdec.get("why") or ""),
+                    "trend": _tdec.get("trend"),
+                    "trend_bps": _tdec.get("trend_bps"),
+                    "min_trend_bps": _tdec.get("min_trend_bps"),
+                    "measured": _tdec.get("measured"),
+                }
+                res = dict(res)
+                res["direction_before_flip"] = int(_dir_raw)
+                res["direction"] = _dir
+                res["trend_flip"] = _trend_flip
+                log.info("trend flip %s/%s %+d -> %+d (%.1f bps vs %.1f bps "
+                         "min)", symbol, tf, int(_dir_raw), _dir,
+                         float(_tdec.get("trend_bps") or 0.0),
+                         float(_tdec.get("min_trend_bps") or 0.0))
+            elif _tdec.get("blocked"):
+                # legacy TREND_GATE=abstain mode: the withhold semantic is
+                # kept for A/B, and it is still visible on the cycle.
+                _trend_flip = {"applied": False, "withheld": True,
+                               "why": str(_tdec.get("why") or "")}
+                res = dict(res)
+                res["trend_withheld"] = _trend_flip
+        except Exception:
+            log.exception("trend rule failed for %s/%s", symbol, tf)
+            _dir = int(_dir_raw)
+            _trend_flip = None
+        res["_trend_flip"] = _trend_flip
         _edge = min(1.0, abs(float(res.get("confidence") or 0.0)) / 0.35)
         _st = self.feed.state(symbol)
         _closes = list(_st.closes or [])
@@ -7441,6 +7689,19 @@ class PredictionEngine:
                                   _highs, _lows, atr=res.get("atr", 0.0),
                                   spread_bps=_spread)
                    for m in dict.fromkeys(_mins)}
+        # The trend rule's "is this move a trend or tick noise?" filter needs
+        # THIS asset's measured σ for THIS window — the same measurement that
+        # just priced the TP/SL, never a second invented volatility scale.
+        try:
+            from . import trend_gate as _tg_sig
+            _hz_key = _mins[-1]
+            _hz_block = _blocks.get(_hz_key) or {}
+            _tg_sig.set_window_sigma(
+                symbol, tf,
+                float(_hz_block.get("sigma_bps")
+                      or _hz_block.get("measured_sigma_bps") or 0.0) or None)
+        except Exception:
+            log.exception("trend sigma publish failed for %s/%s", symbol, tf)
         # per-asset MANDATE geometry (2y measured, mandate_search):
         # sl ×= k, tp = sl × R on the raw measured block — exactly the
         # geometry the EV numbers were computed on, so the generic
@@ -7552,7 +7813,11 @@ class PredictionEngine:
         _g_start, _g_end = now, now + W * 60
         # public verdict for the card: the contract keeps `issued` true so a
         # call can be graded, but the badge must say what actually cleared.
-        _gate_ok, _verdict, _issue_note = public_verdict(
+        # THE FLIP IS ALREADY IN res["direction"] (applied above, from the
+        # ONE decision this window's side came from), so the rule is asked
+        # about the side that will actually be published — never the raw one,
+        # which would flip a second time and produce the original side back.
+        _gate_ok, _verdict, _issue_note, _side_rule = resolve_verdict(
             symbol, tf, int(res.get("direction") or 0),
             float(res.get("confidence") or 0.0), res.get("tier"),
             res.get("issue_note"))
@@ -7560,7 +7825,7 @@ class PredictionEngine:
             symbol=symbol,
             tf=tf,
             W=W,
-            direction=res["direction"],
+            direction=(_side_rule or res["direction"]),
             confidence=res["confidence"],
             cci=res["cci_adjusted"],
             drhe=res["drhe"],
@@ -7570,6 +7835,7 @@ class PredictionEngine:
             issue_note=_issue_note,
             trend_gate=_trend_evidence(symbol, tf,
                                        int(res.get("direction") or 0)),
+            trend_flip=(_trend_flip or {}),
             tier=str(res.get("tier") or "watch-only"),
             p_side=float(res.get("p_side") or 0.5),
             calib_n=int(res.get("calib_n") or 0),
@@ -8785,6 +9051,37 @@ class PredictionEngine:
                             if _row else None)
                         d["entry_age_s"] = (
                             round(now - float(cyc.cycle_start or now), 1))
+                        # ── ANCHOR DRIFT (user report 2026-11-26) ────────
+                        # "I got tp of 551 on BNB when market was on 556."
+                        # The levels are anchored at the LOCKED entry, which
+                        # is CORRECT (a target must be measured from where
+                        # the position was opened, not from wherever price
+                        # has since wandered). What was missing is the ONE
+                        # number that makes that honest on screen: how far
+                        # the live tape has moved away from the anchor since
+                        # the lock. Without it the card prints an entry the
+                        # market is no longer at, next to a target that looks
+                        # wrong, and the user has to do the bps arithmetic
+                        # themselves. Published here so every panel can say
+                        # "anchor 439.43 · now 440.15 (+16 bps) · 4 m ago".
+                        try:
+                            _live_p = float(self.feed.prices().get(symbol)
+                                            or 0.0)
+                            _ent_p = float(lv.get("entry") or 0.0)
+                            if _live_p > 0 and _ent_p > 0:
+                                d["live_price"] = round(_live_p, 6)
+                                d["anchor_drift_bps"] = round(
+                                    (_live_p / _ent_p - 1.0) * 1e4, 2)
+                                # has price already gone THROUGH the target
+                                # we are still printing as "ahead"? That is
+                                # stale-by-definition and must be labelled.
+                                _tpv = float(lv.get("tp") or 0.0)
+                                if _tpv > 0 and int(cyc.direction or 0):
+                                    _past = ((_live_p - _tpv) * int(cyc.direction) >= 0)
+                                    d["tp_already_reached"] = bool(
+                                        _past and not cyc.contract_tp_hit)
+                        except Exception:
+                            pass
                         # why a high-P window is still watch-only: name the
                         # rule and the measured number, never a bare label
                         _ds = self.display_systems.get((symbol, tf)) or {}

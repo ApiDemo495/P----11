@@ -72,10 +72,37 @@ def public_verdict(symbol: str, tf: str, direction: int, confidence: float,
     ``gate_ok`` is what execution reads; ``verdict`` is what the user reads;
     ``issue_note`` says why, in the same units (the floor), so the badge is
     always auditable against the confidence printed beside it.
+
+    THE FLIP LIVES HERE (2026-11-26). This is the one function every card,
+    lock and execution path already calls for its badge, so it is also the
+    only place the trend interaction has to be applied for the whole app to
+    agree. It returns a THIRD element as before (the note) and the caller can
+    read the resolved side from :func:`resolve_side` — see
+    :func:`resolve` for the tuple that carries the flipped side.
+    """
+    ok, verdict, note, _side = resolve(symbol, tf, direction, confidence,
+                                       tier, issue_note)
+    return ok, verdict, note
+
+
+def resolve(symbol: str, tf: str, direction: int, confidence: float,
+            tier: str | None, issue_note: str | None = None,
+            ) -> tuple[bool, str, str, int]:
+    """Same rule, plus the SIDE the app must actually publish.
+
+    The trend interaction (``app/trend_gate.py``) can now FLIP a chasing call
+    instead of withholding it, so the side is part of the verdict: a card
+    that prints "BUY" while its own sealed contract is a short would be a new
+    contradiction, and this rule exists to prevent exactly that class of bug.
+
+    ``side_out`` == ``direction`` whenever nothing acted (rule off, no
+    reading, thin trend, or the call already opposes the trend), so callers
+    that ignore it keep the old behaviour exactly.
     """
     floor = _floor(symbol)
     conf = _num(confidence)
     want = int(_num(direction))
+    side_out = want
     gate_ok = bool(want != 0 and conf > floor)
     tier_s = str(tier or "watch-only")
 
@@ -83,10 +110,15 @@ def public_verdict(symbol: str, tf: str, direction: int, confidence: float,
     try:
         from . import trend_gate
         trend = trend_gate.check(symbol, tf, want)
-    except Exception:                      # never break a card on the gate
+    except Exception:                      # never break a card on the rule
         trend = {}
     if trend.get("blocked"):
         gate_ok = False
+    if trend.get("flipped"):
+        # a flipped side is a NEW side: keep it only if it is a real side.
+        _flipped = int(trend.get("side_out") or 0)
+        if _flipped in (-1, 1) and _flipped != want:
+            side_out = _flipped
 
     if gate_ok and tier_s != "watch-only":
         verdict = "ISSUE"
@@ -101,10 +133,15 @@ def public_verdict(symbol: str, tf: str, direction: int, confidence: float,
     floor_note = (f"cleared the {floor:.3f} floor" if conf > floor
                   else f"below floor ({conf:.3f} <= {floor:.3f})")
     if trend.get("blocked"):
-        note = str(trend.get("why") or "trend-interaction gate withheld")
+        note = str(trend.get("why") or "trend-interaction rule withheld")
         if conf <= floor:
             # say BOTH reasons — a card that is withheld for one reason while
             # it also fails the floor must not read as if only one applied
+            note += f"; also {floor_note}"
+    elif trend.get("flipped"):
+        # the flip IS the headline: it changed the call, so it must be said
+        note = str(trend.get("why") or "trend rule flipped this side")
+        if conf <= floor:
             note += f"; also {floor_note}"
     elif issue_note and not _is_generated(issue_note):
         # an ENGINE explanation (double-check conflict, degraded evidence…)
@@ -114,7 +151,8 @@ def public_verdict(symbol: str, tf: str, direction: int, confidence: float,
         # ours is always recomputed: a note formatted beside an older
         # confidence would otherwise contradict the number printed with it
         note = floor_note
-    return gate_ok, verdict, note
+    return gate_ok, verdict, note, side_out
+
 
 
 def reconcile(symbol: str, tf: str, direction: int, confidence: float,
@@ -154,7 +192,7 @@ def reconcile(symbol: str, tf: str, direction: int, confidence: float,
 def describe(symbol: str, tf: str, direction: int, confidence: float,
              tier: str | None) -> dict[str, Any]:
     """Same rule, evidence-shaped (for panels that show the whole decision)."""
-    ok, verdict, note = public_verdict(symbol, tf, direction, confidence, tier)
+    ok, verdict, note, side = resolve(symbol, tf, direction, confidence, tier)
     ev: dict[str, Any] = {}
     try:
         from . import trend_gate
@@ -162,6 +200,8 @@ def describe(symbol: str, tf: str, direction: int, confidence: float,
     except Exception:
         ev = {}
     return {"gate_ok": ok, "verdict": verdict, "issue_note": note,
+            "side": side, "flipped": bool(side != int(_num(direction))
+                                          and side in (-1, 1)),
             "floor": _floor(symbol), "confidence": _num(confidence),
             "trend_gate": ev}
 
@@ -175,15 +215,33 @@ def reconcile_card(symbol: str, tf: str, card: dict) -> dict:
     trend — withheld" beside ``trend: 0``, because the evidence was a stored
     copy from an earlier refresh while the note was regenerated at print).
     """
+    _dir_in = int(card.get("direction") or 0)
     ok, verdict, note = reconcile(
-        symbol, tf, int(card.get("direction") or 0),
+        symbol, tf, _dir_in,
         _num(card.get("confidence")), card.get("tier"),
         bool(card.get("gate_ok")), str(card.get("verdict") or ""),
         str(card.get("issue_note") or ""))
+    _desc = describe(symbol, tf, _dir_in,
+                     _num(card.get("confidence")), card.get("tier"))
+    side = int(_desc.get("side") or _dir_in)
+    if side != _dir_in and side in (-1, 1):
+        # PUBLISH THE SIDE THE RULE ACTUALLY TOOK. A flip that leaves the
+        # card printing the original side while every note says "flipped"
+        # would be a brand-new contradiction, and the levels below belong to
+        # the ORIGINAL side — so they are dropped rather than mirrored here.
+        # The mirroring happens once, at the level writer, from the frozen
+        # contract; a display layer must never invent a price.
+        card["direction_before_flip"] = _dir_in
+        card["direction"] = side
+        card["signal"] = ("BUY" if side > 0 else "SELL")
+        card["flip_pending_levels"] = True
+        card["trend_flip"] = {
+            "from": _dir_in, "to": side,
+            "why": str((_desc.get("trend_gate") or {}).get("why") or ""),
+            "measured": (_desc.get("trend_gate") or {}).get("measured"),
+        }
     card["gate_ok"], card["verdict"] = ok, verdict
     card["issue_note"] = note
-    card["trend_gate"] = describe(
-        symbol, tf, int(card.get("direction") or 0),
-        _num(card.get("confidence")), card.get("tier"))["trend_gate"]
+    card["trend_gate"] = _desc["trend_gate"]
     card["execution_eligible"] = bool(card.get("execution_eligible")) and ok
     return card

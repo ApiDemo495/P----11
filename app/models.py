@@ -99,8 +99,13 @@ class TFCycle:
     #: why the badge says what it says (floor cleared / how far below it).
     #: Always derived together with gate_ok by engine.public_verdict.
     issue_note: str = ""
-    #: the trend-interaction gate's reading + measurement (app/trend_gate.py)
+    #: the trend-interaction rule's reading + measurement (app/trend_gate.py)
     trend_gate: dict = field(default_factory=dict)
+    #: the FLIP this window's side took (app/trend_gate.py): {applied, from,
+    #: to, why, trend, trend_bps, min_trend_bps, measured}. Empty when the
+    #: engine's own side stood. Published so no card can print a side without
+    #: saying it was reversed, and so the measurement travels with the call.
+    trend_flip: dict = field(default_factory=dict)
     prediction_lock: dict = field(default_factory=dict)
     tier: str = "watch-only"         # full|half|quarter|watch-only (size hint)
     p_side: float = 0.5              # calibrated P(side) in [0.50, 1)
@@ -182,6 +187,7 @@ class TFCycle:
             "gate_ok": self.gate_ok,
             "issue_note": self.issue_note,
             "trend_gate": self.trend_gate,
+            "trend_flip": self.trend_flip,
             "prediction_lock": self.prediction_lock,
             "cycle_start": self.cycle_start,
             "cycle_end": self.cycle_end,
