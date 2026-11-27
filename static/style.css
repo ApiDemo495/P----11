@@ -623,6 +623,11 @@ canvas { max-width: 100%; }
 .hcell .tier-rows { color: #7fd8cf; }
 .hcell .tier-shadow { color: var(--gold, #c9a227); }
 .hcell .tier-warm { color: #f0a24a; }
+/* The lock ORIGIN was never measured (certified 0.27:1, shipped 1:1+).
+   That is a caveat on the evidence, not a forbidden trade or a rule
+   violation, so it is amber — the same family as a warmup/unknown, and
+   deliberately NOT the error red used for a broken invariant. */
+.hcell .tier-warn { color: #e8b93a; }
 /* a rule violation (target pays less than its risk), not a measurement
    caveat — this one keeps the error tone so it cannot blend in */
 .hcell .tier-err { color: #ff5c5c; font-weight: 700; }

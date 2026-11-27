@@ -477,7 +477,10 @@ def test_a_sub_1_to_1_geometry_outranks_every_row_and_ship_gate(monkeypatch):
     s = _hp.summary("BTC", "tf1")
     assert s["geometry_feasible"] is False
     assert "does NOT describe the trade that is placed" in s["geometry_note"]
-    assert "1:1" in s["tier_reason"]
+    # the reason names the ratio that SHIPS (a legal 1:1+ pair), not just
+    # the certification's broken one
+    assert "ships at the repaired" in s["tier_reason"]
+    assert s["live_rr"] >= 1.0
 
 
 def test_cells_endpoint_serves_policy():
@@ -496,7 +499,7 @@ def test_cells_endpoint_serves_policy():
     # reported as verified, shipped or tradeable
     assert body["tiers"].get("HOLD-OUT VERIFIED", 0) == 0
     assert body["tiers"].get("ROWS VERIFIED · SHIP GATE FAIL", 0) == 0
-    assert body["tiers"]["GEOMETRY BELOW 1:1 · NOT TRADEABLE"] == 11
+    assert body["tiers"]["1:1-REPAIRED · LOCK ORIGIN UNMEASURED"] == 11
     assert body["tiers"]["NO MEASURED EDGE · PATTERN NOT TRADEABLE"] == 4
     assert body["tiers"]["UNGRADEABLE / WARMUP"] == 1
     assert body["manual_default"] is True
