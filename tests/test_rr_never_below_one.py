@@ -127,7 +127,12 @@ def test_a_sub_one_to_one_cell_says_so_on_its_badge_and_payload():
     assert s["tier"] == hp.TIER_SUB1
     assert s["geometry_feasible"] is False
     assert s["geometry_rr"] < RR_MIN
-    assert "1:1" in s["tier_reason"]
+    # the reason must name the ratio that SHIPS, not only the broken one
+    assert "ships at the repaired" in s["tier_reason"]
+    assert "1.16:1" in s["tier_reason"]
+    # and publish it as a number a surface can render
+    assert s["live_rr"] >= RR_MIN
+    assert abs(s["live_rr"] - 1.164) < 0.01
     # the note must say the published win rate is not the trade placed
     assert "does NOT describe the trade that is placed" in s["geometry_note"]
     # and the arithmetic must be on the badge, not just the verdict
@@ -222,11 +227,49 @@ def test_the_cell_card_prints_the_ratio_beside_the_win_rate():
     assert i_rr < i_wr
 
 
-def test_the_violation_gets_the_error_tone_not_the_caveat_tone():
+def test_the_repaired_cell_gets_the_caveat_tone_not_the_error_tone():
+    """A 1:1-repaired lock is a LEGAL trade the app places.
+
+    This test used to require the error red ("tier-err") for these cells,
+    on the reasoning that a sub-1:1 certified geometry is a rule
+    violation.  The violation is real but it no longer reaches the book:
+    _cost_aware repairs every target to the floor and raises
+    AssertionError if it cannot, so what ships is 1:1+.  Painting 11 of
+    16 cards red for a caveat about where the win rate came from was both
+    inaccurate and an implicit abstention.
+    """
     src = open("static/app.js", encoding="utf-8").read()
-    assert '"GEOMETRY BELOW 1:1 · NOT TRADEABLE") return "tier-err"' in src
+    assert ('"1:1-REPAIRED · LOCK ORIGIN UNMEASURED") return "tier-warn"'
+            in src)
     css = open("static/style.css", encoding="utf-8").read()
+    assert ".hcell .tier-warn" in css
+    # the error tone must still exist for a genuine invariant breach
     assert ".hcell .tier-err" in css
+
+
+def test_every_shipped_lock_is_at_or_above_the_floor():
+    """The floor is structural: no cell may ship a sub-1:1 pair."""
+    from app import hold_policy as hp
+    seen = 0
+    for sym, tf in hp.known_cells():
+        r = hp.live_rr(sym, tf)
+        if r is None:
+            continue
+        seen += 1
+        assert r >= hp.RR_LIVE_MIN - 1e-6, (sym, tf, r)
+    assert seen >= 12, "live_rr stopped resolving — the floor is unverified"
+
+
+def test_tier_and_reason_agree_that_the_cell_is_unproven_not_forbidden():
+    from app import hold_policy as hp
+    for sym, tf in hp.known_cells():
+        if hp.tier(sym, tf) != hp.TIER_SUB1:
+            continue
+        why = hp.tier_reason(sym, tf)
+        assert "unproven, not forbidden" in why, (sym, tf)
+        assert "ships at the repaired" in why, (sym, tf)
+        # the old label asserted something the app contradicts
+        assert "NOT TRADEABLE" not in hp.TIER_SUB1
 
 
 # ──────────── 5. the live seal can never publish a sub-1:1 pair ───────

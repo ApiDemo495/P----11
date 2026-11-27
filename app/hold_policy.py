@@ -127,14 +127,19 @@ TIER_UNECONOMIC = "UNECONOMIC · BELOW ROUND TRIP"
 # recorded, so it cannot beat the v8 reference).  Honest intermediate:
 # the measurement is real, the ship claim is not earned.
 TIER_SHIPGATE = "ROWS VERIFIED · SHIP GATE FAIL"
-# The certified geometry pays less than it risks (every shipped cell was
-# selected at row_k = 0.15, i.e. 0.15:1).  The measurement is real, but it
-# is a measurement of a trade the app may not place: a target an eighth of
-# the stop needs an 87 % first-touch rate just to break even, and the live
-# lock is built on a repaired 1:1 geometry whose hit rate has NOT been
-# measured.  Neither "verified" nor "failed" is true, so it gets its own
-# label rather than quietly borrowing either one.
-TIER_SUB1 = "GEOMETRY BELOW 1:1 · NOT TRADEABLE"
+# The CERTIFIED geometry pays less than it risks (every shipped cell was
+# selected at row_k = 0.15, i.e. 0.15:1), so its 72.9 % win rate describes
+# a trade the app refuses to place: a target an eighth of the stop needs an
+# 87 % first-touch rate just to break even.
+#
+# WHAT THE APP ACTUALLY PLACES IS 1:1 OR BETTER.  _cost_aware widens every
+# target to the RR_LIVE_MIN floor and raises AssertionError if it cannot,
+# so "NOT TRADEABLE" was false: the app does trade these cells, at a
+# repaired ratio whose hit rate is the thing that has not been measured.
+# The old label also collided with the user's absolute rule — a cell that
+# can only ever read NOT TRADEABLE is an abstention, and abstention is not
+# allowed.  The cell is UNPROVEN at the ratio it ships, not untradeable.
+TIER_SUB1 = "1:1-REPAIRED · LOCK ORIGIN UNMEASURED"
 # The engine's own direction carries no edge on this cell, measured GROSS of
 # fees. No target geometry can repair that: a signal whose expected move is
 # zero before costs has negative expectancy after any cost, at every ratio.
@@ -450,18 +455,20 @@ def tier_reason(symbol: str, tf: str) -> str:
     if t == TIER_SUB1:
         g = sub_1_to_1_geometry(symbol, tf) or {}
         _wr = g.get("certified_win_rate")
-        return (f"the certified geometry pays {g.get('rr')}x what it risks "
-                f"(target = {g.get('k'):g} x stop) — a target an eighth of "
-                f"the stop neither covers its own stop nor the "
-                f"{round(float(c.get('round_trip_bps') or round_trip_bps(symbol)), 1)} bps round "
-                f"trip. It needs a "
-                f"{g.get('win_rate_needed')}% first-touch rate to break even; "
-                "the certified rate is "
-                + (f"{round(float(_wr) * 100, 1)}%. " if _wr is not None
-                   else "not recorded. ")
-                + "Such a pair is not tradeable at ANY win rate and the app "
-                "enforces a 1:1 floor on every live lock, so this win rate "
-                "describes a geometry you are not allowed to place")
+        _rt = round(float(c.get("round_trip_bps")
+                          or round_trip_bps(symbol)), 1)
+        _live = live_rr(symbol, tf)
+        return (f"the CERTIFIED geometry paid {g.get('rr')}x what it risked "
+                f"(target = {g.get('k'):g} x stop), which cannot cover the "
+                f"{_rt} bps round trip at any win rate. "
+                + (f"Every lock therefore ships at the repaired "
+                   f"{_live:.2f}:1 — a legal trade, at a ratio the "
+                   f"certification never measured. " if _live else
+                   "Every lock ships at the repaired 1:1 floor. ")
+                + f"The {g.get('win_rate_needed')}% in the artifact is the "
+                "break-even rate for the OLD pair and does not apply to the "
+                "one that ships; the shipped ratio's rate is unmeasured, so "
+                "this cell is unproven, not forbidden.")
     if t == TIER_HOLDOUT:
         return ("rows AND eras cleared out-of-fold, and the artifact passes "
                 "its own ship gates")
@@ -633,6 +640,11 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
                f" — BELOW the {RR_LIVE_MIN:g}:1 floor, so live locks are "
                f"built on a repaired {RR_LIVE_MIN:g}:1 geometry and this "
                "win rate does NOT describe the trade that is placed"))
+    # the ratio the terminal ACTUALLY ships, published beside the certified
+    # one — a card may not report a geometry the app refuses to place
+    _live = live_rr(symbol, tf)
+    if _live is not None:
+        base["live_rr"] = _live
     base["min_tp_note"] = (
         f"{MIN_TP_OVER_RT}x round trip (fee-multiple convention)"
         + (f"; this cell's own break-even is {_be} bp at "
@@ -797,6 +809,38 @@ def sub_1_to_1_geometry(symbol: str, tf: str, k: float | None = None,
         "certified_win_rate": wr,
         "win_rate_needed": round(100.0 / (1.0 + k / m), 2),
     }
+
+
+def live_rr(symbol: str, tf: str, probes: int = 6) -> float | None:
+    """The reward:risk the LIVE lock actually ships, whatever k/m say.
+
+    ``sub_1_to_1_geometry`` answers "what did certification measure", which
+    for every shipped cell is 0.27:1 — a pair the app refuses to place.
+    ``_cost_aware`` then widens the target to the RR_LIVE_MIN floor, so the
+    trade a user actually gets is a different ratio, and until now nothing
+    published it.  A badge reading "below 1:1" therefore described the
+    certificate while the terminal placed something else.
+
+    Probes the repair across a range of barrier scales and returns the
+    WORST ratio it produces, so the answer is a floor, not a best case.
+    """
+    g = row_geometry(symbol, tf)
+    if g is None:
+        return None
+    k, m = float(g[0]), float(g[1])
+    worst: float | None = None
+    # 0.25x .. 6x the certified stop, spanning a quiet tape to a violent one
+    for i in range(int(max(1, probes))):
+        mult = 0.25 * (24.0 ** (i / max(1, probes - 1)))
+        try:
+            tp_sl, sl_px, _meta = _cost_aware(
+                symbol, 100.0, 1, m * 100.0 * mult, k, m)
+        except Exception:                               # pragma: no cover
+            continue
+        if sl_px > 0:
+            r = float(tp_sl) / float(sl_px)
+            worst = r if worst is None else min(worst, r)
+    return (round(worst, 3) if worst is not None else None)
 
 
 def era_geometry(symbol: str, tf: str) -> tuple[float, float] | None:

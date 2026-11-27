@@ -2359,7 +2359,11 @@ function _tierCls(tier) {
   if (tier === "UNGRADEABLE / WARMUP") return "tier-warm";
   // a certified geometry that pays less than it risks is a violation of a
   // hard rule, not a soft "shadow" measurement — it must read as an error
-  if (tier === "GEOMETRY BELOW 1:1 · NOT TRADEABLE") return "tier-err";
+  // A repaired 1:1 is a LEGAL trade — the app ships it. It is unproven at
+  // the ratio it ships, which is a warning, not an error and certainly not
+  // an abstention. (It read "GEOMETRY BELOW 1:1 · NOT TRADEABLE" while the
+  // terminal placed the trade anyway, which was simply false.)
+  if (tier === "1:1-REPAIRED · LOCK ORIGIN UNMEASURED") return "tier-warn";
   // no signal at all is the more fundamental failure — the signal does not
   // predict a move, so no target ratio can repair it
   if (tier === "NO MEASURED EDGE · PATTERN NOT TRADEABLE") return "tier-err";
@@ -2431,6 +2435,8 @@ function renderCells() {
       ${c.tier_reason ? `<div class="hc-why dim" style="font-size:10px;line-height:1.3">${esc(c.tier_reason)}</div>` : ""}
       ${c.geometry_note ? `<div class="hc-rr" style="font-size:10px;line-height:1.3">${rrTxt
         ? `<b>${rrTxt}</b> ` : ""}${esc(c.geometry_note)}</div>` : ""}
+      ${c.live_rr != null && c.geometry_rr != null && Math.abs(c.live_rr - c.geometry_rr) > 0.01
+        ? `<div class="hc-rr" style="font-size:10px;line-height:1.3">ships at <b>${Number(c.live_rr).toFixed(2)}:1</b> <span class="dim">(certified ${Number(c.geometry_rr).toFixed(2)}:1)</span></div>` : ""}
       ${c.why ? `<div class="hc-why dim" style="font-size:10px;line-height:1.3">${esc(c.why)}</div>` : ""}
       <div class="hc-wr">${wr}${wrLabel} <span class="hc-conf">WR${conf ? " · " + conf : ""}${c.cost_infeasible
           ? ` · <span class="acc-dn">round trip ${num(c.round_trip_bps, 1)}bp &gt; the whole target</span>`
