@@ -114,6 +114,60 @@ MANDATE: dict[str, dict] = {
 }
 
 
+# ─────────────── measured target ratios at >= 1:1 ───────────────
+# Where the >= 1:1 win rate actually survives out of sample.
+#
+# Source: backtest/results/wr_audit_independent.json, a full k x m grid
+# with train/holdout splits. Selected on TRAIN EV, then reported on the
+# untouched holdout (see docs/WINRATE_AT_1_TO_1.md).
+#
+# The scan found the ratio is NOT cell-independent, which is why one
+# global NEW_TARGET_RR was the wrong shape of knob:
+#
+#   tf1 (22m)   0 of 56 grid points positive-EV at >= 1:1   median -0.057R
+#   tf2 (44m)   0 of 84                                     median -0.085R
+#   tf3 (130m) 39 of 84                                     median -0.012R
+#   tf4 (247m) 52 of 84                                     median +0.016R
+#
+# The short windows have no measurable edge at a legal ratio; the long
+# ones do. Only three cells clear both the ratio floor AND positive EV on
+# the holdout. Their measured optimum differs per cell, so the table is
+# keyed by (asset, timeframe) rather than by asset.
+#
+# Cells absent from this table fall back to NEW_TARGET_RR (2.0).
+# Every number here is holdout — the value selected on train that produced
+# it is in the doc, not tuned against the holdout.
+CELL_RR: dict[tuple[str, str], dict] = {
+    # BTC 247m — rr 1.00, holdout WR 51.6 %, EV +0.0288 R, PF 1.127
+    ("BTC", "tf4"): {"rr": 1.00, "holdout_wr": 0.516, "holdout_ev": 0.0288,
+                     "pf": 1.127, "n_holdout": 31},
+    # ETH 130m — rr 3.00, holdout WR 51.6 %, EV +0.1243 R, PF 1.275
+    ("ETH", "tf3"): {"rr": 3.00, "holdout_wr": 0.516, "holdout_ev": 0.1243,
+                     "pf": 1.275, "n_holdout": 62},
+    # ETH 247m — rr 2.00, holdout WR 41.9 %, EV +0.0338 R, PF 1.130
+    ("ETH", "tf4"): {"rr": 2.00, "holdout_wr": 0.419, "holdout_ev": 0.0338,
+                     "pf": 1.130, "n_holdout": 31},
+}
+
+
+def new_rr_cell(symbol: str, tf: str) -> float | None:
+    """The measured target ratio for ONE cell, if it was measured.
+
+    ``None`` means this cell has no positive-EV out-of-sample geometry at
+    >= 1:1, so the caller uses the global default. Note this does NOT
+    silence the cell (there is no abstention here) — it just means the
+    ratio is not one of the three the data supports.
+    """
+    row = CELL_RR.get((str(symbol).upper(), str(tf).lower()))
+    if not row:
+        return None
+    try:
+        rr = float(row["rr"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    return rr if rr >= 1.0 else None
+
+
 def _raw() -> bool:
     return os.environ.get("MANDATE_RAW") == "1"
 

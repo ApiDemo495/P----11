@@ -8523,13 +8523,7 @@ class PredictionEngine:
         # 0.65–0.80, so EVERY new-mode window fell below the 1:1
         # floor and the model could never issue. The stop is the
         # tape's own tail unit; the target is now that unit tilted
-        # by signal strength: rr = factor × NEW_TARGET_RR ∈
-        # [0.56, 1.6], and the user's floor gates the weak signals
-        # exactly as designed. σ stays in the payload for display.
-        # the stop is the tape's own tail unit; the target is that unit tilted
-        # by signal strength: rr = factor × NEW_TARGET_RR ∈ [0.7, 2.0], and
-        # the user's floor gates what is still to small. σ stays in the
-        # payload for display.
+        # by signal strength. σ stays in the payload for display.
         #
         # THE TILT MAY NEVER PUSH A SIGNAL UNDER 1:1 (user rule, absolute).
         # The old band started at 0.7 because 0.35 × 2.0 = 0.7 — any signal
@@ -8543,7 +8537,22 @@ class PredictionEngine:
         _factor = (0.5 + 0.5 * min(1.0, abs(float(
             res.get("cci_adjusted") or res.get("cci") or 0.0)) / 0.08))
         _sl_bps = float(_horizon_block.get("sl_bps") or 0.0)
-        _rr_n = _mcfg_c.new_rr(symbol) or NEW_TARGET_RR
+        # WHICH target ratio to aim at, most specific first:
+        #   1. the ratio this exact (asset, tf) cell measured out of sample
+        #      (app/mandate_cfg.py CELL_RR — only 3 cells clear both the
+        #      1:1 floor and positive holdout EV);
+        #   2. the per-asset mandate override;
+        #   3. the global default.
+        # The scan in docs/WINRATE_AT_1_TO_1.md found the optimal ratio is
+        # NOT constant across cells — tf1/tf2 have zero positive-EV points
+        # at >= 1:1 while tf4 has 52 of 84 — so a single global knob was
+        # the wrong shape. A cell with no measurement keeps the default
+        # rather than being silenced.
+        _rr_cell = _mcfg_c.new_rr_cell(symbol, tf)
+        _rr_n = _rr_cell or _mcfg_c.new_rr(symbol) or NEW_TARGET_RR
+        _rr_src = ("measured cell ratio" if _rr_cell
+                   else "mandate override" if _mcfg_c.new_rr(symbol)
+                   else "global default")
         _mag = _factor * _rr_n * _sl_bps if _sl_bps > 0 \
             else _factor * _sigma
         _fc_price = round(_price0 * (1 + _dir * _mag / 1e4), 6) \
@@ -8554,6 +8563,13 @@ class PredictionEngine:
             "end_ts": _g_end,
             "direction": (1 if (_fc_price or 0) >= _price0 else -1)
             if _fc_price else int(_dir),
+            # where this window's target ratio came from, and — when it was
+            # measured — the out-of-sample evidence behind it. A ratio
+            # presented without its provenance is a number nobody can audit.
+            "rr_target": round(float(_rr_n), 4),
+            "rr_source": _rr_src,
+            "rr_evidence": (dict(_mcfg_c.CELL_RR.get((symbol, tf)) or {})
+                            if _rr_cell else None),
         }
         if _mode == "new" and _fc_price and _price0 > 0:
             cyc.tp = _fc_price

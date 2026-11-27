@@ -84,3 +84,54 @@ The honest path to a better number, in order of expected effect:
 3. Re-running `backtest/wr_audit.py` with the grid restricted to `k >= 1` and
    more eras would give the app its own certified ≥1:1 table to publish,
    replacing `hold_wr.json` rather than reinterpreting it.
+
+---
+
+## Win rate by ratio band — the whole curve
+
+Every grid point in `wr_audit_independent.json`, holdout, net of friction:
+
+| ratio band | n points | median WR | median EV | positive-EV |
+|---|---|---|---|---|
+| < 0.5:1 | 170 | **67.7 %** | −0.0380 R | 35/170 |
+| 0.5 – 1.0:1 | 61 | 55.6 % | −0.0352 R | 19/61 |
+| 1.0 – 1.5:1 | 106 | 45.2 % | −0.0349 R | 33/106 |
+| 1.5 – 2.5:1 | 125 | 43.8 % | −0.0342 R | 37/125 |
+| > 2.5:1 | 77 | 41.9 % | −0.0306 R | 21/77 |
+
+This is the honest shape of the problem, and it is not a bug in the app:
+
+**Win rate is bought with ratio.** Every step up in reward:risk costs
+real hit rate — 67.7 % → 41.9 % — and the median EV barely moves, because
+the market is close to efficient at this resolution. The 83 % the old
+artifact advertised was the far-left end of this table (a 0.27:1 target).
+
+So "increase the win rate at 2:1" cannot be done by tuning a threshold. A
+2:1 target has to *earn* its win rate from better entry timing, and the
+data says most cells have no such edge at all.
+
+## What actually raises it: cell selection
+
+The same grid, cut by timeframe, is where the signal is:
+
+| tf | positive-EV points at ≥1:1 | median EV |
+|---|---|---|
+| 22 m | **0 / 56** | −0.0570 R |
+| 44 m | **0 / 84** | −0.0852 R |
+| 130 m | 39 / 84 | −0.0117 R |
+| 247 m | **52 / 84** | **+0.0160 R** |
+
+Short windows have no measurable edge at a legal ratio; long ones do. Three
+cells clear both the floor and a positive holdout EV, and each wants a
+different ratio — which is why a single global knob was the wrong tool:
+
+| cell | measured rr | holdout WR | holdout EV | PF |
+|---|---|---|---|---|
+| ETH 130 m | **3.00** | 51.6 % | **+0.1243 R** | 1.275 |
+| BTC 247 m | **1.00** | 51.6 % | **+0.0288 R** | 1.127 |
+| ETH 247 m | **2.00** | 41.9 % | **+0.0338 R** | 1.130 |
+
+These three are now wired as `CELL_RR` in `app/mandate_cfg.py` and resolved
+by `new_rr_cell()` before the per-asset override and the global default.
+`tests/test_mandate_new_target.py` recomputes the table from the artifact,
+so the numbers cannot drift away from the measurement that produced them.
