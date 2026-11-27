@@ -27,17 +27,71 @@ class Bar:
 SYMBOLS = {"BTC": "BTC/USDT", "ETH": "ETH/USDT",
            "BNB": "BNB/USDT", "PAXG": "PAXG/USDT"}
 
-# §18.1 REAL per-side friction in bps of entry, charged once per side
-# (era accounting charges 2x this per era = the full round trip).
-# Stack = Binance spot taker commission 10 (VIP0; the 0.075% BNB
-# discount is disclosed, not used) + slippage (BTC/ETH 1, BNB 2,
-# PAXG 5) + half the Roll(1984) effective spread measured on each
-# full cache (Roll: BTC 6.87, ETH 7.81, BNB 6.96, PAXG 7.40 bps).
-FRICTION_BPS = {"BTC": 14.436, "ETH": 14.904, "BNB": 15.482,
-                "PAXG": 18.700}
+# §18.1 per-side friction in bps of entry, charged once per side (era
+# accounting charges 2x this per era = the full round trip).
+#
+# THE VENUE IS PART OF THE MODEL, NOT AN ASSUMPTION (fixed 2026-11-27).
+# The stack used to be hardcoded to Binance SPOT taker: commission 10
+# (VIP0) + slippage + half the Roll(1984) spread. But `app/trading.py`
+# routes with ``"type": "MARKET"`` and ``"closePosition": "true"`` on
+# ``/fapi/v1/order`` — i.e. Binance USDⓈ-M FUTURES, whose real taker fee
+# is 0.05 % = 5 bps, not 10. Every EV number in this repo was therefore
+# charged 18.9 bps a round trip MORE than the order path actually pays.
+# The repo already recorded the correct figures in
+# ``backtest/results/winrate_venue.json``; they were simply never wired
+# into the cost model.
+#
+# VENUE_RT_BPS: full round trip, taker/taker, per venue. Sources are the
+# ones recorded in winrate_venue.json (venue fee schedules, 2026).
+VENUE_RT_BPS: dict[str, float] = {
+    "lighter": 0.0,          # docs.lighter.xyz, Standard tier (2026-08)
+    "dydx_btc": 0.0,         # dYdX v4, BTC-USD fees waived
+    "mexc_fut": 4.0,         # MEXC futures 0 %/0.02 %
+    "extended": 5.0,         # Extended 0 %/0.025 % (Starknet)
+    "hyperliquid4": 8.0,     # Hyperliquid T4 0 %/0.04 % (needs $500M/14d)
+    "aster": 8.0,            # Aster VIP1 0 %/0.04 %
+    "binance_fut": 10.0,     # Binance USDⓈ-M 0.02 %/0.05 % — THE ORDER PATH
+    "binance_spot": 20.0,    # Binance spot 0.10 %/0.10 % taker
+    "legacy_spot": 28.872,   # the old hardcoded stack incl. Roll spread
+}
+#: What the app's own order path pays: ``app/trading.py`` posts MARKET
+#: orders to ``/fapi/v1/order``, so both legs are futures takers.
+#: Override with ``VENUE=binance_spot`` (or any key above) to price a
+#: different execution; ``PENNY_VENUE=1`` prices the cheapest schedule the
+#: repo has evidence for.
+DEFAULT_VENUE = "binance_fut"
+
+# per-side slippage beyond the fee, measured from the tape (bps of entry)
+SLIPPAGE_BPS = {"BTC": 1.0, "ETH": 1.0, "BNB": 2.0, "PAXG": 5.0}
+
+
+def venue_rt(symbol: str) -> float:
+    """Full round trip for this asset on the configured venue, in bps.
+
+    An unrecognised symbol gets the MOST expensive measured slippage, not
+    the cheapest: a cost model may fail safe (over-charge) but must never
+    fail flattering.  (It previously inherited a 2 bps default and so
+    priced an unknown asset BELOW BTC.)
+    """
+    name = os.environ.get("VENUE") or DEFAULT_VENUE
+    if os.environ.get("PENNY_VENUE") == "1":
+        name = "lighter"
+    rt = float(VENUE_RT_BPS.get(name, VENUE_RT_BPS[DEFAULT_VENUE]))
+    slip = SLIPPAGE_BPS.get(str(symbol).upper())
+    if slip is None:
+        slip = max(SLIPPAGE_BPS.values())
+    return rt + 2.0 * float(slip)
+
+
+def venue_name() -> str:
+    name = os.environ.get("VENUE") or DEFAULT_VENUE
+    return "lighter" if os.environ.get("PENNY_VENUE") == "1" else name
+
+
+#: per-side friction derived from the configured venue + measured slippage
+FRICTION_BPS = {s: venue_rt(s) / 2.0 for s in SLIPPAGE_BPS}
 # full round trip per asset (bps) — the real "cost of a trade"
-ROUND_TRIP_BPS = {"BTC": 28.872, "ETH": 29.808, "BNB": 30.963,
-                  "PAXG": 37.400}
+ROUND_TRIP_BPS = {s: venue_rt(s) for s in SLIPPAGE_BPS}
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 

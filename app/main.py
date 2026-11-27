@@ -1814,6 +1814,51 @@ async def hold_cells() -> JSONResponse:
     })
 
 
+@app.get("/api/cost-model")
+async def cost_model() -> JSONResponse:
+    """What a round trip actually costs, and on which venue.
+
+    Every EV figure in the app divides by this number, so it is served
+    rather than buried: the venue the order path really executes on, the
+    fee+slip breakdown per asset, and the tradability gate it implies.
+    Editing ``data.py``'s VENUE_RT_BPS used to leave three modules
+    disagreeing (28.87 / 24 / 12); this endpoint is the single truth the
+    UI reads, so a stale copy shows up as a mismatch instead of a
+    silently wrong EV.
+    """
+    from .horizon import GATE_MULT, MARGINAL_MULT, asset_rt, classify, venue
+    from backtest.data import SLIPPAGE_BPS, VENUE_RT_BPS
+    name = venue()
+    fee = float(VENUE_RT_BPS.get(name, VENUE_RT_BPS["binance_fut"]))
+    assets = []
+    for sym in ("BTC", "ETH", "BNB", "PAXG"):
+        rt = asset_rt(sym)
+        assets.append({
+            "symbol": sym,
+            "fee_bps_rt": fee,
+            "slippage_bps_rt": 2.0 * float(SLIPPAGE_BPS.get(sym, 2.0)),
+            "round_trip_bps": round(rt, 3),
+            "per_side_bps": round(rt / 2.0, 3),
+            "gate_required_bps": round(GATE_MULT * rt / 2.0, 2),
+        })
+    return JSONResponse({
+        "ok": True,
+        "venue": name,
+        "fee_bps_round_trip": fee,
+        "gate_multiplier": GATE_MULT,
+        "marginal_multiplier": MARGINAL_MULT,
+        "assets": assets,
+        "venues_available": VENUE_RT_BPS,
+        "lanes": {tf: classify(m["sigma_bps"], asset_rt("BTC") / 2.0)
+                  for tf, m in __import__("app.horizon", fromlist=["x"])
+                  .MEASURED.items()},
+        "rule": ("cost = the venue app/trading.py actually posts to "
+                 "(MARKET orders on /fapi/v1/order = Binance USDⓈ-M "
+                 "futures taker), plus measured slippage; override with "
+                 "VENUE=<key> or PENNY_VENUE=1"),
+    })
+
+
 @app.get("/api/analyses")
 async def analyses_journal(limit: int = 100) -> JSONResponse:
     """Issue 3 — durable memory of every analysis run: what was decided,

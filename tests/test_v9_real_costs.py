@@ -16,24 +16,32 @@ import pytest
 
 
 # ─────────────────────────── 1) the cost stack ──────────────────────
-def test_full_binance_cost_stack_is_shipped():
-    from backtest.data import FRICTION_BPS, ROUND_TRIP_BPS
-    # §18.1: commission 10 (spot taker VIP0) + slippage (1/1/2/5)
-    # + half the Roll(1984) spread per side
-    assert FRICTION_BPS == {"BTC": 14.436, "ETH": 14.904,
-                            "BNB": 15.482, "PAXG": 18.700}
+def test_the_shipped_cost_stack_is_the_executed_venue():
+    """Pinned: the cost stack must be the one the ORDER PATH pays.
+
+    This test used to assert the Binance SPOT stack (10 bps/side, plus
+    half-Roll spread → 28.9 round trip).  That was never what the app
+    spends: app/trading.py posts MARKET orders to /fapi/v1/order, i.e.
+    USD-M futures at 5 bps/side.  The intent of the test — "every module
+    bills the SAME stack, and that stack is real" — is preserved; the
+    stale spot literal is what changed.
+    """
+    from backtest.data import (FRICTION_BPS, ROUND_TRIP_BPS,
+                               SLIPPAGE_BPS, VENUE_RT_BPS)
+    fee = VENUE_RT_BPS["binance_fut"]
+    assert fee == 10.0
     for sym, rt in ROUND_TRIP_BPS.items():
-        assert rt == pytest.approx(2.0 * FRICTION_BPS[sym], abs=2e-3)  # 4 dp rounding
-    assert ROUND_TRIP_BPS == {"BTC": 28.872, "ETH": 29.808,
-                              "BNB": 30.963, "PAXG": 37.400}
+        assert rt == pytest.approx(fee + 2.0 * SLIPPAGE_BPS[sym])
+        assert rt == pytest.approx(2.0 * FRICTION_BPS[sym])
     # the harness and the app must bill the SAME stack
     from backtest import continuous as btc
     assert btc.FRICTION_BPS == FRICTION_BPS
-    from app.horizon import ASSET_RT_BPS, asset_rt
-    for sym, rt in ASSET_RT_BPS.items():
+    from app.horizon import asset_rt
+    for sym, rt in ROUND_TRIP_BPS.items():
         assert asset_rt(sym) == pytest.approx(rt)
-        assert rt == pytest.approx(2.0 * FRICTION_BPS[sym], abs=2e-3)  # 4 dp rounding
-    assert asset_rt("UNKNOWN") == ASSET_RT_BPS["BTC"]   # honest fallback
+    # an unknown symbol must fail SAFE — never cheaper than a known one
+    assert asset_rt("UNKNOWN") >= ROUND_TRIP_BPS["PAXG"]
+    assert asset_rt("UNKNOWN") > ROUND_TRIP_BPS["BTC"]
 
 
 def test_era_grid_is_guarded_and_rows_reach_deep_stops():
@@ -165,16 +173,17 @@ def test_issue_bar_raises_every_asset_floor():
 
 def test_horizon_gate_charges_the_real_round_trip():
     from app.horizon import classify, asset_rt, DEFAULT_FRICTION_BPS
-    assert DEFAULT_FRICTION_BPS == 28.872
+    from backtest.data import ROUND_TRIP_BPS
+    assert DEFAULT_FRICTION_BPS == pytest.approx(ROUND_TRIP_BPS["BTC"])
     # σ must clear 3× the REAL round trip to be tradable
     btc_rt = asset_rt("BTC")
     assert classify(3 * btc_rt, btc_rt)["state"] == "tradable"
     assert classify(2.5 * btc_rt, btc_rt)["state"] == "marginal"
     assert classify(1.5 * btc_rt, btc_rt)["state"] == "untradable"
-    # and the old default (12 bps) would have LIED: 40 bps of σ looks
-    # tradable at 12 but cannot pay 28.9
-    assert classify(40.0, 12.0)["state"] == "tradable"
-    assert classify(40.0, btc_rt)["state"] == "untradable"
+    # and pricing the SPOT stack would have lied in the other direction:
+    # 40 bps of σ pays a futures round trip but cannot pay a spot one
+    assert classify(40.0, btc_rt)["state"] == "tradable"
+    assert classify(40.0, 28.872)["state"] == "untradable"
 
 
 def test_v8_net_reference_is_pinned_before_v9():
