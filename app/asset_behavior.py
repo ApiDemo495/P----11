@@ -54,7 +54,16 @@ def regime(closes: list[float]) -> dict:
 
 def temper(symbol: str, score: float, confidence: float,
            closes: list[float]) -> dict:
-    """Returns adjusted score/confidence + a human explanation."""
+    """Returns adjusted score/confidence + a human explanation.
+
+    KNOWN HAZARD, fixed downstream (app/engine.py 2026-11-27): for an asset
+    whose profile has no tempering rule this returns ``factor = 1.0`` and
+    ``confidence`` UNCHANGED. The caller used to assign that value back over
+    the calibrated confidence, which silently DISCARDED the calibration chain
+    for BTC (the one asset with no rule) — a 0.42 chain landed on a 0.021
+    published number. The caller now only adopts a confidence this function
+    actually changed.
+    """
     r = regime(closes)
     s, conf = float(score), float(confidence)
     factor, action = 1.0, "reference behaviour (no tempering)"
