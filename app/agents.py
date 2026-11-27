@@ -45,6 +45,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from ssl import SSLError
 from typing import Any
 
 import httpx
@@ -532,6 +533,207 @@ def ollama_chat(prompt: str, model: str = "", *,
 
 
 # ══════════════════════════════════════════════════════════════════════
+# ANY OpenAI-compatible local server — the download-free alternative
+# ══════════════════════════════════════════════════════════════════════
+# Why this exists
+# ---------------
+# The GGUF route needs three things that often are not there: huggingface.co
+# reachable (blocked on many corporate/hosted networks — TLS is closed at the
+# CONNECT stage, so every retry loop looks like an endless "downloading…"),
+# a 2 GB transfer that survives to completion, and a llama.cpp runtime built
+# for the host's exact Python/platform. When any one fails the local agent is
+# dead, and the only advice the UI could give was "press download again".
+#
+# Almost every local runner people actually install speaks the SAME wire
+# format: POST /v1/chat/completions with an OpenAI body, and GET /v1/models
+# to list what is loaded. llama.cpp's own `llama-server`, Ollama, LM Studio,
+# Jan, GPT4All, LocalAI, vLLM, text-generation-webui and KoboldCpp all do.
+# So one prober covers all of them: point the app at a running server (or let
+# it autodetect the default ports) and NO download is needed at all — the
+# model is already on the user's disk, managed by whatever GUI they prefer.
+#
+# This layer is tried BEFORE the GGUF download, so a user who has any of
+# these running stops waiting for a transfer they never needed.
+LOCAL_ENDPOINTS = [
+    # (label, host, port) — the default listen addresses, most common first
+    ("Ollama", "127.0.0.1", 11434),
+    ("LM Studio", "127.0.0.1", 1234),
+    ("llama.cpp server", "127.0.0.1", 8080),
+    ("Jan", "127.0.0.1", 1337),
+    ("GPT4All", "127.0.0.1", 4891),
+    ("LocalAI", "127.0.0.1", 8081),
+    ("vLLM", "127.0.0.1", 8000),
+    ("text-generation-webui", "127.0.0.1", 5000),
+    ("KoboldCpp", "127.0.0.1", 5001),
+]
+
+#: Explicit override: "http://192.168.1.9:8080" (a server on another box).
+#: Comma-separated is allowed; each entry is probed like the defaults.
+LOCAL_ENDPOINT_ENV = "PREDICT_LOCAL_ENDPOINT"
+#: Set to 1 to skip autodetection entirely (only the explicit endpoint).
+LOCAL_AUTODETECT_ENV = "PREDICT_LOCAL_AUTODETECT"
+_PROBE_TTL_LOCAL_S = 20.0
+#: total wall-clock budget for one autodetect sweep (9 ports x 0.4 s worst
+#: case is 3.6 s; this caps it so a filtered host cannot stall a boot)
+ENDPOINT_SWEEP_BUDGET_S = 2.5
+_ENDPOINT_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def configured_endpoints() -> list[dict]:
+    """The endpoint list to probe: explicit env entries first, then defaults.
+
+    An explicit entry is a full base URL, so a server on another host works
+    without editing code. ``PREDICT_LOCAL_AUTODETECT=0`` narrows the list to
+    exactly what the user gave (no 9-port sweep).
+    """
+    out: list[dict] = []
+    raw = (os.environ.get(LOCAL_ENDPOINT_ENV) or "").strip()
+    for chunk in [c.strip() for c in raw.split(",") if c.strip()]:
+        base = chunk.rstrip("/")
+        if not base.startswith(("http://", "https://")):
+            base = "http://" + base
+        out.append({"label": "configured endpoint", "base": base,
+                    "source": "env"})
+    if (os.environ.get(LOCAL_AUTODETECT_ENV) or "1").strip() not in ("0", "false", "no"):
+        for label, host, port in LOCAL_ENDPOINTS:
+            out.append({"label": label, "base": f"http://{host}:{port}",
+                        "source": "default"})
+    return out
+
+
+def probe_openai_endpoint(base: str, timeout: float = 0.4) -> dict:
+    """GET {base}/v1/models — the one call every local runner answers.
+
+    Returns ``{ok, base, label, models, detail, ms}``. A refusal is a normal
+    "not running", never an exception: this runs on the boot path and must
+    cost milliseconds per closed port.
+    """
+    base = base.rstrip("/")
+    url = f"{base}/v1/models"
+    out = {"ok": False, "base": base, "models": [], "detail": "", "ms": None}
+    t0 = time.perf_counter()
+    try:
+        r = _HTTP_LOCAL.get(url, timeout=timeout)
+        out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        if r.status_code != 200:
+            out["detail"] = f"HTTP {r.status_code}"
+            return out
+        try:
+            data = r.json()
+        except ValueError:
+            out["detail"] = "unparseable /v1/models"
+            return out
+        items = data.get("data") if isinstance(data, dict) else data
+        models = []
+        for m in items or []:
+            if isinstance(m, dict):
+                mid = m.get("id") or m.get("name") or m.get("model")
+            else:
+                mid = m
+            if mid:
+                models.append(str(mid))
+        out["models"] = models[:40]
+        out["ok"] = True
+        out["detail"] = f"{len(models)} model(s)"
+    except Exception as exc:                 # refused == not running
+        out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        out["detail"] = type(exc).__name__
+    return out
+
+
+def discover_local_endpoints(*, max_age: float = _PROBE_TTL_LOCAL_S,
+                             force: bool = False) -> dict:
+    """Find the first live OpenAI-compatible server, or say why none is.
+
+    Memoised for ``max_age`` so the several per-build callers do not sweep
+    nine ports each time. Returns the winning probe plus the full attempt
+    list, so the UI can show "LM Studio answered on :1234" or exactly which
+    ports were refused.
+    """
+    now = time.time()
+    if not force and max_age > 0:
+        hit = _ENDPOINT_CACHE.get("last")
+        if hit and now - hit[0] < max_age:
+            return {**hit[1], "cached": True, "age_s": round(now - hit[0], 1)}
+    tried: list[dict] = []
+    deadline = now + ENDPOINT_SWEEP_BUDGET_S
+    for ep in configured_endpoints():
+        # A sweep of 9 ports must not cost 9 x timeout on a boot path: a
+        # refused local port answers in microseconds, but a FILTERED one
+        # hangs. Stop sweeping once the budget is gone and say so.
+        if time.time() > deadline:
+            tried.append({"base": "", "label": "sweep budget",
+                          "ok": False,
+                          "detail": f"stopped after {ENDPOINT_SWEEP_BUDGET_S:g}s"})
+            break
+        p = probe_openai_endpoint(ep["base"])
+        p["label"] = ep["label"]
+        p["source"] = ep["source"]
+        tried.append({"base": ep["base"], "label": ep["label"],
+                      "ok": p["ok"], "detail": p["detail"], "ms": p["ms"]})
+        if p["ok"]:
+            pick = next((m for m in p["models"]
+                         if any(t.split(":")[0].lower() in m.lower()
+                                for t in OLLAMA_TAGS)), "")
+            p["model"] = pick or (p["models"][0] if p["models"] else "")
+            p["cached"] = False
+            p["tried"] = tried          # what was probed BEFORE the hit
+            _ENDPOINT_CACHE["last"] = (now, dict(p))
+            return p
+    out = {"ok": False, "base": "", "models": [], "tried": tried, "cached": False,
+           "detail": (f"none of {len(tried)} endpoint(s) answered — start "
+                      "Ollama / LM Studio / llama-server, or set "
+                      f"{LOCAL_ENDPOINT_ENV}=http://host:port")}
+    _ENDPOINT_CACHE["last"] = (now, dict(out))
+    return out
+
+
+def invalidate_endpoint_cache() -> None:
+    _ENDPOINT_CACHE.clear()
+
+
+def openai_compatible_chat(prompt: str, *, base: str, model: str = "",
+                           timeout: float = 60.0, max_tokens: int = 200) -> dict:
+    """POST a chat completion to ANY OpenAI-compatible server.
+
+    ``model`` is optional: a runner serving exactly one model accepts an
+    empty id, and we only need a name when the listing gave us one.
+    """
+    url = f"{base.rstrip('/')}/v1/chat/completions"
+    body: dict[str, Any] = {
+        "temperature": 0.2, "max_tokens": int(max_tokens),
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if model:
+        body["model"] = model
+    try:
+        r = httpx.post(url, json=body, timeout=timeout)
+    except Exception as exc:
+        return {"ok": False, "reason": type(exc).__name__, "model": model,
+                "base": base}
+    if r.status_code >= 400:
+        # a wrong/absent model id is the single most common 4xx here: retry
+        # once without it before declaring the server unusable
+        if r.status_code in (400, 404, 422) and model:
+            body.pop("model", None)
+            try:
+                r2 = httpx.post(url, json=body, timeout=timeout)
+                if r2.status_code < 400:
+                    r = r2
+            except Exception:
+                pass
+    if r.status_code >= 400:
+        return {"ok": False, "reason": f"http {r.status_code}", "model": model,
+                "base": base, "detail": r.text[:200]}
+    try:
+        text = r.json()["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return {"ok": False, "reason": "unparseable response", "model": model,
+                "base": base}
+    return {"ok": True, "text": str(text), "model": model, "base": base}
+
+
+# ══════════════════════════════════════════════════════════════════════
 # runtime readiness probes
 # ══════════════════════════════════════════════════════════════════════
 def llama_cpp_ready() -> dict:
@@ -652,6 +854,20 @@ def resolve_hf_file(repo: str, fname: str) -> str:
     return sorted(small or files, key=len)[0]
 
 
+def _download_hint(blocked: bool) -> str:
+    """Plain words + the route that actually works, for a failed transfer."""
+    if blocked:
+        return ("huggingface.co is not reachable from this host, so the GGUF "
+                "can NEVER be fetched here. Use one of these instead: "
+                "(1) start Ollama / LM Studio / llama-server — the app finds "
+                "it automatically and needs no download; "
+                f"(2) set {LOCAL_ENDPOINT_ENV}=http://host:port; "
+                "(3) drop a .gguf you downloaded elsewhere into the models "
+                "folder; (4) use a free cloud key (Groq / Gemini).")
+    return ("the transfer did not complete — retry, or use a running local "
+            "server via " + LOCAL_ENDPOINT_ENV)
+
+
 def download_gguf(repo: str, fname: str, dest: str, *,
                   progress: "callable | None" = None,
                   timeout: float = 60.0) -> dict:
@@ -700,10 +916,35 @@ def download_gguf(repo: str, fname: str, dest: str, *,
                         break
     except urllib.error.HTTPError as exc:
         return {"ok": False, "reason": f"HTTP {exc.code} for {url}",
-                "bytes": have, "total": total, "path": dest}
+                "bytes": have, "total": total, "path": dest,
+                "blocked": exc.code in (403, 451),
+                "hint": _download_hint(exc.code == 451)}
+    except SSLError as exc:
+        # TLS closed at the CONNECT stage is the signature of a network
+        # policy blocking the hub, NOT of a missing file. Saying "download
+        # failed" here sends the user to press the button again forever.
+        return {"ok": False, "reason": f"TLS blocked: {str(exc)[:160]}",
+                "bytes": have, "total": total, "path": dest, "blocked": True,
+                "hint": _download_hint(True)}
     except Exception as exc:
+        # urllib wraps the real cause in URLError, so look at the whole
+        # chain: a TLS/SSL close is a BLOCKED network, not a flaky transfer,
+        # and the two need different advice
+        _chain = []
+        _e = exc
+        for _ in range(4):
+            if _e is None:
+                break
+            _chain.append(type(_e).__name__)
+            _chain.append(str(_e)[:120])
+            _e = getattr(_e, "reason", None) or _e.__cause__
+        _blob = " ".join(_chain)
+        blocked = any(k in _blob for k in
+                      ("SSL", "CERTIFICATE", "TLS", "Connect", "Connection",
+                       "MaxRetry", "Name or service"))
         return {"ok": False, "reason": type(exc).__name__ + ": " + str(exc)[:200],
-                "bytes": have, "total": total, "path": dest}
+                "bytes": have, "total": total, "path": dest,
+                "blocked": blocked, "hint": _download_hint(blocked)}
     size = os.path.getsize(part) if os.path.exists(part) else 0
     try:
         with open(part, "rb") as fh:
@@ -748,7 +989,9 @@ class LocalModel:
 
     def __init__(self) -> None:
         self.available = False
-        self.backend = ""            # "llama_cpp" | "ollama" | ""
+        # "openai" (any OpenAI-compatible server) | "llama_cpp" | "ollama"
+        self.backend = ""
+        self.endpoint = ""           # base URL when backend == "openai"
         self.label = "not loaded"
         self.llm = None              # llama_cpp.Llama instance
         self.ollama_model = ""       # chosen ollama tag
@@ -773,6 +1016,9 @@ class LocalModel:
             "label": self.label,
             "model": self.ollama_model or (
                 os.path.basename(self.path) if self.path else ""),
+            "endpoint": self.endpoint,
+            "endpoints": [t["base"] for t in
+                          (discover_local_endpoints().get("tried") or [])],
             "ram_gb": round(self.ram_gb, 1),
             "error": self.error,
             "last_ms": self.last_ms,
@@ -794,12 +1040,48 @@ class LocalModel:
             return
         self._last_attempt = now
         self.error = ""
+        # ORDER MATTERS. A running OpenAI-compatible server needs NO
+        # download and no compiler, so it is tried before anything that
+        # fetches 2 GB or builds C++. On a host where huggingface.co is
+        # blocked this is the difference between "works now" and "works
+        # never": the GGUF route is kept as a later rung, not the first one.
+        if self._try_openai_endpoint():
+            return
         if self._try_llama_cpp():
             return
         if self._try_ollama():
             return
         # neither: keep the most useful explanation
         self.label = "unavailable"
+
+    def _try_openai_endpoint(self) -> bool:
+        """Any OpenAI-compatible local server — needs no download at all.
+
+        This is the pragmatic answer to "Qwen will not load or download":
+        the user almost certainly already HAS a model on disk, managed by
+        Ollama / LM Studio / llama-server / Jan. Asking that server over the
+        wire is instant, works with huggingface.co blocked, needs no C++
+        toolchain, and costs no 2 GB transfer.
+        """
+        found = discover_local_endpoints()
+        if not found.get("ok"):
+            # keep the reason short but name what was probed, so the panel
+            # can say "9 ports refused" instead of "not loaded"
+            tried = found.get("tried") or []
+            self.error = (
+                f"no OpenAI-compatible local server on "
+                f"{len(tried)} endpoint(s) "
+                f"({', '.join(t['base'].split('//')[-1] for t in tried[:4])}"
+                f"{'…' if len(tried) > 4 else ''}); start Ollama/LM Studio/"
+                f"llama-server, or set {LOCAL_ENDPOINT_ENV}")
+            return False
+        self.endpoint = found["base"]
+        self.backend = "openai"
+        self.ollama_model = found.get("model") or ""
+        self.available = True
+        self.label = f"{found.get('label') or 'local server'} · {self.ollama_model or 'model'}"
+        self.error = ""
+        return True
 
     def _try_llama_cpp(self) -> bool:
         probe = llama_cpp_ready()
@@ -821,10 +1103,22 @@ class LocalModel:
             return False
         if not os.path.exists(path):
             # "press download" was the whole message, so a user whose hub is
-            # blocked pressed it forever. Name the step AND the likely cause.
-            self.error = (f"no model file at {path}: only the download step "
-                          "fetches it, and it fails if huggingface.co (or its "
-                          "CDN) is unreachable from this host")
+            # blocked pressed it forever. Name the step, the likely cause,
+            # AND the routes that need no download at all.
+            _ep = discover_local_endpoints()
+            if _ep.get("ok"):
+                self.error = (f"no GGUF at {path}, but {_ep.get('label')} is "
+                              f"serving {_ep.get('model') or 'a model'} on "
+                              f"{_ep.get('base')} — using that instead")
+            else:
+                self.error = (
+                    f"no model file at {path}. A GGUF download needs "
+                    f"huggingface.co to be reachable, and it is not from this "
+                    f"host. Nothing is wrong with your install: start Ollama / "
+                    f"LM Studio / llama-server (the app finds it on its own), "
+                    f"or set {LOCAL_ENDPOINT_ENV}=http://host:port, or drop a "
+                    f".gguf you downloaded elsewhere into {MODELS_DIR}/. "
+                    f"Free cloud keys work too — see the Agents tab.")
             return False
         try:
             # leave one core for the event loop: n_threads=all cores made
@@ -875,6 +1169,14 @@ class LocalModel:
                     out = self.llm(prompt, max_tokens=max_tokens,
                                    temperature=0.2)
                     text = out["choices"][0]["text"]
+                elif self.backend == "openai":
+                    res = openai_compatible_chat(
+                        prompt, base=self.endpoint or "",
+                        model=self.ollama_model, max_tokens=max_tokens)
+                    if not res.get("ok"):
+                        self.error = f"local server: {res.get('reason')}"
+                        return ""
+                    text = res.get("text", "")
                 elif self.backend == "ollama":
                     res = ollama_chat(prompt, self.ollama_model,
                                       max_tokens=max_tokens)
@@ -1044,6 +1346,68 @@ class AgentInstaller:
             "elapsed_s": (int(time.time() - self.started_at)
                           if running and self.started_at else 0),
             "auto": self.auto_status(),
+            # ── THE ALTERNATIVES, on the same panel ────────────────────
+            # A blocked GGUF download used to be a dead end. Report the
+            # done-with-no-download routes alongside it so the user can see
+            # there is a way forward without pressing "download" again.
+            "endpoint": self._endpoint_status(),
+            "alternatives": self._alternatives(),
+        }
+
+    def _endpoint_status(self) -> dict:
+        """Is an OpenAI-compatible server already running? Which ports?"""
+        try:
+            found = discover_local_endpoints(force=True)
+            return {
+                "ok": bool(found.get("ok")),
+                "base": found.get("base", ""),
+                "label": found.get("label", ""),
+                "model": found.get("model", ""),
+                "detail": found.get("detail", ""),
+                "tried": [{"base": t["base"], "label": t["label"],
+                           "ok": t["ok"], "detail": t["detail"]}
+                          for t in (found.get("tried") or [])],
+                "env": LOCAL_ENDPOINT_ENV,
+            }
+        except Exception as exc:
+            return {"ok": False, "detail": type(exc).__name__, "tried": []}
+
+    def _alternatives(self) -> dict:
+        """Every route to a working agent that needs NO 2 GB download."""
+        ep = self._endpoint_status()
+        local = self.local.describe()
+        return {
+            "no_download_needed": bool(ep.get("ok") or local.get("available")),
+            "live_now": [
+                {"what": f"{ep['label']} on {ep['base']}",
+                 "how": "any OpenAI-compatible server (already running)"}
+            ] if ep.get("ok") else [],
+            "start_a_server": [
+                {"what": "Ollama", "url": "https://ollama.com/download",
+                 "then": "ollama pull qwen2.5-coder:1.5b"},
+                {"what": "LM Studio", "url": "https://lmstudio.ai",
+                 "then": "load any model, start the server (port 1234)"},
+                {"what": "llama.cpp server",
+                 "url": "https://github.com/ggml-org/llama.cpp/releases",
+                 "then": "llama-server -m model.gguf --port 8080"},
+            ],
+            "free_cloud": [
+                {"what": "Groq (free tier)", "url": "https://console.groq.com/keys",
+                 "setting": 'openai_base=groq', "model": "llama-3.3-70b-versatile"},
+                {"what": "Google Gemini (free tier)",
+                 "url": "https://aistudio.google.com/apikey",
+                 "setting": "gemini_key", "model": GEMINI_DEFAULT_MODEL},
+                {"what": "OpenRouter (free models)",
+                 "url": "https://openrouter.ai/keys",
+                 "setting": "openai_base=openrouter", "model": "any :free model"},
+                {"what": "DeepSeek", "url": "https://platform.deepseek.com",
+                 "setting": "openai_base=deepseek", "model": "deepseek-chat"},
+            ],
+            "manual_gguf": {
+                "how": ("download a .gguf in a browser on any machine, then "
+                        f"drop it at {self.model_file()}"),
+                "path": self.model_file(),
+            },
         }
 
     # -- the button -----------------------------------------------------
@@ -1246,6 +1610,17 @@ class AgentInstaller:
         ``runtime`` is True when ANY rung worked (or is already present).
         Nothing here raises: each rung records why it did not work.
         """
+        # rung -1 — an OpenAI-compatible server is ALREADY RUNNING.
+        # This needs no pip install, no compiler and no download, so it is
+        # checked before anything that can spend 15 minutes building C++.
+        _ep = discover_local_endpoints()
+        if _ep.get("ok"):
+            detail = (f"{_ep.get('label')} on {_ep.get('base')} serving "
+                      f"{_ep.get('model') or 'a model'}")
+            self._say(f"found {detail} — no runtime install needed")
+            self._step("local server", True, detail)
+            return {"runtime": True, "backend": "openai", "detail": detail}
+
         # rung 0 — already importable
         probe = self._deps()
         if probe["ok"]:
@@ -1305,9 +1680,12 @@ class AgentInstaller:
                     "needs_pull": (not model)}
         self._step("ollama", False, probe.get("detail") or "")
         return {"runtime": False, "backend": "",
-                "detail": ("no usable runtime: llama.cpp could not be "
-                           "installed and Ollama is not reachable — the app "
-                           "runs on formulas + brains + physics alone")}
+                "detail": ("no usable runtime: no OpenAI-compatible server "
+                           "answered, llama.cpp could not be installed and "
+                           "Ollama is not reachable — the app runs on "
+                           "formulas + brains + physics alone. Start LM "
+                           "Studio / llama-server, or set "
+                           f"{LOCAL_ENDPOINT_ENV}=http://host:port")}
 
     def ensure_model(self) -> dict:
         """Download the GGUF for this RAM tier — stdlib, no pip required.
@@ -1354,6 +1732,8 @@ class AgentInstaller:
             self._say(f"model ready at {path} — 0 further bytes needed")
             return {"model": True, "detail": "downloaded"}
         why = res.get("reason") or "no valid model landed on disk"
+        if res.get("hint"):
+            why = why + " — " + str(res["hint"])
         # Second chance: if huggingface_hub IS installed, its resumable
         # downloader may succeed where a plain GET was cut.
         try:
@@ -1505,6 +1885,38 @@ GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
               "{model}:generateContent?key={key}")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+#: Free OpenAI-compatible clouds, used by the ``openai`` slot when it is
+#: pointed at one. Geminera/Together/DeepSeek/OpenRouter all speak the same
+#: body, so the existing request path works unchanged — only the base URL and
+#: the model id differ. Keyed by the value of the ``openai_base`` setting.
+FREE_OPENAI_BASES = {
+    "openai": "https://api.openai.com/v1/chat/completions",
+    "groq": "https://api.groq.com/openai/v1/chat/completions",
+    "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+    "deepseek": "https://api.deepseek.com/v1/chat/completions",
+    "together": "https://api.together.xyz/v1/chat/completions",
+    "mistral": "https://api.mistral.ai/v1/chat/completions",
+    "cerebras": "https://api.cerebras.ai/v1/chat/completions",
+    "fireworks": "https://api.fireworks.ai/inference/v1/chat/completions",
+    "local": "http://127.0.0.1:1234/v1/chat/completions",
+}
+
+
+def openai_base_url(setting: str | None) -> str:
+    """Resolve the ``openai_base`` setting to a chat-completions URL.
+
+    Accepts a nickname from FREE_OPENAI_BASES, a full URL, or "" (OpenAI).
+    This is what turns the ``openai`` slot into a generic "any hosted model"
+    slot: a user who cannot run Qwen locally can point it at Groq, DeepSeek,
+    OpenRouter, or their own LM Studio and the rest of the app never knows.
+    """
+    key = (setting or "").strip().rstrip("/")
+    if not key:
+        return FREE_OPENAI_BASES["openai"]
+    if key.startswith(("http://", "https://")):
+        return key if key.endswith("/chat/completions") else (
+            key + "/chat/completions" if key.endswith("/v1") else key + "/v1/chat/completions")
+    return FREE_OPENAI_BASES.get(key.lower(), FREE_OPENAI_BASES["openai"])
 
 
 async def _to_thread(fn, *a):
@@ -1565,6 +1977,11 @@ class AgentManager:
             # not a code patch
             "gemini_model": GEMINI_DEFAULT_MODEL,
             "openai_model": "gpt-4o",
+            # which OpenAI-compatible host the `openai` slot talks to:
+            # a nickname (groq/deepseek/openrouter/together/mistral/…),
+            # a full URL, or "" for api.openai.com. This is the escape hatch
+            # for a host where the local model will not load or download.
+            "openai_base": "openai",
             "anthropic_model": "claude-3-5-sonnet-latest",
             "theme": "dark", "haptics": True, "sound": True,
             # AUTO-PREDICT: MANUAL IS THE DEFAULT (user directive) —
@@ -1769,8 +2186,8 @@ class AgentManager:
             kr.update(state="rate-limited", cooldown_until=time.time() + 60)
             return {"ok": False, "reason": "rate limited"}
         headers: dict[str, str] = {}
-        if slot == "backup2":                     # OpenAI
-            url = OPENAI_URL
+        if slot == "backup2":                     # OpenAI-compatible cloud
+            url = openai_base_url(self.settings.get("openai_base"))
             headers = {"Authorization": f"Bearer {key}",
                        "Content-Type": "application/json"}
             model = str(self.settings.get("openai_model") or "gpt-4o")
@@ -1977,6 +2394,24 @@ class AgentManager:
             "backend": self._backend_label(),
         }
 
+    def local_endpoint_status(self) -> dict:
+        """Live OpenAI-compatible endpoint discovery, for the Agents tab."""
+        try:
+            found = discover_local_endpoints(force=True)
+        except Exception as exc:
+            return {"ok": False, "detail": type(exc).__name__, "tried": []}
+        return {
+            "ok": bool(found.get("ok")),
+            "base": found.get("base", ""),
+            "label": found.get("label", ""),
+            "model": found.get("model", ""),
+            "detail": found.get("detail", ""),
+            "env": LOCAL_ENDPOINT_ENV,
+            "tried": [{"base": t["base"], "label": t["label"], "ok": t["ok"],
+                       "detail": t["detail"]} for t in (found.get("tried") or [])],
+            "known_servers": [f"{lab} :{port}" for lab, _h, port in LOCAL_ENDPOINTS],
+        }
+
     def _backend_label(self) -> str:
         """Which agent actually answered (for the UI chip)."""
         if self.local.available:
@@ -2177,8 +2612,16 @@ class AgentManager:
                 "error": self.local.error,
                 "last": self.last_replies.get("local"),
                 "enabled": self.settings.get("local_enabled", True),
+                "endpoint": self.local.endpoint,
                 "install": self.installer.status(),
             },
+            # ── the no-download routes, rendered on the same panel ─────
+            # `local` above answers "is the GGUF ready?"; this answers the
+            # question the user actually has when it is not: "what CAN work
+            # right now without fetching 2 GB?"
+            "local_endpoint": self.local_endpoint_status(),
+            "openai_base": self.settings.get("openai_base", "openai"),
+            "openai_bases": sorted(FREE_OPENAI_BASES),
             # the installer is ALSO top-level: the Agents tab used to read
             # agents.installer and find null, so it had nothing to render
             "installer": self.installer.status(),

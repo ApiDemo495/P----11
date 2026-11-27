@@ -4383,6 +4383,39 @@ async function loadAgents() {
         ${ollamaHtml}
         ${compilerHtml}
       </div>
+      ${(() => {
+        // ── THE NO-DOWNLOAD ROUTES ────────────────────────────────────
+        // When huggingface.co is blocked the GGUF button can never work, and
+        // pressing it again is the only thing the old panel offered. Show
+        // what CAN work instead, with the exact setting for each.
+        const lep = a.local_endpoint || {};
+        const alt = lep.alternatives || {};
+        const live = lep.ok
+          ? `<div class="kv"><span class="acc-up">ALREADY RUNNING</span>`
+            + `<b>${esc(lep.label || "local server")} · ${esc(lep.base || "")}`
+            + `${lep.model ? " · " + esc(lep.model) : ""}</b></div>`
+            + `<div class="hint">no download needed — the app talks to it `
+            + `over the OpenAI-compatible API</div>`
+          : `<div class="kv"><span class="acc-warn">no local server found</span>`
+            + `<b class="dim">${esc((lep.tried || []).length)} port(s) probed: `
+            + `${esc((lep.known_servers || []).slice(0, 4).join(", "))}…</b></div>`;
+        const starters = (alt.start_a_server || []).map(x =>
+          `<div class="kv"><span>${esc(x.what)}</span>`
+          + `<b class="dim">${esc(x.then)} · ${esc(x.url)}</b></div>`).join("");
+        const cloud = (alt.free_cloud || []).map(x =>
+          `<div class="kv"><span>${esc(x.what)}</span>`
+          + `<b class="dim">${esc(x.setting)} · ${esc(x.model)} · ${esc(x.url)}</b></div>`).join("");
+        const manual = alt.manual_gguf || {};
+        return `<div class="hint" style="margin-top:10px"><b>Works without any download</b></div>`
+          + live + starters
+          + `<div class="hint" style="margin-top:6px"><b>or a free cloud key</b></div>` + cloud
+          + (manual.path ? `<div class="kv"><span>or drop a .gguf</span><b class="dim">`
+             + `download it in a browser on any machine, then place it at ${esc(manual.path)}</b></div>` : "")
+          + `<div class="kv-row" style="margin-top:8px">`
+          + `<input class="inp" id="ag-endpoint" placeholder="http://host:port" `
+          + `value="${esc(lep.base || "")}" style="flex:1"/>`
+          + `<button class="btn" id="ag-endpoint-set">use this server</button></div>`;
+      })()}
       ${stepsHtml}
       ${ins.installed
         ? `${lo.available
@@ -4417,6 +4450,20 @@ async function loadAgents() {
         toast(r.install?.state === "done" ? "local agent already downloaded"
                                            : "local agent download started — watch this panel");
       } catch (e) { toast("download start failed: " + e.message, "err"); }
+      loadAgents();
+    });
+    const epBtn = $("#ag-endpoint-set");
+    if (epBtn) epBtn.addEventListener("click", async () => {
+      epBtn.disabled = true; epBtn.textContent = "probing…";
+      try {
+        const ep = ($("#ag-endpoint") || {}).value || "";
+        const r = await api("/api/agents/local/endpoints",
+                            { method: "POST", body: JSON.stringify({ endpoint: ep }) });
+        toast(r.ok && (r.local || {}).available
+          ? "connected to " + (r.local.endpoint || ep)
+          : "no server answered at " + (ep || "(autodetect)"), 
+          r.local && r.local.available ? "ok" : "err");
+      } catch (e) { toast("endpoint probe failed: " + e.message, "err"); }
       loadAgents();
     });
     const retryBtn = $("#ag-retry");
