@@ -115,3 +115,61 @@ Tests: `tests/test_exchange_filters.py` (18). Full suite **1273 passed,
 — a placeholder-sized order that the new layer correctly refuses. Its
 intent ("no path bypasses the gates; three brackets are sent") is
 unchanged; the fixture is now a real BTC order at 68273.5.
+
+---
+
+# The position never actually closed
+
+**Same segment, found while testing the entry path.**
+
+`Trader.close_position()` was the only exit. On settlement it popped the
+local book and logged a P&L estimate — **and sent nothing**. The position
+stayed open on Binance with its TP/SL brackets attached.
+
+That is the worst failure mode an execution layer can have:
+
+- the app reports "closed", the exchange reports an open position;
+- the one-position-per-symbol gate then blocks every new signal on that
+  symbol forever;
+- the daily order cap keeps counting against a position nobody manages;
+- the orphaned `closePosition: true` brackets can still fire against a
+  position the app believes is flat.
+
+## The fix
+
+- `Trader.reconcile(symbol, price)` — sends a real **reduce-only MARKET**
+  order for the filled quantity, then cancels both brackets so they cannot
+  fire later. It deliberately sits beside `close_position`, not inside it,
+  because the settlement path must never become a trade trigger.
+- `close_position()` keeps its job (book the result) and now reports
+  `exchange_closed` honestly instead of implying a flat book.
+- The position record now carries what a close actually needs — `qty`,
+  `sl_id`, `tp_id`, `tp_px`, `sl_px` — which it previously did not.
+- `engine` reconciles at settlement **only when the account is live**
+  (`enabled` + both keys); with no live account there is nothing at the
+  exchange to flatten and the local booking is unchanged.
+- A rejected close leaves the position **in the book** and says why, rather
+  than silently forgetting it.
+
+The decision log renders the difference in words:
+
+```
+CLOSED LOCALLY — NOT AT THE EXCHANGE
+```
+
+## Verification
+
+End to end through a real `consider()` → `reconcile()`:
+
+```
+position: qty 0.002  sl_id 2  tp_id 3  tp_px 69639.0  sl_px 67590.7
+close order: SELL 0.002 MARKET reduceOnly=true
+brackets cancelled: [2, 3]
+open positions now: {}
+```
+
+Four new tests cover: the position remembers how to be closed; the close
+is reduce-only and cancels both brackets; a rejected close keeps the
+position visible; and `close_position()` alone sends **zero** orders.
+
+Full suite **1277 passed, 3 skipped**.

@@ -7907,12 +7907,30 @@ class PredictionEngine:
             except Exception:
                 pass
             # close the trading book for this asset if a position was
-            # opened under the optional execution module
+            # opened under the optional execution module.
+            #
+            # If the account is armed and has keys, the position is
+            # flattened AT THE EXCHANGE first (reduce-only market + cancel
+            # of the TP/SL brackets). Before this, settlement popped the
+            # local book while the position stayed open on Binance with
+            # orphaned brackets — the app said "closed", the exchange said
+            # "open", and the one-position-per-symbol gate meant the app
+            # could never manage it again. When the account is not live
+            # there is nothing at the exchange to flatten, so the local
+            # book is booked exactly as before.
             try:
-                self.trader.close_position(symbol, price,
-                                           _row.get("result"))
+                _cfg = getattr(self.trader, "cfg", {}) or {}
+                _live = bool(_cfg.get("enabled") and _cfg.get("api_key")
+                             and _cfg.get("api_secret"))
+                _recon = (self.trader.reconcile(symbol, price)
+                          if _live else None)
+                _row_close = self.trader.close_position(
+                    symbol, price, _row.get("result"))
+                if _recon and _row_close is not None:
+                    _row_close["exchange_closed"] = bool(_recon.get("closed"))
+                    _row_close["exchange_why"] = _recon.get("why")
             except Exception:
-                pass
+                log.exception("settlement close failed for %s", symbol)
             # grade the probability forecast made for THAT window:
             # only windows where a barrier was actually decided count
             try:

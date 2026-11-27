@@ -234,3 +234,86 @@ def test_live_filters_override_the_bundled_defaults(monkeypatch):
     assert f.source == "exchangeInfo"
     # a 150 USDT order is no longer legal under the live schedule
     assert not ef.legal_order("BTCUSDT", 68273.5, 150.0 / 68273.5, 1)["ok"]
+
+
+# ──────────────── the position must actually close at the exchange ────────
+def _open_btc():
+    """Open one real, legal BTC position and return (trader, calls)."""
+    import app.trading as tr_mod
+    trader = trading.Trader()
+    cfg = {**trading.DEFAULTS, "enabled": True, "armed_until": 9e9,
+           "max_orders_day": 4, "testnet": True, "api_key": "k",
+           "api_secret": "s", "max_order_usdt": 150.0}
+    trader.cfg = cfg
+    tr_mod.load_cfg = lambda: cfg
+    calls: list[tuple] = []
+    trader._signed = lambda m, p, params: (
+        calls.append((m, p, dict(params))) or {"orderId": len(calls)})
+    sig = locked_contract_signal(symbol="BTC", entry=68273.5,
+                                 cycle_id="reconcile-test")
+    row = trader.consider(sig)
+    assert row["ok"], row["why"]
+    return trader, calls
+
+
+def test_an_open_position_remembers_how_to_be_closed():
+    """qty and both bracket ids must survive the fill.
+
+    Without them the app could log a settlement but had no way to send a
+    reduce-only close, so the position stayed open at the exchange.
+    """
+    trader, _ = _open_btc()
+    pos = trader.open_positions["BTC"]
+    assert pos["qty"] == pytest.approx(0.002)
+    assert pos["sl_id"] and pos["tp_id"]
+    assert pos["sl_px"] and pos["tp_px"]
+
+
+def test_reconcile_sends_a_reduce_only_close_and_cancels_brackets():
+    trader, calls = _open_btc()
+    n_before = len(calls)
+    out = trader.reconcile("BTC", 68900.0)
+    assert out["ok"] and out["closed"]
+    new = calls[n_before:]
+    # exactly one closing order, reduce-only market, opposite side
+    markets = [c for c in new if c[2].get("type") == "MARKET"]
+    assert len(markets) == 1
+    m = markets[0]
+    assert m[2]["side"] == "SELL"          # long position closes with a sell
+    assert m[2]["reduceOnly"] == "true"    # never opens a new position
+    assert m[2]["quantity"] == pytest.approx(0.002)
+    # and both brackets are cancelled so they cannot fire later
+    deletes = [c for c in new if c[0] == "DELETE"]
+    assert len(deletes) == 2
+    assert out["cancelled_brackets"]
+    assert "BTC" not in trader.open_positions
+
+
+def test_reconcile_does_not_pop_the_book_when_the_close_is_rejected():
+    """A failed close must leave the position visible, not forgotten."""
+    trader, calls = _open_btc()
+
+    def boom(method, path, params):
+        if params.get("type") == "MARKET":
+            raise OSError("insufficient margin")
+        return {"orderId": 99}
+
+    trader._signed = boom
+    out = trader.reconcile("BTC", 68900.0)
+    assert out["ok"] is False and not out["closed"]
+    assert "rejected" in out["why"]
+    assert "BTC" in trader.open_positions, (
+        "the position was dropped from the book even though the exchange "
+        "never confirmed the close")
+
+
+def test_close_position_alone_never_sends_an_order():
+    """Settlement books the result; it must not become a trade trigger."""
+    trader, calls = _open_btc()
+    n_before = len(calls)
+    row = trader.close_position("BTC", 68900.0, "target")
+    assert len(calls) == n_before, (
+        "close_position sent an order — the settlement path must never "
+        "become a trade trigger")
+    assert row["pnl_bps_est"] is not None
+    assert row["exchange_closed"] is False   # honestly not flattened

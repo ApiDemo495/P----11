@@ -233,10 +233,20 @@ class Trader:
         try:
             row["order"] = self.execute(sig)
             self.orders_today += 1
+            o = row["order"]
+            # The position record must carry what a close actually needs:
+            # the FILLED quantity and the two bracket order ids. Without
+            # them the app could log a settlement but had no way to send a
+            # reduce-only close, so the position stayed open at the
+            # exchange with orphaned TP/SL orders attached.
             self.open_positions[sig["symbol"]] = {
                 "tf": sig.get("tf"), "entry": sig.get("entry"),
                 "side": sig.get("direction"),
-                "window_end": sig.get("window_end")}
+                "window_end": sig.get("window_end"),
+                "qty": o.get("qty"), "sl_id": o.get("sl_id"),
+                "tp_id": o.get("tp_id"),
+                "tp_px": o.get("tp_px"), "sl_px": o.get("sl_px"),
+                "exchange_closed": False}
         except Exception as exc:                       # never crash engine
             row["ok"] = False
             row["why"] = f"order failed: {exc}"[:200]
@@ -307,10 +317,76 @@ class Trader:
                 "filters": _ord["filters"], "tp_px": _ord["tp"],
                 "sl_px": _ord["sl"]}
 
+    def _cancel(self, symbol: str, order_id) -> dict | None:
+        """Cancel one resting order. Never raises — a dead order is not news."""
+        try:
+            return self._signed("DELETE", "/fapi/v1/order",
+                                {"symbol": symbol, "orderId": order_id})
+        except Exception as exc:                       # pragma: no cover
+            return {"error": str(exc)[:120]}
+
+    def reconcile(self, symbol: str, price: float) -> dict | None:
+        """Close a position AT THE EXCHANGE, not just in this account.
+
+        `close_position` used to pop the local book and log a P&L estimate
+        while the position stayed open on Binance with its brackets
+        attached. That is the worst possible failure for an execution
+        layer: the app reports "closed", the exchange reports an open
+        position, and the daily order cap plus the one-position-per-symbol
+        gate then keep the app from ever managing it again.
+
+        This sends a real reduce-only MARKET order, then cancels the TP/SL
+        brackets (which would otherwise sit as orphan orders). It is
+        deliberately separate from close_position so the settlement path
+        cannot accidentally start trading.
+        """
+        pos = self.open_positions.get(symbol)
+        if not pos:
+            return None
+        sym = SYMBOLS.get(symbol, symbol)
+        side = int(pos.get("side") or 1)
+        qty = float(pos.get("qty") or 0.0)
+        if qty <= 0:
+            return {"ok": False, "why": "no filled quantity on this position",
+                    "symbol": sym, "closed": False}
+        close_side = "SELL" if side > 0 else "BUY"
+        intent = {"ts": time.time(), "symbol": symbol, "tf": pos.get("tf"),
+                  "side": side, "entry": pos.get("entry"),
+                  "exit": price, "close_side": close_side, "qty": qty}
+        try:
+            o = self._signed("POST", "/fapi/v1/order", {
+                "symbol": sym, "side": close_side, "type": "MARKET",
+                "quantity": qty, "reduceOnly": "true"})
+        except Exception as exc:
+            row = {**intent, "ok": False, "closed": False,
+                   "why": f"close order rejected: {exc}"[:200]}
+            _log(row)
+            return row
+        # The position is flat now. Remove the brackets so they cannot
+        # later fire against a position that no longer exists.
+        cancelled = []
+        for k in ("sl_id", "tp_id"):
+            oid = pos.get(k)
+            if oid:
+                self._cancel(sym, oid)
+                cancelled.append(oid)
+        self.open_positions.pop(symbol, None)
+        row = {**intent, "ok": True, "closed": True,
+               "close_order_id": (o or {}).get("orderId"),
+               "cancelled_brackets": cancelled,
+               "why": "position closed at the exchange (reduce-only market)"}
+        _log(row)
+        return row
+
     def close_position(self, symbol: str, exit_price: float,
                        result: str | None) -> dict | None:
-        """Settlement reached: close the book on an open position and
-        log the estimated outcome (bps vs entry, side-aware)."""
+        """Settlement reached: record the outcome of an open position.
+
+        This books the RESULT only. It deliberately does not send an order
+        — the settlement path must never become a trade trigger. A caller
+        that needs the position actually flattened must call
+        ``reconcile()`` first, which is the exchange-facing half.
+        """
         pos = self.open_positions.pop(symbol, None)
         if not pos:
             return None
@@ -320,8 +396,9 @@ class Trader:
             if entry > 0 and exit_price > 0 else None
         row = {"ts": time.time(), "symbol": symbol, "tf": pos.get("tf"),
                "side": side, "entry": entry, "exit": exit_price,
-               "ok": True, "why": f"position closed at settle ({result})",
-               "pnl_bps_est": pnl_bps, "closed": True}
+               "ok": True, "why": f"position settled ({result})",
+               "pnl_bps_est": pnl_bps, "closed": True,
+               "exchange_closed": bool(pos.get("exchange_closed"))}
         _log(row)
         return row
 
