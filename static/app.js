@@ -5251,6 +5251,24 @@ async function loadTrading() {
     $("#tr-today").textContent = String(t.orders_today ?? 0);
     if ($("#tr-key") && c.api_key) $("#tr-key").placeholder = c.api_key;
     if ($("#tr-max") && c.max_order_usdt) $("#tr-max").value = c.max_order_usdt;
+    // The exchange minimum used to be invisible: the form offered 25 USDT
+    // while BTCUSDT needs ~136, so every BTC order was rejected after the
+    // fact. Show the real floor and say which symbols the budget covers.
+    const ex = t.exchange;
+    const floors = $("#tr-floors");
+    if (floors && ex) {
+      const ref = ex.budget_refused || [];
+      floors.className = "conf " + (ref.length ? "acc-dn" : "acc-up");
+      floors.textContent = ref.length
+        ? `⚠ ${ex.budget_usdt} USDT cannot be filled on ${ref.join(", ")} — `
+          + `exchange minimum is ${Math.ceil(ex.min_order_usdt[ref[0]])} USDT `
+          + `(step size + minNotional)`
+        : `✓ ${ex.budget_usdt} USDT clears every exchange minimum `
+          + `(dearest ${Math.ceil(ex.dearest_floor_usdt)} USDT on BTC) `
+          + `· orders round DOWN to the symbol's step and tick`;
+    } else if (floors) {
+      floors.textContent = "exchange filters unavailable (offline) — using bundled defaults";
+    }
     if ($("#tr-cap") && c.max_orders_day) $("#tr-cap").value = c.max_orders_day;
     if ($("#tr-testnet")) $("#tr-testnet").checked = c.testnet !== false;
     if ($("#tr-enabled")) $("#tr-enabled").checked = !!c.enabled;
@@ -5266,7 +5284,7 @@ function bindTrading() {
     try {
       await api("/api/trading/config", { method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ api_key: $("#tr-key").value, api_secret: $("#tr-secret").value,
-          max_order_usdt: Number($("#tr-max").value || 25), max_orders_day: Number($("#tr-cap").value || 4),
+          max_order_usdt: Number($("#tr-max").value || 150), max_orders_day: Number($("#tr-cap").value || 4),
           testnet: $("#tr-testnet").checked, enabled: $("#tr-enabled").checked }) });
       toast("trading settings saved (keys masked, stored locally)", "ok");
     } catch (e) { toast("trading: " + e.message, "err"); }

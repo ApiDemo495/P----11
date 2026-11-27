@@ -74,6 +74,14 @@ def test_the_execution_gate_still_refuses_a_sub_one_to_one_contract():
 
 
 def test_trader_executes_only_through_gates_with_brackets():
+    """The doctrine under test is "nothing bypasses the gates".
+
+    The order it uses must still be one the EXCHANGE would accept, or the
+    test proves nothing about a real order: a 25 USDT budget for a
+    BTCUSDT order at 100.0 rounds to zero at stepSize 0.001 and is now
+    refused before it is sent. The fixture is therefore sized like a real
+    BTC order (BTCUSDT tick 0.1 / step 0.001 / minNotional 100).
+    """
     calls = []
 
     def fake_transport(method, url, params, headers):
@@ -81,14 +89,17 @@ def test_trader_executes_only_through_gates_with_brackets():
         return {"orderId": len(calls)}
 
     t = trading.Trader(transport=fake_transport)
-    t.cfg = _cfg()
+    t.cfg = _cfg(max_order_usdt=5000)
     import app.trading as tr
     orig = tr.load_cfg
     tr.load_cfg = lambda: t.cfg
     try:
-        row = t.consider({**SIG, "issued": False})
+        btc = locked_contract_signal(symbol="BTC", entry=68273.5,
+                                     tp_bps=100.0, sl_bps=100.0,
+                                     cycle_id="trading-profile-btc")
+        row = t.consider({**btc, "issued": False})
         assert not row["ok"] and not calls          # refused, no order
-        row = t.consider(SIG)
+        row = t.consider(btc)
         assert row["ok"] and len(calls) == 3        # entry + SL + TP
         types = [c[2].get("type") for c in calls]
         assert types == ["MARKET", "STOP_MARKET", "TAKE_PROFIT_MARKET"]
