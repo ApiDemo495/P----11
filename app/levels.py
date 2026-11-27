@@ -212,6 +212,14 @@ def make_contract(levels: dict | None, *, symbol: str, timeframe: str,
     tp_dist, sl_dist = abs(tp - entry), abs(entry - sl)
     if sl_dist <= 0:
         return None
+    # USER RULE: a contract may never pay less than it risks. Every caller
+    # upstream is supposed to have floored the pair already; this is the
+    # structural guarantee that a new caller cannot reintroduce a sub-1:1
+    # trade by forgetting. Widens the TARGET, never narrows the stop.
+    if tp_dist < sl_dist - 1e-12:
+        tp = entry + side * sl_dist
+        tp_dist = sl_dist
+        levels = {**levels, "tp": tp}
     ratio = tp_dist / sl_dist
     if not math.isfinite(ratio) or ratio <= 0 or ratio > MAX_RR + 1e-6:
         return None
@@ -316,22 +324,63 @@ def unavailable_contract(*, symbol: str, timeframe: str, cycle: str | None,
             "reason": reason}
 
 
+RR_MIN = 1.0        # USER RULE: a trade may never pay less than it risks.
+
+
+def floor_rr(levels: dict | None, side: int | None = None) -> dict | None:
+    """Last line of defence: no published pair may sit below RR_MIN.
+
+    `risk.dynamic_level_placement` now applies the floor at construction,
+    but levels also arrive from frozen cycles, legacy paths and repairs, so
+    the invariant is enforced again here — at the one function every caller
+    uses to read a cycle's levels. As at construction, the floor WIDENS THE
+    TARGET and never narrows the stop: the stop is the measured risk unit,
+    and shrinking it would raise the loss frequency to buy a prettier ratio.
+    """
+    if not levels:
+        return levels
+    e, tp, sl = levels.get("entry"), levels.get("tp"), levels.get("sl")
+    d = int(side if side is not None else (levels.get("direction") or 0) or 0)
+    try:
+        e, tp, sl = float(e), float(tp), float(sl)
+    except (TypeError, ValueError):
+        return levels
+    if not (e > 0 and tp > 0 and sl > 0) or d not in (-1, 1):
+        return levels
+    sl_dist = abs(e - sl)
+    tp_dist = abs(tp - e) if (tp - e) * d > 0 else -1.0
+    if sl_dist <= 0:
+        return levels
+    if tp_dist >= RR_MIN * sl_dist:
+        return levels
+    out = dict(levels)
+    out["tp"] = round(e + d * sl_dist, 6)
+    out["tp_dist"] = round(sl_dist, 6)
+    out["sl_dist"] = round(sl_dist, 6)
+    out["ratio"] = RR_MIN
+    out["below_floor"] = False
+    out["rr_floor_applied"] = round((tp_dist / sl_dist) if tp_dist > 0 else 0.0, 4)
+    return out
+
+
 def from_cycle(cyc) -> dict | None:
     """Return the validated frozen contract, or legacy frozen levels."""
     contract = getattr(cyc, "level_contract", None)
     if contract is not None:
         checked = validate_cycle_contract(cyc)
-        return ({**checked, "direction": checked["side"]}
-                if checked is not None else None)
+        if checked is None:
+            return None
+        return floor_rr({**checked, "direction": checked["side"]},
+                        checked.get("side"))
     risk = getattr(cyc, "risk", None) or {}
     entry = risk.get("entry") or getattr(cyc, "_levels_entry", None)
     if not entry:
         t = cyc.target(1) if hasattr(cyc, "target") else None
         entry = getattr(t, "anchor", None) or getattr(cyc, "entry", None)
     direction = int(getattr(cyc, "direction", 0) or 0)
-    return guard(
+    return floor_rr(guard(
         {"tp": getattr(cyc, "tp", None), "sl": getattr(cyc, "sl", None),
          "tp_dist": getattr(cyc, "tp_dist", None),
          "sl_dist": getattr(cyc, "sl_dist", None),
          "ratio": getattr(cyc, "ratio", None),
-         "entry": entry, "direction": direction}, risk or None)
+         "entry": entry, "direction": direction}, risk or None), direction)

@@ -21,12 +21,27 @@ def test_contract_is_bound_to_lock_cycle_side_and_revision():
 
 
 def test_contract_ratios_keep_floor_and_cap_explicit():
+    """The 1:1 floor is enforced at construction, the 4:1 cap at the ceiling.
+
+    USER RULE: a trade may never pay less than it risks, and 1:1 is the
+    floor. `make_contract` used to ACCEPT a 0.5:1 pair and mark it
+    `below_floor`, leaving the watch-only demotion to a later layer — which
+    is how seven of sixteen live cells ended up publishing a target closer
+    than their stop. It now widens the target to meet the measured stop:
+    the stop is the risk unit and must never be narrowed to buy a ratio.
+    """
     lock_id = "lock-test"
     below = levels.make_contract(
         levels.freeze(100.0, 1, {"tp_bps": 50.0, "sl_bps": 100.0}),
         symbol="BTC", timeframe="tf1", cycle="c1", side=1,
         revision=1, lock_id=lock_id)
-    assert below and below["below_floor"] and below["ratio"] == 0.5
+    assert below is not None
+    assert below["ratio"] == 1.0, "a sub-1:1 pair must be floored on the way in"
+    assert below["tp_dist"] == below["sl_dist"]
+    assert below["sl"] == 99.0, "the stop must never move to buy the ratio"
+    assert below["tp"] == 101.0, "the target is widened to meet the stop"
+    assert not below["below_floor"]
+    # the cap is unchanged: 5:1 is still refused outright
     above = levels.make_contract(
         levels.freeze(100.0, 1, {"tp_bps": 500.0, "sl_bps": 100.0}),
         symbol="BTC", timeframe="tf1", cycle="c2", side=1,

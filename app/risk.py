@@ -120,6 +120,29 @@ def dynamic_level_placement(
     phi_sl = 1.0 + 0.3 * fbps_sl - 0.2 * max(0.0, min(1.0, ofti_value))
     sl_dist = atr * 1.0 * phi_sl * tighten
 
+    # ── HARD FLOOR: NEVER BELOW 1:1 (USER RULE) ─────────────────────────
+    # phi_tp can fall to 1 + 0.3*(-0.5) + 0 = 0.85 when a fractal boundary
+    # sits in the target's path, while phi_sl can rise to 1 + 0.3*1 = 1.30
+    # when a fresh barrier protects the stop. The two multipliers are
+    # independent and NOTHING checked their product, so an intended 1:1 or
+    # 3:2 collapsed below 1:1. Live board proof (2026-11-27): BTC tf1 and
+    # tf3 published 0.50:1, ETH tf1/tf2 0.80:1, ETH tf3 0.545:1, PAXG tf2
+    # 0.543:1 — seven of sixteen cells paying less than the risk taken, on
+    # a product whose standing rule is that 1:1 is the floor.
+    #
+    # The floor is applied by WIDENING THE TARGET, never by narrowing the
+    # stop. The stop is the measured risk unit: shrinking it to buy a
+    # prettier ratio would raise the loss frequency, which is the opposite
+    # of what the ratio is for. The obstacle adjustment keeps its meaning
+    # as "narrow all the way down to 1:1, and no further".
+    rr_before = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
+    floored = rr_before < 1.0 - 1e-12
+    if floored:
+        tp_dist = sl_dist
+    if details is not None:
+        details.update({"rr_before_floor": round(rr_before, 4),
+                        "floor_applied": bool(floored)})
+
     tp = price + direction * tp_dist
     sl = price - direction * sl_dist
     if sl <= 0:                                # never emit a non-positive SL
