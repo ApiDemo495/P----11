@@ -73,18 +73,22 @@ def test_mandate_tiers_follow_measured_cells():
         assert "hold policy [" not in out["tier_rule"], (sym, tf)
         assert f"[{hp.tier(sym, tf)}]" in out["tier_rule"], (sym, tf)
     # the certified tier distribution is exact — and it is now gated by
-    # the artifact's own ship verdict.  The shipped hold_wr.json FAILS
-    # backtest/gates18.py gate (ii) (it records no REAL post-cost win
-    # rate for any cell, so it cannot beat the v8 reference), therefore
-    # the 7 cells whose rows held up out-of-fold are reported as
-    # ROWS VERIFIED · SHIP GATE FAIL — never as HOLD-OUT VERIFIED.
+    # the artifact's own ship verdict AND by the hard reward:risk rule.
+    # 2026-11-27: the shipped hold_wr.json fails gate (ii) AND selected a
+    # 0.27:1 geometry on every graded cell, so no cell may wear a
+    # "verified", "shipped" or "holdout miss" badge: the geometry it was
+    # measured on is not one the app is allowed to trade.  The distribution
+    # therefore collapses onto the geometry violation, which is the honest
+    # label until the artifact is re-graded at legal leverage.
     counts = hp.tier_counts()
     assert hp.artifact_ship_verdict()["gate_ii_pass"] is False
     assert counts.get("HOLD-OUT VERIFIED", 0) == 0
-    assert counts[hp.TIER_SHIPGATE] == 7
+    assert counts.get(hp.TIER_SHIPGATE, 0) == 0
     assert counts.get("HOLDOUT ROWS · ERA n<3", 0) == 0
     assert counts.get("IN-SAMPLE SHADOW", 0) == 0
-    assert counts["IN-SAMPLE SHADOW · HOLDOUT MISS"] == 5
+    assert counts.get("IN-SAMPLE SHADOW · HOLDOUT MISS", 0) == 0
+    # the rule outranks every gate above it
+    assert counts[hp.TIER_SUB1] == 12
     assert counts["UNGRADEABLE / WARMUP"] == 4
     # legacy fallback still caps when the hold record is absent
     import app.hold_policy as _hp

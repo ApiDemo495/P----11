@@ -40,11 +40,21 @@ def test_certified_short_timeframe_target_is_widened_to_pay():
     assert abs((entry - sl) / entry * 1e4 - 0.55 * scale / entry * 1e4) < 1e-6
 
 
-def test_target_that_already_pays_is_left_alone():
-    entry, scale, side = 100.0, 40.0, 1
-    tp, _sl, meta = hp._cost_aware("BTC", entry, side, scale, 0.15, 0.55)
+def test_a_target_that_already_pays_the_round_trip_is_not_widened_for_cost():
+    """The COST floor leaves a sufficiently wide target alone.
+
+    2026-11-27: this case used to reuse the certified k=0.15 in a way that
+    only cleared the cost floor because the STOP was enormous. It now also
+    has to clear the reward:risk floor, so it is expressed as what it is:
+    a geometry whose target is already pays-the-round-trip wide AND pays
+    its stop. The cost-only assertion is unchanged.
+    """
+    entry, scale, side = 100.0, 40.0, 2.0
+    tp, _sl, meta = hp._cost_aware("BTC", entry, side, scale, 2.0, 0.55)
     assert meta["tp_widened_for_cost"] is False
     assert meta["tp_bps_used"] == meta["tp_bps_certified"]
+    assert meta["tp_widened_for_rr"] is False
+    assert meta["rr_live"] >= 1.0
 
 
 def test_widening_only_lowers_the_hit_rate_never_raises_it():

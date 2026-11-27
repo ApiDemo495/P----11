@@ -224,6 +224,7 @@ def test_every_tier_has_a_reason_and_all_16_cells_get_one():
             "IN-SAMPLE SHADOW", "IN-SAMPLE SHADOW · HOLDOUT MISS",
             "UNGRADEABLE / WARMUP", "UNECONOMIC · BELOW ROUND TRIP",
             "ROWS VERIFIED · SHIP GATE FAIL",
+            "GEOMETRY BELOW 1:1 · NOT TRADEABLE",
         }, t
 
 
