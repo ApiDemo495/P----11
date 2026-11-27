@@ -34,6 +34,7 @@ import urllib.request
 from pathlib import Path
 
 from . import levels as _levels
+from .exchange_filters import cheapest_legal_notional, legal_order
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 CFG_PATH = DATA / "trading.json"
@@ -48,7 +49,21 @@ DEFAULTS = {
     "testnet": True,
     "api_key": "",
     "api_secret": "",
-    "max_order_usdt": 25.0,
+    # Binance futures rejects any order below the symbol's MIN_NOTIONAL,
+    # and the real floor is higher than the raw filter because quantity
+    # must also be a multiple of stepSize. Measured 2026-11-27:
+    #
+    #   BTC    minNotional 100 USDT, stepSize 0.001 -> 0.002 BTC = ~136 USDT
+    #   ETH    20 USDT, stepSize 0.001              -> ~22 USDT
+    #   BNB    20 USDT, stepSize 0.010              -> ~22 USDT
+    #   PAXG   20 USDT, stepSize 0.001              -> ~22 USDT
+    #
+    # The old default was 25.0, which cannot be filled on ANY of the four
+    # symbols (BTC fails on three filters at once). 150 clears BTC's
+    # effective floor with room for price drift; exchange_filters
+    # re-derives the true floor from live /exchangeInfo at execution time
+    # and the order path refuses an illegal size instead of sending it.
+    "max_order_usdt": 150.0,
     # FUNCTIONAL equity sizing (the POSITION SIZE panel drives this):
     # mode "risk" sizes every order as equity x risk_pct% / stop-distance,
     # capped by max_order_usdt and by the equity itself. "fixed" = legacy.
@@ -249,7 +264,6 @@ class Trader:
         # market mode): can only shrink the order, never lever it up
         _sm = float(sig.get("size_mult") or 1.0)
         notional *= max(0.25, min(1.0, _sm))
-        qty = round(notional / entry, 6)
         # EVT catastrophic-stop bound: the protective stop actually
         # placed is never wider than the measured 1-in-100 tail
         _sl_price = float(sig["sl"])
@@ -259,6 +273,24 @@ class Trader:
             if _dist > _max_bps:
                 _sl_price = entry * (1 - sig["direction"]
                                      * _max_bps / 1e4)
+        # ── EXCHANGE FILTERS ─────────────────────────────────────────
+        # `round(notional / entry, 6)` and `round(price, 2)` are not
+        # orders, they are rejections. Binance enforces LOT_SIZE %stepSize,
+        # PRICE_FILTER %tickSize and notional >= minNotional per symbol; at
+        # the old 25 USDT default BTC failed all three (qty 0.000366 vs a
+        # 0.001 step, stop 67590.76 vs a 0.1 tick, 25 USDT vs the 100 USDT
+        # floor). Every value is now rounded DOWN to a legal one, so the
+        # sent order can only be smaller than the risk already approved.
+        _ord = legal_order(sym, entry, notional / entry,
+                           int(sig["direction"]), tp=float(sig["tp"]),
+                           sl=_sl_price, budget_notional=notional)
+        if not _ord["ok"]:
+            raise ValueError(
+                "order would be rejected by the exchange: "
+                + "; ".join(_ord["why"])
+                + f" (max_order_usdt must be at least "
+                  f"{_ord['filters']['min_notional']:g} for {sym})")
+        qty = _ord["qty"]
         side = "BUY" if sig["direction"] > 0 else "SELL"
         close = "SELL" if side == "BUY" else "BUY"
         entry_o = self._signed("POST", "/fapi/v1/order", {
@@ -266,12 +298,14 @@ class Trader:
             "quantity": qty})
         sl_o = self._signed("POST", "/fapi/v1/order", {
             "symbol": sym, "side": close, "type": "STOP_MARKET",
-            "stopPrice": round(float(_sl_price), 2), "closePosition": "true"})
+            "stopPrice": _ord["sl"], "closePosition": "true"})
         tp_o = self._signed("POST", "/fapi/v1/order", {
             "symbol": sym, "side": close, "type": "TAKE_PROFIT_MARKET",
-            "stopPrice": round(float(sig["tp"]), 2), "closePosition": "true"})
+            "stopPrice": _ord["tp"], "closePosition": "true"})
         return {"symbol": sym, "qty": qty, "entry_id": entry_o.get("orderId"),
-                "sl_id": sl_o.get("orderId"), "tp_id": tp_o.get("orderId")}
+                "sl_id": sl_o.get("orderId"), "tp_id": tp_o.get("orderId"),
+                "filters": _ord["filters"], "tp_px": _ord["tp"],
+                "sl_px": _ord["sl"]}
 
     def close_position(self, symbol: str, exit_price: float,
                        result: str | None) -> dict | None:

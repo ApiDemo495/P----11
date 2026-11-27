@@ -1683,7 +1683,36 @@ async def demo_sync_config(body: dict) -> JSONResponse:
 
 @app.get("/api/trading/status")
 async def trading_status() -> JSONResponse:
-    return JSONResponse({"ok": True, **engine.trader.status()})
+    """Trader state PLUS the exchange filters every order must satisfy.
+
+    The filters used to be invisible: the app sized orders with
+    round(qty, 6) against a 25 USDT default and the exchange rejected
+    them. Serving the constraints beside the config means a budget the
+    broker will refuse is visible before an order is attempted, not after.
+    """
+    from .exchange_filters import min_order_usdt, refresh
+    from .trading import DEFAULTS
+    body = {"ok": True, **engine.trader.status()}
+    try:
+        table = refresh()
+        floors = {sym: min_order_usdt(sym) for sym in
+                  ("BTC", "ETH", "BNB", "PAXG")}
+        budget = float((body.get("config") or {}).get("max_order_usdt")
+                       or DEFAULTS["max_order_usdt"])
+        body["exchange"] = {
+            "symbols": {k: v.describe() for k, v in table.items()},
+            "min_order_usdt": floors,
+            "dearest_floor_usdt": max(floors.values()),
+            "budget_usdt": budget,
+            "budget_fillable": [s for s, f in floors.items() if budget >= f],
+            "budget_refused": [s for s, f in floors.items() if budget < f],
+            "rule": ("orders are rounded DOWN to stepSize / tickSize and "
+                     "must clear minNotional; a budget under a symbol's "
+                     "floor is refused with the number to raise it to"),
+        }
+    except Exception:                                  # pragma: no cover
+        body["exchange"] = None
+    return JSONResponse(body)
 
 
 @app.put("/api/trading/config")
