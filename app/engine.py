@@ -1648,9 +1648,35 @@ class PredictionEngine:
             # speaks only above the asset's noise gate; tempering can
             # veto an issue, never create one the RL gate refused.
             from .asset_behavior import temper as _temper
+            # CONFIDENCE OWNERSHIP (live defect 2026-11-27)
+            # ------------------------------------------------
+            # The card printed confidence 0.021 while the CONFIDENCE CHAIN
+            # — regenerated from the same inputs — printed a total of 0.421.
+            # A 20x disagreement is not rounding: `temper()` returns the
+            # confidence UNCHANGED for an asset with no tempering rule (BTC
+            # has none), and the old line assigned that return value back
+            # over the calibrated number. `fin["confidence"]` at this point
+            # was whatever the earlier chain left behind, so the calibrated
+            # 0.42 was overwritten by a stale 0.02 for exactly the one asset
+            # with nothing to say. calibrate_confidence is the single owner
+            # of this number; temper may only SCALE it when it states a
+            # factor.
+            _calibrated_conf = float(fin.get("confidence") or 0.0)
             _beh = _temper(symbol, pack["cci_adjusted"],
-                           fin["confidence"],
+                           _calibrated_conf,
                            list(self.feed.state(symbol).closes or []))
+            _beh_c = float(_beh.get("confidence") or 0.0)
+            if abs(_beh_c - _calibrated_conf) > 1e-9:
+                fin["behavior_conf"] = {
+                    "before": round(_calibrated_conf, 4),
+                    "after": round(_beh_c, 4),
+                    "factor": _beh.get("factor"),
+                }
+            else:
+                # nothing was changed: keep the calibrated number and the
+                # record of the calibration instead of a verbatim copy
+                _beh = dict(_beh)
+                _beh["confidence"] = _calibrated_conf
             fin["behavior"] = _beh
             # ── CROSS-ASSET SPILLOVER + THESIS-SIGNED REVERSAL ────────
             # Measured, not assumed: on nine months of real Binance bars
@@ -1747,6 +1773,28 @@ class PredictionEngine:
             self._last_dirs[(symbol, tf)] = (time.time(),
                                              int(_dir_final or 0))
             fin["confidence"] = _beh["confidence"]
+            # ── THE CONFIDENCE TRACE (user report 2026-11-27: "why their is
+            # n/a? In explain this why confidence is too low") ────────────
+            # Every stage from here to the published number appends
+            # (stage, before, after). The card renders it verbatim, so a
+            # number that drops by 20x can name the stage that dropped it
+            # instead of leaving the reader to guess. The list is built even
+            # when nothing moves, so "0.42 in, 0.42 out" is also auditable.
+            _ctrace: list[dict] = []
+
+            def _conf_stage(name: str, before: float, after: float,
+                            why: str = "") -> None:
+                if abs(float(after) - float(before)) > 1e-9:
+                    _ctrace.append({"stage": name,
+                                    "before": round(float(before), 4),
+                                    "after": round(float(after), 4),
+                                    "why": why})
+
+            _ctrace.append({"stage": "calibrated chain",
+                            "before": None,
+                            "after": round(float(fin["confidence"]), 4),
+                            "why": "SNR→tanh base × bounded modulators"})
+            fin["conf_trace"] = _ctrace
             # docs11-doublecheck §3: EVERY window gets a side. The old
             # chain (RL bandit -> asset floor -> noise gate) fused three
             # different units into one veto and silenced the app for
@@ -1829,8 +1877,12 @@ class PredictionEngine:
                 f"{float(_adv['rqa_mult'] or 1.0):.3f} = {_adv_mult:.3f} "
                 "(both factors measured in app/advanced.py; this is a "
                 "regression guard, not the calibration)")
+            _c_before_adv = float(fin["confidence"])
             fin["confidence"] = max(0.0, min(1.0,
                 float(fin["confidence"]) * _adv_mult))
+            _conf_stage("advanced layer ×", _c_before_adv,
+                        float(fin["confidence"]),
+                        f"soft_gate × RQA = {_adv_mult:.3f}")
             _beh = dict(_beh)
             _adv_k = self._adv_blend_k(symbol, tf)
             fin["adv_blend_k"] = round(_adv_k, 4)
@@ -2260,6 +2312,10 @@ class PredictionEngine:
                 "asset_nature": fin.get("asset_nature"),
                 **_cell_cert,
                 "behavior": fin.get("behavior"),
+                # the confidence audit trail: every stage that moved the
+                # published number, so the card can name it (2026-11-27)
+                "conf_trace": fin.get("conf_trace"),
+                "behavior_conf": fin.get("behavior_conf"),
                 "drhe": drhe,
                 "pcv": pcv,
                 "pcv_detail": pcv_detail,
@@ -3733,8 +3789,46 @@ class PredictionEngine:
                     res[_k] = _v
             price = self.feed.prices().get(symbol, 0.0)
             atr = float(res.get("atr") or self._atr(self.build_ctx(symbol, tf)))
+            # ── THE SIDE THE APP ACTUALLY PUBLISHES (live defect 2026-11-27)
+            # The card said "BUY", the note said "side FLIPPED to SELL", and
+            # the sealed TP/SL were the BUY ones. Cause: verdict.resolve() is
+            # the one place the trend interaction resolves a side (it can
+            # FLIP a chase), but this function took only three of its four
+            # return values — `side_out` was discarded — and then published
+            # `res["direction"]`, which no longer carried the flip because
+            # the double-check pass had overwritten it afterwards. So the
+            # note and the side described different trades. Resolve ONCE,
+            # here, and publish that side with the levels priced from it.
             direction = int(res.get("direction") or 0)
             conf = float(res.get("confidence") or 0.0)
+            _side_resolved = direction
+            try:
+                from .verdict import resolve as _v_resolve
+                _ok_r, _vd_r, _nt_r, _side_r = _v_resolve(
+                    symbol, tf, direction, conf, res.get("tier"),
+                    res.get("issue_note"))
+                if int(_side_r or 0) in (-1, 1) and int(_side_r) != direction:
+                    _side_resolved = int(_side_r)
+                    res["direction_resolved_from"] = direction
+                    res["trend_flip"] = {
+                        "applied": True, "from": direction,
+                        "to": _side_resolved,
+                        "why": str(_nt_r or ""),
+                        "source": "verdict.resolve",
+                    }
+                    log.info("side resolved %s/%s %+d -> %+d by the verdict "
+                             "rule", symbol, tf, direction, _side_resolved)
+            except Exception:
+                log.exception("side resolution failed %s/%s", symbol, tf)
+                _side_resolved = direction
+            if _side_resolved != direction:
+                # keep the pre-flip side visible for the UI's divergence note
+                if res.get("direction_cci") is None:
+                    res["direction_cci"] = direction
+                res["direction"] = _side_resolved
+                res["signal"] = ("BUY" if _side_resolved > 0
+                                 else "SELL")
+                direction = _side_resolved
             minutes = TIMEFRAMES[tf]["targets"]
             # ONE source of truth for levels (user: "which is real?"):
             # the LOCKED cycle levels — the same entry/TP/SL the chart,
@@ -3968,6 +4062,15 @@ class PredictionEngine:
                 "raw_signal": ("BUY" if direction > 0 else
                                "SELL" if direction < 0 else "FLAT"),
                 "recheck": recheck,
+                # the confidence audit trail, on the ANALYSE result too —
+                # the CONFIDENCE CHAIN panel lives in this box and had no
+                # way to name a stage that moved the number (2026-11-27)
+                "conf_trace": res.get("conf_trace"),
+                "confidence_chain": (res.get("confidence_chain")
+                                     or res.get("published_chain")),
+                "snr": res.get("snr"),
+                "noise_floor": res.get("noise_floor"),
+                "asset_floor": res.get("asset_floor"),
                 "prediction": ({"direction": direction,
                                 "confidence": round(conf, 4),
                                 "entry": round(entry_used, 6),
@@ -5008,7 +5111,18 @@ class PredictionEngine:
                 # tier at quarter as degraded evidence instead
                 res["tier"] = "quarter" if res.get("tier") in ("full", "half") else res.get("tier", "watch-only")
                 res["degraded_evidence"] = True
+            _dc_before = float(res.get("confidence") or 0.0)
             res["confidence"] = dc["confidence"]
+            try:
+                _t = (res.setdefault("conf_trace", []))
+                if abs(float(dc["confidence"]) - _dc_before) > 1e-9:
+                    _t.append({
+                        "stage": "4-vote double-check",
+                        "before": round(_dc_before, 4),
+                        "after": round(float(dc["confidence"]), 4),
+                        "why": str(dc.get("label") or "")})
+            except Exception:
+                pass
             if dc["label"] == "overridden" and not _md_lock:
                 res["direction"] = dc["direction"]
             # The previous-signal cache must match the final post-agent /

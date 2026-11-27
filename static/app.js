@@ -2365,8 +2365,15 @@ function renderCells() {
     const left = untilMs - now;
     const locked = left > 0;
     const active = sym === S.symbol && tf === S.focusTf;
+    // "n/a" with no reason is a dead end, not an answer (user report
+    // 2026-11-27: "Why their is n/a?"). A cell with no certified win rate
+    // is either UNGRADEABLE on its own history or has not been measured
+    // yet, and those are different facts — say which, and why.
     const wr = c.win_rate != null ? `${(c.win_rate * 100).toFixed(1)}%` :
-      (c.certified ? "—" : "n/a");
+      (c.certified ? "—" :
+        (c.status === "ungradeable" || c.tier === "UNGRADEABLE / WARMUP")
+          ? `<span class="dim" title="${esc(c.why || "")}">no rate — ungradeable</span>`
+          : `<span class="dim">no rate — not measured</span>`);
     // the number above is a GROSS first-touch hit rate — label it so it
     // can never be read as money
     const wrLabel = c.win_rate != null ? " <span class=\"dim\">gross</span>" : "";
@@ -2400,6 +2407,7 @@ function renderCells() {
       ${c.tier_reason ? `<div class="hc-why dim" style="font-size:10px;line-height:1.3">${esc(c.tier_reason)}</div>` : ""}
       ${c.geometry_note ? `<div class="hc-rr" style="font-size:10px;line-height:1.3">${rrTxt
         ? `<b>${rrTxt}</b> ` : ""}${esc(c.geometry_note)}</div>` : ""}
+      ${c.why ? `<div class="hc-why dim" style="font-size:10px;line-height:1.3">${esc(c.why)}</div>` : ""}
       <div class="hc-wr">${wr}${wrLabel} <span class="hc-conf">WR${conf ? " · " + conf : ""}${c.cost_infeasible
           ? ` · <span class="acc-dn">round trip ${num(c.round_trip_bps, 1)}bp &gt; the whole target</span>`
           : c.cannot_pay_at_any_target
@@ -2961,6 +2969,35 @@ function renderWhy() {
             + `</b></div>`;
         })()}
         <h5>CONFIDENCE CHAIN — spec order</h5>
+        ${(() => {
+          // WHY THE NUMBER IS WHAT IT IS (user report 2026-11-27: "In
+          // explain this why confidence is too low you can do anything to
+          // increase confidence"). The engine now records every stage that
+          // MOVED the published confidence (`conf_trace`). Print it, and
+          // name the binding constraint: a chain that ends at the 0.02
+          // floor because |CCI| is inside its own noise floor is a real
+          // "no edge", not a broken formula — and the reader deserves to
+          // see which of the two it is.
+          const t = s.conf_trace;
+          if (!Array.isArray(t) || !t.length) return "";
+          const floorHit = (s.confidence ?? 0) <= 0.0205;
+          const snr = s.snr;
+          const head = floorHit
+            ? `<div class="kv"><span class="acc-warn">confidence is at the floor</span>`
+              + `<b class="dim">the fused score sits inside this cell's own noise floor`
+              + (snr != null ? ` (snr ${fmt(snr, 2)})` : "")
+              + `, so the calibrated base is ~0.02 — the chain is working, `
+              + `there is no edge to report in this window. It rises when `
+              + `|CCI_ADJ| clears the floor, and the trace below is the only `
+              + `place that can say otherwise.</b></div>`
+            : "";
+          return head
+            + `<div class="kv"><span class="dim">published</span><b>${fmt(s.confidence, 4)}`
+            + ` <span class="dim">· floor ${fmt(s.asset_floor, 3)}</span></b></div>`
+            + t.map(x => `<div class="kv"><span>${esc(x.stage)}</span>`
+              + `<b class="dim">${x.before == null ? "—" : fmt(x.before, 4)} → `
+              + `${fmt(x.after, 4)}${x.why ? ` <span class="dim">(${esc(x.why)})</span>` : ""}</b></div>`).join("");
+        })()}
         ${(() => {
           // The walk-forward edge model's own probability. It is the only
           // directional component in this system with a measured
