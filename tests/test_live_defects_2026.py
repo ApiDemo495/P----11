@@ -410,3 +410,82 @@ def test_the_engine_skips_the_edge_rung_without_an_artifact():
     # and the vote is published with its probability
     pub = inspect.getsource(_eng.PredictionEngine)
     assert '"edge_model": self._edge_model' in pub
+
+
+# ── 7. THE 1:1 FLOOR (USER RULE) ────────────────────────────────────────
+def test_dynamic_level_placement_never_returns_below_1_to_1():
+    """phi_tp and phi_sl are INDEPENDENT multipliers and nothing bound them.
+
+    phi_tp falls to 0.85 when a fractal boundary sits in the target's path;
+    phi_sl rises to 1.30 when a fresh barrier protects the stop. An intended
+    1:1 therefore collapsed to 0.65:1, and lower with `tighten`. Live board
+    2026-11-27: 7 of 16 cells shipped below 1:1 (BTC tf1/tf3 0.50, ETH tf1/tf2
+    0.80, ETH tf3 0.545, PAXG tf2 0.543). The user's rule is that 1:1 is the
+    floor, so this must hold across the whole input space.
+    """
+    from app.risk import dynamic_level_placement
+    import itertools
+
+    for ratio, drhe, ofti, tighten, side in itertools.product(
+            (1.0, 1.5, 3.0), (0.0, 0.5, 1.0), (0.0, 0.5, 1.0),
+            (1.0, 1.5, 2.0), (1, -1)):
+        det: dict = {}
+        # a boundary just inside the target path and one just beyond the SL
+        below, above = [99.1], [100.9]
+        tp, sl, tpd, sld = dynamic_level_placement(
+            price=100.0, direction=side, ratio=ratio, atr=1.0,
+            boundaries=(below, above), drhe=drhe, ofti_value=ofti,
+            tighten=tighten, details=det)
+        assert sld > 0
+        assert tpd / sld >= 1.0 - 1e-9, (ratio, drhe, ofti, tighten, side,
+                                         tpd / sld, det)
+        # the floor must never be bought by shrinking the stop
+        if det.get("floor_applied"):
+            assert sld == 1.0 * 1.0 * det["phi_sl"] * tighten
+
+
+def test_the_floor_widens_the_target_and_never_narrows_the_stop():
+    """Buying a prettier ratio with a tighter stop raises the loss rate."""
+    from app.risk import dynamic_level_placement
+    det: dict = {}
+    tp, sl, tpd, sld = dynamic_level_placement(
+        price=100.0, direction=1, ratio=1.0, atr=1.0,
+        boundaries=([99.1], [100.9]), drhe=0.0, ofti_value=1.0,
+        tighten=2.0, details=det)
+    assert det["floor_applied"] is True
+    assert det["rr_before_floor"] < 1.0
+    assert tpd == sld                      # target raised to meet the stop
+    # the stop is still the one the placement measured
+    assert abs(sld - 1.0 * det["phi_sl"] * 2.0) < 1e-9
+
+
+def test_levels_floor_rr_is_the_last_line_of_defence():
+    """Frozen cycles and legacy paths bypass construction, so from_cycle
+    re-applies the invariant. Compliant pairs must pass through untouched."""
+    from app.levels import floor_rr
+
+    for side, tp, sl, want in (
+            (1, 100.5, 99.0, 1.0),          # 0.5:1 long
+            (-1, 99.2, 101.0, 1.0),         # 0.8:1 short
+            (1, 100.2, 99.0, 1.0),          # 0.2:1 long
+    ):
+        out = floor_rr({"entry": 100.0, "tp": tp, "sl": sl,
+                        "direction": side}, side)
+        assert out["tp"] == (101.0 if side > 0 else 99.0)
+        assert out["sl"] == sl, "the stop must never move"
+        assert out["ratio"] == want
+        assert out["below_floor"] is False
+
+    ok = {"entry": 100.0, "tp": 102.0, "sl": 99.0, "direction": 1}
+    assert floor_rr(dict(ok)) == ok, "a 2:1 pair must pass through untouched"
+
+
+def test_mandate_level_scale_does_not_rescale_an_already_scaled_stop():
+    """`tp_bps = sl_bps * R` read the ALREADY-scaled stop, so the published
+    ratio was R rather than k*R: eight cells asked for 2:1 and shipped
+    1.667:1 with nothing on the card saying so. Source-level pin."""
+    import inspect
+    from app import engine as _eng
+    src = inspect.getsource(_eng.PredictionEngine)
+    assert '_sl0 = float(_b["sl_bps"])' in src
+    assert '_b["tp_bps"] = round(_sl0 * _k * _Rm, 3)' in src

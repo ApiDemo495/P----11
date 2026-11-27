@@ -3871,6 +3871,30 @@ class PredictionEngine:
             wts = damp_all(self.cci.get_weights(symbol, tf))
             top_w = sorted(wts.items(), key=lambda kv: -abs(kv[1]))[:8]
             ai = job.get("ai") or {}
+            # ── floor the PUBLISHED pair at 1:1 (USER RULE) ─────────────
+            # Computed here, once, so the card cannot show a target closer
+            # than its stop on either the contract path or the preview
+            # fallback. Widens the target; never narrows the measured stop.
+            _pub_tp = (float(_tp_lv) if _tp_lv else
+                       (float(tps[-1]["level"]) if tps else None))
+            _pub_sl = round(sl, 6) if sl else None
+            if (_pub_tp and _pub_sl and entry_used
+                    and int(direction or 0) in (-1, 1)):
+                try:
+                    _e = float(entry_used)
+                    _d = int(direction)
+                    _sd = abs(_e - float(_pub_sl))
+                    _td = abs(float(_pub_tp) - _e)
+                    if _sd > 0 and (_td < _sd or (_pub_tp - _e) * _d <= 0):
+                        _pub_tp = round(_e + _d * _sd, 6)
+                        final_floor = {"rr_before_floor": round(
+                            _td / _sd if _sd else 0.0, 4)}
+                    else:
+                        final_floor = {}
+                except (TypeError, ValueError):
+                    final_floor = {}
+            else:
+                final_floor = {}
             final = {
                 "signal": "BUY" if direction > 0 else ("SELL" if direction < 0 else "FLAT"),
                 "direction": direction,
@@ -3899,9 +3923,20 @@ class PredictionEngine:
                 # as "no target" on the one panel the user opens on purpose.
                 # Publish the same number the ladder ends at, and the tier
                 # the size hint actually resolved to.
-                "tp": (float(_tp_lv) if _tp_lv else
-                       (float(tps[-1]["level"]) if tps else None)),
-                "sl": round(sl, 6) if sl else None,
+                # THE PUBLISHED PAIR IS FLOORED AT 1:1 (USER RULE).
+                # When no contract is locked the card falls back to the
+                # horizon target from `tps` and a SEPARATELY measured `sl` —
+                # two numbers that were never compared, so the board could
+                # publish a target closer than the stop. Live proof
+                # 2026-11-27: 7 of 16 cells below 1:1 on this path alone
+                # (BNB tf1 0.474, BTC tf1/tf3 0.500, ETH tf1/tf2 0.800,
+                # ETH tf3 0.545, PAXG tf1 0.543) while the contract path had
+                # already been floored. Flooring at the publish point is
+                # what makes the rule true of the CARD, not just of the
+                # contract behind it.
+                "tp": _pub_tp,
+                "sl": _pub_sl,
+                "rr_floor": final_floor or None,
                 "tp_source": ("locked contract — horizon target"
                               if _lv else
                               "preview ladder — measured, no lock"),
@@ -5890,13 +5925,36 @@ class PredictionEngine:
             risk["tp_bps"] = tp_dist / entry * 1e4
             risk["rr"] = risk["ratio"] = _levels.MAX_RR
             rr = _levels.MAX_RR
+        # ── THE 1:1 FLOOR (USER RULE), applied to the CONTRACT ──────────
+        # This used to demote the cycle to watch-only when the ratio came
+        # out below 1:1 — i.e. exactly the abstention the user forbids — and
+        # it published the sub-1:1 pair anyway, so the card showed a trade
+        # paying less than it risked. Live board 2026-11-27 before this fix:
+        # 9 of 16 cells below 1:1 (BNB tf1 0.474, BTC tf1/tf3 0.500, ETH tf1/
+        # tf2 0.800, ETH tf3 0.545, PAXG tf2 0.543).
+        #
+        # The floor WIDENS THE TARGET to meet the measured stop; it never
+        # narrows the stop, because the stop is the risk unit and shrinking
+        # it to buy a prettier ratio would raise the loss frequency. The
+        # window still ships a side at full size — nothing abstains.
+        if sl_dist > 0 and rr < 1.0 - 1e-6:
+            risk.setdefault("rr_before_floor", round(rr, 6))
+            tp_dist = sl_dist
+            tp = entry + side * tp_dist
+            cyc.tp = round(tp, 8)
+            if cyc.targets:
+                cyc.target(len(cyc.targets)).level = cyc.tp
+            risk["tp"] = cyc.tp
+            risk["tp_dist"] = tp_dist
+            risk["tp_bps"] = tp_dist / entry * 1e4
+            risk["rr"] = risk["ratio"] = 1.0
+            risk["rr_floor_applied"] = True
+            rr = 1.0
+            if not any(e.get("type") == "rr_floor_applied" for e in cyc.events):
+                cyc.events.append({"ts": now, "type": "rr_floor_applied",
+                                   "from": risk["rr_before_floor"], "to": 1.0})
         cyc.tp_dist, cyc.sl_dist = tp_dist, sl_dist
         cyc.ratio = round(rr, 6) if sl_dist else None
-        if rr < 1.0 - 1e-6:
-            cyc.tier = "watch-only"
-            cyc.execution_eligible = False
-            if not any(e.get("type") == "below_ratio_floor" for e in cyc.events):
-                cyc.events.append({"ts": now, "type": "below_ratio_floor", "ratio": rr})
 
         # Give each issuance/relock a fresh lock fingerprint, distinct from
         # the settlement-window row's mutable metadata.
@@ -8031,9 +8089,16 @@ class PredictionEngine:
         _mandate_cell = _mscale is not None
         if _mscale:
             _k, _Rm = _mscale
+            # NOTE: sl_bps is scaled FIRST and tp_bps is then k x R times the
+            # ORIGINAL stop, because reading the already-scaled stop made
+            # the published ratio R and no longer k x R — a mandate cell
+            # asking for 2:1 shipped 1.667:1 on eight of sixteen cells
+            # (BTC tf2/tf4, ETH tf1/tf2, BNB tf2/tf3, PAXG tf3/tf4) with
+            # nothing on the card to say the number had moved.
             for _b in _blocks.values():
-                _b["sl_bps"] = round(float(_b["sl_bps"]) * _k, 3)
-                _b["tp_bps"] = round(float(_b["sl_bps"]) * _Rm, 3)
+                _sl0 = float(_b["sl_bps"])
+                _b["sl_bps"] = round(_sl0 * _k, 3)
+                _b["tp_bps"] = round(_sl0 * _k * _Rm, 3)
                 _b["tp"] = round(_price0 * (1 + _dir * _b["tp_bps"] / 1e4), 6)
                 _b["sl"] = round(_price0 * (1 - _dir * _b["sl_bps"] / 1e4), 6)
                 _b["rr"] = (round(_b["tp_bps"] / _b["sl_bps"], 3)
@@ -9466,10 +9531,35 @@ class PredictionEngine:
                                 _lv_note = (" · levels mirrored onto the "
                                             "published side (the stored pair "
                                             "was inverted)")
+                        # ── THE 1:1 FLOOR ON THE SCREEN (USER RULE) ─────
+                        # `mirror` preserves distances but nothing compared
+                        # them, and the legacy frozen block was never floored
+                        # at all. Live board 2026-11-27: 7 of 16 cells
+                        # published a target closer than their stop (BNB tf1
+                        # 0.474, BTC tf1/tf3 0.500, ETH tf1/tf2 0.800, ETH
+                        # tf3 0.545, PAXG tf2 0.544). This is the one place
+                        # the card's levels are written, so the invariant is
+                        # enforced here: the target is widened to meet the
+                        # measured stop, the stop never moves, and the card
+                        # says when it happened.
+                        try:
+                            from .levels import floor_rr as _rrfloor
+                            _lv_floored = _rrfloor(lv, _lv_side) or lv
+                        except Exception:
+                            _lv_floored = lv
+                        if (float(_lv_floored["tp"]) != float(lv["tp"])):
+                            _lv_note = ((_lv_note or "") +
+                                        " · target raised to 1:1 (it sat "
+                                        f"closer than the stop: "
+                                        f"{_lv_floored.get('rr_floor_applied')}:1)")
+                            _lv_floored["mirrored"] = lv.get("mirrored", False)
+                        lv = _lv_floored
                         d["tp"], d["sl"] = lv["tp"], lv["sl"]
                         d["tp_dist"], d["sl_dist"] = lv["tp_dist"], lv["sl_dist"]
                         d["ratio"] = lv["ratio"]
                         d["entry"] = lv["entry"]
+                        d["rr_floor"] = ({"before": lv.get("rr_floor_applied")}
+                                         if lv.get("rr_floor_applied") else None)
                         d["levels_ok"] = bool(_lv_ok or _lv_note)
                         d["levels_mirrored"] = lv.get("mirrored") is True
                         if _lv_note:

@@ -2827,6 +2827,17 @@ function renderWhy() {
         <div class="hint">Σ contributions = <b>${fmt(bd.sum_contributions, 4)}</b> = CCI. ω weights relearn every GRC (reward = sign agreement with the move).</div>
       </div>
       <div>
+        ${(() => {
+          // the 1:1 floor is a hard rule; when it moved a level the card
+          // must say so, or the published ratio looks like it fell out of
+          // the maths instead of being corrected by policy.
+          const fl = s.rr_floor && s.rr_floor.before;
+          if (!fl || fl >= 1) return "";
+          return `<div class="kv"><span class="warn">1:1 FLOOR</span>`
+            + `<b class="dim">target raised from ${fmt(fl, 3)}:1 to 1:1 `
+            + `(stop unchanged) — a trade may never pay less than it risks`
+            + `</b></div>`;
+        })()}
         <h5>CONFIDENCE CHAIN — spec order</h5>
         ${(() => {
           // The walk-forward edge model's own probability. It is the only

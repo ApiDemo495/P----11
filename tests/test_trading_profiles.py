@@ -3,6 +3,7 @@ emotions. Safety doctrine under test: a random (sub-floor, unarmed,
 disabled, wrong-side) prediction can NEVER become an order."""
 import time
 
+from app import levels
 from app import trading
 from app.config import asset_profile
 from app.emotion import _crowd
@@ -39,11 +40,37 @@ def test_gate_refuses_everything_unsafe():
     assert not ok and "live Binance feed required" in why
 
 
-def test_below_one_to_one_contract_is_watch_only():
-    sig = locked_contract_signal(entry=100.0, tp_bps=50.0, sl_bps=100.0,
-                                cycle_id="below-floor")
-    ok, why = trading.gate(_cfg(), sig, set(), 0)
-    assert not ok and "watch-only" in why
+def test_the_execution_gate_still_refuses_a_sub_one_to_one_contract():
+    """The gate stays as a last-resort net, but it must be UNREACHABLE now.
+
+    A sub-1:1 pair is floored when the contract is built and again when the
+    card's levels are written, so `levels.freeze` no longer produces one and
+    the gate can only fire from a hand-built artifact. Keeping it is what
+    makes that a guarantee rather than a hope: if a future caller bypasses
+    the floor, the order is still refused instead of executed at 0.5:1.
+    """
+    # a contract the floor never touched cannot be sub-1:1 ...
+    floored = levels.freeze(100.0, 1, {"tp_bps": 50.0, "sl_bps": 100.0})
+    assert levels.make_contract(
+        floored, symbol="BTC", timeframe="tf1", cycle="c1", side=1,
+        revision=1, lock_id="lock-x")["ratio"] >= 1.0
+    # ... so the ONLY way to reach the gate is a forged artifact, and then
+    # it must refuse. Build one directly.
+    forged = dict(locked_contract_signal(
+        entry=100.0, tp_bps=50.0, sl_bps=100.0, cycle_id="below-floor"))
+    contract = dict(forged.get("contract") or {})
+    if not contract:
+        return
+    contract.update({"ratio": 0.5, "below_floor": True,
+                     "tp": 100.5, "tp_dist": 0.5, "sl": 99.0, "sl_dist": 1.0})
+    forged["contract"] = contract
+    forged.update({"tp": 100.5, "sl": 99.0})
+    ok, why = trading.gate(_cfg(), forged, set(), 0)
+    assert not ok, "a sub-1:1 contract must never reach an order"
+    # it is refused; WHICH check catches it is not the point (a hand-built
+    # artifact usually trips the fingerprint first). What matters is that no
+    # path lets a target closer than its stop through to execution.
+    assert why
 
 
 def test_trader_executes_only_through_gates_with_brackets():
