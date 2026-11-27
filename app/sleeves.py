@@ -286,21 +286,57 @@ def evaluate_sleeves(
         asset = s.get("asset", "")
         if asset in by_asset:
             continue
+        # A SHADOW SLEEVE STILL HAS A LIVE READING (user report 2026-11-27:
+        # "why asset triggers are unproven and shadow or none"). The card
+        # printed the word UNPROVEN and a bare row of statistics with no
+        # indication of what the trigger is doing NOW, so "unproven" read as
+        # "the app is not running this" rather than "the gate rejected this
+        # candidate". Compute the same frozen-spec z the open sleeves use —
+        # it is a measurement either way — and say on the row exactly which
+        # gate the candidate failed.
+        z = None
+        state = "unproven"
+        _spec = parse_frozen((s.get("details") or {}).get("frozen_candidate") or "")
+        _lead = str(_spec.get("lead") or "BTC")
+        try:
+            z, state = impulse_z_for(
+                feed, asset, lead=_lead,
+                impulse_hours=int(_spec.get("lookback_h") or IMPULSE_HOURS),
+                threshold=float(_spec.get("thr") or Z_THRESHOLD))
+        except Exception:
+            z, state = None, "unproven"
+        # A SHADOW SLEEVE MAY NOT EMIT A TRADABLE STATE. `state` stays
+        # "unproven" — that is the contract every consumer and test reads —
+        # and the live reading travels in its own field (`trigger`) so the
+        # card can show what the trigger is doing WITHOUT any surface being
+        # able to mistake it for a position.
+        trigger = (str(state) if state in ("long", "short", "flat")
+                   else "warming_up")
+        state = "unproven"
+        reasons = [str(r) for r in (s.get("reasons") or [])]
         by_asset[asset] = {
             "sleeve_id": s.get("sleeve_id", ""),
             "asset": asset,
             "status": "shadow",
-            "state": "unproven",
-            "z": None,
-            "threshold": Z_THRESHOLD,
-            "hold_hours": HOLD_HOURS,
+            "state": state,
+            "z": (round(float(z), 3) if z is not None else None),
+            "trigger": trigger,
+            "threshold": float(_spec.get("thr") or Z_THRESHOLD),
+            "hold_hours": int(_spec.get("hold_h") or HOLD_HOURS),
             "as_of": now,
             "net_ev_bps": round(float(s.get("net_ev_bps", 0.0)), 2),
             "profit_factor": round(float(s.get("profit_factor", 0.0)), 3),
             "t_effective": round(float(s.get("t_effective", 0.0)), 3),
             "n": int(s.get("n", 0)),
-            "note": "out-of-fold evidence only, no live signal",
-            "reasons": s.get("reasons", []),
+            "note": ("the gate rejected this candidate, so it is watched and "
+                     "reported but never traded"
+                     + (" · the live trigger reading needs a real Binance "
+                        "tape (simulated bars are excluded)"
+                        if z is None else
+                        " · the live trigger reading is shown below")),
+            "gate_note": ("; ".join(reasons) if reasons
+                          else "no gate reason recorded"),
+            "reasons": reasons,
         }
 
     return {

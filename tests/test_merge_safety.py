@@ -61,19 +61,39 @@ def test_invalid_feed_mode_fails_loudly():
     assert "FEED_MODE must be one of" in result.stderr
 
 
-def test_paper_book_is_frozen_instead_of_fabricating_fills():
+def test_paper_book_never_fabricates_a_fill():
+    """The rule this pins has always been "no invented fills".
+
+    The book used to satisfy it by being frozen outright. It now satisfies it
+    by only filling on a verified next-bar OPEN over a gap-free Binance tape
+    (app/exec_live.py), and by reporting the precise fact that blocks a fill
+    when one cannot be proven — so a pause still names its cause, and an
+    existing position is still never marked against unverified tape.
+    """
     class Book:
         def snapshot(self):
-            return {"open_positions": [{"sleeve_id": "existing"}], "closed_trades": 1}
+            return {"open_positions": [{"sleeve_id": "existing"}],
+                    "closed_trades": 1}
         def manage(self, *args, **kwargs):
             raise AssertionError("must not mark or close unverified positions")
         def try_enter(self, *args, **kwargs):
             raise AssertionError("must not create unverified fills")
 
-    engine = SimpleNamespace(portfolio=Book())
-    book = PredictionEngine._step_portfolio(engine, {"signals": [{"state": "long"}]})
+    # a feed that cannot price a certified fill: simulated tape
+    class Feed:
+        mode = "sim"
+        def state(self, symbol):
+            raise AssertionError("simulated tape must be refused before resampling")
+
+    engine = SimpleNamespace(portfolio=Book(), feed=Feed())
+    book = PredictionEngine._step_portfolio(
+        engine, {"signals": [{"state": "long"}]})
     assert book["execution_status"] == "paused"
-    assert "next-bar open" in book["execution_reason"]
+    # the reason is the specific fact, per asset — never a bare "paused"
+    assert "simulated tape is excluded" in book["execution_reason"]
+    assert set(book["paused_assets"]) == {"ETH", "BTC", "BNB", "PAXG"}
+    # and the contract it would fill under is published either way
+    assert "next 15m bar open" in book["execution_contract"]["fill"]
     assert book["entered_this_bar"] == []
     assert book["open_positions"] == [{"sleeve_id": "existing"}]
 

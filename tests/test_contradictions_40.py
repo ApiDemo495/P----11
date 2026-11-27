@@ -47,8 +47,12 @@ def test_every_panel_that_prints_a_side_reads_the_conflict():
     # quick bar: side stands, chip carries the caveat
     assert "const _cf = res?.regime_conflict || cyc?.regime_conflict || null;" in JS
     assert "no routing" in JS
-    # the hero header chip
-    assert "REGIME DISAGREEMENT · routing held" in JS
+    # the hero header chip names the opposing state AND the side it opposes,
+    # in one sentence (2026-11-27: "it is showing bullish in yellow box with
+    # impulse bear") — a bare "routing held" chip left the badge contradicting
+    # the chip beside it with nothing explaining the pair
+    assert "OPPOSES THIS" in JS and "routing held" in JS
+    assert "${conflict ? \"\" : chopChip(tf)}" in JS
     # and the ANALYSE box big word is the real side
     assert "const bigWord = r.signal;" in JS
 

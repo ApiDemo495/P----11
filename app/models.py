@@ -101,6 +101,12 @@ class TFCycle:
     issue_note: str = ""
     #: the trend-interaction rule's reading + measurement (app/trend_gate.py)
     trend_gate: dict = field(default_factory=dict)
+    # The 5-state regime read on THIS asset's tape, and the disagreement
+    # record when its impulse state opposes the certified side. Written by
+    # EVERY path that writes a card (ANALYSE and each GRC refresh): it used
+    # to be set only inside the analyse path, so a GRC-refreshed card drew
+    # "▲ BULLISH" beside "📉 impulse bear" with no banner anywhere.
+    regime_conflict: dict | None = None
     #: the FLIP this window's side took (app/trend_gate.py): {applied, from,
     #: to, why, trend, trend_bps, min_trend_bps, measured}. Empty when the
     #: engine's own side stood. Published so no card can print a side without
@@ -193,6 +199,7 @@ class TFCycle:
             "gate_ok": self.gate_ok,
             "issue_note": self.issue_note,
             "trend_gate": self.trend_gate,
+            "regime_conflict": self.regime_conflict,
             "trend_flip": self.trend_flip,
             "levels_repaired": self.levels_repaired,
             "restore_note": self.restore_note,

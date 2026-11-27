@@ -268,4 +268,6 @@ def test_sub_one_to_one_is_repaired_by_widening_the_target():
     assert "heroEntry + _side * risk" in block
     assert "stop left unchanged at" in block
     # a repaired cell is still shown (repaired, never silenced)
-    assert "_floorHit ? 1.0 : _rr0" in block
+    # the printed ratio is recomputed from the repaired target and the
+    # unchanged stop, so it can never describe a different pair
+    assert "const rr = Math.abs(tgt - heroEntry) / risk;" in block
