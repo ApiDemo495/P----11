@@ -393,9 +393,6 @@ class RLSystem:
         n = int(st["n"])
         return (float(st["reward"]) / n) if n > 0 else float("-inf")
 
-    def _mean_reward(self, i: int) -> float:
-        return self._bandit_mean(self.bandit, i)
-
     def _repick(self, bandit: dict | None = None,
                 kind: str = "bandit") -> None:
         bandit = self.bandit if bandit is None else bandit

@@ -29,7 +29,6 @@ is applied on top of Phi_sl.
 """
 from __future__ import annotations
 
-import math
 
 from .config import CONFIDENCE_FLOOR
 

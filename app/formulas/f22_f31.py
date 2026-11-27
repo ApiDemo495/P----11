@@ -11,7 +11,7 @@ import cmath
 import math
 
 from ._helpers import ema, linear_slope, mean, median, pct_returns, safe_tanh, sign, std_pop
-from ..config import HIST_R_ANOMALY, HIST_VOL_CLUSTERS
+from ..config import HIST_R_ANOMALY
 
 EPS = 1e-12
 

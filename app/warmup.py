@@ -37,7 +37,7 @@ from . import loadgov
 from typing import Any
 
 from .cci import uniform_prior
-from .config import SYMBOL_ORDER, TF_ORDER, TIMEFRAMES, WEIGHT_IDS
+from .config import SYMBOL_ORDER, TF_ORDER, TIMEFRAMES
 from .formulas import FORMULA_FUNCTIONS, compute_all
 from .history import HistoryStore
 from .models import FormulaContext

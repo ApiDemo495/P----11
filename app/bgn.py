@@ -141,8 +141,3 @@ class BgnSynchronizer:
                 den += s
             out[tf_i] = (num / den) if den > 1e-12 else raw.get(tf_i, 0.0)
         return out
-
-    def adjust_vector(self, symbol: str, raw_by_tf: dict[str, float]) -> dict[str, float]:
-        """Convenience: build (or reuse this-GRC) matrix and adjust."""
-        matrix = self.last_matrix.get(symbol) or self.matrix(symbol)
-        return self.adjust(matrix, raw_by_tf)

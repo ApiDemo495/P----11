@@ -10,7 +10,6 @@ import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from .config import HISTORY_DIR, HISTORY_RETENTION_DAYS
 

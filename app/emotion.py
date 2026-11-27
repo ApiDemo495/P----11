@@ -37,7 +37,6 @@ from __future__ import annotations
 import math
 import time
 
-from .config import HIST_EMOTION_LAG
 from .formulas._helpers import sign, std_pop
 from .models import FormulaContext
 
@@ -276,24 +275,6 @@ def _compress(z: float, scale: float = 1.6) -> float:
     return math.asinh(max(-1e6, min(1e6, float(z))) / max(1e-9, scale))
 
 
-def _lag_value(ring) -> float | None:
-    """GRC-lagging comparator: the value from HIST_EMOTION_LAG GRCs ago."""
-    if len(ring) == 0:
-        return None
-    if len(ring) >= HIST_EMOTION_LAG:
-        return ring.values()[0]
-    return ring.last()
-
-
-def _neg_frac(closes: list[float], n: int) -> float:
-    if len(closes) < 2:
-        return 0.0
-    tail = closes[-min(n + 1, len(closes)):]
-    steps = [(tail[i] - tail[i - 1]) / tail[i - 1]
-             for i in range(1, len(tail)) if tail[i - 1]]
-    if not steps:
-        return 0.0
-    return sum(1 for r in steps if r < 0) / len(steps)
 
 
 def _atr5(ohlc: dict | None, closes: list[float]) -> float:
@@ -1129,7 +1110,6 @@ class EmotionSystem:
         }
 
         # ---- dominant channel (ranked by distance from ITS OWN neutral) --
-        import time as _time
         _key = (ctx.symbol, ctx.tf)
         _prev = self._prev_emos.get(_key) or {}
 

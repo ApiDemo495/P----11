@@ -51,12 +51,6 @@ class SyncClock:
         self._anchor_src = "local-utc"
         return time.time()
 
-    def begin_pass(self, feed=None) -> float:
-        """Stamp the single snapshot_ts every subsystem of this pass shares."""
-        self._snapshot_ts = self.server_now(feed)
-        self._passes += 1
-        return self._snapshot_ts
-
     @property
     def snapshot_ts(self) -> float:
         return self._snapshot_ts or time.time()
@@ -66,9 +60,6 @@ class SyncClock:
         return self._anchor_src
 
     # ── component scheduling ─────────────────────────────────────────
-    def note_pass(self, component: str, now: float | None = None) -> None:
-        self._last_pass[component] = now if now is not None else time.time()
-
     def _remaining(self, component: str, period: float,
                    now: float) -> float:
         last = self._last_pass.get(component, 0.0)

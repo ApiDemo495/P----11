@@ -204,21 +204,6 @@ class HistoryStore:
         """Called when a cycle closes without an SL hit (keeps cycles aligned)."""
         self.sl_hit_events[symbol].append(0)
 
-    def p_hit(self, symbol: str) -> float:
-        """E2: fraction of SL hits over the last 10 completed cycles."""
-        ev = self.sl_hit_events.get(symbol)
-        if not ev:
-            return 0.0
-        return sum(ev) / len(ev)
-
-    def sl_hit_ratio_recent(self, symbol: str) -> float:
-        """E9: hit ratio over the last 5 completed cycles (hit = trauma)."""
-        ev = self.sl_hit_events.get(symbol)
-        if not ev:
-            return 0.0
-        last5 = list(ev)[-5:]
-        return sum(last5) / len(last5)
-
     def commit_win_streak(self, symbol: str, correct: bool) -> None:
         """Consecutive-correct running ratio: run length capped and /10."""
         if correct:

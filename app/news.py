@@ -1029,31 +1029,12 @@ class NewsSystem:
                 "theme_inputs": ev.get("theme_inputs", {}),
                 "niv_swing_90s": ev.get("niv_swing_90s", 0.0)}
 
-    def set_tape_accel(self, symbol: str, accel: float) -> None:
-        """Engine feeds tape acceleration for SMD (news-vs-price)."""
-        self.tape_accel[symbol] = float(accel)
-
     def impact_against(self, symbol: str, direction: int) -> float:
         """Opposing news impact magnitude in [0,1] (Extreme Override > 0.8)."""
         value = self.aggregate(symbol)["value"]
         if direction >= 0:
             return max(0.0, -value)
         return max(0.0, value)
-
-    def agrees_with(self, symbol: str, direction: int) -> bool:
-        """Neutral aggregate counts as agreement (risk-layer convention)."""
-        value = self.aggregate(symbol)["value"]
-        if abs(value) < 0.05:
-            return True
-        return (1 if value > 0 else -1) == direction or abs(value) < 0.15
-
-    def arrival_scores_last(self, minutes: int) -> list[float]:
-        """Arrival impact scores within `minutes` (QDPC event counting)."""
-        now = time.time()
-        return [
-            it["arrival_impact"] for it in self.items
-            if 0.0 <= (now - it["ts"]) / 60.0 <= minutes
-        ]
 
     def arrival_minutes_last(self, minutes: int) -> dict[int, float]:
         """Minute epoch -> summed arrival impact score for the last

@@ -20,7 +20,6 @@ from the directive; cells start at those defaults and learn in place
 from __future__ import annotations
 
 import threading
-from copy import deepcopy
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
