@@ -73,6 +73,29 @@ def _fresh_locks(_isolate_lock_file):
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_local_servers(monkeypatch):
+    """Never let a developer's running Ollama / LM Studio change a test.
+
+    `LocalModel` now probes OpenAI-compatible servers (Ollama, LM Studio,
+    llama-server, Jan, ...) as its FIRST rung, because that route needs no
+    download. Correct for users, fatal for a suite: with LM Studio running on
+    :1234, every "no runtime" test found a live backend and failed with
+    `'openai' != 'llama_cpp'` — the tests were describing the machine, not
+    the code. Autodetect is off by default here; the tests that exercise
+    discovery set these up themselves.
+    """
+    from app import agents as _ag
+    monkeypatch.setenv(_ag.LOCAL_AUTODETECT_ENV, "0")
+    monkeypatch.delenv(_ag.LOCAL_ENDPOINT_ENV, raising=False)
+    # an explicit endpoint guarantees the probe cannot fall through to the
+    # default port sweep even if a test re-enables autodetect
+    monkeypatch.setenv(_ag.LOCAL_ENDPOINT_ENV, "http://127.0.0.1:9")
+    _ag.invalidate_endpoint_cache()
+    yield
+    _ag.invalidate_endpoint_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_pred_journal(monkeypatch, tmp_path):
     """A prediction seal written by one test must not make the next test's
     analyse take the duplicate-window path.

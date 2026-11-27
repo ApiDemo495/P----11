@@ -13,6 +13,7 @@ import hashlib
 import math
 import json
 import logging
+import os
 import threading
 import time
 from typing import Any
@@ -2018,6 +2019,47 @@ async def agents_local_install_start() -> JSONResponse:
     """
     return JSONResponse({"ok": True,
                          "install": engine.agents.installer.start()})
+
+
+@app.get("/api/agents/local/endpoints")
+async def agents_local_endpoints() -> JSONResponse:
+    """Which local server is answering, and what else could run right now.
+
+    This is the answer to a blocked GGUF download: no transfer is needed if
+    the user already has Ollama / LM Studio / llama-server running, and this
+    reports every port it probed plus the routes that need nothing at all.
+    """
+    ag = engine.agents
+    out = await asyncio.to_thread(ag.local_endpoint_status)
+    out["alternatives"] = await asyncio.to_thread(
+        engine.agents.installer._alternatives)
+    out["ok"] = True
+    return JSONResponse(out)
+
+
+@app.post("/api/agents/local/endpoints")
+async def agents_local_endpoints_set(req: dict) -> JSONResponse:
+    """Point the app at a running server (``{"endpoint": "http://host:port"}``).
+
+    An empty endpoint clears the override and returns to autodetection. The
+    value is kept in the environment of the running process AND reported, so
+    the Agents tab can show exactly what is being probed.
+    """
+    ep = str((req or {}).get("endpoint") or "").strip()
+    from app import agents as _ag
+    if ep:
+        os.environ[_ag.LOCAL_ENDPOINT_ENV] = ep
+    else:
+        os.environ.pop(_ag.LOCAL_ENDPOINT_ENV, None)
+    _ag.invalidate_endpoint_cache()
+    ag = engine.agents
+    local = ag.local
+    local.reset()
+    await asyncio.to_thread(local.try_load, True)
+    out = await asyncio.to_thread(ag.local_endpoint_status)
+    out.update(ok=True, endpoint=ep,
+               local=local.describe())
+    return JSONResponse(out)
 
 
 @app.post("/api/agents/local/retry")
