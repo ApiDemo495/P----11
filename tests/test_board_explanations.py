@@ -225,6 +225,7 @@ def test_every_tier_has_a_reason_and_all_16_cells_get_one():
             "UNGRADEABLE / WARMUP", "UNECONOMIC · BELOW ROUND TRIP",
             "ROWS VERIFIED · SHIP GATE FAIL",
             "GEOMETRY BELOW 1:1 · NOT TRADEABLE",
+            "NO MEASURED EDGE · PATTERN NOT TRADEABLE",
         }, t
 
 
@@ -238,9 +239,20 @@ def test_ship_gate_fail_names_the_gate_and_the_reference():
 
 
 def test_warmup_names_the_actual_blocker():
+    """A demoted cell must name the actual blocker, whatever it is.
+
+    PAXG tf1 reports NO MEASURED EDGE now — its gross edge is negative, a
+    fact about the pattern that outranks the "60m bars cannot resolve a
+    22-min window" history limitation. The requirement is unchanged: the
+    reason must carry the blocker, not a shrug.
+    """
     from app import hold_policy as hp
     r = hp.tier_reason("PAXG", "tf1")
-    assert "60m bars" in r or "cost floor" in r
+    t = hp.tier("PAXG", "tf1")
+    if t == hp.TIER_NO_EDGE:
+        assert "GROSS move" in r and "bps" in r, r
+    else:
+        assert "60m bars" in r or "cost floor" in r, r
 
 
 def test_holdout_miss_names_the_failing_metric():

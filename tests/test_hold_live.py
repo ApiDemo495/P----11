@@ -425,7 +425,10 @@ def test_hold_cells_block_covers_16_cells():
     assert btc1["confidence"] and btc1["confidence"] >= 0.66
     assert btc1["analyse"]["tf_minutes"] == 22
     assert "era" in btc1 and "friction_rule" in btc1["era"]
-    assert block["PAXG|tf1"]["tier"] == "UNGRADEABLE / WARMUP"
+    # PAXG reports NO MEASURED EDGE rather than WARMUP: its signal has no
+    # gross edge at any timeframe, which is a fact about the PATTERN and
+    # outranks a limitation of its history (see tests/test_gross_edge_gate.py)
+    assert block["PAXG|tf1"]["tier"] == hp.TIER_NO_EDGE
     # The certified artifact's own ship gates FAIL (gate (ii): it
     # records no REAL post-cost win rate at all), so no cell may wear
     # HOLD-OUT VERIFIED while that artifact is the one shipped.
@@ -493,7 +496,8 @@ def test_cells_endpoint_serves_policy():
     # reported as verified, shipped or tradeable
     assert body["tiers"].get("HOLD-OUT VERIFIED", 0) == 0
     assert body["tiers"].get("ROWS VERIFIED · SHIP GATE FAIL", 0) == 0
-    assert body["tiers"]["GEOMETRY BELOW 1:1 · NOT TRADEABLE"] == 12
-    assert body["tiers"]["UNGRADEABLE / WARMUP"] == 4
+    assert body["tiers"]["GEOMETRY BELOW 1:1 · NOT TRADEABLE"] == 11
+    assert body["tiers"]["NO MEASURED EDGE · PATTERN NOT TRADEABLE"] == 4
+    assert body["tiers"]["UNGRADEABLE / WARMUP"] == 1
     assert body["manual_default"] is True
     assert body["rule"].startswith("one ANALYSE click")

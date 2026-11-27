@@ -126,6 +126,81 @@ TIER_SHIPGATE = "ROWS VERIFIED · SHIP GATE FAIL"
 # measured.  Neither "verified" nor "failed" is true, so it gets its own
 # label rather than quietly borrowing either one.
 TIER_SUB1 = "GEOMETRY BELOW 1:1 · NOT TRADEABLE"
+# The engine's own direction carries no edge on this cell, measured GROSS of
+# fees. No target geometry can repair that: a signal whose expected move is
+# zero before costs has negative expectancy after any cost, at every ratio.
+# This is a different failure from "below 1:1" and gets its own label.
+TIER_NO_EDGE = "NO MEASURED EDGE · PATTERN NOT TRADEABLE"
+
+# ─────────── measured GROSS edge per (asset, timeframe) ───────────
+# Source: backtest/results/per_tf_full_engine_real.csv — the app's own
+# engine walked over real tape, 893 settled windows, every row carrying
+# realised bps_gross and bps_net. Regenerate the numbers with
+# `python -m backtest.trend_gate_audit`.
+#
+# WHY GROSS AND NOT NET: net depends on the venue's fee stack, so a
+# threshold on net silently encodes today's fees. The gross column is the
+# signal's own expectation — if it is not positive, the pattern does not
+# predict anything and no fee assumption can rescue it.
+#
+# Measured mean gross bps per cell (n in brackets):
+#
+#   BNB  tf1  +10.6 (62)   tf2  +58.8 (65)   tf3 +144.5 (69)   tf4 +205.1 (67)
+#   BTC  tf1  +28.7 (59)   tf2  +45.6 (59)   tf3 +151.3 (62)   tf4 +235.6 (58)
+#   ETH  tf1  +40.6 (45)   tf2  +87.6 (45)   tf3 +290.5 (47)   tf4 +594.4 (46)
+#   PAXG tf1  -16.1 (45)   tf2   -0.7 (50)   tf3   -0.3 (56)   tf4   +0.2 (58)
+#
+# Every BTC/ETH/BNB cell is gross-positive at EVERY confidence band
+# (+29.9 / +218.2 / +267.0 / +148.2 bps across the four bands). PAXG flips
+# sign between bands (-9.5 / -35.9 / +60.0 / -28.9) — that is noise, not an
+# edge. PAXG is also a different microstructure: it pays 18 bps a side trip
+# against a median |move| of 109 bps, versus 12 bps against 147-154 bps for
+# the crypto majors.
+CELL_GROSS_BPS: dict[tuple[str, str], dict[str, float]] = {
+    ("BTC", "tf1"): {"gross": 28.7, "n": 59},
+    ("BTC", "tf2"): {"gross": 45.6, "n": 59},
+    ("BTC", "tf3"): {"gross": 151.3, "n": 62},
+    ("BTC", "tf4"): {"gross": 235.6, "n": 58},
+    ("ETH", "tf1"): {"gross": 40.6, "n": 45},
+    ("ETH", "tf2"): {"gross": 87.6, "n": 45},
+    ("ETH", "tf3"): {"gross": 290.5, "n": 47},
+    ("ETH", "tf4"): {"gross": 594.4, "n": 46},
+    ("BNB", "tf1"): {"gross": 10.6, "n": 62},
+    ("BNB", "tf2"): {"gross": 58.8, "n": 65},
+    ("BNB", "tf3"): {"gross": 144.5, "n": 69},
+    ("BNB", "tf4"): {"gross": 205.1, "n": 67},
+    ("PAXG", "tf1"): {"gross": -16.1, "n": 45},
+    ("PAXG", "tf2"): {"gross": -0.7, "n": 50},
+    ("PAXG", "tf3"): {"gross": -0.3, "n": 56},
+    ("PAXG", "tf4"): {"gross": 0.2, "n": 58},
+}
+#: A cell needs this much measured gross edge to be called tradeable. Above
+#: zero but inside the noise of its own sample is not evidence, so the bar is
+#: "clears zero by more than a token margin".
+MIN_GROSS_EDGE_BPS = 1.0
+
+
+def gross_edge(symbol: str, tf: str) -> float | None:
+    """Measured mean gross bps this cell's signal produced. None = unmeasured."""
+    row = CELL_GROSS_BPS.get((str(symbol).upper(), str(tf).lower()))
+    if not row:
+        return None
+    try:
+        return float(row["gross"])
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def has_gross_edge(symbol: str, tf: str) -> bool | None:
+    """Does this cell's signal predict anything BEFORE costs?
+
+    ``None`` when the cell was never measured — never guessed, and never
+    silently treated as tradeable.
+    """
+    g = gross_edge(symbol, tf)
+    if g is None:
+        return None
+    return g >= MIN_GROSS_EDGE_BPS
 
 # ────────────── cost-aware "is a win actually a win?" ────────────────
 # The certified artifact's headline number is the GROSS row win rate
@@ -267,6 +342,21 @@ def artifact_ship_verdict() -> dict[str, Any]:
 
 
 def tier(symbol: str, tf: str) -> str:
+    # NO SIGNAL, NO TRADE — checked FIRST, ahead of the history gate.
+    #
+    # A cell whose own signal has no measured gross edge cannot be rescued
+    # by geometry: if the expected move is zero before costs it is negative
+    # after any cost, at every target ratio. A perfect 2:1 target aimed by
+    # a coin flip still loses.
+    #
+    # This outranks "ungradeable": PAXG tf1-tf3 used to report WARMUP ("60m
+    # bars cannot resolve a 22-min window"), which described a limitation of
+    # the HISTORY rather than a property of the SIGNAL. The gross-edge
+    # measurement is taken on the engine's own walk at every timeframe and
+    # is a fact about the pattern, so it is the more fundamental answer and
+    # the one the card should lead with.
+    if has_gross_edge(symbol, tf) is False:
+        return TIER_NO_EDGE
     c = cell(symbol, tf)
     if c is None:
         return TIER_WARMUP
@@ -312,6 +402,19 @@ def tier_reason(symbol: str, tf: str) -> str:
     """
     c = cell(symbol, tf)
     t = tier(symbol, tf)
+    # the signal verdict outranks the history verdict — see tier()
+    if t == TIER_NO_EDGE:
+        _ge = gross_edge(symbol, tf)
+        _n = (CELL_GROSS_BPS.get((symbol, tf)) or {}).get("n")
+        return (f"the engine's side has no measured edge on this cell: its "
+                f"mean GROSS move is {_ge:+.1f} bps over {int(_n)} settled "
+                f"windows, before any fee. A signal that predicts nothing "
+                f"cannot be repaired by geometry — every target ratio "
+                f"multiplies a zero expectancy — so this pattern is not "
+                f"tradeable at any 1:1+ setting. The tape keeps computing and "
+                f"every other cell is unaffected."
+                if _ge is not None else
+                "this cell has no measured gross edge")
     if c is None:
         return "this cell is not in the certified hold-policy artifact"
     if c.get("status") != "ok":
@@ -324,6 +427,17 @@ def tier_reason(symbol: str, tf: str) -> str:
     full = sel.get("full") or {}
     hold = sel.get("holdout") or {}
     tg = c.get("targets") or {}
+    if t == TIER_NO_EDGE:
+        _ge = gross_edge(symbol, tf)
+        _n = (CELL_GROSS_BPS.get((symbol, tf)) or {}).get("n")
+        return (f"the engine's side has no measured edge on this cell: its mean "
+                f"GROSS move is {_ge:+.1f} bps over {int(_n)} settled windows "
+                f"(before any fee). A signal that predicts nothing cannot be "
+                f"repaired by geometry — every target ratio multiplies a zero "
+                f"expectancy — so this pattern is not tradeable at any 1:1+ "
+                f"setting. The tape keeps computing and every other cell is "
+                f"unaffected." if _ge is not None else
+                "this cell has no measured gross edge")
     if t == TIER_SUB1:
         g = sub_1_to_1_geometry(symbol, tf) or {}
         _wr = g.get("certified_win_rate")

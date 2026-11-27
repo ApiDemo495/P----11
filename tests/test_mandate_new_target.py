@@ -108,8 +108,11 @@ def test_mandate_tiers_follow_measured_cells():
     assert counts.get("IN-SAMPLE SHADOW", 0) == 0
     assert counts.get("IN-SAMPLE SHADOW · HOLDOUT MISS", 0) == 0
     # the rule outranks every gate above it
-    assert counts[hp.TIER_SUB1] == 12
-    assert counts["UNGRADEABLE / WARMUP"] == 4
+    assert counts[hp.TIER_SUB1] == 11
+    # PAXG is demoted on GROSS EDGE (no signal before any fee), which
+    # outranks the geometry label — see tests/test_gross_edge_gate.py
+    assert counts[hp.TIER_NO_EDGE] == 4
+    assert counts["UNGRADEABLE / WARMUP"] == 1
     # legacy fallback still caps when the hold record is absent
     import app.hold_policy as _hp
     old_path = os.environ.get("HOLD_WR_PATH")
