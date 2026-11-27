@@ -50,6 +50,51 @@ JOURNAL_FILE = os.environ.get("PRED_JOURNAL_PATH",
 KEEP = 400
 MIN_CONF = 0.0
 
+# ── SEAL-TIME ANCHOR SANITY (live defect 2026-11-27) ────────────────────
+# The user pressed ANALYSE and watched two rows go LOST in the history a
+# few seconds later, before price had come anywhere near either barrier.
+# The tape said why: the lock had been stamped at 4,923.24 (ETH) while the
+# market was already trading 4,952.50 — 40 bps away — with a stop only
+# 5.47 bps from that stale anchor. Every barrier therefore sat BEHIND the
+# market at the instant of the seal, so the very first completed bar
+# "touched" it: a loss recorded before any time had passed.
+#
+# A barrier the market has already blown through cannot measure a
+# prediction — it measures how stale the anchor was. That is a refusal
+# (named, with the distance), never a silent repair and never an invented
+# grade: the seal path re-anchors on the live price and seals again.
+ANCHOR_TOL_BPS = 2.0     # anchor vs live market tolerance at seal time
+
+
+def _barrier_behind_market(direction: int, entry: float, tp: float,
+                           sl: float, now_price: float) -> str:
+    """Name the barrier the market is already past, or '' when both stand.
+
+    For a BUY the target must be ABOVE the current price and the stop
+    BELOW it; a SELL is the mirror. When the entry anchor is stale, the
+    whole ladder can sit on the wrong side of the live quote — the
+    condition that produced an instant, unearned loss.
+    """
+    if direction not in (-1, 1) or now_price <= 0:
+        return ""
+    if direction > 0:
+        if tp > 0 and now_price >= tp:
+            return (f"target {tp:g} is already at/below the live price "
+                    f"{now_price:g} at seal time (a LONG cannot run to it)")
+        if sl > 0 and now_price <= sl:
+            return (f"stop {sl:g} is already at/above the live price "
+                    f"{now_price:g} at seal time (it would fire on the "
+                    f"first completed bar, before any time passes)")
+    else:
+        if tp > 0 and now_price <= tp:
+            return (f"target {tp:g} is already at/above the live price "
+                    f"{now_price:g} at seal time (a SHORT cannot run to it)")
+        if sl > 0 and now_price >= sl:
+            return (f"stop {sl:g} is already at/below the live price "
+                    f"{now_price:g} at seal time (it would fire on the "
+                    f"first completed bar, before any time passes)")
+    return ""
+
 
 def _finite(v: Any) -> float | None:
     try:
@@ -122,12 +167,19 @@ class PredictionJournal:
              target: str = "measured TP/SL ladder",
              source: str = "analyse", system_mode: str = "old",
              cycle_id: str | None = None, lock_id: str | None = None,
-             max_hold_s: float | None = None) -> dict:
+             max_hold_s: float | None = None,
+             now_price: float | None = None) -> dict:
         """Seal one prediction, or refuse with every failing check named.
 
         ``max_hold_s`` seals an **era ride** (§18): the lock no longer
         dies at the window boundary — it lives until TP, SL, the
         certified side flipping (the era exit), or this maximum hold.
+
+        ``now_price`` is the live quote at the moment of the seal. When it
+        is supplied, a barrier the market has ALREADY passed is refused
+        instead of being sealed and graded on the next bar: that is the
+        "loss before price moved" defect. Omit it only where there is no
+        live market to compare against (replays and unit tests).
         """
         now = float(created_at if created_at is not None else time.time())
         if symbol not in SYMBOL_ORDER:
@@ -144,6 +196,20 @@ class PredictionJournal:
         ok, why = _side_ok(int(direction), entry_f, tp_f, sl_f)
         if not ok:
             checks.append(why)
+        # the anchor itself must be the market, not a stale copy of it
+        _live = _finite(now_price)
+        if _live is not None and _live > 0 and entry_f > 0:
+            _skew = abs(_live / entry_f - 1.0) * 1e4
+            if _skew > ANCHOR_TOL_BPS:
+                checks.append(
+                    f"entry anchor {entry_f:g} is {_skew:.1f} bps from the "
+                    f"live price {_live:g} — sealing it would grade a stale "
+                    f"anchor, not a prediction (re-anchor on the live price)")
+        if _live is not None and _live > 0:
+            _behind = _barrier_behind_market(int(direction), entry_f,
+                                             tp_f, sl_f, _live)
+            if _behind:
+                checks.append(_behind)
         if conf is None or not (0.0 <= conf <= 1.0):
             checks.append("confidence is missing or outside [0, 1]")
         if checks:
@@ -165,10 +231,26 @@ class PredictionJournal:
             if (row.get("symbol") == symbol and row.get("tf") == tf
                     and row.get("window") == window
                     and row.get("status") in ("open", "won", "lost", "push", "ambiguous")):
+                # A row that has ALREADY SETTLED is history. Replaying it as
+                # "the prediction that does not move" is how the user saw a
+                # LOST row appear in the history in the same instant they
+                # pressed ANALYSE: the window bucket was still the current
+                # one, so the old, graded row was handed back as the answer.
+                # The window is only held while the prediction is still
+                # OPEN — a settled row is returned for the record, clearly
+                # labelled, and a fresh lock is allowed for the live window.
+                if row.get("status") != "open":
+                    return {**self._public(row), "locked": False,
+                            "already": True, "status": str(row.get("status")),
+                            "settled": True,
+                            "why": [f"this {W}-minute window was already "
+                                    f"graded {str(row.get('status')).upper()} "
+                                    f"— the row below is that record, not a "
+                                    f"new prediction"]}
                 return {**self._public(row), "locked": True, "already": True,
                         "why": [f"{symbol} {tf.upper()} is already locked for "
-                                "this {W}-minute window — the sealed prediction "
-                                "does not move"]}
+                                f"this {W}-minute window — the sealed "
+                                f"prediction does not move"]}
 
         evidence = dict(evidence or {})
         digest = hashlib.sha256(
@@ -237,7 +319,8 @@ class PredictionJournal:
                high: float | None = None, low: float | None = None,
                now: float | None = None,
                series: list | None = None,
-               side_now: int | None = None) -> list[dict]:
+               side_now: int | None = None,
+               bar_s: float = 0.0) -> list[dict]:
         """Settle every open lock for (symbol, tf) that has resolved.
 
         ``series`` — optional ``[(ts, high, low), …]`` of CLOSED bars.
@@ -245,6 +328,12 @@ class PredictionJournal:
         from OHLC: status becomes ``ambiguous`` (ungraded, no bps), never
         an invented win or loss. The backtest's SL-first walk is retained
         only as its pessimistic bound, not as live truth.
+
+        ``bar_s`` — the width of one ``series`` bar in seconds (60 for a
+        1-minute tape). A bar is stamped at its OPENING minute, so a bar
+        that merely ends after the seal still carries pre-seal tape; with
+        its width known such a bar is skipped instead of charging the
+        prediction for a move that happened before it existed.
 
         ``side_now`` — the CURRENT certified side (±1).  An open
         **era ride** (§18, settle_mode ``era_ride``) exits at market
@@ -290,6 +379,17 @@ class PredictionJournal:
                 for ts, bhi, blo in series:
                     ts = float(ts)
                     if not (created < ts < horizon):
+                        continue
+                    # A bar STAMPED after the seal can still have OPENED
+                    # before it: the tape stamps a bar at its opening
+                    # minute, so the bar carrying ts = created+50s covers
+                    # [created-10s, created+50s) and its high/low include
+                    # price action from BEFORE the prediction existed.
+                    # Grading a lock on that tape charges it for a move it
+                    # never saw (the "LOST seconds after ANALYSE" report).
+                    # Require the bar's own interval to start after the
+                    # seal, unless the caller has no bar width to give.
+                    if bar_s > 0 and (ts - bar_s) < created - 1e-6:
                         continue
                     bhi, blo = _finite(bhi), _finite(blo)
                     if bhi is None or blo is None:
@@ -380,8 +480,8 @@ class PredictionJournal:
                    extremes: dict[str, tuple[float, float]] | None = None,
                    now: float | None = None,
                    series: dict[str, list] | None = None,
-                   sides_now: dict[tuple[str, str], int] | None = None
-                   ) -> list[dict]:
+                   sides_now: dict[tuple[str, str], int] | None = None,
+                   bar_s: float = 0.0) -> list[dict]:
         out: list[dict] = []
         for symbol in SYMBOL_ORDER:
             p = _finite(prices.get(symbol))
@@ -395,7 +495,7 @@ class PredictionJournal:
                 sn = (sides_now or {}).get((symbol, tf))
                 out.extend(self.settle(symbol, tf, p, high=hi, low=lo,
                                        now=now, series=sym_series,
-                                       side_now=sn))
+                                       side_now=sn, bar_s=bar_s))
         return out
 
     def mark_learned(self, lock_id: str) -> None:
@@ -403,6 +503,80 @@ class PredictionJournal:
             if row.get("id") == lock_id:
                 row["learned"] = True
         self._save()
+
+    # ------------------------------------------------------- self-examination
+    def audit(self, *, tol_bps: float = 1.0) -> dict:
+        """Check the journal against its OWN invariants and name every break.
+
+        The user's third complaint was not "a number is wrong" but "the app
+        does not notice that a number is wrong". A record set can be
+        self-examined without any outside truth, so this runs on every read:
+
+          * a graded row whose outcome contradicts its own barrier plane
+            (a LONG graded LOST by a stop that sits ABOVE its entry, …);
+          * a graded row that settled *without time passing* — an
+            unearned result, the exact symptom the user photographed;
+          * a row whose side, TP and SL are not one ladder;
+          * a row sealed and settled at the same instant.
+
+        Returns ``{ok, issues, checked, rule}``; ``issues`` is a list of
+        ``{id, symbol, tf, kind, detail}`` and is EMPTY when the journal is
+        coherent. Never raises: a self-check that can fail must report the
+        failure rather than take the page down with it.
+        """
+        issues: list[dict] = []
+        rows = list(self.rows or [])
+        for r in rows:
+            rid = str(r.get("id") or "?")
+            sym, tf = r.get("symbol"), r.get("tf")
+            d = _sign(r.get("direction"))
+            e, tp, sl = (_finite(r.get("entry")), _finite(r.get("tp")),
+                         _finite(r.get("sl")))
+            base = {"id": rid, "symbol": sym, "tf": tf}
+            if d == 0 or e is None or tp is None or sl is None or e <= 0:
+                continue
+            ok, why = _side_ok(d, e, tp, sl)
+            if not ok:
+                issues.append({**base, "kind": "ladder-on-wrong-side",
+                               "detail": why})
+            created = _finite(r.get("created_at"))
+            settled = _finite(r.get("settled_at"))
+            if (r.get("outcome") in ("won", "lost") and created is not None
+                    and settled is not None and settled > 0):
+                # how long the prediction was actually exposed
+                held = settled - created
+                reason = str(r.get("settle_reason") or "")
+                if held < 0:
+                    issues.append({**base, "kind": "settled-before-sealed",
+                                   "detail": (f"settled {abs(held):.1f}s "
+                                              f"BEFORE it was sealed")})
+                elif held < 1.0 and "touch" in reason:
+                    issues.append({
+                        **base, "kind": "unearned-settlement",
+                        "detail": (f"graded {r.get('outcome')} after "
+                                   f"{held:.2f}s — no bar can close that "
+                                   f"fast, so the barrier was already "
+                                   f"passed when the lock was sealed")})
+            # a touch-graded row must have decided AT the barrier that
+            # actually produced that outcome: a win at the target (ahead
+            # of the entry) and a loss at the stop (behind it)
+            reason = str(r.get("settle_reason") or "")
+            if r.get("outcome") in ("won", "lost") and "touch" in reason:
+                decided = tp if r.get("outcome") == "won" else sl
+                if decided and _finite(decided):
+                    moved = (decided - e) * d
+                    if (r.get("outcome") == "won" and moved <= 0) or \
+                            (r.get("outcome") == "lost" and moved >= 0):
+                        issues.append({
+                            **base, "kind": "graded-at-a-barrier-behind",
+                            "detail": (f"{r.get('outcome')} recorded at "
+                                       f"{decided:g}, which is on the WRONG "
+                                       f"side of entry {e:g} for a "
+                                       f"{'BUY' if d > 0 else 'SELL'}")})
+        return {"ok": not issues, "issues": issues, "checked": len(rows),
+                "rule": ("every sealed row is checked against its own "
+                         "ladder, side and elapsed time; an empty list "
+                         "means the journal is coherent")}
 
     # ---------------------------------------------------------------- read
     def _public(self, row: dict) -> dict:
