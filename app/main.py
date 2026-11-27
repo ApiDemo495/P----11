@@ -1608,6 +1608,26 @@ async def prediction_stats(symbol: str | None = None,
                          **engine.predlocks.stats(symbol, tf)})
 
 
+@app.get("/api/predictions/audit")
+async def prediction_audit() -> JSONResponse:
+    """The sealed journal's SELF-EXAMINATION.
+
+    The user's third report was that the app ships its own contradictions
+    without noticing. This endpoint asks the record set whether it is
+    coherent — wrong-side ladders, results recorded at a barrier the
+    market had already passed, settlements younger than one bar — and
+    names every break. ``ok: true`` with an empty ``issues`` list is the
+    only state that means "nothing to report"; a populated list is the
+    in-app error the page renders instead of hiding.
+    """
+    try:
+        return JSONResponse({"ok": True, **engine.predlocks.audit()})
+    except Exception as exc:                      # never take the page down
+        return JSONResponse({"ok": False,
+                             "error": f"{type(exc).__name__}: {exc}",
+                             "issues": [], "checked": 0})
+
+
 @app.get("/api/predictions/{lock_id}")
 async def prediction_one(lock_id: str) -> JSONResponse:
     for row in engine.predlocks.rows:

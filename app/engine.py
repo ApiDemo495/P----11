@@ -4138,6 +4138,78 @@ class PredictionEngine:
                     target=("forecast price at horizon end"
                             if _tmode == "new"
                             else "measured TP/SL ladder"))
+                # ── STALE-ANCHOR RECOVERY (live defect 2026-11-27) ──────
+                # The journal refuses a seal whose entry anchor is not the
+                # live market (or whose barriers the market has already
+                # passed). Re-anchoring is the repair the user asked for:
+                # the SAME call, levels re-measured from the live price,
+                # sealed immediately — never an unearned loss and never a
+                # silenced window.
+                _pl = final.get("prediction_lock") or {}
+                if (not _pl.get("locked")
+                        and not _pl.get("already")
+                        and _pl.get("status") == "refused"
+                        and any("anchor" in str(w) or "seal time" in str(w)
+                                for w in (_pl.get("why") or []))
+                        and cyc is not None):
+                    _re = None
+                    _live_r = 0.0
+                    try:
+                        _live_r = float(self.feed.prices().get(symbol, 0.0)
+                                        or 0.0)
+                        _dir_r = int(final.get("direction") or 0)
+                        _sl_bps_r = float((getattr(cyc, "risk", {}) or {})
+                                          .get("sl_bps") or 0.0)
+                        if _live_r > 0 and _dir_r in (-1, 1) and _sl_bps_r > 0:
+                            from .moves_risk import risk_block as _risk_block_r
+                            _fresh_r = _risk_block_r(
+                                _live_r, _dir_r,
+                                int(TIMEFRAMES[tf]["minutes"]),
+                                min(1.0, abs(float(final.get("confidence")
+                                                   or 0.0)) / 0.35),
+                                list(self.feed.state(symbol).closes or []),
+                                list(self.feed.state(symbol).highs or []),
+                                list(self.feed.state(symbol).lows or []),
+                                atr=float(res.get("atr") or 0.0),
+                                spread_bps=float(_pl.get("_spread") or 0.0),
+                                bar_minutes=1.0)
+                            _re = self.predlocks.seal(
+                                symbol, tf,
+                                direction=_dir_r,
+                                entry=float(_fresh_r["entry"]),
+                                tp=float(_fresh_r["tp"]),
+                                sl=float(_fresh_r["sl"]),
+                                confidence=float(final.get("confidence")
+                                                 or 0.0),
+                                minutes=int(TIMEFRAMES[tf]["minutes"]),
+                                gate_ok=bool(final.get("gate_ok")),
+                                recheck_ok=(final.get("recheck") or {})
+                                .get("passed"),
+                                reason=(f"re-anchored on the live price "
+                                        f"{_live_r:g} — {final.get('verdict')}"),
+                                evidence={"reanchored_from": {
+                                    "why": _pl.get("why"),
+                                    "entry": float(
+                                        (getattr(cyc, "level_contract", {})
+                                         or {}).get("entry") or 0.0)}},
+                                target="re-anchored on the live price",
+                                source=str((self.analyse_job or {})
+                                           .get("source") or "analyse"),
+                                system_mode=str(self.agents.settings.get(
+                                    "system_mode", "old")),
+                                now_price=_live_r)
+                    except Exception:
+                        log.exception("stale-anchor re-seal failed for %s|%s",
+                                      symbol, tf)
+                        _re = None
+                    if _re is not None:
+                        _re["reanchored"] = True
+                        _re["refused_before"] = _pl.get("why")
+                        final["prediction_lock"] = _re
+                        log.warning("lock re-anchored %s|%s on the live "
+                                    "price %g (was refused: %s)",
+                                    symbol, tf, _live_r,
+                                    "; ".join(_pl.get("why") or []))
             except Exception:
                 log.exception("prediction lock failed for %s|%s", symbol, tf)
                 final["prediction_lock"] = {
@@ -6451,6 +6523,18 @@ class PredictionEngine:
             # Backtest row rules retain a pessimistic SL-first bound;
             # live OHLC ties are unresolvable and are never learned as loss.
             evidence["hold_policy"] = hold_block
+        # THE LIVE PRICE AND THE ANCHOR MUST BE THE SAME MARKET. The seal
+        # used to accept whatever the level contract remembered, so a
+        # restart (or a contract frozen before the last move) stamped a
+        # prediction at an anchor tens of bps away from the live quote —
+        # with a stop inside that gap, every barrier was already behind
+        # the market and the lock graded on the first closed bar. Handing
+        # the live quote to the journal lets it refuse that seal by name
+        # instead of writing an unearned loss to history.
+        try:
+            _live_seal = float(self.feed.prices().get(symbol, 0.0) or 0.0)
+        except Exception:
+            _live_seal = 0.0
         return self.predlocks.seal(
             symbol, tf,
             direction=int(final.get("direction") or 0),
@@ -6461,6 +6545,7 @@ class PredictionEngine:
                         or final.get("entry") or 0.0),
             tp=float(tp or 0.0),
             sl=float(sl or 0.0),
+            now_price=(_live_seal or None),
             confidence=float(final.get("confidence") or 0.0),
             minutes=int(TIMEFRAMES[tf]["minutes"]),
             gate_ok=bool(final.get("gate_ok") and
@@ -6675,6 +6760,30 @@ class PredictionEngine:
                     self._save_thoughts()
                     return
 
+    PRED_AUDIT_TTL_S = 5.0
+
+    def _prediction_audit_cached(self) -> dict:
+        """The journal's self-audit, rebuilt at most every few seconds.
+
+        Never raises: a failed self-check reports its own failure, because
+        a checker that can silently die is the very defect being fixed.
+        """
+        now = time.time()
+        hit = getattr(self, "_pred_audit_cache", None)
+        if hit and (now - hit[0]) < self.PRED_AUDIT_TTL_S:
+            return hit[1]
+        try:
+            rep = self.predlocks.audit()
+            rep["stamp"] = round(now, 3)
+        except Exception as exc:
+            rep = {"ok": False, "checked": 0, "issues": [],
+                   "error": f"{type(exc).__name__}: {exc}",
+                   "rule": ("the self-audit itself failed — that is itself "
+                            "an error worth showing"),
+                   "stamp": round(now, 3)}
+        self._pred_audit_cache = (now, rep)
+        return rep
+
     def learn_from_prediction_lock(self, lock: dict) -> None:
         """Feed a settled sealed lock back into the app's learners.
 
@@ -6777,10 +6886,16 @@ class PredictionEngine:
                         getattr(cyc, "direction", 0) or 0)
                 except Exception:
                     continue
+            # bar_s: the tape is 1-minute, so a bar stamped at ts covers
+            # [ts, ts+60). Without the width the journal cannot tell that
+            # a bar which ENDS after the seal still opened before it, and
+            # graded the lock on pre-seal tape (an immediate, unearned
+            # loss). Passing it lets a straddling bar be skipped.
             rows = self.predlocks.settle_all(prices, extremes={},
                                               now=now,
                                               series=series_by_sym,
-                                              sides_now=sides_now)
+                                              sides_now=sides_now,
+                                              bar_s=60.0)
             for row in rows:
                 self.learn_from_prediction_lock(row)
             return rows
@@ -7991,8 +8106,32 @@ class PredictionEngine:
         # away (a 170k anchor under a 79k market froze a nonsense
         # forecast/levels). If the anchor disagrees with the live
         # price by >20%, the live price wins.
+        #
+        # 20 % IS NOT A SANITY BOUND (live defect 2026-11-27). A lock
+        # stamped at 4,923.24 while ETH traded 4,952.50 is only 59 bps out
+        # — it sailed under the old threshold — yet its 5.5 bp stop landed
+        # 32 bps BEHIND the market, so the first completed bar "touched"
+        # it and the history recorded a loss seconds after ANALYSE, before
+        # price moved at all. The anchor must BE the market it is graded
+        # against: anything beyond the seal tolerance is re-anchored here,
+        # at the source, and the re-anchor is recorded on the cycle.
         _live = float(self.feed.prices().get(symbol, 0.0) or 0.0)
-        if _live > 0 and _price0 > 0 and abs(_price0 / _live - 1.0) > 0.20:
+        _anchor_skew_bps = (abs(_price0 / _live - 1.0) * 1e4
+                            if _live > 0 and _price0 > 0 else 0.0)
+        if _live > 0 and _price0 > 0 and (
+                abs(_price0 / _live - 1.0) > 0.20
+                or _anchor_skew_bps > 2.0):
+            if abs(_price0 / _live - 1.0) <= 0.20:
+                # small skew: record it so the page can say the anchor was
+                # refreshed rather than pretending it was always the tape
+                self._anchor_reanchored = getattr(
+                    self, "_anchor_reanchored", {})
+                self._anchor_reanchored[(symbol, tf)] = {
+                    "ts": now, "from": _price0, "to": _live,
+                    "skew_bps": round(_anchor_skew_bps, 2)}
+                log.warning("anchor re-anchored %s|%s: %g -> live %g "
+                            "(%.1f bps skew)", symbol, tf, _price0, _live,
+                            _anchor_skew_bps)
             _price0 = _live
         # MEASURED-MOVES TP/SL (docs11-charts B-1): levels come from
         # this asset's measured excursions at each horizon — q80 MAE
@@ -10019,6 +10158,12 @@ class PredictionEngine:
                 "stalled": (time.time() - self.last_window_ts) >
                             (TIMEFRAMES["tf4"]["minutes"] * 60 + 45),
             },
+            # SELF-EXAMINATION OF THE SEALED RECORD. The app checks its own
+            # journal on every snapshot and publishes what it finds, so an
+            # incoherent row becomes a visible in-app error instead of a
+            # number the user has to notice for us. Cost is a linear scan of
+            # at most KEEP (400) rows — sub-millisecond.
+            "prediction_audit": self._prediction_audit_cached(),
             "agent_signal": self.last_agent_signal or {},
         }
 

@@ -1643,14 +1643,61 @@ function renderHero() {
         // numbers, three different ratios, no label saying which object each
         // belongs to. Compute the ratio from the SAME entry and stop that are
         // printed above and say which target it used.
+        //
+        // THE TARGET MUST BE ON THE CALL'S OWN SIDE (live defect 2026-11-27).
+        // The hero took `cyc.forecast.price` FIRST, without asking whether it
+        // sat on the side the card was calling. The reported card was a SELL
+        // at 3,632 whose printed target was 3,649 — ABOVE its own entry —
+        // because the forecast had been computed for the pre-flip BUY and the
+        // trend rule then flipped the side. The card rendered an unexecutable
+        // short with a "0.87:1" ratio. A target on the wrong side is not a
+        // weak target, it is not a target at all: fall through to the next
+        // source that IS on the call's side, and when none is, say so.
         if (!heroEntry || !heroSl) return `<div class="kv"><span>TP:SL ratio</span><b>—</b></div>`;
-        const tgt = cyc?.forecast?.price ?? cyc?.tp ?? res.contract_tp ?? null;
         const risk = Math.abs(heroEntry - heroSl);
-        if (!tgt || !(risk > 0)) return `<div class="kv"><span>TP:SL ratio</span><b>—</b></div>`;
-        const rr = Math.abs(tgt - heroEntry) / risk;
-        const src = cyc?.forecast?.price != null ? "forecast target"
-          : cyc?.tp != null ? "cycle target" : "contract TP";
-        return `<div class="kv"><span>TP:SL ratio</span><b>${rr.toFixed(2)}:1 <span class="dim" style="font-size:11px">(${src} ${px(tgt)} vs stop ${px(heroSl)} from entry ${px(heroEntry)})</span></b></div>`;
+        if (!(risk > 0)) return `<div class="kv"><span>TP:SL ratio</span><b>—</b></div>`;
+        const _side = dir > 0 ? 1 : dir < 0 ? -1 : 0;
+        const _ahead = (t) => t != null && Number.isFinite(+t) &&
+          (_side === 0 || (_side > 0 ? +t > heroEntry : +t < heroEntry));
+        const _cands = [
+          ["forecast target", cyc?.forecast?.price],
+          ["cycle target", cyc?.tp],
+          ["contract TP", res.contract_tp],
+          ["locked contract TP", (cyc?.level_contract || {}).tp],
+        ];
+        const _pick = _cands.find(([, v]) => _ahead(v));
+        const _wrong = _cands.filter(([, v]) => v != null &&
+          Number.isFinite(+v) && !_ahead(v));
+        if (!_pick) {
+          // Nothing on the call's side: the levels and the badge disagree.
+          // Print the disagreement — never a made-up ratio, and never a
+          // silent "—" that hides an incoherent card.
+          const _label = _side > 0 ? "LONG" : _side < 0 ? "SHORT" : "CALL";
+          const _seen = _wrong.length
+            ? ` (${_wrong.map(([n, v]) => `${n} ${px(v)}`).join(", ")})`
+            : "";
+          return `<div class="kv"><span>TP:SL ratio</span><b class="acc-warn">NO TARGET ON THE ${_label} SIDE<span class="dim" style="font-size:11px"> — every published target sits on the wrong side of entry ${px(heroEntry)}${_seen}; nothing can be executed, so no ratio is claimed</span></b></div>`;
+        }
+        const [src, tgt0] = _pick;
+        // THE FLOOR WIDENS THE TARGET, NEVER NARROWS THE STOP (user rule,
+        // absolute). A sub-1:1 pair is REPAIRED, not demoted: the stop is
+        // exactly as measured above, the target moves out to 1.0x the risk,
+        // and the card prints BOTH numbers so the repair can never pass for
+        // a measurement. This is also what keeps the mode honest — before
+        // it, a flipped call could be drawn with a ratio under the floor.
+        const _rr0 = Math.abs(tgt0 - heroEntry) / risk;
+        const _floorHit = _rr0 < 1.0;
+        const tgt = _floorHit
+          ? +(heroEntry + _side * risk).toFixed(8)
+          : tgt0;
+        const rr = _floorHit ? 1.0 : _rr0;
+        const _warn = _wrong.length
+          ? ` <span class="acc-warn" style="font-size:11px">· ignored ${_wrong.map(([n, v]) => `${n} ${px(v)} (wrong side)`).join(", ")}</span>`
+          : "";
+        const _floor = _floorHit
+          ? ` <span class="dim" style="font-size:11px">· ${_rr0.toFixed(2)}:1 as published — target widened to the 1:1 floor (${px(tgt)}); stop left unchanged at ${px(heroSl)}</span>`
+          : "";
+        return `<div class="kv"><span>TP:SL ratio</span><b>${rr.toFixed(2)}:1 <span class="dim" style="font-size:11px">(${src} ${px(tgt)} vs stop ${px(heroSl)} from entry ${px(heroEntry)})</span>${_warn}${_floor}</b></div>`;
       })()}`;
   }
   // TP ladder — the TF's own horizon ALWAYS first (user rule)
@@ -4650,10 +4697,49 @@ function renderMindHistory(h) {
 }
 
 /* ═══════════ HISTORY ═══════════ */
+/* Self-examination of the sealed prediction journal. The app must be able
+   to say "one of my own records is incoherent", name it, and keep going. */
+async function fetchPredictionAudit() {
+  const box = $("#pred-audit");
+  if (!box) return null;
+  try {
+    const a = await api("/api/predictions/audit");
+    if (a.error) {
+      box.className = "hint";
+      box.innerHTML = `<span class="acc-warn">⚠ SELF-AUDIT FAILED — ${esc(a.error)}</span>`;
+      return a;
+    }
+    const issues = a.issues || [];
+    if (a.ok && !issues.length) {
+      box.className = "hint";
+      box.innerHTML = `<span class="dim">✓ self-audit: ${a.checked ?? 0} sealed row(s) coherent — no wrong-side ladder, no settlement younger than one bar.</span>`;
+      return a;
+    }
+    box.className = "hint";
+    box.innerHTML = `<span class="acc-warn">⚠ SELF-AUDIT FOUND ${issues.length} INCONSISTENT ROW(S)</span>` +
+      `<div class="dim" style="margin-top:4px">${esc(a.rule || "")}</div>` +
+      `<ul style="margin:6px 0 0 16px">${issues.slice(0, 8).map(i =>
+        `<li><span class="mono">${esc(i.symbol || "?")}·${esc(String(i.tf || "").toUpperCase())}</span> ` +
+        `<span class="acc-warn">${esc(i.kind || "issue")}</span> — ${esc(i.detail || "")}</li>`).join("")}` +
+      `${issues.length > 8 ? `<li class="dim">…and ${issues.length - 8} more</li>` : ""}</ul>`;
+    return a;
+  } catch (e) {
+    box.className = "hint";
+    box.innerHTML = `<span class="acc-warn">⚠ self-audit unavailable: ${esc(e.message)}</span>`;
+    return null;
+  }
+}
+
 async function loadSealedPredictions() {
   const box = $("#pred-history");
   if (!box) return;
   loadDemoSync().catch(() => {});
+  // SELF-AUDIT (live defect 2026-11-27): the sealed journal checks its own
+  // rows against its own invariants. A clean report is a quiet line; a
+  // broken one is an error the page shows instead of a number the user has
+  // to notice for us. Fetched separately so a failure here can never hide
+  // the history table itself.
+  fetchPredictionAudit().catch(() => {});
   try {
     const [p, s] = await Promise.all([
       api("/api/predictions?limit=40"),
