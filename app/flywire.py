@@ -495,7 +495,7 @@ class FlyWireBrain:
                        / "assets" / "connectome" / "flywire_783.npz.gz")
             if not bundled.exists():
                 return False
-            import gzip, shutil
+            import gzip
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
             tmp = self.npz_path().with_suffix(".npz.part")
             want = bundled.stat().st_size or 1

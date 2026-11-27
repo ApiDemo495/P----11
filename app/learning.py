@@ -27,18 +27,13 @@ from .config import (
     DEEP_PERIOD_MINUTES,
     DEEP_RIGHT_BOOST,
     DEEP_WRONG_CUT,
-    EMOTION_W_MAX,
-    EMOTION_W_MIN,
-    EMOTION_COMPONENT_ID,
     ETA_BRAIN,
     ETA_EMOTION,
     ETA_MICRO,
     ETA_PHYSICS,
-    HEDGE_COMPONENT_ID,
     HIGH_ALERT_HIGH,
     HIGH_ALERT_LOW,
     HIGH_ALERT_PROBATION,
-    BRAIN_COMPONENT_ID,
     LEARN_STATE_FILE,
     MACRO_ACC_WINDOW,
     MACRO_BONUS,
@@ -46,13 +41,8 @@ from .config import (
     MACRO_CUT,
     MACRO_PERIOD_GRC,
     MACRO_PROBATION,
-    NEWS_COMPONENT_ID,
-    PHYSICS_W_MAX,
-    PHYSICS_W_MIN,
-    PHYSICS_COMPONENT_ID,
     SUBSYSTEM_BEARINGS,
     SUBSYSTEM_SHARES_INIT,
-    SUBSYSTEM_STEP,
     SYMBOL_ORDER,
     TF_ORDER,
     WEIGHT_MAX,
@@ -96,10 +86,6 @@ class HMM2:
         self.var = [1e-4, 1e-4]
         self.n_iter = 0
         self.last_loglik = None
-
-    def _norm_pdf(x: float, mu: float, var: float) -> float:
-        var = max(var, 1e-12)
-        return math.exp(-0.5 * (x - mu) ** 2 / var) / math.sqrt(2 * math.pi * var)
 
     def fit(self, series: list[float], iters: int = 8) -> float:
         """Baum-Welch; returns the final mean log-likelihood per step."""
@@ -255,9 +241,6 @@ class LearningSystem:
     # ==================================================================
     # helpers
     # ==================================================================
-    def rates_for(self) -> dict[str, float]:
-        return dict(self.rates)
-
     def _acc_ring(self, ring_map, key, maxlen):
         r = ring_map.get(key)
         if r is None:

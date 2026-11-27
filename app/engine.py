@@ -33,7 +33,6 @@ from .bgn import BgnSynchronizer
 from .cci import CCIEngine, calibrate_confidence, finalize_confidence
 from .clock import grc_id, next_grc_ts, seconds_to_next_grc
 from .config import (
-    ASSET_PROFILES,
     asset_profile,
     BRAIN_COMPONENT_ID,
     CONFIDENCE_FLOOR,
@@ -61,7 +60,6 @@ from .config import (
     TARGET_SCALE,
     TF_ORDER,
     TIMEFRAMES,
-    UFP_ALPHA_IDS,
     WEIGHT_IDS,
 )
 from .contracts import clamp_rung, rung_level   # canonical rung prices

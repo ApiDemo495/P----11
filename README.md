@@ -386,8 +386,7 @@ static/
                    physics/news/brains/agents/history/settings)
   app.js           Tabs, candle chart, fx() formatter, explain panels,
                    contribution ticks, AUTO chip, gauges, news stream
-  brains3d.js      Three.js 2×2 instanced brain visualization
-  vendor/          three.module.js v0.160.1 (MIT, vendored — no CDN)
+  vendor/          lightweight-charts v4 (vendored — no CDN)
 tests/             357 tests: parts 1–4, honesty guards, news (docs11),
                    FlyWire brain (10), order-book layer (6), UX sync
 pytest.ini         pytest 9 + pytest-asyncio 1, strict asyncio mode,

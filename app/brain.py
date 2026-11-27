@@ -36,7 +36,6 @@ import time
 log = logging.getLogger("brain")
 
 from .config import (
-    BRAIN_CLUSTER_UNITS,
     BRAIN_INDIVIDUAL_UNITS,
     BRAIN_MARKET_STATES,
     BRAIN_OUT_DEGREE,
@@ -47,7 +46,7 @@ from .config import (
     SYMBOL_ORDER,
     WEIGHT_IDS,
 )
-from .formulas._helpers import pearson, sign
+from .formulas._helpers import sign
 
 BRAIN_IDS = ["DB-1", "DB-2", "DB-3", "DB-4"]
 _STATE_DIR = {"accumulation": 1, "markup": 1, "distribution": -1,
@@ -259,10 +258,6 @@ class Connectome:
             num += state[mbon_id] * w
             den += w
         return num / den if den > 0 else 0.5
-
-    def cluster_mean(self, state: list[float], pop_name: str) -> float:
-        vals = [state[i] for i in self.pop[pop_name]]
-        return sum(vals) / len(vals) if vals else 0.5
 
 
 class BrainInstance:
@@ -745,14 +740,6 @@ class BrainSystem:
         }
 
     # ------------------------------------------------------------------
-    def on_grc_outcome(self, symbol: str, tf: str, predicted_dir: int,
-                       actual_move: float) -> None:
-        """Track per-brain reward windows for Brain 4 performance inputs."""
-        actual = sign(actual_move)
-        # brain signals: use stored consensus polarity via predicted_dir proxy
-        # (engine passes the aggregate; per-brain windows updated in engine)
-        _ = (symbol, tf, predicted_dir, actual)
-
     def push_rewards(self, formula_rewards: dict[int, float],
                      brain_rewards: dict[int, float]) -> None:
         for wid, r in formula_rewards.items():

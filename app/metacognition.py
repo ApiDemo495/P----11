@@ -38,7 +38,7 @@ import threading
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Callable, Sequence
 
 # ── the 16 Θ(a,τ) cells (mirrors app.cell_registry ids) ──────────────
 CELL_IDS: list[tuple[str, str]] = [
@@ -588,22 +588,6 @@ class Metacognition:
         return _clamp(c, 0.0, 1.0), report.abstain
 
     # ── settled-window updates ─────────────────────────────────────
-    def record_settled(self, symbol: str, tf: str, p: float,
-                       y: int, reward: float | None = None) -> None:
-        """The ONLY entry point that moves calibration and Exp3 weights.
-        Call it when a prediction window has SETTLED — never live."""
-        key = (symbol, tf)
-        idx = self._idx(symbol, tf)
-        if idx is None:
-            # unknown cell (new symbol/tf): it joins as SHADOW-only and
-            # keeps its calibration, but never gets an Exp3 capital slice
-            # until the registry grows deliberately
-            self.shadow_only.add(key)
-        self.calib.record(symbol, tf, p, y)
-        r = reward if reward is not None else (1.0 if y else 0.0)
-        if idx is not None:
-            self.exp3.update(idx, r)
-
     def calibrate(self, symbol: str, tf: str, p: float) -> float:
         return self.calib.calibrate(symbol, tf, p)
 

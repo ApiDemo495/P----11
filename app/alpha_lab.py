@@ -753,8 +753,13 @@ def evaluate_deep(bars, horizon: int, tf: str = "TF1",
             `|score|·σ ≥ friction_mult × hurdle`, and barrier multiples
             fitted on the train fold only.
     """
-    from .ensemble import (apply_platt, cost_labels, fit_platt, ic_weights,
-                           net_edge_bps, zscore_train)
+    from .ensemble import (
+        apply_platt,
+        cost_labels,
+        fit_platt,
+        ic_weights,
+        zscore_train,
+    )
     m = build_matrix(bars, horizon, market=market, stride=stride)
     X, names, idx = m["X"], m["names"], m["idx"]
     fwd, sig, hurdle, prior = m["fwd"], m["sigma"], m["hurdle"], m["prior"]
@@ -921,7 +926,6 @@ CASCADE_GRID = [
 
 def _cascade_trades(bars, events, params, fees_bps: float) -> list[dict]:
     """Settle fade-the-cascade events with taker execution."""
-    from .events import simulate_event
     k, z_thr, tp_frac, sl_frac, hz = params
     out = []
     c = bars.c

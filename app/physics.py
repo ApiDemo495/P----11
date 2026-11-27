@@ -51,12 +51,10 @@ import numpy as np
 from .config import (
     CONFIDENCE_FLOOR,
     ETA_PHYSICS,
-    LEARNING_RATE_ETA,
     PHYSICS_W_MAX,
     PHYSICS_W_MIN,
     PHYSICS_ALPHA_COUNT,
     PHYSICS_COUPLING_WINDOW,
-    PHYSICS_NAMES,
     PHYSICS_STATE_FILE,
     PIPP_MAX_STEPS,
     PIPP_PATHS,
@@ -81,7 +79,6 @@ from .config import (
     WEIGHT_MIN,
 )
 from .formulas._helpers import sign as _sign
-from .formulas.__init__ import compute_all
 from .models import FormulaContext
 
 EPS = 1e-12

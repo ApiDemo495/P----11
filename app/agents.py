@@ -57,7 +57,6 @@ from .config import (
     AGENT_FREE_RPH,
     AGENT_GEMINI_WEIGHT,
     AGENT_LOCAL_WEIGHT,
-    AGENT_PAID_PER_GRC,
     SYMBOL_ORDER,
     TF_ORDER,
 )
