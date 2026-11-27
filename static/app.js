@@ -2340,6 +2340,9 @@ function _tierCls(tier) {
   if (tier === "HOLD-OUT VERIFIED") return "tier-hold";
   if (tier === "HOLDOUT ROWS · ERA n<3") return "tier-rows";
   if (tier === "UNGRADEABLE / WARMUP") return "tier-warm";
+  // a certified geometry that pays less than it risks is a violation of a
+  // hard rule, not a soft "shadow" measurement — it must read as an error
+  if (tier === "GEOMETRY BELOW 1:1 · NOT TRADEABLE") return "tier-err";
   return "tier-shadow";
 }
 function _cdText(ms) {
@@ -2367,6 +2370,16 @@ function renderCells() {
     // the number above is a GROSS first-touch hit rate — label it so it
     // can never be read as money
     const wrLabel = c.win_rate != null ? " <span class=\"dim\">gross</span>" : "";
+    // ── the ratio the win rate BELONGS to. Until 2026-11-27 the cell
+    // printed a 74 % win rate and never the payoff it was measured at
+    // (0.15 x stop, i.e. 0.27:1), so the headline read as a good trade
+    // when the certified geometry cannot pay for its own stop and the
+    // live lock runs a repaired 1:1 whose hit rate was never measured.
+    const _rrBad = c.geometry_feasible === false;
+    const rrTxt = c.geometry_rr != null
+      ? `<span class="${_rrBad ? "acc-dn" : "dim"}">${num(c.geometry_rr, 2)}:1${
+          _rrBad ? ` — BELOW THE 1:1 FLOOR` : ""}</span>`
+      : "";
     const conf = c.confidence != null ? `wilson lo ${(c.confidence * 100).toFixed(1)}%` :
       (c.tier === "UNGRADEABLE / WARMUP" ? "warmup — no certified WR" : "");
     const dir = c.live_direction > 0 ? `<span class="buy">▲ BUY</span>` :
@@ -2385,6 +2398,8 @@ function renderCells() {
       <div class="hc-top"><span class="hc-sym">${sym} ${tf.toUpperCase()} · ${(a.tf_minutes || c.minutes)}m</span>
         <span class="hc-tier ${_tierCls(c.tier)}" title="${esc(c.tier_reason || "why this tier: not recorded")}">${esc(c.tier)}</span></div>
       ${c.tier_reason ? `<div class="hc-why dim" style="font-size:10px;line-height:1.3">${esc(c.tier_reason)}</div>` : ""}
+      ${c.geometry_note ? `<div class="hc-rr" style="font-size:10px;line-height:1.3">${rrTxt
+        ? `<b>${rrTxt}</b> ` : ""}${esc(c.geometry_note)}</div>` : ""}
       <div class="hc-wr">${wr}${wrLabel} <span class="hc-conf">WR${conf ? " · " + conf : ""}${c.cost_infeasible
           ? ` · <span class="acc-dn">round trip ${num(c.round_trip_bps, 1)}bp &gt; the whole target</span>`
           : c.cannot_pay_at_any_target

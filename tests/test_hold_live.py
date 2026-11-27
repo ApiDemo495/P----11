@@ -410,8 +410,17 @@ def test_hold_cells_block_covers_16_cells():
     block = eng.hold_cells_block()
     assert len(block) == 16
     btc1 = block["BTC|tf1"]
-    assert btc1["tier"] in (hp.TIER_HOLDOUT, hp.TIER_ROWS_ONLY,
-                            hp.TIER_SHIPGATE)
+    # 2026-11-27: every shipped cell was selected at row_k = 0.15 against
+    # m = 0.55, i.e. 0.27:1 — below the user's absolute 1:1 floor. Such a
+    # geometry is not tradeable whatever its row gates say, so the check
+    # for a "rows verified" badge now has to be made on a cell whose
+    # geometry can legally be traded. The shipped artifact has none, which
+    # is exactly what TIER_SUB1 reports.
+    assert btc1["tier"] == hp.TIER_SUB1
+    assert btc1["geometry_feasible"] is False
+    assert btc1["geometry_rr"] < 1.0
+    assert btc1["geometry_win_rate_needed"] > btc1["win_rate"] * 100
+    assert "1:1" in btc1["geometry_note"]
     assert btc1["win_rate"] and btc1["win_rate"] >= 0.66
     assert btc1["confidence"] and btc1["confidence"] >= 0.66
     assert btc1["analyse"]["tf_minutes"] == 22
@@ -423,7 +432,7 @@ def test_hold_cells_block_covers_16_cells():
     ship = hp.artifact_ship_verdict()
     assert ship["checked"] is True
     assert ship["gate_ii_pass"] is False
-    assert block["BNB|tf4"]["tier"] == hp.TIER_SHIPGATE
+    assert block["BNB|tf4"]["tier"] == hp.TIER_SUB1
     # and every tradeable cell still carries its GROSS label + cost floor
     assert btc1["win_rate_label"].startswith("gross")
     assert btc1["min_tp_bps"] > btc1["round_trip_bps"]
@@ -432,9 +441,16 @@ def test_hold_cells_block_covers_16_cells():
 
 def test_tier_restores_holdout_badge_when_artifact_passes_gates(monkeypatch):
     """A failing artifact must not overclaim — and a passing one must
-    still earn the badge.  (Guards both directions of the rule.)"""
+    still earn the badge.  (Guards both directions of the rule.)
+
+    2026-11-27: the geometry floor is checked BEFORE the ship gate, so a
+    cell whose certified payoff is below 1:1 reports that first. To keep
+    both directions of the SHIP-GATE rule testable, the geometry floor is
+    neutralised here and restored by monkeypatch teardown.
+    """
     from app import hold_policy as _hp
     monkeypatch.setattr(_hp, "_SHIP_CACHE", None)
+    monkeypatch.setattr(_hp, "sub_1_to_1_geometry", lambda *a, **k: None)
     monkeypatch.setattr(_hp, "artifact_ship_verdict",
                         lambda: {"checked": True, "gate_ii_pass": True})
     assert _hp.tier("BNB", "tf4") == _hp.TIER_HOLDOUT
@@ -442,6 +458,23 @@ def test_tier_restores_holdout_badge_when_artifact_passes_gates(monkeypatch):
     monkeypatch.setattr(_hp, "artifact_ship_verdict",
                         lambda: {"checked": True, "gate_ii_pass": False})
     assert _hp.tier("BNB", "tf4") == _hp.TIER_SHIPGATE
+
+
+def test_a_sub_1_to_1_geometry_outranks_every_row_and_ship_gate(monkeypatch):
+    """The user's absolute rule cannot be masked by a green gate.
+
+    Rows can clear their hold-out bar and the artifact can pass its ship
+    gates; a pair that pays less than it risks is still not tradeable.
+    """
+    from app import hold_policy as _hp
+    monkeypatch.setattr(_hp, "_SHIP_CACHE", None)
+    monkeypatch.setattr(_hp, "artifact_ship_verdict",
+                        lambda: {"checked": True, "gate_ii_pass": True})
+    assert _hp.tier("BTC", "tf1") == _hp.TIER_SUB1
+    s = _hp.summary("BTC", "tf1")
+    assert s["geometry_feasible"] is False
+    assert "does NOT describe the trade that is placed" in s["geometry_note"]
+    assert "1:1" in s["tier_reason"]
 
 
 def test_cells_endpoint_serves_policy():
@@ -455,9 +488,12 @@ def test_cells_endpoint_serves_policy():
     body = json.loads(resp.body)
     assert body["ok"] is True
     assert body["count"] == 16
-    # the shipped artifact fails its own gate (ii), so those 7 cells are
-    # reported as rows-verified-but-not-shipped rather than HOLDOUT VERIFIED
+    # the shipped artifact fails its own gate (ii) AND every one of its
+    # graded cells sits below the 1:1 reward:risk floor, so none of them is
+    # reported as verified, shipped or tradeable
     assert body["tiers"].get("HOLD-OUT VERIFIED", 0) == 0
-    assert body["tiers"]["ROWS VERIFIED · SHIP GATE FAIL"] == 7
+    assert body["tiers"].get("ROWS VERIFIED · SHIP GATE FAIL", 0) == 0
+    assert body["tiers"]["GEOMETRY BELOW 1:1 · NOT TRADEABLE"] == 12
+    assert body["tiers"]["UNGRADEABLE / WARMUP"] == 4
     assert body["manual_default"] is True
     assert body["rule"].startswith("one ANALYSE click")

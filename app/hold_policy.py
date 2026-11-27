@@ -118,6 +118,14 @@ TIER_UNECONOMIC = "UNECONOMIC · BELOW ROUND TRIP"
 # recorded, so it cannot beat the v8 reference).  Honest intermediate:
 # the measurement is real, the ship claim is not earned.
 TIER_SHIPGATE = "ROWS VERIFIED · SHIP GATE FAIL"
+# The certified geometry pays less than it risks (every shipped cell was
+# selected at row_k = 0.15, i.e. 0.15:1).  The measurement is real, but it
+# is a measurement of a trade the app may not place: a target an eighth of
+# the stop needs an 87 % first-touch rate just to break even, and the live
+# lock is built on a repaired 1:1 geometry whose hit rate has NOT been
+# measured.  Neither "verified" nor "failed" is true, so it gets its own
+# label rather than quietly borrowing either one.
+TIER_SUB1 = "GEOMETRY BELOW 1:1 · NOT TRADEABLE"
 
 # ────────────── cost-aware "is a win actually a win?" ────────────────
 # The certified artifact's headline number is the GROSS row win rate
@@ -265,6 +273,12 @@ def tier(symbol: str, tf: str) -> str:
     if c.get("status") != "ok":
         return TIER_WARMUP
     t = c.get("targets") or {}
+    # A geometry that pays less than it risks can never be traded, so no
+    # row or ship gate can make the cell tradeable.  Checked FIRST, before
+    # any gate that could otherwise return a green-ish badge.
+    _g = sub_1_to_1_geometry(symbol, tf)
+    if _g is not None and not _g["feasible"]:
+        return TIER_SUB1
     if c.get("single_year"):
         return TIER_INSAMPLE
     # A cell may only wear HOLD-OUT VERIFIED while the artifact it came
@@ -310,6 +324,21 @@ def tier_reason(symbol: str, tf: str) -> str:
     full = sel.get("full") or {}
     hold = sel.get("holdout") or {}
     tg = c.get("targets") or {}
+    if t == TIER_SUB1:
+        g = sub_1_to_1_geometry(symbol, tf) or {}
+        _wr = g.get("certified_win_rate")
+        return (f"the certified geometry pays {g.get('rr')}x what it risks "
+                f"(target = {g.get('k'):g} x stop) — a target an eighth of "
+                f"the stop neither covers its own stop nor the "
+                f"{round(float(c.get('round_trip_bps') or round_trip_bps(symbol)), 1)} bps round "
+                f"trip. It needs a "
+                f"{g.get('win_rate_needed')}% first-touch rate to break even; "
+                "the certified rate is "
+                + (f"{round(float(_wr) * 100, 1)}%. " if _wr is not None
+                   else "not recorded. ")
+                + "Such a pair is not tradeable at ANY win rate and the app "
+                "enforces a 1:1 floor on every live lock, so this win rate "
+                "describes a geometry you are not allowed to place")
     if t == TIER_HOLDOUT:
         return ("rows AND eras cleared out-of-fold, and the artifact passes "
                 "its own ship gates")
@@ -456,6 +485,20 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
            if _wr is not None and _rr is not None else None)
     base["breakeven_tp_bps"] = _be
     base["win_rate_is_money"] = None
+    # ── the reward:risk the CERTIFIED geometry implies, and therefore
+    # whether the published win rate describes a trade the app may place.
+    _geo = sub_1_to_1_geometry(symbol, tf, base.get("row_k"), base.get("row_m"))
+    if _geo is not None:
+        base["geometry_rr"] = _geo["rr"]
+        base["geometry_feasible"] = _geo["feasible"]
+        base["geometry_win_rate_needed"] = _geo["win_rate_needed"]
+        base["geometry_note"] = (
+            "certified geometry pays "
+            f"{_geo['rr']}x what it risks"
+            + ("" if _geo["feasible"] else
+               f" — BELOW the {RR_LIVE_MIN:g}:1 floor, so live locks are "
+               f"built on a repaired {RR_LIVE_MIN:g}:1 geometry and this "
+               "win rate does NOT describe the trade that is placed"))
     base["min_tp_note"] = (
         f"{MIN_TP_OVER_RT}x round trip (fee-multiple convention)"
         + (f"; this cell's own break-even is {_be} bp at "
@@ -562,6 +605,35 @@ def row_geometry(symbol: str, tf: str) -> tuple[float, float] | None:
         return None
     sel = c["selected"]
     return float(sel["row_k"]), float(sel["row_m"])
+
+
+def sub_1_to_1_geometry(symbol: str, tf: str, k: float | None = None,
+                        m: float | None = None) -> dict[str, Any] | None:
+    """The certified target as a multiple of the certified stop — and the
+    exchange fee the target must clear, if the geometry is unsettleable.
+
+    ``None`` when the cell is not graded. Otherwise a dict carrying
+    ``rr`` (target / stop), ``feasible`` (False when the ratio is under
+    1:1) and, for an infeasible cell, the certified win rate next to the
+    first-touch rate the geometry would actually need.
+    """
+    if k is None or m is None:
+        g = row_geometry(symbol, tf)
+        if g is None:
+            return None
+        k, m = g
+    k, m = float(k), float(m)
+    if k <= 0 or m <= 0:
+        return None
+    c = cell(symbol, tf) or {}
+    wr = ((c.get("selected") or {}).get("full") or {}).get("row_wr")
+    return {
+        "rr": round(k / m, 4),
+        "k": k, "m": m,
+        "feasible": bool(k / m >= RR_LIVE_MIN - 1e-9),
+        "certified_win_rate": wr,
+        "win_rate_needed": round(100.0 / (1.0 + k / m), 2),
+    }
 
 
 def era_geometry(symbol: str, tf: str) -> tuple[float, float] | None:
@@ -957,6 +1029,10 @@ def barrier_payability(tp_bps: float, sl_bps: float, rt_bps: float) -> dict:
     }
 
 
+#: USER RULE (absolute): a trade may never pay less than it risks.
+RR_LIVE_MIN = 1.0
+
+
 def _cost_aware(symbol: str, entry: float, side: int, scale_px: float,
                 k: float, m: float) -> tuple[float, float, dict[str, Any]]:
     """(tp_px, sl_px, meta) with the round-trip floor enforced.
@@ -975,9 +1051,9 @@ def _cost_aware(symbol: str, entry: float, side: int, scale_px: float,
     raise it — so the reported win rate becomes attainable rather than
     decorative.
     """
-    # CERTIFIED GEOMETRY, unchanged: stop = m x scale, target = k x stop,
-    # both kept inside the price (a fat warmup ATR proxy must never push
-    # a SELL's TP below zero — the seal refuses that).
+    # CERTIFIED GEOMETRY: stop = m x scale, target = k x stop, both kept
+    # inside the price (a fat warmup ATR proxy must never push a SELL's TP
+    # below zero — the seal refuses that).
     sl_px = min(m * float(scale_px), entry * 0.9)
     tp_px = min(k * sl_px, entry * 0.9)
     rt_bps = round_trip_bps(symbol)
@@ -986,8 +1062,42 @@ def _cost_aware(symbol: str, entry: float, side: int, scale_px: float,
     widened = bool(tp_bps > 0 and floor_bps > 0 and tp_bps < floor_bps
                    and entry > 0)
     if widened:
-        # floor the TARGET only; the certified stop is left untouched
-        tp_px = min(floor_bps * 1e-4 * entry, entry * 0.9)
+        # floor the TARGET; the certified stop is left untouched
+        tp_px = floor_bps * 1e-4 * entry
+
+    # ── REWARD:RISK FLOOR (user rule, absolute) ───────────────────────
+    # Found 2026-11-27. The cost floor above treated "pays the round trip"
+    # as sufficient, but on the certified k=0.15 geometry the target is
+    # 0.15x the stop: widening it to 1.5x RT (44.7 bps on ETH) against a
+    # 55 bps stop still ships 0.81:1 — a target that cannot pay for its
+    # own stop no matter how often it is touched. That is a rule
+    # violation in the LIVE geometry, not a display bug: every sealed
+    # hold lock was built from it.
+    #
+    # The repair direction is fixed by the user: a floor may WIDEN THE
+    # TARGET and may never NARROW THE STOP. Only when the target cannot
+    # legally widen any further (the 0.9x price cap) does the stop give
+    # way — and it gives way by getting WIDER, never tighter.
+    rr_before = (tp_px / sl_px) if sl_px > 0 else None
+    tp_widened_for_rr = False
+    if sl_px > 0 and tp_px < RR_LIVE_MIN * sl_px:
+        # The stop is already capped at 0.9 x price, so the target can
+        # always be widened to pay it — this cap is what makes the floor
+        # reachable without ever touching the stop. (No stop-narrowing
+        # branch exists here on purpose: a tighter stop raises the loss
+        # frequency to buy a prettier ratio, which is the opposite of the
+        # user's rule.)
+        tp_px = min(RR_LIVE_MIN * sl_px, entry * 0.9)
+        tp_widened_for_rr = True
+    tp_px = min(tp_px, entry * 0.9) if entry > 0 else tp_px
+    ratio = (tp_px / sl_px) if sl_px > 0 else None
+    # The floor is structural, not aspirational: the stop can never exceed
+    # the shared 0.9 x price cap, so a target at the same cap always pays
+    # it. Anything else is a bug and must not reach a seal.
+    if ratio is not None and ratio < RR_LIVE_MIN - 1e-9:
+        raise AssertionError(
+            f"reward:risk {ratio:.4f} below the {RR_LIVE_MIN:g}:1 floor "
+            f"({symbol} entry={entry} scale={scale_px} k={k} m={m})")
     meta = {
         "rt_bps": round(rt_bps, 3),
         "tp_bps_certified": round(tp_bps, 3),
@@ -996,10 +1106,20 @@ def _cost_aware(symbol: str, entry: float, side: int, scale_px: float,
         "min_tp_bps": round(floor_bps, 3),
         "tp_widened_for_cost": widened,
         "tp_pays_round_trip": bool(tp_bps >= floor_bps) if tp_bps else None,
-        "note": ("certified target sits inside the round trip — widened to "
-                 f"{MIN_TP_OVER_RT}x RT so a win actually pays"
-                 if widened else
-                 "certified target clears the round trip"),
+        #: reward:risk the LIVE lock is actually built on, and the
+        #: certified one it started from — both published so no surface
+        #: has to infer a ratio from prices it was handed.
+        "rr_certified": (round(rr_before, 4) if rr_before else None),
+        "rr_live": (round(ratio, 4) if ratio else None),
+        "rr_floor": RR_LIVE_MIN,
+        "tp_widened_for_rr": tp_widened_for_rr,
+        "note": "; ".join(filter(None, [
+            ("certified target sits inside the round trip — widened to "
+             f"{MIN_TP_OVER_RT}x RT so a win actually pays"
+             if widened else "certified target clears the round trip"),
+            (f"target widened to the {RR_LIVE_MIN:g}:1 reward:risk floor"
+             if tp_widened_for_rr else ""),
+        ])),
     }
     return entry + tp_px * side, entry - sl_px * side, meta
 

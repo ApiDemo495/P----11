@@ -45,7 +45,17 @@ def test_era_grid_is_guarded_and_rows_reach_deep_stops():
     assert max(M_ROW) == 3.0
     assert min(M_ERA) >= 0.5
     assert K_ERA[0] == 0.6 and max(K_ERA) == 2.0
-    assert K_ROW[0] == 0.15
+    # 2026-11-27: the row grid used to start at k=0.15, which let EVERY
+    # shipped cell select a 0.27:1 first-touch geometry (k=0.15, m=0.55)
+    # and certify a 74 % win rate that loses 0.030 R per trade. The user's
+    # absolute rule is that reward:risk may never be below 1:1, so the grid
+    # may not contain a lever that cannot pay for the smallest stop.
+    from backtest.hold import rr_floor_ok
+    assert K_ROW[0] == 0.5
+    assert min(k / m for k in K_ROW for m in M_ROW if rr_floor_ok(k, m)) >= 1.0
+    # and the guard agrees with the rule it enforces
+    assert rr_floor_ok(0.15, 0.55) is False
+    assert rr_floor_ok(1.0, 1.0) is True
 
 
 # ─────────────────────── 2) the era-ride lock ───────────────────────

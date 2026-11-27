@@ -53,13 +53,33 @@ from .continuous import (CACHE, MOM_GRID, RESULTS, _hourly_final,
                          wilson)
 from .data import FRICTION_BPS
 
-# Row geometry (T1 — the every-window scoring rule): the first-touch
-# floor 1/(1+k) at k=0.5 is 66.7 % and the real side edge lifts above
-# it.  Rows simulate gross (friction 0) but §18 records the REAL win
-# rate P(gross pnl > full RT) from the same walk — gate (ii) is a net
-# gate, so selection targets it while the 0.66 gross contract holds.
-K_ROW = (0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6)
+# Row geometry (T1 — the every-window scoring rule).  Rows simulate
+# gross (friction 0) but §18 records the REAL win rate P(gross pnl >
+# full RT) from the same walk — gate (ii) is a net gate, so selection
+# targets it while the 0.66 gross contract holds.
+#
+# HARD CONSTRAINT (user rule, absolute): reward:risk may never be below
+# 1:1, so no lever the selector may choose can pay less than it risks.
+#   2026-11-27: this grid started at k = 0.15, which made every one of the
+#   shipped cells select a FIRST-TOUCH GEOMETRY AT 0.27:1 (k=0.15,
+#   m=0.55). At 0.27:1 a window must clear 78.6 % just to break even, and
+#   its EV is p*k - (1-p)*m = 0.7425*0.15 - 0.2575*0.55 = -0.030 R per
+#   trade — a certified "74.3 % win rate" that loses money on every
+#   window. The lever 1:1 boundary is k = m, so k starts at the smallest
+#   value that can pair with the smallest stop.
+K_ROW = (0.5, 0.6, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0)
 M_ROW = (0.15, 0.25, 0.4, 0.55, 0.75, 1.0, 1.5, 2.0, 3.0)
+
+
+def rr_floor_ok(k: float, m: float) -> bool:
+    """The user's absolute floor, as a guard on every (k, m) pair.
+
+    A pair whose target does not pay for its stop is not a trade, however
+    often the target is touched. Callers that enumerate (k, m) must skip
+    the pairs this rejects rather than rely on the grid constant above,
+    so a future edit to the grid cannot reintroduce a sub-1:1 selection.
+    """
+    return bool(m > 0 and k / m >= 1.0 - 1e-9)
 # Era geometry (T2 — the position's REAL TP/SL): wide enough for the
 # held move to pay the FULL Binance round trip (28.9–37.4 bps, §18.1)
 # at a positive edge.  Guarded stops only — the m = 999 no-stop ride
@@ -471,6 +491,10 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
         tr_w_eff = np.ones(n, dtype=bool) if single else tr_w
         for k in K_ROW:
             for m in M_ROW:
+                # the user's absolute floor: never evaluate, never select,
+                # a pair whose target pays less than its stop
+                if not rr_floor_ok(k, m):
+                    continue
                 res = _simulate(side, entry, exit_, moves, scale, k, m,
                                 starts, t, h, l, step_s, fr0,
                                 i_entry, i_exit)
@@ -522,6 +546,8 @@ def grade_cell(asset, w_min, bars, smoke=False, btc_bars=None) -> dict:
             for m in M_ERA:
                 if m >= 999.0 and k != K_ERA[0]:
                     continue                # ride geometry: one k only
+                if not rr_floor_ok(k, min(m, 3.0)):
+                    continue                # the user's 1:1 floor, always
                 for gate_l in ERA_GATES:
                     er = era_sim(side, starts, i_entry, i_exit, entry,
                                  scale, t, h, l, c, k, m, fr_bps,

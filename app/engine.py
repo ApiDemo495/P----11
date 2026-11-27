@@ -6466,6 +6466,12 @@ class PredictionEngine:
                     "scale": _scale,
                     "scale_source": _scale_src,
                     "row_tp": tp, "row_sl": sl,
+                    # the ratio and the floors this lock was BUILT on, so
+                    # no surface has to derive a payoff from the two prices
+                    # and guess which geometry it belongs to
+                    "row_rr": (_cost_meta or {}).get("rr_live"),
+                    "row_rr_certified": (_cost_meta or {}).get("rr_certified"),
+                    "rr_floor": (_cost_meta or {}).get("rr_floor"),
                     "cost_floor": _cost_meta,
                     "era_ride": _use_era,
                     "geometry": "guarded_era" if _use_era_geometry else "row",

@@ -643,6 +643,9 @@ canvas { max-width: 100%; }
 .hcell .tier-rows { color: #7fd8cf; }
 .hcell .tier-shadow { color: var(--gold, #c9a227); }
 .hcell .tier-warm { color: #f0a24a; }
+/* a rule violation (target pays less than its risk), not a measurement
+   caveat — this one keeps the error tone so it cannot blend in */
+.hcell .tier-err { color: #ff5c5c; font-weight: 700; }
 .hcell .hc-wr { font-size: 17px; font-weight: 700; color: #26c96f; margin-top: 3px; }
 .hcell .hc-conf { font-size: 10px; color: #8a8aa3; }
 /* A structural cost caveat that is true for EVERY certified cell is not an
