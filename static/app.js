@@ -2355,6 +2355,9 @@ function _tierCls(tier) {
   // a certified geometry that pays less than it risks is a violation of a
   // hard rule, not a soft "shadow" measurement — it must read as an error
   if (tier === "GEOMETRY BELOW 1:1 · NOT TRADEABLE") return "tier-err";
+  // no signal at all is the more fundamental failure — the signal does not
+  // predict a move, so no target ratio can repair it
+  if (tier === "NO MEASURED EDGE · PATTERN NOT TRADEABLE") return "tier-err";
   return "tier-shadow";
 }
 function _cdText(ms) {

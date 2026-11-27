@@ -136,21 +136,42 @@ def test_a_sub_one_to_one_cell_says_so_on_its_badge_and_payload():
 
 
 def test_every_shipped_cell_is_flagged_if_it_is_below_the_floor():
+    """A sub-1:1 geometry is never allowed to wear a tradeable badge.
+
+    Counts moved from 12 to 11 when PAXG tf4 was demoted one step earlier:
+    its gross edge is +0.2 bps, i.e. no signal, and "no signal" is a more
+    fundamental failure than "wrong geometry" (see tests/test_gross_edge_gate.py).
+    The invariant tested here is unchanged — any cell whose geometry is
+    below the floor must carry TIER_SUB1.
+    """
     flagged = 0
     for sym, tf in hp.known_cells():
         s = hp.summary(sym, tf)
         if s.get("geometry_feasible") is False:
-            assert s["tier"] == hp.TIER_SUB1
+            # A below-floor cell must NEVER wear a tradeable badge. Which
+            # "not tradeable" label it wears depends on whether an even
+            # more fundamental gate fired first: NO_EDGE (the signal does
+            # not predict anything, so no ratio can help) outranks SUB1.
+            assert s["tier"] in (hp.TIER_SUB1, hp.TIER_NO_EDGE), \
+                (sym, tf, s["tier"])
             assert s["geometry_rr"] < RR_MIN
             flagged += 1
     # the shipped artifact has none above the floor; if that ever changes
     # this assertion is the record of when it did
     assert flagged == 12
+    # and of those, exactly one is demoted to NO_EDGE instead
+    assert sum(1 for sym, tf in hp.known_cells()
+               if hp.summary(sym, tf).get("geometry_feasible") is False
+               and hp.summary(sym, tf)["tier"] == hp.TIER_NO_EDGE) == 1
 
 
 def test_tier_counts_expose_the_violation_rather_than_hiding_it():
     counts = hp.tier_counts()
-    assert counts.get(hp.TIER_SUB1) == 12
+    assert counts.get(hp.TIER_SUB1) == 11
+    # the 4 no-edge cells are named, not hidden inside another bucket
+    assert counts.get(hp.TIER_NO_EDGE) == 4
+    assert counts.get(hp.TIER_SUB1) + counts.get(hp.TIER_NO_EDGE) \
+        + counts.get("UNGRADEABLE / WARMUP", 0) == 16
     assert counts.get(hp.TIER_HOLDOUT, 0) == 0
 
 
