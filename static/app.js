@@ -5273,8 +5273,17 @@ async function loadTrading() {
     if ($("#tr-testnet")) $("#tr-testnet").checked = c.testnet !== false;
     if ($("#tr-enabled")) $("#tr-enabled").checked = !!c.enabled;
     const log = $("#tr-log");
-    if (log) log.innerHTML = (t.log || []).slice(-8).reverse().map(r =>
-      `<div>${new Date((r.ts || 0) * 1000).toTimeString().slice(0, 8)} ${esc(r.symbol || "")} ${esc(r.tf || "")} — <b class="${r.ok ? "acc-up" : "acc-dn"}">${r.ok ? "FIRED" : "refused"}</b> ${esc(r.why || "")}</div>`).join("") || "no decisions yet";
+    if (log) log.innerHTML = (t.log || []).slice(-8).reverse().map(r => {
+      // A close that never reached the exchange is the most dangerous state
+      // this panel can show: the app thinks it is flat and the exchange does
+      // not. Say it in words rather than leaving it in a log field.
+      const pos = t.open_positions?.[r.symbol];
+      const unclosed = r.closed && r.exchange_closed === false && pos;
+      const tag = unclosed ? "CLOSED LOCALLY — NOT AT THE EXCHANGE"
+        : r.closed ? "CLOSED" : r.ok ? "FIRED" : "refused";
+      const cls = unclosed ? "acc-dn" : (r.ok || r.closed) ? "acc-up" : "acc-dn";
+      return `<div>${new Date((r.ts || 0) * 1000).toTimeString().slice(0, 8)} ${esc(r.symbol || "")} ${esc(r.tf || "")} — <b class="${cls}">${tag}</b> ${esc(r.why || "")}</div>`;
+    }).join("") || "no decisions yet";
   } catch { /* trading optional */ }
 }
 function bindTrading() {
