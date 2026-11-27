@@ -1738,7 +1738,19 @@ function renderHero() {
         const _floor = _floorHit
           ? ` <span class="dim" style="font-size:11px">· ${_rr0.toFixed(2)}:1 as published — target widened to the 1:1 floor (${px(tgt)}); stop left unchanged at ${px(heroSl)}</span>`
           : "";
-        return `<div class="kv"><span>TP:SL ratio</span><b>${rr.toFixed(2)}:1 <span class="dim" style="font-size:11px">(${src} ${px(tgt)} vs stop ${px(heroSl)} from entry ${px(heroEntry)})</span>${_warn}${_floor}</b></div>`;
+        // WHEN this ratio is one the data measured, say so and show the
+        // evidence that earned it. A target ratio with no provenance is
+        // just a number; the user asked for a win rate and is owed the
+        // number that was actually measured next to the ratio it came from.
+        const _fc = cyc?.forecast || {};
+        const _ev = _fc.rr_evidence || null;
+        const _provenance = _ev
+          ? ` <span class="acc-up" style="font-size:11px">· measured: ${_fc.rr_target}:1 target`
+            + ` — holdout WR ${(_ev.holdout_wr * 100).toFixed(1)}%, EV ${_ev.holdout_ev > 0 ? "+" : ""}${_ev.holdout_ev.toFixed(4)}R, PF ${_ev.pf} over n=${_ev.n_holdout}</span>`
+          : (_fc.rr_source
+            ? ` <span class="dim" style="font-size:11px">· target ratio ${_fc.rr_target}:1 (${esc(_fc.rr_source)} — this cell has no measured ≥1:1 win rate)</span>`
+            : "");
+        return `<div class="kv"><span>TP:SL ratio</span><b>${rr.toFixed(2)}:1 <span class="dim" style="font-size:11px">(${src} ${px(tgt)} vs stop ${px(heroSl)} from entry ${px(heroEntry)})</span>${_warn}${_floor}${_provenance}</b></div>`;
       })()}`;
   }
   // TP ladder — the TF's own horizon ALWAYS first (user rule)

@@ -58,7 +58,11 @@ def test_old_sigma_mean_formula_is_gone():
     # (rr comes from the per-asset mandate config when set, else the
     # global NEW_TARGET_RR — the structure is the same)
     assert "_mag = _factor * _rr_n * _sl_bps" in src
-    assert "_rr_n = _mcfg_c.new_rr(symbol) or NEW_TARGET_RR" in src
+    # the ratio resolves most-specific-first: measured cell -> per-asset
+    # mandate -> global default (docs/WINRATE_AT_1_TO_1.md)
+    assert "_rr_cell = _mcfg_c.new_rr_cell(symbol, tf)" in src
+    assert ("_rr_n = _rr_cell or _mcfg_c.new_rr(symbol) or NEW_TARGET_RR"
+            in src)
     assert "0.5 * min(1.0, abs(float(" in src   # factor kept (tilt, floored at 1:1)
 
 
@@ -121,3 +125,83 @@ def test_mandate_tiers_follow_measured_cells():
         else:
             os.environ["HOLD_WR_PATH"] = old_path
         _hp.reload(old_path)
+
+
+def test_measured_cell_ratios_match_the_artifact_they_came_from():
+    """CELL_RR must be re-derivable from the audit grid, not asserted by hand.
+
+    Every entry claims "selected on train, reported on holdout" at a ratio
+    >= 1:1 with positive holdout EV. This test recomputes that from
+    backtest/results/wr_audit_independent.json and fails if the table and
+    the measurement ever disagree — otherwise a future edit could quietly
+    turn a measured number into a remembered one.
+    """
+    import json
+    from pathlib import Path
+
+    from app.mandate_cfg import CELL_RR
+
+    root = Path(__file__).resolve().parent.parent
+    grid = json.loads(
+        (root / "backtest" / "results" / "wr_audit_independent.json").read_text())
+
+    by_cell = {}
+    for row in grid:
+        best = None
+        for g in (row.get("grid") or []):
+            tp, sl = g.get("tp_bps") or 0, g.get("sl_bps") or 0
+            if sl <= 0 or g.get("holdout_net_wr") is None:
+                continue
+            rr = tp / sl
+            if rr < 1.0 - 1e-9:
+                continue
+            if best is None or (g.get("train_ev_net_R") or -9) > best[0]:
+                best = (g.get("train_ev_net_R") or -9, rr,
+                        g["holdout_net_wr"], g["holdout_ev_net_R"],
+                        g.get("holdout_pf_net"))
+        if best:
+            by_cell[row["cell"]] = best
+
+    assert CELL_RR, "the measured table must not be empty"
+    for (symbol, tf), row in CELL_RR.items():
+        w_min = {"tf1": 22, "tf2": 44, "tf3": 130, "tf4": 247}[tf]
+        cell = f"{symbol}|{w_min}"
+        assert cell in by_cell, f"{cell} is not in the audit grid"
+        _train_ev, rr, hwr, hev, pf = by_cell[cell]
+        assert abs(row["rr"] - rr) < 1e-6, (cell, row["rr"], rr)
+        assert abs(row["holdout_wr"] - hwr) < 5e-4, (cell, row["holdout_wr"], hwr)
+        assert abs(row["holdout_ev"] - hev) < 5e-4, (cell, row["holdout_ev"], hev)
+        assert abs(row["pf"] - pf) < 5e-4, (cell, row["pf"], pf)
+        # the whole point of the table: a legal ratio AND positive EV
+        assert row["rr"] >= 1.0, cell
+        assert row["holdout_ev"] > 0, cell
+
+
+def test_short_timeframes_have_no_positive_ev_point_at_one_to_one():
+    """The measured reason tf1/tf2 get no special ratio.
+
+    If this ever flips, the table above should grow — the test exists so
+    the omission is a decision backed by data rather than an oversight.
+    """
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    grid = json.loads(
+        (root / "backtest" / "results" / "wr_audit_independent.json").read_text())
+
+    pos = {22: 0, 44: 0}
+    for row in grid:
+        w = row.get("w_min")
+        if w not in pos:
+            continue
+        for g in (row.get("grid") or []):
+            tp, sl = g.get("tp_bps") or 0, g.get("sl_bps") or 0
+            if sl <= 0 or g.get("holdout_net_wr") is None:
+                continue
+            if tp / sl < 1.0 - 1e-9:
+                continue
+            if (g.get("holdout_ev_net_R") or 0) > 0:
+                pos[w] += 1
+    assert pos[22] == 0, f"tf1 gained {pos[22]} positive-EV points at >=1:1"
+    assert pos[44] == 0, f"tf2 gained {pos[44]} positive-EV points at >=1:1"
