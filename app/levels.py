@@ -178,11 +178,29 @@ def mirror(levels: dict | None, side: int) -> dict | None:
                 "ratio": (abs(tp - entry) / abs(entry - sl)
                           if abs(entry - sl) > 0 else None),
                 "mirrored": False}
-    # Reflect: the old TP becomes the new SL and vice versa.
-    out = {"entry": entry, "tp": sl, "sl": tp, "direction": want,
-           "tp_dist": abs(sl - entry), "sl_dist": abs(entry - tp),
-           "ratio": (abs(sl - entry) / abs(entry - tp)
-                     if abs(entry - tp) > 0 else None),
+    # Place each leg at ITS OWN frozen distance, on the new side.
+    #
+    # This used to swap the two prices (old TP became new SL and vice
+    # versa), which silently INVERTED the reward:risk: a certified 2:1
+    # pair arrived on the screen as 1:2, the 1:1 floor then widened the
+    # target back to exactly 1:1, and every direction disagreement
+    # destroyed a legal 2:1 geometry (live 2026-11-27: BTC tf1 contract
+    # ratio 1.9999 published as 1.0000). Swapping prices is only
+    # equivalent when both legs are equidistant from the entry, which is
+    # why the original docstring example (a 1:1 pair) never exposed it.
+    #
+    # The target is not "the stop's price on the other side" — it is a
+    # DISTANCE that was measured for this window. Keep the target at its
+    # own distance and the stop at its own distance and the ratio
+    # survives the flip.
+    tp_dist = abs(tp - entry)
+    sl_dist = abs(entry - sl)
+    out = {"entry": entry,
+           "tp": entry + want * tp_dist,
+           "sl": entry - want * sl_dist,
+           "direction": want,
+           "tp_dist": tp_dist, "sl_dist": sl_dist,
+           "ratio": (tp_dist / sl_dist if sl_dist > 0 else None),
            "mirrored": True, "mirrored_from": have}
     if not valid(out):
         return None

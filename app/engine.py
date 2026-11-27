@@ -84,7 +84,7 @@ NON_VOTING_IDS = frozenset({20, 97, 98, 99, 100, 101})
 # NEW-mode target: signal-tilled multiple of the measured stop (tail
 # units). Tuned on the 2y real-data mandate (backtest/mandate.py) —
 # candidates {1.2, 1.6, 2.0}, selected on train, validated on holdout.
-NEW_TARGET_RR = 1.6
+NEW_TARGET_RR = 2.0
 EMERGENCY_RELOCK_COOLDOWN_S = 900.0
 EMERGENCY_RELOCK_MIN_MOVE_ATR = 3.0
 #: WINDOW FREEZE (audit §1.3). A locked contract is immutable for the
@@ -2582,6 +2582,17 @@ class PredictionEngine:
                             if not str(k).startswith("_")}
                 self.display_systems[(symbol, tf)] = {
                     **_ds_base,
+                    # WHEN this block was measured. Everything in
+                    # display_systems — formula values, emotion channels,
+                    # physics — is computed once per GRC pass and is
+                    # therefore BIT-IDENTICAL between passes. The panels
+                    # repaint from it every 2 s, so without this stamp the
+                    # screen looked like live values that had frozen
+                    # ("formula value doesn't change", "sadness for 8
+                    # days"). The numbers are correct; they are simply not
+                    # new. The UI prints the age so a reading can never be
+                    # mistaken for a fresh one.
+                    "measured_at": time.time(),
                     # fields the analysis FINAL writes into results[tf]
                     # (p_correct / calib_iso / spillover / winrate …)
                     # used to be dropped by this whitelist, so the hero's
@@ -8515,7 +8526,21 @@ class PredictionEngine:
         # by signal strength: rr = factor × NEW_TARGET_RR ∈
         # [0.56, 1.6], and the user's floor gates the weak signals
         # exactly as designed. σ stays in the payload for display.
-        _factor = (0.35 + 0.65 * min(1.0, abs(float(
+        # the stop is the tape's own tail unit; the target is that unit tilted
+        # by signal strength: rr = factor × NEW_TARGET_RR ∈ [0.7, 2.0], and
+        # the user's floor gates what is still to small. σ stays in the
+        # payload for display.
+        #
+        # THE TILT MAY NEVER PUSH A SIGNAL UNDER 1:1 (user rule, absolute).
+        # The old band started at 0.7 because 0.35 × 2.0 = 0.7 — any signal
+        # that was not almost saturated landed below the floor and the cell
+        # went "watch-only" permanently. That is what the board showed for
+        # six days: 12 of 16 cells NOT TRADEABLE, 4 ungradeable. The tilt
+        # now modulates how FAR ABOVE the floor a target sits (1:1 .. 2:1)
+        # instead of deciding whether the trade is legal at all. A weak
+        # signal still gets the smallest legal target and still carries the
+        # weak score in its tier/issue_note — it is no longer silenced.
+        _factor = (0.5 + 0.5 * min(1.0, abs(float(
             res.get("cci_adjusted") or res.get("cci") or 0.0)) / 0.08))
         _sl_bps = float(_horizon_block.get("sl_bps") or 0.0)
         _rr_n = _mcfg_c.new_rr(symbol) or NEW_TARGET_RR
