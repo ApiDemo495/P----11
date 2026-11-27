@@ -287,6 +287,72 @@ def tier(symbol: str, tf: str) -> str:
     return TIER_MISS
 
 
+def tier_reason(symbol: str, tf: str) -> str:
+    """WHY this cell wears the tier it wears — in one readable sentence.
+
+    The user's report: "why hold policy have those yellow boxes of gate fail,
+    warmup and other any issues behind them". The badge named the verdict and
+    never the evidence, so a failed gate looked like a defect in the app
+    rather than a measurement result. Every tier now carries the number that
+    produced it, taken from the same artifact the badge is derived from.
+    """
+    c = cell(symbol, tf)
+    t = tier(symbol, tf)
+    if c is None:
+        return "this cell is not in the certified hold-policy artifact"
+    if c.get("status") != "ok":
+        why = str(c.get("why") or "").strip()
+        return ("no configuration survives the cost floor on this cell's "
+                "history, so no win rate can be certified"
+                + (f" — {why}" if why else "")
+                + " · live tape keeps computing, nothing is certified")
+    sel = c.get("selected") or {}
+    full = sel.get("full") or {}
+    hold = sel.get("holdout") or {}
+    tg = c.get("targets") or {}
+    if t == TIER_HOLDOUT:
+        return ("rows AND eras cleared out-of-fold, and the artifact passes "
+                "its own ship gates")
+    if t == TIER_SHIPGATE:
+        ship = artifact_ship_verdict()
+        _wil = (hold.get("row_wilson") or [None])[0]
+        return ("the rows held up out-of-fold (hold-out row WR "
+                f"{(hold.get('row_wr') or 0) * 100:.1f} %"
+                + (f", Wilson lo {_wil * 100:.1f} %" if _wil is not None else "")
+                + f", holdout era net EV {(hold.get('era_ev_net') or 0) * 1e4:+.1f} bp"
+                "), but the artifact that produced them fails its own pre-"
+                "registered ship gate (ii): it carries no REAL post-cost win "
+                "rate for any cell, so its mean net WR cannot beat the v8 "
+                f"reference {(ship.get('v8_reference') or 0) * 100:.2f} %. "
+                "The measurement is real; the ship claim is not earned")
+    if t == TIER_ROWS_ONLY:
+        return ("rows cleared out-of-fold but the hold-out has fewer than 3 "
+                f"eras (n={tg.get('holdout_era_n')}), so system EV cannot be "
+                "judged")
+    if t == TIER_INSAMPLE:
+        return ("this cell's artifact is a SINGLE-YEAR fit: every number is "
+                "in-sample, so it is shown as a shadow, never as a "
+                "certified edge")
+    # TIER_MISS and anything else
+    misses = []
+    _wil = (hold.get("row_wilson") or [None])[0]
+    if not tg.get("holdout_row_wr_ge_66"):
+        misses.append(f"hold-out row WR {(hold.get('row_wr') or 0) * 100:.1f} % "
+                      "is below the 66 % bar")
+    elif not tg.get("holdout_row_wilson_lo_ge_66"):
+        misses.append("its Wilson lower bound "
+                      + (f"({_wil * 100:.1f} %)" if _wil is not None else "")
+                      + " is below the 66 % bar")
+    if tg.get("holdout_era_ev_net_gt_0") is False:
+        misses.append("hold-out era net EV is "
+                      f"{(hold.get('era_ev_net') or 0) * 1e4:+.1f} bp after "
+                      "friction (needs > 0)")
+    if not tg.get("full_era_ev_net_gt_0"):
+        misses.append("the full-era net EV does not clear zero")
+    return ("missing the hold-out bar — " + "; ".join(misses)
+            if misses else "in-sample only — the hold-out never confirmed it")
+
+
 def is_hold_cell(symbol: str, tf: str) -> bool:
     """True when this cell is governed by the certified hold policy
     (gradeable cells) — warmup cells keep the policy's badges but the
@@ -311,6 +377,9 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
         "symbol": symbol, "tf": tf, "minutes": TF_MINUTES.get(tf),
         "tier": t, "managed": c is not None,
         "certified": is_hold_cell(symbol, tf),
+        # WHY the badge says what it says — carried on the payload so the
+        # card can explain itself instead of showing a bare coloured label.
+        "tier_reason": tier_reason(symbol, tf),
     }
     if c is None:
         base.update(status="unknown", side=None, win_rate=None,

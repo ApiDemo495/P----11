@@ -192,7 +192,10 @@ def test_regime_conflict_holds_routing_but_never_silences_the_call():
     j = src.index('final["verdict"] = ("ISSUE" if (final.get("gate_ok")', i)
     body = src[i:j]
     _verdict_src = src[j:j + 400]
-    assert '"IMPULSE_BULL": 1' in body and '"IMPULSE_BEAR": -1' in body
+    # the classification itself now lives in ONE method
+    # (2026-11-27) so ANALYSE and the GRC card writers compare
+    # the chip and the badge with the same classifier
+    assert "self.regime_conflict(symbol, int(direction or 0))" in body
     # routing is still held back...
     assert 'final["execution_eligible"] = False' in body
     # ...but the badge and the size are NOT silenced
@@ -251,10 +254,14 @@ def test_conflict_check_uses_the_same_classifier_as_the_chip():
     # the gate must classify THIS asset's tape — the exact input the
     # TF-card chip renders — so the user's "impulse bear" reading and
     # the gate can never disagree
-    i = src.index("REGIME CONFLICT (user order)")
-    body = src[i:i + 1600]
-    assert "_ctape(list(_stq.closes or [])" in body
+    i = src.index("def regime_conflict(self, symbol: str, direction: int)")
+    body = src[i:i + 1800]
+    # it must classify THIS asset's tape with the exact classifier the chip
+    # uses (`classify_tape`), taking highs/lows/volumes from the same state
+    assert "_ctape(list(st.closes or [])" in body
     assert "self.feed.state(symbol)" in body
+    # and the ANALYSE path must reach it rather than re-deriving its own
+    assert "_conflict = self.regime_conflict(" in src
 
 
 # ── 5. formula/brain proof is visible in the result box ─────────────

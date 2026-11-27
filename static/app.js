@@ -1335,14 +1335,27 @@ function renderBook() {
   // ---- observe vs enforced: the single most important honesty label ----
   const enforced = book.monitors_enforced !== false;
   if (modeEl) {
-    modeEl.innerHTML = book.execution_status === "paused"
+    // A PAUSE MUST NAME ITS CAUSE (user report 2026-11-27: "why paper
+    // execution is paused?"). The badge used to be the whole answer. It now
+    // prints the contract when fills are live, and the specific per-asset
+    // fact when they are not.
+    const _paused = book.execution_status === "paused";
+    const _reasons = Object.entries(book.paused_assets || {});
+    modeEl.innerHTML = _paused
       ? `<b class="acc-warn">PAPER EXECUTION PAUSED</b>`
-      : enforced ? `<b class="acc-warn">ENFORCED</b>`
-      : `<b class="acc-up">OBSERVE</b>`;
-    modeEl.title = book.execution_status === "paused" ? (book.execution_reason || "Paper execution is paused")
-      : enforced
-      ? "circuit breakers act: a decaying sleeve is de-risked to half size, then halted on sustained contradiction"
-      : "circuit breakers observe only: full research contract, monitors recorded but not acted on";
+      : `<b class="acc-up">PAPER EXECUTION LIVE</b> · ${enforced ? "enforced" : "observe"}`;
+    modeEl.title = _paused
+      ? (book.execution_reason || "Paper execution is paused")
+      : (book.execution_reason || "verified next-bar-open fills");
+    const _why = $("#book-pause-why");
+    if (_why) {
+      _why.innerHTML = _paused
+        ? `<b class="acc-warn">why no fills:</b> ` +
+          (_reasons.length
+            ? _reasons.map(([a, w]) => `<span class="mono">${esc(a)}</span> — ${esc(w)}`).join(" · ")
+            : esc(book.execution_reason || "unknown reason — this is itself a defect"))
+        : `<b class="acc-up">fill contract:</b> ${esc(Object.entries(book.execution_contract || {}).map(([k, v]) => `${k}: ${v}`).join(" · ") || "not published")}`;
+    }
   }
   if (meta) {
     meta.textContent = (book.execution_status === "paused" ? `${book.execution_reason} ` : "")
@@ -1405,15 +1418,31 @@ function renderBook() {
   // ---- per-asset trigger coverage (honest none / blocked) ----
   const assetWrap = $("#book-assets");
   if (assetWrap) {
+    // "UNPROVEN" / "SHADOW" / "NONE" were three labels with no explanation
+    // (user report 2026-11-27). Each is a DIFFERENT fact and the tile now
+    // says which: a shadow sleeve has a live reading the gate rejected, an
+    // untested asset was never in the scan's search space, and a warming
+    // sleeve is waiting for real Binance tape (never simulated).
     const rowsA = Object.entries(block.assets || {}).map(([sym, a]) => {
-      const state = String(a.state || "none").toUpperCase();
+      const _st = String(a.state || "none");
+      const _shadow = a.status === "shadow" || _st.startsWith("shadow:");
+      // a shadow sleeve's `state` is contractually "unproven"; its live
+      // reading arrives separately in `trigger`
+      const _trig = String(a.trigger || _st.replace("shadow:", "") || "unproven");
+      const state = (_shadow ? _trig : _st).toUpperCase();
       const c = state === "LONG" ? "acc-up" : state === "SHORT" ? "acc-dn"
         : state === "FLAT" ? "dim" : "acc-warn";
-      const z = a.z == null ? "" : ` · z ${Number(a.z).toFixed(2)} / ${Number(a.threshold || 2.5)}`;
+      const z = a.z == null ? ""
+        : ` · live z ${Number(a.z).toFixed(2)} / ${Number(a.threshold || 2.5)}`;
+      const kind = a.untested ? "UNTESTED — not in the scan"
+        : _shadow ? "SHADOW — gate rejected, watched only"
+        : a.status === "warming_up" ? "WARMING UP — needs real tape"
+        : String(a.status || "none").toUpperCase();
       return `<div class="kv"><span>${sym}</span>`
         + `<b class="${c}">${state}</b>`
-        + `<span class="dim">${a.status || "none"}${z}</span>`
-        + `<span class="dim" style="text-transform:none">${a.note || ""}</span></div>`;
+        + `<span class="dim">${esc(kind)}${z}</span>`
+        + `<span class="dim" style="text-transform:none">${esc(a.note || "")}`
+        + `${a.gate_note ? ` · <b>failed:</b> ${esc(a.gate_note)}` : ""}</span></div>`;
     }).join("");
     assetWrap.innerHTML = rowsA || `<div class="dim pad">no assets evaluated</div>`;
   }
@@ -1616,13 +1645,23 @@ function renderHero() {
   const badge = $("#hero-badge");
   if (badge) {
     badge.className = "hero-badge " + (dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat");
-    badge.innerHTML = `${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)} · ${verdict}${cyc?.tier ? ` · ${cyc.tier}` : ""}${_pTag(cyc, res)}${lockedId ? ` · lock ${lockedId.slice(-6)}` : ""}</small>${chopChip(tf)}${conflict ? `<span class="chip-err" title="the 5-state regime on this timeframe's tape disagrees with the certified side: the call is published and graded, only order routing is held back">⚠ REGIME DISAGREEMENT · routing held</span>` : ""}`;
+    // A BADGE MAY NOT CONTRADICT ITS OWN CHIP (live defect 2026-11-27).
+    // The headline read "▲ BULLISH*" while the chip beside it read
+    // "📉 impulse bear · conf 0.20", and nothing on the card explained it.
+    // When they disagree the badge now prints BOTH facts in one sentence —
+    // the certified side first (it is the call, and it is graded) and the
+    // regime read second — instead of two numbers that fight.
+    const _sideTxt = dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL";
+    const _clash = conflict
+      ? `<span class="chip-err" title="the 5-state regime on this timeframe's tape is ${esc(conflict.state)} (conf ${num(conflict.regime_conf)}) while the certified side is ${dir > 0 ? "BUY" : "SELL"}. The call stands and is graded; only ORDER ROUTING is held back until the tape agrees with itself. A withheld call is not a safer call — it is an ungraded one">⚠ ${esc(conflict.state)} (conf ${num(conflict.regime_conf)}) OPPOSES THIS ${dir > 0 ? "BUY" : "SELL"} · call stands and is graded, routing held</span>`
+      : "";
+    badge.innerHTML = `${_sideTxt}${weak && dir ? "*" : ""}<small>${S.symbol} · ${tf.toUpperCase()} ${m.mins}m · conf ${fx(res.confidence ?? 0, 3)} · ${verdict}${cyc?.tier ? ` · ${cyc.tier}` : ""}${_pTag(cyc, res)}${lockedId ? ` · lock ${lockedId.slice(-6)}` : ""}</small>${conflict ? "" : chopChip(tf)}${_clash}`;
   }
   const stats = $("#hero-stats");
   if (stats) {
     stats.innerHTML = `
-      <div class="kv"><span>call</span><b class="${dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat"}">${conflict ? "● WITHHELD" : dir > 0 ? "▲ BULL" : dir < 0 ? "▼ BEAR" : "● FLAT"}${weak && dir ? "*" : ""}</b></div>
-      ${conflict ? `<div class="kv"><span>why withheld</span><b class="acc-warn">regime ${esc(conflict.state)} (conf ${num(conflict.regime_conf)}) opposes ${rawDir > 0 ? "BUY" : "SELL"} — window still sealed and graded, nothing routed</b></div>` : ""}
+      <div class="kv"><span>call</span><b class="${dir > 0 ? (weak ? "flat" : "up") : dir < 0 ? (weak ? "flat" : "down") : "flat"}">${dir > 0 ? "▲ BULL" : dir < 0 ? "▼ BEAR" : "● FLAT"}${weak && dir ? "*" : ""}${conflict ? ' <span class="acc-warn" style="font-size:11px">· ungraded-free: no order routed</span>' : ""}</b></div>
+      ${conflict ? `<div class="kv"><span>regime disagreement</span><b class="acc-warn">the 5-state chip reads ${esc(conflict.state)} (conf ${num(conflict.regime_conf)}) against this ${dir > 0 ? "BUY" : "SELL"} — the side stands and is graded, only routing is held</b></div>` : ""}
       <div class="kv"><span>confidence</span><b>${fx(res.confidence ?? 0, 3)} · ${verdict}${res.issue_note ? ` <span class="dim" style="font-size:11px">${esc(res.issue_note)}</span>` : ""}${res.cell_certainty != null ? ` <span class="dim" style="font-size:11px">· certainty ${fx(res.cell_certainty, 3)} (n=${res.cell_certainty_n ?? "?"})</span>` : ""}</b></div>
       ${res.cell_win_rate_net != null ? `<div class="kv"><span>real win rate</span><b>${fx(res.cell_win_rate_net * 100, 1)}% after ${fx(res.cell_round_trip_bps ?? 0, 1)} bps RT <span class="dim" style="font-size:11px">(gross ${fx((res.cell_win_rate ?? 0) * 100, 1)}%)</span></b></div>` : ""}
       <div class="kv"><span>prediction lock</span><b class="${cyc?.prediction_lock?.locked ? "acc-up" : "dim"}">${cyc?.prediction_lock?.locked ? `🔒 ${esc(cyc.prediction_lock.side || "")} · ${esc(String(cyc.prediction_lock.id || "").slice(-8))}` : "not sealed yet"}</b></div>
@@ -1690,7 +1729,9 @@ function renderHero() {
         const tgt = _floorHit
           ? +(heroEntry + _side * risk).toFixed(8)
           : tgt0;
-        const rr = _floorHit ? 1.0 : _rr0;
+        // recomputed from the target and the stop PRINTED ON THIS CARD, so
+        // the number can never describe a different pair than the panel does
+        const rr = Math.abs(tgt - heroEntry) / risk;
         const _warn = _wrong.length
           ? ` <span class="acc-warn" style="font-size:11px">· ignored ${_wrong.map(([n, v]) => `${n} ${px(v)} (wrong side)`).join(", ")}</span>`
           : "";
@@ -1739,15 +1780,33 @@ function renderHero() {
   const slBlock = $("#hero-sleeve");
   if (slBlock) {
     if (!sl || sl.status === "none") {
+      // "none" had two very different meanings and the panel said neither:
+      // the scan TESTED this asset and every candidate failed the gate, or
+      // the scan never produced a candidate for it at all. The payload now
+      // distinguishes them (sl.untested / sl.note), so the row says which.
       slBlock.innerHTML = `
-        <div class="kv"><span>certified sleeve</span><b class="dim">none / blocked for ${S.symbol}</b></div>
-        <div class="kv"><span>why</span><b class="dim">edge scan found no trigger clearing |t| ≥ 2.0 after friction · see docs/ALPHA_RESEARCH.md</b></div>`;
+        <div class="kv"><span>certified sleeve</span><b class="dim">${sl && sl.untested ? `UNTESTED — ${S.symbol}` : `none cleared the gate — ${S.symbol}`}</b></div>
+        <div class="kv"><span>why</span><b class="dim">${esc((sl && sl.note) || "edge scan found no trigger clearing |t| ≥ 2.0 after friction")}</b></div>
+        ${sl && sl.gate_note ? `<div class="kv"><span>detail</span><b class="dim">${esc(sl.gate_note)}</b></div>` : ""}`;
     } else {
       const isOpen = sl.status === "open";
-      const live = pos ? (pos.direction > 0 ? "LONG" : "SHORT") : (isOpen ? String(sl.state || "flat").toUpperCase() : "UNPROVEN");
+      // A shadow sleeve's state arrives as "shadow:long|short|flat". It is a
+      // READING of the trigger, never a position — the label says so instead
+      // of the bare word UNPROVEN, which read as "the app is not working".
+      const _shadow = sl.status === "shadow"
+        || String(sl.state || "").startsWith("shadow:");
+      const _rawState = String(sl.trigger
+        || String(sl.state || "").replace("shadow:", ""));
+      const live = pos ? (pos.direction > 0 ? "LONG" : "SHORT")
+        : isOpen ? String(_rawState || "flat").toUpperCase()
+        : _shadow ? `SHADOW · ${String(_rawState).toUpperCase()}`
+        : String(sl.state || "unproven").toUpperCase();
       const stCls = pos ? (pos.direction > 0 ? "acc-up" : "acc-dn")
-                        : (sl.state === "long" ? "acc-up" : sl.state === "short" ? "acc-dn" : "dim");
-      const zTxt = sl.z == null ? "warming up" : `${Number(sl.z).toFixed(2)}σ / ${sl.threshold}σ`;
+                        : (_rawState === "long" ? "acc-up" : _rawState === "short" ? "acc-dn" : "dim");
+      const zTxt = sl.z == null
+        ? "warming up — needs a real Binance tape (simulated bars are excluded from certified signals)"
+        : `${Number(sl.z).toFixed(2)}σ / ${Number(sl.threshold).toFixed(1)}σ`
+          + (sl.status === "shadow" ? ` · ${Math.abs(Number(sl.z)) > Number(sl.threshold) ? "trigger is FIRING now" : "below the trigger"} (shadow — never traded)` : "");
       const holdTxt = pos
         ? `${pos.hold_bars} bars`
         : `${sl.hold_hours}h`;
@@ -1762,8 +1821,8 @@ function renderHero() {
         ${rep && rep.live_trades ? `<div class="kv"><span>paper ledger (${rep.live_trades} trades)</span><b class="${rep.live_ev_bps > 0 ? "acc-up" : "acc-dn"}">${Number(rep.live_ev_bps).toFixed(1)} bp · t ${Number(rep.live_t).toFixed(2)}</b></div>` : ""}
         ${rep && rep.realized_slippage_bps != null ? `<div class="kv"><span>realised slippage vs friction</span><b>${Number(rep.realized_slippage_bps).toFixed(1)} bp</b></div>` : ""}
         ${rep && rep.decay_warning ? `<div class="kv"><span>alpha decay</span><b class="acc-dn">live expectancy below half of research — monitor armed</b></div>` : ""}
-        ${!isOpen ? `<div class="kv"><span>status</span><b class="dim">${(sl.reasons || []).slice(0, 2).join("; ") || "unproven"}</b></div>` : ""}
-        ${sl.note ? `<div class="kv"><span>note</span><b class="dim">${sl.note}</b></div>` : ""}`;
+        ${!isOpen ? `<div class="kv"><span>gate it failed</span><b class="dim">${esc(sl.gate_note || (sl.reasons || []).slice(0, 2).join("; ") || "not recorded")}</b></div>` : ""}
+        <div class="kv"><span>note</span><b class="dim">${esc(sl.note || "")}</b></div>`;
     }
   }
   renderBook();
@@ -2324,7 +2383,8 @@ function renderCells() {
       : "no sealed lock yet";
     return `<div class="hcell ${active ? "active" : ""}" data-cell="${key}" title="${esc(key)} — ${esc(c.rule || c.tier || "")}">
       <div class="hc-top"><span class="hc-sym">${sym} ${tf.toUpperCase()} · ${(a.tf_minutes || c.minutes)}m</span>
-        <span class="hc-tier ${_tierCls(c.tier)}">${esc(c.tier)}</span></div>
+        <span class="hc-tier ${_tierCls(c.tier)}" title="${esc(c.tier_reason || "why this tier: not recorded")}">${esc(c.tier)}</span></div>
+      ${c.tier_reason ? `<div class="hc-why dim" style="font-size:10px;line-height:1.3">${esc(c.tier_reason)}</div>` : ""}
       <div class="hc-wr">${wr}${wrLabel} <span class="hc-conf">WR${conf ? " · " + conf : ""}${c.cost_infeasible
           ? ` · <span class="acc-dn">round trip ${num(c.round_trip_bps, 1)}bp &gt; the whole target</span>`
           : c.cannot_pay_at_any_target
@@ -2848,7 +2908,7 @@ function renderWhy() {
   el.innerHTML = lockBlock + priceBlock + ladderBlock + sparkHtml + ticksBlock + whoBlock + convBlock + exBlock + `
     <div class="why-head">
       <div class="why-dir ${dir > 0 ? "up" : dir < 0 ? "down" : "flat"}">
-        ${_cf ? "● WITHHELD" : dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}<span class="sym">${S.symbol} · ${tf.toUpperCase()} · ${TF_META[tf].mins}m</span></div>
+        ${dir > 0 ? "▲ BULLISH" : dir < 0 ? "▼ BEARISH" : "● NO CALL"}<span class="sym">${S.symbol} · ${tf.toUpperCase()} · ${TF_META[tf].mins}m</span>${_cf ? ` <span class="acc-warn" title="${esc(_cf.state)} (conf ${num(_cf.regime_conf)}) opposes this side — the call stands and is graded, no order is routed">· ${esc(_cf.state)} opposes · no routing</span>` : ""}</div>
       <div class="why-conf">CONFIDENCE
         <div class="bar"><i class="${s.confidence > 0.35 ? "pos" : "neg"}" style="width:${clamp((s.confidence || 0) * 100, 0, 100)}%"></i></div>
         <b>${fx(s.confidence, 3)}</b> / floor ${bd.floor ?? 0.35}</div>

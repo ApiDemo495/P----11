@@ -4054,28 +4054,7 @@ class PredictionEngine:
             # app must not advertise or route the opposite call:
             # gate_ok=False → verdict NO CALL, tier watch-only (below)
             # → no paper/live entry, and the reason names BOTH sides.
-            _conflict: dict | None = None
-            try:
-                from .regime import classify_tape as _ctape
-                _stq = self.feed.state(symbol)
-                _rq = _ctape(list(_stq.closes or []),
-                             highs=list(_stq.highs or []) or None,
-                             lows=list(_stq.lows or []) or None,
-                             volumes=list(getattr(_stq, "volumes", None)
-                                          or []) or None)
-                _want_q = {"IMPULSE_BULL": 1,
-                           "IMPULSE_BEAR": -1}.get(
-                               str(_rq.get("state") or ""), 0)
-                if _want_q and direction and _want_q != direction:
-                    _conflict = {
-                        "state": str(_rq.get("state")),
-                        "label": str(_rq.get("label") or ""),
-                        "regime_conf": _rq.get("confidence"),
-                        "regime_wants": _want_q,
-                        "certified_side": direction,
-                    }
-            except Exception:
-                _conflict = None
+            _conflict = self.regime_conflict(symbol, int(direction or 0))
             if _conflict is not None:
                 final["regime_conflict"] = _conflict
                 # NOT A NO CALL ANY MORE (2026-11-26). This used to set
@@ -4235,6 +4214,7 @@ class PredictionEngine:
                 cyc.issue_note = str(final.get("issue_note") or _note_a)
                 cyc.trend_gate = _trend_evidence(
                     symbol, tf, int(final.get("direction") or 0))
+                cyc.regime_conflict = _conflict
                 cyc.prediction_lock = dict(final.get("prediction_lock") or {})
                 if _conflict is not None:
                     # routing held on the next tick; the tier, the side and
@@ -8902,6 +8882,8 @@ class PredictionEngine:
                 None)
             cyc.trend_gate = _trend_evidence(symbol, tf,
                                              int(cyc.direction or 0))
+            cyc.regime_conflict = self.regime_conflict(
+                symbol, int(cyc.direction or 0))
             self._save_cycle_lock_state(cyc)
             return
 
@@ -8992,6 +8974,14 @@ class PredictionEngine:
             symbol, tf, int(cyc.direction or 0), cyc.confidence, cyc.tier,
             res.get("issue_note"))
         cyc.trend_gate = _trend_evidence(symbol, tf, int(cyc.direction or 0))
+        # The chip and the badge are compared on EVERY card write, not only
+        # inside ANALYSE. This is the path a GRC takes, and it is the one
+        # that produced the screenshot: a ▲ BULLISH* headline beside a
+        # 📉 impulse bear chip, with no disagreement banner in sight.
+        cyc.regime_conflict = self.regime_conflict(
+            symbol, int(cyc.direction or 0))
+        if cyc.regime_conflict:
+            cyc.execution_eligible = False
         self._apply_risk(symbol, tf, cyc, res)
         self._save_cycle_lock_state(cyc)
 
@@ -9506,14 +9496,29 @@ class PredictionEngine:
 
         # every UI asset gets a row, even with nothing certified — silence
         # is reported as silence, never as a signal
+        # THE EDGE SCAN NEVER TESTED SOME ASSETS, and "none" used to read as
+        # "we tested it and it failed" — the two are different facts and the
+        # user asked which one they were looking at. The registry records
+        # which assets it actually covered; anything outside that set is
+        # reported as UNTESTED, with the scan's own candidate count.
+        _covered = set((block.get("assets") or {}).keys())
+        _tested = int((block.get("summary") or {}).get("total") or 0)
         for symbol in SYMBOL_ORDER:
-            block["assets"].setdefault(symbol, {
+            if symbol in _covered:
+                continue
+            block["assets"][symbol] = {
                 "sleeve_id": "",
                 "asset": symbol,
                 "status": "none",
                 "state": "none",
-                "note": "no certified sleeve for this asset (edge scan found none)",
-            })
+                "untested": True,
+                "note": (f"the edge scan ({_tested} candidates across the "
+                         f"covered assets) never produced a candidate for "
+                         f"{symbol}, so there is nothing to certify and "
+                         f"nothing to reject"),
+                "gate_note": ("not a failure and not a live signal — this "
+                              "asset was outside the scan's search space"),
+            }
         block["coverage"] = sorted(block["assets"].keys())
 
         # drive the paper portfolio from the same certified signals
@@ -9526,6 +9531,45 @@ class PredictionEngine:
         self._sleeve_cache = (now if now is not None else time.time(), block)
         return block
 
+    def regime_conflict(self, symbol: str, direction: int) -> dict | None:
+        """The 5-state regime read on THIS asset's tape vs a certified side.
+
+        One definition, used by BOTH writers of a card (ANALYSE and the GRC
+        refresh). It used to exist only inside the analyse path, so every
+        card produced by a GRC refresh carried the chip and no conflict
+        record — which is exactly the screenshot the user sent: a headline
+        **▲ BULLISH\*** beside a chip reading **📉 impulse bear · conf 0.20**,
+        with no disagreement banner anywhere on the card. The chip and the
+        badge disagreed because only one of the two paths compared them.
+
+        Returns ``None`` when the tape is not in an impulse state, when the
+        side is flat, or when they AGREE. Never raises: a failed
+        classification is the absence of a conflict claim, not a silent
+        "disagrees".
+        """
+        try:
+            if int(direction) not in (-1, 1):
+                return None
+            from .regime import classify_tape as _ctape
+            st = self.feed.state(symbol)
+            rq = _ctape(list(st.closes or []),
+                        highs=list(st.highs or []) or None,
+                        lows=list(st.lows or []) or None,
+                        volumes=list(getattr(st, "volumes", None)
+                                     or []) or None)
+            want = {"IMPULSE_BULL": 1, "IMPULSE_BEAR": -1}.get(
+                str(rq.get("state") or ""), 0)
+            if not want or want == int(direction):
+                return None
+            return {"state": str(rq.get("state")),
+                    "label": str(rq.get("label") or ""),
+                    "regime_conf": rq.get("confidence"),
+                    "regime_wants": want,
+                    "certified_side": int(direction)}
+        except Exception:
+            log.exception("regime classification failed for %s", symbol)
+            return None
+
     def _step_portfolio(self, block: dict[str, Any]) -> dict[str, Any]:
         """Expose the existing paper book without fabricating live fills.
 
@@ -9535,14 +9579,25 @@ class PredictionEngine:
         source, timing and OHLC parity with the research fill contract. The
         existing ledger is preserved; it is not evidence of verified fills.
         """
-        snap = self.portfolio.snapshot()
-        snap["execution_status"] = "paused"
-        snap["execution_reason"] = (
-            "Paper execution paused: next-bar open and real-tape provenance "
-            "are not yet verified; existing positions and results are frozen."
-        )
-        snap["entered_this_bar"] = []
-        return snap
+        # VERIFIED EXECUTION (2026-11-27). The book was frozen because the
+        # two things a paper fill must prove — a NEXT-BAR OPEN and REAL-TAPE
+        # provenance — were not implemented. They are now (app/exec_live.py),
+        # so the freeze is lifted exactly as far as the tape supports it:
+        # real Binance tape fills; simulated or gapped tape reports the
+        # precise rule that blocks it, per asset. The book is never paused
+        # without naming the fact that paused it.
+        try:
+            from . import exec_live as _xl
+            return _xl.step_live_book(self, block)
+        except Exception:
+            log.exception("verified paper execution failed")
+            snap = self.portfolio.snapshot()
+            snap["execution_status"] = "paused"
+            snap["execution_reason"] = (
+                "Paper execution paused: the verified-fill driver raised — "
+                "see the server log for the traceback.")
+            snap["entered_this_bar"] = []
+            return snap
 
     def _current_meta_inputs(self) -> dict:
         """Latest frozen subsystem readings, for the meta gauge."""
