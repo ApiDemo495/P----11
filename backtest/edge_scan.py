@@ -42,13 +42,16 @@ from app.edge_gate import (
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 
-# §18.1 real per-side friction for the shipped assets (see
-# backtest/data.py); the extra research tickers keep the legacy 12.
-FRICTION_BPS = {
-    "BTC": 14.436, "ETH": 14.904, "BNB": 15.482,
-    "SOL": 12.0, "XRP": 12.0, "ADA": 12.0, "AVAX": 12.0, "LINK": 12.0,
-    "PAXG": 18.700,
-}
+# §18.1 per-side friction. Shipped assets are IMPORTED from
+# backtest/data.py (the executed venue) so this scanner can never again
+# price a different world than the app. Extra research tickers are not in
+# the venue table; they take the most expensive shipped slippage, so a
+# research result can be under-stated but never flattered.
+from .data import FRICTION_BPS as _SHIPPED_FRICTION
+
+FRICTION_BPS = {**_SHIPPED_FRICTION}
+for _t in ("SOL", "XRP", "ADA", "AVAX", "LINK"):
+    FRICTION_BPS[_t] = max(_SHIPPED_FRICTION.values())
 
 # Research window / locked holdout split.
 #

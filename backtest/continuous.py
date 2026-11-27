@@ -64,9 +64,11 @@ RESULTS = os.path.join(os.path.dirname(__file__), "results")
 
 TF_W = {"tf1": 22, "tf2": 44, "tf3": 130, "tf4": 247}   # minutes
 W_MIN = list(TF_W.values())
-# §18.1 real per-side friction — MUST match backtest/data.py
-FRICTION_BPS = {"BTC": 14.436, "ETH": 14.904, "BNB": 15.482,
-                "PAXG": 18.700}
+# §18.1 real per-side friction — imported, never copied. This module used
+# to carry its own literal copy of the table, which is how a stale spot
+# figure (14.436/side) outlived the futures order path across four files.
+# One source of truth: backtest/data.py -> VENUE_RT_BPS.
+from .data import FRICTION_BPS  # noqa: F401  (re-exported for callers)
 
 RET_L = (15, 60, 240, 720, 1440, 2640, 4320)           # feature lookbacks
 MOM_GRID = (15, 60, 240, 720, 1440, 2640, 4320)        # momentum candidates

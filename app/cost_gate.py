@@ -42,6 +42,21 @@ from __future__ import annotations
 # rounding noise.
 MIN_MARGIN_BP = 2.0
 
+#: ONE cost source for every gate in this module. Previously each sleeve
+#: hardcoded ``fee_bp: 8.0`` and each gate defaulted ``friction_bps=8.0``,
+#: while app/horizon.py charged 28.87 and the CSV charged 12 — three
+#: different prices for the same trade. Everything now reads the venue the
+#: order path actually uses (backtest.data.venue_rt).
+def _venue_fee_bps(asset: str = "BTC") -> float:
+    try:
+        from backtest.data import venue_rt
+        return float(venue_rt(str(asset).upper()))
+    except Exception:                                   # pragma: no cover
+        return 12.0
+
+
+DEFAULT_FEE_BP = _venue_fee_bps("BTC")
+
 # Horizon buckets in minutes -> the lane a measurement belongs to.
 _BUCKETS = ((0, 90, "intraday"), (90, 720, "session"),
             (720, 2880, "swing"), (2880, 10 ** 9, "position"))
@@ -152,12 +167,14 @@ def bucket(minutes: float) -> str:
     return "position"
 
 
-def sleeve_gate(name: str, friction_bps: float = 8.0) -> dict:
+def sleeve_gate(name: str, friction_bps: float | None = None) -> dict:
     """Verdict for one event sleeve at its own execution cost."""
     s = SLEEVES.get(name)
     if not s:
         return {"state": "unknown", "name": name,
                 "note": "no such sleeve"}
+    if friction_bps is None:
+        friction_bps = _venue_fee_bps(s.get("asset", "BTC"))
     net = float(s["gross_bp"]) - float(friction_bps)
     t = abs(float(s["boot_t"]))
     pf = float(s.get("profit_factor", 0.0))
@@ -179,9 +196,11 @@ def sleeve_gate(name: str, friction_bps: float = 8.0) -> dict:
             "note": s["note"]}
 
 
-def gates_for(asset: str, friction_bps: float = 8.0) -> list[dict]:
+def gates_for(asset: str, friction_bps: float | None = None) -> list[dict]:
     """Every measured sleeve that trades this asset (verdicts included)."""
     want = str(asset).upper()
+    if friction_bps is None:
+        friction_bps = _venue_fee_bps(want or "BTC")
     return [sleeve_gate(k, friction_bps) for k, v in SLEEVES.items()
             if str(v.get("asset", "")).upper() == want]
 

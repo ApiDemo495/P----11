@@ -2345,6 +2345,11 @@ async function loadCells() {
   try {
     const d = await api("/api/cells");
     S.cells = d;
+    // The cost model is fetched alongside the cells so the fee every EV
+    // is divided by is ON SCREEN. It used to live only in Python, which
+    // is how the panel could quote a 28.9bp round trip while the order
+    // path paid 10 — nobody could see the two disagree.
+    try { S.cost = await api("/api/cost-model"); } catch { /* keep last */ }
     renderCells();
   } catch { /* offline — keep last render */ }
 }
@@ -2372,7 +2377,11 @@ function renderCells() {
   const now = Date.now() + (S.serverOffset || 0);
   $("#cells-meta").textContent =
     `${Object.keys(cells).length} cells · tiers: ` +
-    Object.entries(S.cells.tiers || {}).map(([k, v]) => `${k} ×${v}`).join(" · ");
+    Object.entries(S.cells.tiers || {}).map(([k, v]) => `${k} ×${v}`).join(" · ") +
+    (S.cost && S.cost.venue
+      ? ` · cost: ${S.cost.venue} ${fx(S.cost.fee_bps_round_trip, 1)}bp fee`
+        + ` + slip = ${fx(S.cost.assets?.[0]?.round_trip_bps, 1)}bp RT (BTC)`
+      : "");
   box.innerHTML = Object.entries(cells).map(([key, c]) => {
     const [sym, tf] = key.split("|");
     const a = c.analyse || {};

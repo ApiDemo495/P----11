@@ -25,10 +25,14 @@ def test_settle_sl_wins_tie_and_friction_in_r():
     future = [Bar(1, 100, 103, 98, 101, 1)]           # hits BOTH -> SL
     tr = settle("BTC", sig, future[0], future)
     assert tr.exit_reason == "SL" and tr.r_gross == -1.0
-    # §18.1 real BTC friction 14.436 bps of 100 = 0.14436 quote =
-    # 0.14436R (risk 1.0)
-    assert abs(tr.r_net - (-1.1444)) < 1e-9   # Trade rounds r_net to 4 dp
-    assert abs(tr.pnl - (-1.1444)) < 1e-9
+    # §18.1 friction is derived from the executed venue, not a literal:
+    # BTC per-side 6.0 bps of 100 = 0.06 quote = 0.06R (risk 1.0).
+    # (Was 14.436 bps/side under the stale Binance-SPOT assumption, but
+    # app/trading.py posts USD-M futures MARKET orders at 5 bps/side.)
+    from backtest.data import FRICTION_BPS
+    want = round(-1.0 - FRICTION_BPS["BTC"] / 100.0, 4)
+    assert abs(tr.r_net - want) < 1e-9      # Trade rounds r_net to 4 dp
+    assert abs(tr.pnl - want) < 1e-9
 
 
 def test_settle_tp_and_paxg_friction_higher():

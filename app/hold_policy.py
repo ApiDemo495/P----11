@@ -52,9 +52,18 @@ TF_MINUTES = {k: int(v["minutes"]) for k, v in TIMEFRAMES.items()}
 _MOM_MINUTES = tuple(range(15, 45 * 60 + 1, 15)) + (
     7200, 10080, 14400, 43200, 129600, 259200, 525600)
 
+#: The graded barrier distances (median stop / target per cell). The
+#: certified hold_wr.json carries k, m and the win rates but NOT the
+#: barrier bps, so asking it "does this target pay for the round trip"
+#: can only ever answer "unknown".
+REREG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "backtest", "results", "wr_rereg_5m.json")
+
 _lock = threading.RLock()
 _DOC: dict[str, dict] = {}
 _PATH = ""
+_REREG: dict[str, dict] | None = None
 
 
 def _load_doc(path: str | None = None) -> dict[str, dict]:
@@ -568,8 +577,10 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
         era_ev_holdout=hold.get("era_ev_net"),
         era_ev_total=full.get("era_ev_total_net"),
         era_wr=full.get("era_wr"), era_n=full.get("era_n"),
-        friction_bps_per_side=c.get("friction_bps_per_side"),
-        round_trip_bps=2.0 * float(c.get("friction_bps_per_side") or 0.0),
+        friction_bps_per_side=round(round_trip_bps(symbol) / 2.0, 3),
+        # overwritten below by the authoritative round trip; this line only
+        # has to not raise for a cell with no artifact constant
+        round_trip_bps=round(round_trip_bps(symbol), 3),
         flip_rate=sel.get("flip_rate"),
         single_year=bool(c.get("single_year")),
         selection=sel.get("selection"),
@@ -580,14 +591,23 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
     # the certified geometry aims at sits inside the round trip, that
     # hit rate cannot be booked as profit.
     #
-    # The round trip used here is the AUTHORITATIVE full-stack figure
-    # (backtest.data.FRICTION_BPS, §18.1: commission 10 + slippage +
-    # half-Roll spread per side).  Some shipped artifacts still carry
-    # the older 12 bps/side constant; taking the max means the cost
-    # verdict can only be conservative, never flattering.
-    rt = max(2.0 * float(c.get("friction_bps_per_side") or 0.0),
-             round_trip_bps(symbol))
+    # The round trip used here is the AUTHORITATIVE full-stack figure,
+    # derived from the venue the order path really executes on
+    # (backtest.data.round_trip -> VENUE_RT_BPS).
+    #
+    # This used to be max(artifact, authoritative) under the reasoning
+    # "max can only be conservative, never flattering".  That reasoning
+    # backfired: the shipped artifacts never stopped carrying the OLD
+    # 12 bps/side spot constant, so max() always picked the stale, 2x
+    # too-expensive number and the panel advertised a cost the order
+    # path does not pay.  Conservative is not the same as correct.
+    # The authoritative figure wins; a disagreeing artifact is reported
+    # beside it instead of silently overriding it.
+    rt = round_trip_bps(symbol)
+    _artifact_rt = 2.0 * float(c.get("friction_bps_per_side") or 0.0)
     base["round_trip_bps"] = round(rt, 3)
+    if _artifact_rt and abs(_artifact_rt - rt) > 1e-6:
+        base["round_trip_stale_artifact_bps"] = round(_artifact_rt, 3)
     # the fee-multiple floor AND the honest break-even for this cell's own
     # gross rate and payoff. The panel shows both; they differ whenever
     # reward:risk is not 1.0, and the break-even is the one that pays.
@@ -667,37 +687,66 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
     return base
 
 
+def _rereg_row(symbol: str, tf: str) -> dict | None:
+    """The graded row record for this cell from wr_rereg_5m.json.
+
+    This is the ONLY shipped artifact that records the median stop and
+    target the certified geometry actually used.  hold_wr.json carries
+    k/m and the win rates but no barrier distances at all.
+    """
+    global _REREG
+    try:
+        if _REREG is None:
+            with open(REREG_PATH, encoding="utf-8") as fh:
+                _REREG = {r.get("cell"): r for r in json.load(fh)
+                          if isinstance(r, dict)}
+    except (OSError, ValueError):
+        _REREG = {}
+    mins = TF_MINUTES.get(tf)
+    return _REREG.get(f"{symbol}|{mins}")
+
+
 def geometry_cost_check(symbol: str, tf: str) -> dict[str, Any]:
     """Does the certified target for this cell clear the round trip?
 
-    Uses the artifact's own selected geometry (k, m) and the grader's
-    recorded median barrier scale where present, so the answer is
-    derived from the shipped numbers — not from a fresh guess.  When
-    the scale is not in the artifact the verdict is ``None`` (unknown),
-    never a silent True.
+    Two things used to be wrong here and both made the answer look good:
+
+    1. It read ``full["row_sl_bps_median"]`` from hold_wr.json, a key that
+       artifact has never contained, so every cell returned
+       ``pays_round_trip=None`` — "artifact carries no median stop
+       distance".  A permanent unknown, presented as a lack of evidence
+       rather than a lookup against the wrong file.  The graded medians
+       live in wr_rereg_5m.json and are read from there now.
+    2. It charged the artifact's own ``friction_bps_per_side`` (12/side
+       spot) instead of the venue the order path executes on (5/side
+       futures).  The graded cost is still reported, as
+       ``graded_rt_bps``, so the difference stays visible.
     """
     c = cell(symbol, tf)
     if not c or c.get("status") != "ok":
         return {"pays_round_trip": None, "why": "no certified cell"}
     sel = c.get("selected") or {}
-    full = sel.get("full") or {}
-    rt = 2.0 * float(c.get("friction_bps_per_side") or 0.0)
-    # the row target in bps, from the grader's own median stop distance
-    sl_bps = full.get("row_sl_bps_median")
+    row = _rereg_row(symbol, tf) or {}
     k = sel.get("row_k")
-    tp_bps = (float(sl_bps) * float(k)
-              if sl_bps is not None and k is not None else None)
+    sl_bps = row.get("row_sl_bps_median")
+    tp_bps = row.get("row_tp_bps_median")
+    if tp_bps is None and sl_bps is not None and k is not None:
+        tp_bps = float(sl_bps) * float(k)
+    rt = round_trip_bps(symbol)
+    _graded_rt = 2.0 * float(c.get("friction_bps_per_side") or 0.0)
     floor = MIN_TP_OVER_RT * rt
+    pays = (None if tp_bps is None else bool(float(tp_bps) >= floor))
     return {
         "rt_bps": round(rt, 3),
+        "graded_rt_bps": (round(_graded_rt, 3) if _graded_rt else None),
         "min_tp_bps": round(floor, 3),
         "tp_bps": (round(float(tp_bps), 3) if tp_bps is not None else None),
-        "pays_round_trip": (None if tp_bps is None
-                            else bool(float(tp_bps) >= floor)),
+        "sl_bps": (round(float(sl_bps), 3) if sl_bps is not None else None),
+        "pays_round_trip": pays,
         "why": ("target inside the round trip — every 'win' still loses "
-                "money" if tp_bps is not None and float(tp_bps) < floor
-                else "target clears the round trip" if tp_bps is not None
-                else "artifact carries no median stop distance"),
+                "money" if pays is False
+                else "target clears the round trip" if pays
+                else "no graded barrier distance for this cell"),
     }
 
 
