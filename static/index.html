@@ -97,11 +97,13 @@
          the certified tier, the measured every-window win rate, the
          Wilson confidence bound, the held side + era position with
          real friction, and the last sealed lock. -->
-    <div class="panel-h" style="margin:10px 2px 6px">HOLD POLICY CELLS — 4 assets × 4 timeframes · 16 predictions
-      <span class="dim" id="cells-meta">certified side · every-window WR · Wilson confidence · per-cell ANALYSE timer (click locks one cell only)</span></div>
-    <div class="panel" style="padding:8px 10px">
-      <div id="cells-cards" class="cells-grid"><span class="dim">loading hold policy…</span></div>
-    </div>
+    <details id="cells-details" class="cells-details">
+      <summary class="panel-h" style="margin:10px 2px 6px;cursor:pointer">HOLD POLICY CELLS — 4 assets × 4 timeframes · 16 predictions
+        <span class="dim" id="cells-meta">tap to expand · certified side · every-window WR · Wilson confidence · per-cell ANALYSE timer (click locks one cell only)</span></summary>
+      <div class="panel" style="padding:8px 10px">
+        <div id="cells-cards" class="cells-grid"><span class="dim">loading hold policy…</span></div>
+      </div>
+    </details>
     <div id="tf-hero">
       <div class="panel dash-hero">
         <div class="dash-hero-top">
@@ -212,6 +214,7 @@
     <div class="tab-head"><div class="tab-title">EMOTION ENGINE — 22 channels <span class="dim" id="em-scope"></span></div></div>
     <div class="panel" id="em-dom-panel">
       <div class="panel-h">DOMINANT NOW — biggest channel on this window</div>
+      <div id="em-age" class="dim" style="font-size:11px;margin:2px 0 4px"></div>
       <div id="em-dominant"><div class="dim">loading…</div></div>
     </div>
     <div class="panel">
@@ -348,6 +351,7 @@
       <div class="panel-h">THOUGHT PROCESS — six steps, in order
         <button class="btn" id="mind-refresh" style="float:right;padding:3px 12px">re-think</button>
       </div>
+      <div id="mind-spine"></div>
       <div id="mind-steps"><div class="dim pad">waiting for the first trace…</div></div>
     </div>
 

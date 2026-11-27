@@ -85,13 +85,49 @@ def test_levels_pair_is_repaired_onto_the_published_side():
     # refusals: no side, no pair
     assert mirror(buy, 0) is None
     assert mirror({"entry": 100.0, "direction": 1}, -1) is None
-    # a skewed pair is reflected, not rejected — the distances ARE the
-    # measurement, and 20:1 is still a legal SELL (tp 99 < 100 < sl 120)
-    skew = mirror({"entry": 100.0, "tp": 120.0, "sl": 99.0,
+    # a skewed pair keeps ITS OWN ratio: the target distance is the
+    # measurement, so reflecting must not turn 4:1 into 1:4. (The old
+    # code swapped the two prices, which inverted the ratio — that is the
+    # bug that published a certified 2:1 contract as exactly 1:1 after
+    # the floor repaired it. Swapping is only equivalent for an equidistant
+    # pair, which is why the 1:1 case above never caught it.)
+    skew = mirror({"entry": 100.0, "tp": 104.0, "sl": 99.0,
                    "direction": 1}, -1)
-    assert skew is not None and skew["tp"] == 99.0 and skew["sl"] == 120.0
+    assert skew is not None
+    assert skew["tp"] == 96.0 and skew["sl"] == 101.0   # 4 down, 1 up
+    assert abs(skew["ratio"] - 4.0) < 1e-9, skew["ratio"]
+    assert skew["tp"] < 100.0 < skew["sl"]              # a SELL
+    # beyond MAX_RR the pair is refused rather than published
+    assert mirror({"entry": 100.0, "tp": 120.0, "sl": 99.0,
+                   "direction": 1}, -1) is None
     # and what it returns always validates
     assert valid(sell)
+    assert valid(skew)
+
+
+def test_mirror_preserves_ratio_across_a_flip():
+    """A flip is a new SIDE, not a new risk profile.
+
+    Live proof of the defect (2026-11-27, BTC tf1): the sealed contract
+    carried ratio 1.9999, the card's published direction disagreed with
+    the contract's side, the display mirrored it, and the screen showed
+    exactly 1.0000. Switching sides must never change how much the trade
+    stands to make relative to what it risks.
+    """
+    from app.levels import mirror
+    buy = {"entry": 68270.019448, "tp": 69571.723909,
+           "sl": 67619.133083, "direction": 1}
+    sell = mirror(buy, -1)
+    assert sell is not None
+    assert abs(sell["ratio"] - 1.999895) < 1e-5, sell["ratio"]
+    # the legs stay at their measured distances, just on the other side
+    assert abs(sell["tp_dist"] - 1301.704461) < 1e-4
+    assert abs(sell["sl_dist"] - 650.886365) < 1e-4
+    # round trip: flipping back restores the original pair
+    back = mirror(sell, 1)
+    assert abs(back["tp"] - buy["tp"]) < 1e-4
+    assert abs(back["sl"] - buy["sl"]) < 1e-4
+    assert abs(back["ratio"] - 1.999895) < 1e-5
 
 
 def test_engine_verifies_the_pair_before_freezing_a_contract():

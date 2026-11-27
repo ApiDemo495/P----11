@@ -643,3 +643,39 @@ canvas { max-width: 100%; }
 .hcell .hc-timer .free { color: #26c96f; }
 .hcell .hc-era { font-size: 10px; color: #8a8aa3; margin-top: 3px; min-height: 13px; }
 .hcell .hc-lock { font-size: 10px; color: #6f6f8c; margin-top: 2px; }
+
+/* ── the dashboard must fit a phone, not six screens of scroll ──────────
+   The 16 hold-policy cells were the bulk of the vertical length: they
+   stacked above the hero, so the thing the user opens the dashboard FOR
+   (the live call) started below several screens of cards. Collapse them
+   into a <details> that remembers its state; the hero is now first. */
+.cells-details { margin-bottom: 6px; }
+.cells-details > summary { list-style: none; outline: none; }
+.cells-details > summary::-webkit-details-marker { display: none; }
+.cells-details > summary::before { content: "▸ "; color: var(--dim); }
+.cells-details[open] > summary::before { content: "▾ "; }
+.cells-details:not([open]) #cells-meta::after { content: ""; }
+
+/* ── MIND spine: the six-step reasoning as one scannable chain ───────────
+   The trace is honest prose, but prose alone gave the user no way to see
+   the SHAPE of the reasoning ("mind is just text"). Each node is a step,
+   its colour is the server's own status for that step. */
+.mind-chain { display: flex; align-items: center; flex-wrap: wrap; gap: 0; margin: 4px 0 2px; }
+.mind-node {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 3px 9px 3px 4px; font: 600 10px/1 var(--mono);
+  letter-spacing: 0.5px; background: #101019; color: var(--dim);
+}
+.mind-node i {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; border-radius: 50%;
+  background: #1d1d2e; color: var(--dim); font-style: normal; font-size: 9px;
+}
+.mind-node b { font-weight: 600; }
+.mind-node.done { border-color: #22c98a66; color: var(--green); }
+.mind-node.done i { background: #22c98a22; color: var(--green); }
+.mind-node.warn, .mind-node.conflict { border-color: #c9a22788; color: var(--gold); }
+.mind-node.warn i, .mind-node.conflict i { background: #c9a22722; color: var(--gold); }
+.mind-node.partial { border-color: var(--line); color: var(--dim); }
+.mind-link { width: 12px; height: 1px; background: var(--line); }

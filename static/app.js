@@ -3637,6 +3637,23 @@ async function loadEmotion() {
         if (!S.domEm || S.domEm.i !== bi) S.domEm = { i: bi, since: Date.now() };
         heldS = Math.max(0, Math.round((Date.now() - S.domEm.since) / 1000));
       }
+      // Everything below is measured ONCE PER GRC PASS, so it is
+      // bit-identical between passes while the panels repaint every 2 s.
+      // Print the age next to the headline: a reading that is 3 minutes
+      // old is fine, but it must not *look* like it just changed.
+      const ageEl = $("#em-age");
+      if (ageEl) {
+        const at = Number(em.measured_at || 0);
+        if (at > 0) {
+          const ageS = Math.max(0, Math.round(Date.now() / 1000 - at));
+          ageEl.textContent = ageS < 90
+            ? `measured ${ageS}s ago · recomputed once per GRC pass`
+            : `measured ${Math.round(ageS / 60)}m ago · recomputed once per GRC pass `
+              + "(the tape moved since — these channels have not been re-read)";
+        } else {
+          ageEl.textContent = "";
+        }
+      }
       if (dom && bi) {
         const pct = Math.round(best * 100);
         const names = em.model?.channels || {};
@@ -4699,6 +4716,30 @@ const MIND_STATUS = { done: "acc-up", partial: "dim", warn: "acc-warn",
                       conflict: "acc-warn" };
 
 function renderMind(t) {
+  // ── THE SPINE: the same six steps as a compact, coloured chain.
+  // The prose below is honest but reads as a wall of text ("mind is just
+  // text"), so the state of the whole reasoning is also drawn as one row
+  // you can scan: each block is a step, its colour is its status. Still
+  // server-driven — a step the server did not send has no block here.
+  const spine = $("#mind-spine");
+  if (spine) {
+    const st = t.steps || [];
+    const doneN = st.filter(s => s.status === "done").length;
+    const badN = st.filter(s => s.status === "warn" || s.status === "conflict").length;
+    spine.innerHTML = `
+      <div class="mind-chain">${st.map((s, i) => `
+        <span class="mind-node ${esc(s.status)}" title="${esc(s.title)} — ${esc(s.status)}">
+          <i>${i + 1}</i><b>${esc((s.step || "").slice(0, 4).toUpperCase())}</b>
+        </span>${i < st.length - 1 ? '<span class="mind-link"></span>' : ""}`).join("")}
+      </div>
+      <div class="dim" style="font-size:11px;margin-top:6px">
+        ${doneN}/${st.length} steps settled${badN ? ` · <span class="acc-warn">${badN} caveat${badN > 1 ? "s" : ""}</span>` : " · no caveats"}
+        ${t.consistency ? (t.consistency.ok
+            ? ' · <span class="acc-up">self-consistent</span>'
+            : ' · <span class="acc-dn">CONTRADICTION</span>') : ""}
+      </div>`;
+  }
+
   // ── the six steps, verbatim from the server
   const box = $("#mind-steps");
   if (box) {

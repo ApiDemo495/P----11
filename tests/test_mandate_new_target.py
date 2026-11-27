@@ -19,18 +19,34 @@ import math
 def test_new_target_rr_is_tradable_at_full_strength():
     from app.engine import NEW_TARGET_RR
 
-    factor_full = 0.35 + 0.65 * min(1.0, 0.10 / 0.08)   # saturated CCI
+    factor_full = 0.5 + 0.5 * min(1.0, 0.10 / 0.08)     # saturated CCI
     assert math.isclose(factor_full, 1.0)
     assert factor_full * NEW_TARGET_RR >= 1.0, \
         "a full-strength signal must clear the 1:1 floor"
+    assert factor_full * NEW_TARGET_RR <= 2.0 + 1e-9, \
+        "a full-strength target is capped at 2:1"
 
 
-def test_new_target_still_gates_weak_signals():
+def test_the_tilt_never_pushes_a_signal_under_the_floor():
+    """The tilt modulates how far ABOVE 1:1 a target sits — it may not
+    decide whether the trade is legal at all.
+
+    The old band was 0.35 + 0.65·|cci|/0.08, i.e. rr ∈ [0.7, 2.0]: any
+    signal that was not almost saturated produced a sub-1:1 target, the
+    floor refused it, and the cell sat "watch-only" indefinitely. That is
+    exactly what the board showed for six days (12 of 16 cells NOT
+    TRADEABLE). A weak signal now gets the SMALLEST LEGAL target and keeps
+    its weak score in the tier/issue_note rather than being silenced.
+    """
     from app.engine import NEW_TARGET_RR
 
-    factor_weak = 0.35 + 0.65 * min(1.0, 0.01 / 0.08)   # |cci| = 0.01
-    assert factor_weak * NEW_TARGET_RR < 1.0, \
-        "weak signals must stay watch-only under the user's floor"
+    for cci in (0.0, 0.005, 0.01, 0.02, 0.04, 0.08, 0.5):
+        factor = 0.5 + 0.5 * min(1.0, abs(cci) / 0.08)
+        rr = factor * NEW_TARGET_RR
+        assert rr >= 1.0 - 1e-9, (cci, rr)
+        assert rr <= 2.0 + 1e-9, (cci, rr)
+    # the weakest possible signal still clears the floor
+    assert NEW_TARGET_RR * 0.5 >= 1.0 - 1e-9
 
 
 def test_old_sigma_mean_formula_is_gone():
@@ -43,7 +59,7 @@ def test_old_sigma_mean_formula_is_gone():
     # global NEW_TARGET_RR — the structure is the same)
     assert "_mag = _factor * _rr_n * _sl_bps" in src
     assert "_rr_n = _mcfg_c.new_rr(symbol) or NEW_TARGET_RR" in src
-    assert "0.65 * min(1.0, abs(float(" in src   # factor kept (tilt)
+    assert "0.5 * min(1.0, abs(float(" in src   # factor kept (tilt, floored at 1:1)
 
 
 def test_mandate_tiers_follow_measured_cells():
