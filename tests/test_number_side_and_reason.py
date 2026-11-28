@@ -160,9 +160,13 @@ def test_the_engine_publishes_the_resolved_side_not_the_raw_one():
     assert 'res["signal"] = ("BUY" if _side_resolved > 0' in block
     # the pre-flip side stays visible for the divergence note
     assert 'res["direction_cci"] = direction' in block
-    # the 2:1 correction feeds the SAME resolved variable, never a second one
-    assert "two_to_one_direction" in block
-    assert "_side_resolved = _rr_dir" in block
+    # the 2:1 block no longer REVERSES the side: flipping a fixed 2:1 pair
+    # only relabels the book (resolved -24R <-> +24R, total -0.82R either
+    # way), so it is published as a note and the engine keeps its own side.
+    assert "two_to_one_side_note" in block
+    assert '"applied": False' in block
+    assert "_side_resolved = _rr_dir" not in block
+    assert "two_to_one_direction" not in block
 
 
 def test_the_side_is_resolved_before_any_level_is_built():

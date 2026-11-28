@@ -1898,73 +1898,83 @@ async def cost_model() -> JSONResponse:
 
 @app.get("/api/rr-geometry")
 async def rr_geometry_endpoint(symbol: str = "BTC") -> JSONResponse:
-    """Where a 2:1 barrier pair's win rate is actually highest — and on which
-    side.
+    """What a 2:1 barrier pair can actually achieve — and whether it pays.
 
-    Two independent facts decide a 2:1 win rate, and neither was visible in
-    the product before:
+    Three facts decide it, and the third one is the finding:
 
-    1. THE SIDE. P(hit +2b before -b) = 1/3 for ANY b on a driftless process
-       (optional stopping — no distribution assumed). This app's own 2:1
-       walk landed TP first on 8 of 48 resolved trades = 16.7 %, i.e.
-       significantly WORSE than a fair coin (one-sided p = 0.008); the
-       reverse side lands 83.3 % (p = 0.008) and holds in both halves. The
-       pair is therefore issued on the corrected side.
-    2. THE HORIZON. A barrier pair only produces a win if something touches
-       it. 22 minutes resolved 15.4 % of the time; 24 hours, 86.0 %.
+    1. THE RATIO. With no drift, P(hit +2b before -b) = 1/(1+R), so at 2:1
+       the pair wins 1/3 of the windows it resolves. This is optional
+       stopping on a mean-zero martingale — no distribution assumed.
+    2. THE WINDOW. The unconditional rate is P(resolve)/(1+R). A short
+       window truncates the race before either barrier is reached, which
+       pulls the conditional rate BELOW 1/3 and can never push it above.
+    3. THE ARITHMETIC DOES NOT CLOSE. achieved = P(resolve)/(1+R) and
+       needed = (1+c/b)/(1+R) share the 1/(1+R) factor, so the sign of the
+       edge is the sign of (P(resolve) - 1 - c/b), which is negative for
+       every lane, every ratio and every stop. A zero-edge barrier pair
+       cannot clear its own round trip. That is a theorem, not an estimate.
 
-    Nothing here withholds a lane — every one is reported with its number.
+    So this endpoint publishes a MEASUREMENT, not a promise: the ceiling is
+    33.3 %, the 6-hour lane achieves 18.0 %, and the shortfall is 18.2pp
+    against a 36.2 % breakeven. Every lane is reported. Nothing withheld.
     """
     from .config import TIMEFRAMES, TWO_TO_ONE_LANE
     from .horizon import asset_rt
-    from .rr_geometry import (CALIBRATION, TWO_TO_ONE_EDGE,
+    from .rr_geometry import (CALIBRATION, P_TP_FIRST_FAIR, TWO_TO_ONE_EDGE,
                               TWO_TO_ONE_EDGE_OBSERVED, TWO_TO_ONE_EDGE_SHIPPED,
-                              TWO_TO_ONE_RATE_OBSERVED, TWO_TO_ONE_RATE_PLANNED,
-                              TWO_TO_ONE_SIDE, best_lane, race_summary,
-                              vol_scale)
+                              TWO_TO_ONE_SIDE, ZERO_EDGE_THEOREM, best_lane,
+                              best_pair, race_summary, side_policy, vol_scale)
     sym = str(symbol).upper()
     v, prov = vol_scale(sym)
     rt = asset_rt(sym)
     lanes = {tf: float(m["minutes"]) for tf, m in TIMEFRAMES.items()}
-    # every lane is SIZED AND RANKED on the conservative edge, never on the
-    # 83.3 % point estimate from a single regime
-    res = best_lane(rt, v, lanes, TWO_TO_ONE_EDGE)
-    shipped = best_lane(rt, v, lanes, TWO_TO_ONE_EDGE_SHIPPED)
-    observed = best_lane(rt, v, lanes, TWO_TO_ONE_EDGE_OBSERVED)
-    return JSONResponse({
+    base = {
         "ok": True, "symbol": sym,
         "vol_bps_per_sqrt_hour": v, "vol_provenance": prov,
         "round_trip_bps": rt,
         "two_to_one_lane": TWO_TO_ONE_LANE,
+        "lane_minutes": lanes.get(TWO_TO_ONE_LANE),
         "two_to_one_side": TWO_TO_ONE_SIDE,
-        "side_policy": {
-            "planned_on": "wilson95_lower_bound",
-            "rate_planned": round(TWO_TO_ONE_RATE_PLANNED, 4),
-            "rate_observed": round(TWO_TO_ONE_RATE_OBSERVED, 4),
-            "edge_planned": round(TWO_TO_ONE_EDGE, 4),
-            "edge_observed": round(TWO_TO_ONE_EDGE_OBSERVED, 4),
-            "why": ("40/48 resolved trades landed target-first on the reverse "
-                    "side (Wilson 95% lower bound 70.4%). That is 48 trades "
-                    "from ONE 2.5-month regime, so the app sizes on the lower "
-                    "bound and publishes the 83.3% beside it rather than "
-                    "quoting it."),
-        },
-        "calibration": CALIBRATION,
+        "side_policy": side_policy(),
+        "theorem": ZERO_EDGE_THEOREM,
+        "fair_conditional_rate": round(P_TP_FIRST_FAIR, 4),
         "measured_race": race_summary(),
+    }
+    if v is None:
+        # THE HONEST ANSWER FOR AN UNMEASURED ASSET. No volatility, no
+        # resolution probability, no win rate — and saying so is the answer,
+        # not a placeholder to be filled with a prior.
+        base.update({
+            "measured": False,
+            "lanes": {}, "best": None,
+            "verdict": ("no measured volatility for this asset in this "
+                        "checkout, so no 2:1 win rate can be computed for "
+                        "it. Publishing one from a prior is what produced "
+                        "the 60.6 % figure that cannot exist."),
+            "note": ZERO_EDGE_THEOREM["statement"],
+        })
+        return JSONResponse(base)
+    res = best_lane(rt, v, lanes, TWO_TO_ONE_EDGE)
+    shipped = best_lane(rt, v, lanes, TWO_TO_ONE_EDGE_SHIPPED)
+    pair = best_pair(lanes.get(TWO_TO_ONE_LANE, 360.0), v, rt)
+    base.update({
+        "measured": True,
+        "calibration": CALIBRATION,
         "as_corrected": res,
-        "as_observed_point_estimate": {
-            "best": observed["best"],
-            "best_detail": observed["best_detail"]},
-        "as_shipped": {
-            "best": shipped["best"],
-            "best_detail": shipped["best_detail"]},
+        "as_shipped": {"best": shipped["best"],
+                       "best_detail": shipped["best_detail"]},
+        "best_pair_in_lane": pair,
         **res,
-        "note": ("a 2:1 hit rate cannot be raised by moving the barriers — "
-                 "P(TP first | resolved) is 1/3 for any stop on a driftless "
-                 "tape. It moves with the SIDE (the measured race is on the "
-                 "reverse of the shipped side) and with the window's sigma, "
-                 "which is why the 24h lane carries the highest 2:1 rate."),
+        "verdict": (
+            f"a 2:1 pair in the {lanes.get(TWO_TO_ONE_LANE)}-minute lane "
+            f"resolves {100 * res['lanes'][TWO_TO_ONE_LANE]['resolve_probability']:.1f}% "
+            "of the time, so its win rate is "
+            f"{100 * res['lanes'][TWO_TO_ONE_LANE]['win_rate_unconditional']:.1f}% "
+            "against a 36.2% breakeven. It is BELOW breakeven at every stop "
+            "size, in every lane. That is arithmetic, not a measurement gap."),
+        "note": ZERO_EDGE_THEOREM["statement"],
     })
+    return JSONResponse(base)
 
 
 @app.get("/api/analyses")

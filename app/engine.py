@@ -3829,37 +3829,43 @@ class PredictionEngine:
             except Exception:
                 log.exception("side resolution failed %s/%s", symbol, tf)
                 _side_resolved = direction
-            # ── THE 2:1 SIDE CORRECTION (2026-11-27) ────────────────────
-            # The app's own 2:1 walk resolved 48 pairs and landed TP first
-            # 8 times = 16.7 %, against the 33.3 % a fair coin gives. That
-            # is significantly WORSE than no edge (one-sided exact binomial
-            # p = 0.008). The reverse side lands 83.3 % (p = 0.008) and it
-            # holds in both independent halves of the sample (73.9 % /
-            # 92.0 %). So the 2:1 pair is issued on the side the tape
-            # supports rather than the side that loses the race.
+            # ── THE 2:1 SIDE LABEL (2026-11-28) ─────────────────────────
+            # This block used to REVERSE the engine's side on the 2:1 lane.
+            # It no longer does, and the reason is worth recording because
+            # the statistic that motivated it is real and still true: on the
+            # app's own 2:1 walk the shipped side landed target-first 8 times
+            # out of 48 resolved (16.7 %, exact binomial p = 0.0081 against
+            # the fair 1/3), and the reverse lands 40/48.
             #
-            # This is NOT "abstain and take the other one" and it drops no
-            # window (no-abstention mandate): the same asset, the same
-            # window, the same barriers, one corrected sign, stated on the
-            # card so the user can see the trade is on the reverse side.
+            # But a flip cannot add money to a fixed 2:1 pair. A resolved
+            # trade books +2R or -1R and nothing else, so reversing the side
+            # moves P&L between the resolved book (-24.0R) and the time-out
+            # book (+24.8R) and leaves the total at -0.82R either way. It
+            # makes 83.3 % of RESOLVED trades "win" while the account does
+            # not move — a loser's illusion. Acting on it would have placed
+            # the user's trades on a side whose only justification is a
+            # relabelled sample from one 2.5-month regime.
+            #
+            # So the finding is PUBLISHED as a label (`rr_geometry.
+            # side_policy()`, size_authority 0.0) and the engine keeps its
+            # own side. It is re-enabled only by a locked out-of-sample walk
+            # on a new regime that shows profit, not just a race label.
             if tf == TWO_TO_ONE_LANE and _side_resolved in (-1, 1):
-                from .rr_geometry import (TWO_TO_ONE_SIDE as _rrs,
-                                          two_to_one_direction as _rr2)
-                _rr_dir = _rr2(_side_resolved, _rrs)
-                if _rr_dir in (-1, 1) and _rr_dir != _side_resolved:
-                    res["two_to_one_flip"] = {
-                        "applied": True, "lane": tf,
-                        "from": _side_resolved, "to": _rr_dir,
-                        "side_policy": _rrs,
-                        "why": ("the measured 2:1 race is on the reverse "
-                                "side: 16.7% as shipped (p=0.008 against), "
-                                "83.3% reversed (p=0.008 for)"),
-                        "source": "rr_geometry.two_to_one_direction",
-                    }
-                    _side_resolved = _rr_dir
-                    log.info("2:1 side corrected %s/%s %+d -> %+d (measured "
-                             "race is on the reverse side)",
-                             symbol, tf, -_rr_dir, _rr_dir)
+                from .rr_geometry import side_policy as _rr_side
+                _sp = _rr_side()
+                res["two_to_one_side_note"] = {
+                    "applied": False,
+                    "lane": tf,
+                    "side_kept": _side_resolved,
+                    "observed_rate": _sp["rate_observed"],
+                    "flipped_rate": _sp["rate_flipped"],
+                    "p_value": _sp["p_value"],
+                    "size_authority": _sp["size_authority"],
+                    "why": ("the 2:1 race is measurably one-sided in this "
+                            "sample, but reversing it relabels the book "
+                            "without changing P&L (-0.82R either way), so the "
+                            "engine does not act on it"),
+                }
             if _side_resolved != direction:
                 # keep the pre-flip side visible for the UI's divergence note
                 if res.get("direction_cci") is None:

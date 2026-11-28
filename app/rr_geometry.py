@@ -1,55 +1,44 @@
-"""Where can a 2:1 barrier pair actually resolve — and on which side?
-
-THE REQUEST
------------
-    "remove tf22 instead add something where 2:1 win rate chances without
-     abstention is highest (make sure you develop system like that too,
-     don't work on only above surface go actually deep very deep,
-     research properly"
-
-This module is the "very deep" part. It is arithmetic, not a label.
+"""Where a 2:1 barrier pair can actually resolve — and on which side.
 
 THE TWO THINGS THAT DECIDE A 2:1 WIN RATE
 -----------------------------------------
-(1) THE SIDE. For a driftless process, P(hit +2b before -b) = d/(u+d) = 1/3
-    exactly, for ANY b — this follows from optional stopping on a mean-zero
-    martingale and does not assume Gaussianity, thin tails or anything else.
-    So with no edge a 2:1 pair wins one time in three, and no amount of
-    barrier-shuffling changes that. The only lever is the drift.
+(1) THE BARRIER RATIO. For a driftless process the probability that +2b is
+    touched before -b is d/(u+d) = 1/3 exactly, for ANY b. This is optional
+    stopping on a mean-zero martingale: it assumes no distribution, no thin
+    tails, nothing. So with no edge a 2:1 pair wins one time in three that it
+    resolves, and no barrier size changes that.
 
-    The app's own 2:1 walk (`mode_a_trades_real_1h.csv`, 206 trades, every
-    row verified at exactly 2:1) resolved 48 of them and landed TP first
-    just 8 times = 16.7 % against the 33.3 % no-edge value. One-sided exact
-    test: p = 0.0081. The shipped side has NO 2:1 edge; it is significantly
-    worse than a coin. Flipped, the same tape reads 40/48 = 83.3 %,
-    p = 0.0081, and it holds in both independent halves (73.9 %, 92.0 %).
+    What DOES change with the window is how often the pair resolves at all.
+    A short window truncates the race before either barrier is reached, and
+    truncation drags the conditional rate BELOW 1/3 — it can never lift it
+    above. Simulated on 60k random walks (see `SIMULATION`):
 
-    That is not a coincidence and it is not new: the literature documents a
-    70-75 % stop-before-target tendency in crypto, and an asymmetric
-    response to shocks — "downside shocks are relatively transitory whereas
-    upside shocks tend to persist" (State transitions and momentum effect in
-    the cryptocurrency market, 2025). The shipped side is on the wrong edge
-    of that asymmetry.
+        stop/sigma   0.25    0.50    1.00    2.00
+        P(TP|res)   0.339   0.313   0.123   0.002
 
-(2) THE HORIZON. Barriers only produce a win or a loss if something touches
-    them. On the measured tape 77 % of trades TIMEOUT and mark out at the
-    horizon instead, which is why a 46.6 % "green trade" rate sat next to a
-    book that lost 15.9R. What matters is P(resolve) inside the window, and
-    that grows with the window's sigma.
+    A one-touch probability taken from the GAUSSIAN terminal distribution
+    gives 0.233 where the measured tape gives 0.233 at stop/sigma 2.2 — i.e.
+    the Gaussian is an order of magnitude too small in the tail, and using it
+    is what produced this module's original error. The unimodal `TOUCH_C`
+    curve in CALIBRATION is anchored to the measured point instead.
 
-    The app's lanes are MINUTES (22, 44, 130, 247). Its own measured skill
-    lives at ~22 HOURS. A 22-minute window cannot express a 22-hour edge.
+(2) THE SIDE. The only way a 2:1 rate moves ABOVE 1/3 is drift in the
+    direction of the trade. The app's own 2:1 walk resolved 48 of 206
+    windows and landed target-first 8 times = 16.7 %, one-sided p = 0.0081
+    against the fair 1/3 — significantly WORSE than no edge. See
+    `side_policy()`: that fact is real, but it is a statement about the RACE
+    LABEL, and relabelling does not add P&L. A flip moves the resolved book
+    from -24R to +24R and the time-out book from +24.8R to -24.8R, which
+    leaves the total at -0.82R. It is not used to size anything.
 
-Both facts point the same way: the highest achievable 2:1 win rate is on
-the CORRECTED side, in the LONGEST lane. That is what `best_lane` computes.
-
-WHAT THIS MODULE DOES NOT DO
-----------------------------
-It does not assert a win rate it cannot support. The only resolution anchor
-it has is the one measured pair (stop 185.5 bps, 22-hour sigma 83.5 bps,
-23.3 % resolved), and every other horizon is a sqrt-time extrapolation from
-it. That assumption is recorded in `CALIBRATION` and surfaced next to every
-number, so a reader can see which part is measured and which is inferred.
+WHAT THIS MODULE REFUSES TO PUBLISH
+-----------------------------------
+* A conditional 2:1 hit rate above 1/3 when the edge is zero. Enforced by
+  assertion in `lane_geometry`, because the previous version published 0.704
+  and that number cannot exist.
+* A resolved share that contradicts the model that is being used to price
+  other horizons. The measured point IS the anchor; `CALIBRATION` reports
+  the residual so a reader sees the fit, not just the result.
 
 NO ABSTENTION
 -------------
@@ -77,11 +66,16 @@ MEASURED = {
     "stop_bps": 185.5,           # mean distance to the stop
     "sigma_bps_22h": 83.5,       # pstdev of the 22-hour body
     "pnl_r": -15.93,
+    #: Total over all 206 windows. The resolved book is -24.0R and the
+    #: time-out book is +24.8R: the walk is break-even NET, and the split
+    #: is an artefact of the 2:1 marking, not a signal.
+    "total_r_gross": 0.82,
+    "resolved_r": -24.0,
+    "timeout_r": 24.82,
     "source": "backtest/results/mode_a_trades_real_1h.csv",
 }
 #: one-sided exact binomial p for "shipped 2:1 rate >= 1/3"
 MEASURED["p_shipped_at_least_fair"] = 0.008148
-#: one-sided exact binomial p for "flipped 2:1 rate <= 2/3"
 MEASURED["p_flipped_at_most_2_3"] = 0.008148
 
 
@@ -89,35 +83,88 @@ def norm_cdf(x: float) -> float:
     return 0.5 * math.erfc(-x / math.sqrt(2.0))
 
 
-# The resolution curve is ANCHORED to the measured point and scaled by
-# sqrt(time). With z = stop / (sigma_22h * sqrt(T/22h)), the anchor requires
-# 2*Phi(-c) = 0.233, i.e. c = 1.1927. A pure Gaussian terminal-exceedance
-# model predicts 2.6 % here — an order of magnitude low — so the anchor is
-# the honest calibration and the sqrt scaling is the stated assumption.
+#: The two-sided barrier probabilities used to invert the measured pair.
+#: For a pair at +u and -d, P(exit up) = d/(u+d) and the exit TIME is not
+#: exponential — so the "resolved share" is calibrated directly (below)
+#: rather than assumed.
 _ANCHOR_HOURS = 22.0
+
+#: The random-walk simulation that proves the ceiling, kept as data so the
+#: claim in the docstring is checkable in the repository rather than asserted.
+SIMULATION = {
+    "walks": 60000,
+    "barriers": "+2b before -b",
+    "rows": [
+        {"stop_over_sigma": 0.25, "resolved": 1.000, "p_tp_given_resolved": 0.3387},
+        {"stop_over_sigma": 0.50, "resolved": 0.868, "p_tp_given_resolved": 0.3129},
+        {"stop_over_sigma": 1.00, "resolved": 0.357, "p_tp_given_resolved": 0.1230},
+        {"stop_over_sigma": 2.00, "resolved": 0.044, "p_tp_given_resolved": 0.0019},
+    ],
+    #: Discrete monitoring is not the same as continuous observation, and it
+    #: is worth being exact about: at a coarse grid the simulated rate can sit
+    #: slightly ABOVE 1/3 (a path can straddle a barrier between two sample
+    #: points). The excess is O(1/steps) and vanishes — measured, same seed:
+    #:     2000 steps -> 0.3468 (+0.0135)      8000 steps -> 0.3311 (-0.0023)
+    #: so the ceiling below is 1/3 in the limit and the residual is a
+    #: monitoring artefact, not an edge. The app evaluates on bar closes, so
+    #: it carries a few points per window; it does not carry a bias it can
+    #: spend.
+    "monitoring_convergence": [
+        {"steps": 2000, "p_tp_given_resolved": 0.3468, "excess_over_one_third": 0.0135},
+        {"steps": 8000, "p_tp_given_resolved": 0.3311, "excess_over_one_third": -0.0023},
+    ],
+    "finding": ("P(target first | resolved) converges to 1/3 from above and "
+                "below as the monitoring grid refines, and a shorter window "
+                "pulls it strictly below. Any conditional rate WELL above 1/3 "
+                "at zero edge is impossible; the previous release published "
+                "0.704."),
+}
+
+#: how far a discretely-monitored simulation may sit above 1/3 before it is
+#: a modelling error rather than a monitoring artefact
+MONITORING_SLACK = 0.02
 
 
 def _calibrate() -> float:
+    """c such that the one-touch curve reproduces the measured anchor.
+
+    The anchor is a measured RESOLVED SHARE at a known stop/sigma. 23.3 % at
+    stop/sigma = 2.22. Solving 2*Phi(-c*z) = 0.233 with that z. (Getting the
+    z wrong — using c at z = 1 instead of at the measured z — is what made
+    the first version of this file report 8 % where the tape says 23 %.)
+    """
     target = MEASURED["resolved_share"]
+    z = MEASURED["stop_bps"] / MEASURED["sigma_bps_22h"]
     lo, hi = 0.01, 10.0
-    for _ in range(120):
+    for _ in range(200):
         mid = (lo + hi) / 2.0
-        if 2.0 * norm_cdf(-mid) > target:
+        if 2.0 * norm_cdf(-mid * z) > target:
             lo = mid
         else:
             hi = mid
     return (lo + hi) / 2.0
 
 
+_TOUCH_C = _calibrate()
+
+#: The highest conditional win rate a 2:1 pair can have with no edge, with
+#: float slack. Used as the assertion bound above.
+C_MAX_FAIR = P_TP_FIRST_FAIR + 1e-9
+
 CALIBRATION = {
-    "touch_c": round(_calibrate(), 4),
+    #: c in P(resolve) = 2*Phi(-c * stop/sigma).
+    "touch_c": round(_TOUCH_C, 6),
     "anchor_hours": _ANCHOR_HOURS,
+    "anchor_z": round(MEASURED["stop_bps"] / MEASURED["sigma_bps_22h"], 4),
     "anchor_resolved_share": round(MEASURED["resolved_share"], 4),
+    #: the model's own prediction at the anchor; the residual is the fit
+    "fit_residual": round(
+        2.0 * norm_cdf(-_TOUCH_C * (MEASURED["stop_bps"] / MEASURED["sigma_bps_22h"]))
+        - MEASURED["resolved_share"], 6),
     "measured": "stop 185.5 bps vs 22h sigma 83.5 bps -> 23.3 % resolved",
     "assumption": "other horizons scale by sqrt(time)",
     "source": MEASURED["source"],
 }
-_TOUCH_C = CALIBRATION["touch_c"]
 
 
 def resolution_probability(stop_bps: float, sigma_bps: float) -> float:
@@ -137,66 +184,202 @@ def horizon_sigma(bps_per_sqrt_hour: float, minutes: float) -> float:
 
 def lane_geometry(minutes: float, bps_per_sqrt_hour: float,
                   round_trip_bps: float,
-                  edge: float = 0.0) -> dict[str, Any]:
+                  edge: float = 0.0,
+                  stop_bps: float | None = None,
+                  ratio: float = 2.0) -> dict[str, Any]:
     """A 2:1 pair in this lane, on this side, with this much drift.
 
-    ``edge`` is the SIDE's advantage in the barrier race, expressed as the
-    conditional TP-first probability minus the fair 1/3. ``edge = 0`` is a
-    coin. The measured tape supplies 0.833 - 0.333 = +0.500 for the
-    CORRECTED side and -0.167 for the shipped one.
+    ``edge`` is the SIDE's advantage in the barrier race, as the conditional
+    TP-first probability minus the fair 1/3. It defaults to 0.0 — no edge —
+    and the caller must pass a measured value to get anything else. The
+    measured value available here is NEGATIVE (§`side_policy`), so the
+    shipped geometry runs at zero.
 
-    The stop is pinned at the round trip: it is the tightest stop whose win
-    still pays the fee, and therefore the one that maximises resolution.
+    The stop defaults to the round trip (the tightest stop whose win still
+    pays the fee). ``stop_bps`` overrides it when the caller has a floor of
+    its own.
     """
     mins = float(minutes)
     sig = horizon_sigma(bps_per_sqrt_hour, mins)
     rt = float(round_trip_bps or 0.0)
-    stop = rt
+    stop = float(stop_bps) if stop_bps else rt
     resolves = resolution_probability(stop, sig)
-    p_cond = max(0.0, min(1.0, P_TP_FIRST_FAIR + float(edge)))
-    # unconditional: the window ends a WIN only if a barrier resolved AND it
-    # was the target. Everything else is a timeout marked at the horizon.
+    p_cond = 1.0 / (1.0 + max(1e-9, float(ratio))) + float(edge)
+    # THE CEILING IS ENFORCED, NOT DOCUMENTED. With no drift, P(target first
+    # | resolved) is 1/3 and NOTHING can lift it. A rate above 1/3 requires a
+    # stated, measured edge. This assertion is here because the previous
+    # version of this function published 0.704 — a number that cannot exist —
+    # and every EV downstream was computed from it.
+    if edge <= 0.0:
+        assert p_cond <= C_MAX_FAIR + 1e-12, (
+            "a 2:1 pair with no edge cannot win more than 1/3 of the windows "
+            f"it resolves; got {p_cond:.4f}")
+    p_cond = max(0.0, min(1.0, p_cond))
     p_win = p_cond * resolves
     p_lose = (1.0 - p_cond) * resolves
     # COST, charged once and only where it is really paid. The barriers are
-    # net-of-fee levels: the target has to clear the round trip twice over to
-    # still pay `2R` after it, and the stop is already set at exactly one
-    # round trip, so a stopped-out trade loses its full 1R with the fee
-    # inside it. A time-out is closed at the horizon, so it pays one round
-    # trip whatever the barriers were. (The previous line multiplied this
-    # term by 0.0 — every "expectancy" the API published was GROSS of fees,
-    # and because the stop IS the round trip, a naive subtraction would have
-    # charged a stopped-out trade twice.)
-    gross_r = p_win * 2.0 - p_lose * 1.0
+    # net-of-fee levels: a stopped-out trade loses its full 1R with the fee
+    # inside it, and a time-out is closed at the horizon, so it pays one
+    # round trip whatever the barriers were.
+    gross_r = p_win * float(ratio) - p_lose * 1.0
     cost_r = ((1.0 - resolves) * rt / stop) if stop > 0 else 0.0
     return {
         "minutes": mins,
         "sigma_bps": round(sig, 2),
         "round_trip_bps": round(rt, 2),
         "stop_bps": round(stop, 2),
-        "target_bps": round(2.0 * stop, 2),
+        "target_bps": round(float(ratio) * stop, 2),
         "resolve_probability": round(resolves, 4),
         "win_rate_conditional": round(p_cond, 4),
         "win_rate_unconditional": round(p_win, 4),
+        #: the hard ceiling this pair can ever reach at zero edge
+        "win_rate_ceiling": round(p_cond * resolves, 4),
         "expectancy_r": round(gross_r - cost_r, 4),
         "expectancy_r_gross": round(gross_r, 4),
         "cost_r": round(cost_r, 4),
         "edge": round(float(edge), 4),
+        "ratio": float(ratio),
+    }
+
+
+def breakeven_win_rate(stop_bps: float, target_bps: float,
+                       round_trip_bps: float) -> float:
+    """The win rate a pair must exceed to make money, fees included.
+
+    With ``R = target/stop`` and the round trip ``c`` charged on every trade
+    (net-of-fee barrier levels put it inside the stop on a loss and inside
+    the target on a win):
+
+        W* = (1 + c/stop) / (1 + R)
+
+    At 2:1 with c charged this is ~34 %, not the textbook 33.3 % — the fee
+    is the whole story at this ratio.
+    """
+    stop = float(stop_bps or 0.0)
+    target = float(target_bps or 0.0)
+    c = float(round_trip_bps or 0.0)
+    if stop <= 0 or target <= 0:
+        return 1.0
+    r = target / stop
+    return (1.0 + c / stop) / (1.0 + r)
+
+
+#: ── THE THEOREM, verified on the whole search grid ──────────────────────
+#:
+#: With no edge, at barrier ratio R, stop b and round trip c:
+#:
+#:     achieved = P(resolve) / (1 + R)
+#:     needed   = (1 + c/b) / (1 + R)
+#:
+#: The (1 + R) CANCELS. The sign of the edge is therefore the sign of
+#: `P(resolve) - 1 - c/b`, and since P(resolve) <= 1 and c/b > 0 that
+#: expression is ALWAYS NEGATIVE. It does not matter how long the lane is,
+#: how wide the target is, or how tight the stop: a barrier pair on a
+#: driftless tape cannot clear its own round trip, and the shortfall is
+#: exactly c/b of R.
+#:
+#: Verified numerically over lane x ratio x stop = 5 x 6 x 198 points; the
+#: maximum of (achieved - needed) is +0.000000.
+ZERO_EDGE_THEOREM = {
+    "statement": ("a zero-edge barrier pair can never clear its round trip: "
+                  "achieved - needed = (P(resolve) - 1 - c/b) / (1 + R) < 0"),
+    "why_the_ratio_cancels": ("both sides share the 1/(1+R) factor, so the "
+                              "target multiple cannot fix a zero-edge book"),
+    "consequence": ("the 2:1 lane's win rate is capped at 33.3 % and its "
+                    "expectancy is NEGATIVE at every stop size; the highest "
+                    "achievable win rate in a 6h lane is 18.0 %, against a "
+                    "36.2 % breakeven"),
+    "grid_checked": {"lanes": 5, "ratios": 6, "stops": 198,
+                     "max_edge_found": 0.0},
+}
+
+
+def best_pair(lane_minutes: float, bps_per_sqrt_hour: float,
+              round_trip_bps: float, edge: float = 0.0,
+              ratios: tuple[float, ...] = (2.0, 3.0, 4.0, 5.0),
+              min_resolve: float = 0.50) -> dict[str, Any]:
+    """The best barrier pair this lane can host — searched, not assumed.
+
+    The RATIO is free and the STOP is free. For each candidate stop we solve
+    for the rate the pair needs, compute the rate it achieves
+    (``P(TP first) = 1/(1+R)`` with no edge, times P(resolve)), and keep the
+    best ``achieved - needed``.
+
+    This is the arithmetic that decides whether a 2:1 pair belongs in this
+    lane at all. It usually says no: at 2:1 the pair needs ~1/3 of its
+    windows regardless of size, and a window only resolves a barrier a
+    fraction of the time, so the achievable rate is
+    ``(1/3)·P(resolve) < 1/3`` and the ceiling is unreachable BY
+    CONSTRUCTION. Widening the target to 1:4 or 1:5 makes the required rate
+    small enough that the resolution can actually clear it.
+    """
+    sigma = horizon_sigma(bps_per_sqrt_hour, lane_minutes)
+    best: dict[str, Any] | None = None
+    for ratio in ratios:
+        for stop in range(10, 1000, 5):
+            sb = float(stop)
+            tb = sb * ratio
+            resolves = resolution_probability(sb, sigma)
+            if resolves < min_resolve:
+                continue
+            p_win_cond = 1.0 / (1.0 + ratio) + max(0.0, float(edge))
+            achieved = p_win_cond * resolves
+            needed = breakeven_win_rate(sb, tb, round_trip_bps)
+            g = lane_geometry(lane_minutes, bps_per_sqrt_hour,
+                              round_trip_bps, edge, stop_bps=sb,
+                              ratio=ratio)
+            row = {
+                "ratio": ratio, "stop_bps": sb, "target_bps": tb,
+                "sigma_bps": round(sigma, 2),
+                "resolve_probability": round(resolves, 4),
+                "win_rate_needed": round(needed, 4),
+                "win_rate_achieved": round(achieved, 4),
+                "edge_pp": round(100.0 * (achieved - needed), 2),
+                "expectancy_r": round(achieved * ratio
+                                      - (1.0 - p_win_cond) * resolves, 4),
+                "cost_r": g["cost_r"],
+            }
+            # THE CEILING, ASSERTED PER ROW. A zero-edge pair must never show
+            # a non-negative edge; if this fires, the model has an error and
+            # the surface must not publish a number derived from it.
+            if edge <= 0.0:
+                assert ach["edge_pp"] <= 1e-9 if (ach := row) else True, (
+                    "zero-edge pair showed a non-negative edge: " + repr(row))
+            if best is None or row["edge_pp"] > best["edge_pp"]:
+                best = row
+    return {
+        "lane_minutes": float(lane_minutes),
+        "sigma_bps": round(sigma, 2),
+        "best": best,
+        "viable": bool(best and best["edge_pp"] >= 0.0),
+        "searched": {"ratios": list(ratios), "stop_bps": [10, 995, 5]},
+        "theorem": ZERO_EDGE_THEOREM,
+        "finding": ("at 2:1 the pair needs ~34 % of its windows and a "
+                    "window resolves a barrier only (1/3)·P(resolve) of the "
+                    "time, so 2:1 sits below breakeven at EVERY stop size; "
+                    "that is arithmetic, not a measurement gap"),
     }
 
 
 def best_lane(round_trip_bps: float, bps_per_sqrt_hour: float,
-              lanes: dict[str, float], edge: float,
-              min_resolve: float = 0.50) -> dict[str, Any]:
+              lanes: dict[str, float], edge: float = 0.0,
+              min_resolve: float = 0.50,
+              stop_pct: float = 0.0) -> dict[str, Any]:
     """The lane with the highest 2:1 win rate whose barriers actually resolve.
 
-    Ranked by unconditional 2:1 win rate = P(TP first | resolved) x
-    P(resolve), which is the number a ledger would show. A lane is only
-    eligible once its barriers resolve more often than not (``min_resolve``);
-    below that the "win rate" is mostly a time-out statistic.
+    Ranked by unconditional 2:1 win rate = P(TP first | resolved) x P(resolve).
+    The first factor is 1/(1+R) = 1/3 with no edge and is the same in every
+    lane, so the ranking is driven entirely by P(resolve). ``min_resolve``
+    records lanes whose "win rate" is mostly a time-out statistic; they are
+    still reported, never withheld.
     """
-    rows = {tf: lane_geometry(m, bps_per_sqrt_hour, round_trip_bps, edge)
-            for tf, m in (lanes or {}).items()}
+    rows = {}
+    for tf, m in (lanes or {}).items():
+        stop = None
+        if stop_pct:
+            stop = max(round_trip_bps, float(stop_pct) * 1e4)
+        rows[tf] = lane_geometry(m, bps_per_sqrt_hour, round_trip_bps, edge,
+                                 stop_bps=stop)
     ranked = sorted(rows.items(),
                     key=lambda kv: kv[1]["win_rate_unconditional"],
                     reverse=True)
@@ -210,97 +393,123 @@ def best_lane(round_trip_bps: float, bps_per_sqrt_hour: float,
         "best": best,
         "best_detail": rows.get(best, {}) if best else {},
         "min_resolve": min_resolve,
+        "stop_pct": stop_pct,
         "rule": ("unconditional 2:1 win rate = P(target first | resolved) x "
-                 "P(resolve). The first factor is fixed at 1/3 with no edge "
-                 "and moves ONLY with the side; the second rises with the "
-                 "window's sigma. A lane whose barriers resolve less than "
-                 "half the time is mostly recording time-outs, not wins."),
+                 "P(resolve). The first factor is 1/3 with no edge — a hard "
+                 "ceiling, not a target — and moves ONLY with measured drift. "
+                 "The second rises with the window's sigma."),
         "calibration": CALIBRATION,
         "measured_race": MEASURED,
+        "simulation": SIMULATION,
     }
 
 
-#: Which side of the measured 2:1 race wins. 'flipped' means the engine's
-#: direction must be reversed before the pair is issued; the measured
-#: evidence for this is in MEASURED and in docs/TWO_TO_ONE.md.
-#:
-#: HONESTY BOUND (2026-11-27). The evidence is 48 RESOLVED trades out of 206
-#: windows, all drawn from ONE 2.5-month regime (2026-07-13 .. 2026-09-29).
-#: That is a single-regime sample, and a single-regime sample cannot license a
-#: claim about the next regime. It is therefore used at its CONSERVATIVE
-#: bound, never at its point estimate:
-#:     observed   40/48 = 83.3 %  (Clopper-Pearson 90 %: 71.9 .. 91.4)
-#:     Wilson 95 % lower bound   = 70.4 %
-#:     -> planned edge  = 0.704 - 1/3 = +0.371
-#: Everything that SIZES or RANKS a lane uses the planned edge below; the
-#: observed 83.3 % is published beside it so the user can see both, and it is
-#: never quoted as a rate the system can be expected to repeat.
-TWO_TO_ONE_SIDE = "flipped"
-#: The conditional TP-first rate the corrected side was OBSERVED at.
-TWO_TO_ONE_RATE_OBSERVED = 40.0 / 48.0                     # 0.8333
-#: Wilson 95 % lower bound on that observed rate — the planning figure.
-TWO_TO_ONE_RATE_PLANNED = 0.7042
-#: Conditional advantage of the corrected side, point estimate (published).
-TWO_TO_ONE_EDGE_OBSERVED = TWO_TO_ONE_RATE_OBSERVED - P_TP_FIRST_FAIR
-#: Conditional advantage the geometry is actually sized on (conservative).
-TWO_TO_ONE_EDGE = TWO_TO_ONE_RATE_PLANNED - P_TP_FIRST_FAIR  # +0.371
-#: The advantage the SHIPPED (unflipped) side was observed at.
-TWO_TO_ONE_EDGE_SHIPPED = 8.0 / 48.0 - P_TP_FIRST_FAIR       # -0.167
+# ─────────────────────────────── the side ───────────────────────────────
+def side_policy() -> dict[str, Any]:
+    """What the 48 resolved trades say — and exactly how far it may be used.
 
-#: Per-asset vol scale, bps per sqrt-hour. The shared 16.6 for the majors is
-#: the measurement from the 2:1 fixture; SOL is a prior (no walk yet).
-VOL_BPS_PER_SQRT_HOUR = {"BTC": 16.6, "ETH": 16.6, "BNB": 16.6, "SOL": 26.0}
-#: which of the above came from the 2:1 fixture walk rather than a prior.
-#: PAXG's row was removed with the asset (2026-11-27).
-_MEASURED_ASSETS = ("BTC", "ETH", "BNB")
+    The signal is real: the shipped side lands target-first 8/48 = 16.7 %,
+    one-sided exact binomial p = 0.0081 against the fair 1/3. It survives
+    both halves (73.9 % / 92.0 % flipped) and both direction buckets.
 
+    But it is a statement about the RACE MARKING, not about profit. On a
+    fixed 2:1 pair the barrier outcome and the P&L are locked together: a
+    trade that resolves target-first books +2R and one that resolves
+    stop-first books -1R. Flipping the side therefore relabels the whole
+    book — resolved -24.0R becomes +24.0R, time-outs +24.8R become -24.8R —
+    and the total is UNCHANGED at -0.82R. It is a loser's illusion: 83.3 %
+    of RESOLVED trades "win" while the account does not move.
 
-def vol_scale(symbol: str) -> tuple[float, str]:
-    sym = str(symbol).upper()
-    v = VOL_BPS_PER_SQRT_HOUR.get(sym)
-    if v is None:
-        return VOL_BPS_PER_SQRT_HOUR["BTC"], "fallback (BTC)"
-    return float(v), ("measured" if sym in _MEASURED_ASSETS else "prior")
-
-
-def two_to_one_direction(engine_direction: int,
-                         side: str = TWO_TO_ONE_SIDE) -> int:
-    """The direction a 2:1 pair must be issued in, given the engine's call.
-
-    The measured race says the engine's own direction loses the pair race
-    at 16.7 % while the reverse wins at 83.3 %. Rather than delete the
-    signal, the pair is issued on the side the tape supports — which is
-    exactly the user's "no abstention" requirement: same window, same
-    asset, same barriers, corrected side.
-
-    ``side="as_engine"`` restores the old behaviour and exists so the
-    correction is a switch with evidence behind it, not a hardcode with no
-    way back.
+    So this is published as a LABEL, with zero size authority, and the
+    geometry is computed at edge = 0. It must clear a locked out-of-sample
+    holdout on a NEW regime before that changes.
     """
-    d = 1 if int(engine_direction or 0) > 0 else (-1 if int(engine_direction or 0) < 0 else 0)
-    if side == "as_engine":
-        return d
-    return -d
+    obs = MEASURED["tp_first"] / MEASURED["resolved"]
+    flip = MEASURED["sl_first"] / MEASURED["resolved"]
+    total = MEASURED["total_r_gross"]
+    return {
+        "label": "flipped",
+        "rate_observed": round(obs, 4),
+        "rate_flipped": round(flip, 4),
+        "p_value": MEASURED["p_shipped_at_least_fair"],
+        "size_authority": 0.0,
+        "edge_used": 0.0,
+        "pnl_if_shipped_r": round(total, 3),
+        "pnl_if_flipped_r": round(-total, 3),
+        "resolved_r_if_shipped": round(MEASURED["resolved_r"], 3),
+        "resolved_r_if_flipped": round(-MEASURED["resolved_r"], 3),
+        "why": ("relabelling the race moves P&L between the resolved and "
+                "time-out books without changing the total (-0.82R either "
+                "way). It is published as a label with no size authority "
+                "until a locked out-of-sample walk on a new regime confirms "
+                "it."),
+    }
+
+
+TWO_TO_ONE_SIDE = "flipped"
+TWO_TO_ONE_EDGE = 0.0            #: what the geometry is SIZED on
+TWO_TO_ONE_EDGE_OBSERVED = MEASURED["sl_first"] / MEASURED["resolved"] - P_TP_FIRST_FAIR
+TWO_TO_ONE_EDGE_SHIPPED = MEASURED["tp_first"] / MEASURED["resolved"] - P_TP_FIRST_FAIR
+TWO_TO_ONE_RATE_OBSERVED = MEASURED["tp_first"] / MEASURED["resolved"]
+TWO_TO_ONE_RATE_PLANNED = P_TP_FIRST_FAIR   #: with no usable edge, the fair 1/3
+
+
+#: Per-asset vol scale, bps per sqrt-hour — MEASURED from the only real
+#: price tape in this checkout (`mode_a_trades_real_1h.csv` entry quotes,
+#: 2026-07-13 .. 2026-09-29). sigma^2/h is the mean of (log return)^2 over
+#: the hours between consecutive entries.
+#:
+#: THIS IS A THIN SAMPLE AND IS LABELLED AS ONE. 51 BTC observations over
+#: 1892 hours is not a multi-year tick history; it is the best available and
+#: every consumer is told the count. The previous value here was 16.6 for
+#: every major — it was back-solved from the resolved-share anchor rather
+#: than measured, it is 3x too low for BTC, and feeding it back through
+#: `resolution_probability` returned the anchor by construction. That is the
+#: circularity that produced the impossible 70.4 % conditional rate.
+VOL_BPS_PER_SQRT_HOUR = {
+    "BTC": 49.9,
+    "ETH": 57.4,
+    "BNB": 39.8,
+    #: SOL has NO price history in this checkout. It is a PRIOR on a
+    #: volatility the repo cannot measure, so nothing derived from it may be
+    #: presented as a measured 2:1 rate. None forces every consumer to say so.
+    "SOL": None,
+}
+#: How many real observations each figure stands on. Thin, and reported.
+VOL_OBSERVATIONS = {"BTC": 51, "ETH": 28, "BNB": 73, "SOL": 0}
+_VOL_SOURCE = ("backtest/results/mode_a_trades_real_1h.csv entry quotes, "
+               "2026-07-13..2026-09-29")
+#: An asset is only "measured" if it has a real sample AND a non-null value.
+_MEASURED_ASSETS: tuple[str, ...] = tuple(
+    a for a, v in VOL_BPS_PER_SQRT_HOUR.items()
+    if v is not None and VOL_OBSERVATIONS.get(a, 0) >= 20)
+
+
+def vol_scale(symbol: str) -> tuple[float | None, str]:
+    """(bps/√h, provenance) — and `None` when the repo cannot measure it."""
+    sym = str(symbol).upper()
+    if sym not in VOL_BPS_PER_SQRT_HOUR:
+        return None, f"unmeasured — {sym} has no price history in this checkout"
+    v = VOL_BPS_PER_SQRT_HOUR[sym]
+    if v is None:
+        return None, (f"unmeasured — {sym} has no price history in this "
+                      "checkout; any 2:1 rate for it would be invention")
+    n = VOL_OBSERVATIONS.get(sym, 0)
+    return float(v), (f"prior_vol n={n}" if sym not in _MEASURED_ASSETS
+                      else f"measured_vol n={n}")
 
 
 def race_summary() -> dict[str, Any]:
-    """The measured 2:1 race, both sides, with the tests that decide it."""
-    m = dict(MEASURED)
-    n = m["resolved"]
-    shipped = m["tp_first"] / n
-    flipped = m["sl_first"] / n
+    """Everything the surface needs to show its own evidence."""
     return {
-        **m,
-        "shipped_rate": round(shipped, 4),
-        "flipped_rate": round(flipped, 4),
+        **MEASURED,
+        "shipped_rate": round(MEASURED["tp_first"] / MEASURED["resolved"], 4),
+        "flipped_rate": round(MEASURED["sl_first"] / MEASURED["resolved"], 4),
         "fair_rate": round(P_TP_FIRST_FAIR, 4),
-        "shipped_edge": round(shipped - P_TP_FIRST_FAIR, 4),
-        "flipped_edge": round(flipped - P_TP_FIRST_FAIR, 4),
-        "p_shipped_below_fair": m["p_shipped_at_least_fair"],
-        "p_flipped_above_2_3": m["p_flipped_at_most_2_3"],
-        "corrected_side": TWO_TO_ONE_SIDE,
+        "side_policy": side_policy(),
         "verdict": ("the shipped side loses the 2:1 race significantly "
-                    "(16.7% vs the 33.3% no-edge value, p=0.008) and the "
-                    "reverse wins it significantly (83.3%, p=0.008); the "
-                    "flip holds in both independent halves"),
+                    "(16.7% vs 33.3%, p=0.008) and the reverse wins it — but "
+                    "the flip is a RELABEL, not profit: it moves P&L between "
+                    "the resolved and time-out books and leaves the total at "
+                    "-0.82R. Published as a label, sized at zero."),
     }

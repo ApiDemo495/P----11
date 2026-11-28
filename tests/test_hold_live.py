@@ -421,7 +421,8 @@ def test_hold_cells_block_covers_16_cells():
     # equally honest state. BTC tf2 is a certified cell and still SUB1.
     assert block["BTC|tf2"]["tier"] == hp.TIER_SUB1
     assert block["BTC|tf1"]["tier"] == hp.TIER_WARMUP
-    assert "1440-minute" in hp.tier_reason("BTC", "tf1")
+    from app.config import TIMEFRAMES
+    assert f"{TIMEFRAMES['tf1']['minutes']}-minute" in hp.tier_reason("BTC", "tf1")
     # (btc1 is the certified BTC tf2 cell now — tf1 is uncertified)
     btc1 = block["BTC|tf2"]
     assert btc1["geometry_feasible"] is False
@@ -435,7 +436,8 @@ def test_hold_cells_block_covers_16_cells():
     assert btc1["confidence"] and btc1["confidence"] >= 0.66
     assert btc1["analyse"]["tf_minutes"] == 44
     # the 24-hour lane reports its own real duration, not the old 22
-    assert block["BTC|tf1"]["analyse"]["tf_minutes"] == 1440
+    from app.config import TIMEFRAMES
+    assert block["BTC|tf1"]["analyse"]["tf_minutes"] == TIMEFRAMES["tf1"]["minutes"]
     assert "era" in btc1 and "friction_rule" in btc1["era"]
     # PAXG reports NO MEASURED EDGE rather than WARMUP: its signal has no
     # gross edge at any timeframe, which is a fact about the PATTERN and

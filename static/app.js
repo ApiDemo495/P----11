@@ -10,7 +10,7 @@ const TF_META = {
   // barriers are set, so the only thing that moves the number is whether
   // the pair resolves inside the window. At 22 minutes it resolved 15.4 % of
   // the time; at 24 hours, 86.0 %. The same key now carries 24 hours.
-  tf1: { mins: 1440, tps: [360, 720, 1080, 1440], twoToOne: true },
+  tf1: { mins: 360, tps: [90, 180, 270, 360], twoToOne: true },   // 6h 2:1 lane
   tf2: { mins: 44, tps: [11, 22, 33, 44] },
   tf3: { mins: 130, tps: [30, 40, 90, 130] },
   tf4: { mins: 247, tps: [60, 120, 180, 247] },
@@ -2365,57 +2365,77 @@ async function loadCells() {
   } catch { /* offline — keep last render */ }
 }
 // ── THE 2:1 CARD ──────────────────────────────────────────────────────
-// Two independent facts decide a 2:1 win rate and neither was on screen:
-// which SIDE wins the barrier race, and whether the window is long enough
-// for anything to touch the barriers at all. The arithmetic is printed
-// beside the number so it can be checked, and the observed 83.3% is shown
-// NEXT TO the 70.4% planning bound it is actually sized on — the first is
-// a single-regime point estimate and must never read as a promise.
+// The card exists to stop one specific lie. A 2:1 barrier pair wins 1/3 of
+// the windows it resolves with no edge — that is a ceiling, not a target —
+// and the achievable rate is P(resolve)/3, which is BELOW it. So the first
+// number shown is the ceiling, the second is what the lane achieves, and
+// the third is what it would need. When achieved < needed the card says so
+// in plain words instead of dressing the percentage up as an edge.
 function renderRR21() {
   const box = $("#rr21");
   const d = S.rr21;
   if (!box) return;
   if (!d || !d.ok) { box.innerHTML = `<span class="dim">2:1 geometry unavailable</span>`; return; }
-  const sp = d.side_policy || {};
-  const lanes = (d.lanes || {});
-  const order = Object.keys(lanes).sort((a, b) => (lanes[b].win_rate_unconditional || 0) -
-                                                (lanes[a].win_rate_unconditional || 0));
+  if (d.measured === false) {
+    box.innerHTML = `<div class="rr21-head"><b>2:1 GEOMETRY — ${esc(d.symbol)}</b></div>
+      <div class="rr21-law acc-dn">${esc(d.verdict || "no measured volatility — no rate can be computed")}</div>`;
+    return;
+  }
+  const lanes = d.lanes || {};
+  const order = Object.keys(lanes).sort((a, b) =>
+    (lanes[b].win_rate_unconditional || 0) - (lanes[a].win_rate_unconditional || 0));
   const pct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
   const rows = order.map((tf) => {
     const L = lanes[tf] || {};
-    const best = tf === d.best;
+    const lane = tf === d.two_to_one_lane;
     const ok = (d.eligible || []).includes(tf);
-    return `<tr class="${best ? "rr-best" : ""}">
-      <td>${tf.toUpperCase()}<span class="dim"> · ${L.minutes}m</span>${best ? " ★" : ""}</td>
-      <td>${num(L.sigma_bps, 1)}</td>
+    return `<tr class="${lane ? "rr-best" : ""}">
+      <td>${tf.toUpperCase()}<span class="dim"> · ${L.minutes}m</span>${lane ? " ★" : ""}</td>
+      <td>${num(L.sigma_bps, 0)}</td>
       <td>${pct(L.resolve_probability)}</td>
       <td><b>${pct(L.win_rate_unconditional)}</b></td>
-      <td class="${L.expectancy_r > 0 ? "buy" : "sell"}">${L.expectancy_r > 0 ? "+" : ""}${num(L.expectancy_r, 2)}R</td>
-      <td class="dim">${ok ? "eligible" : "resolves &lt; 50% — time-outs, not wins"}</td></tr>`;
+      <td class="dim">${pct(L.win_rate_ceiling)}</td>
+      <td>${ok ? "resolves" : "mostly time-outs"}</td></tr>`;
   }).join("");
+  const bp = d.best_pair_in_lane || {};
+  const b = bp.best || {};
+  const viable = bp.viable;
   box.innerHTML = `
     <div class="rr21-head">
       <b>2:1 GEOMETRY — ${esc(d.symbol)}</b>
       <span class="dim">· lane <b>${esc(d.two_to_one_lane || "—")}</b>
-        (${num((lanes[d.two_to_one_lane] || {}).minutes, 0)}m)
+        (${num(d.lane_minutes, 0)}m)
         · vol ${num(d.vol_bps_per_sqrt_hour, 1)} bps/√h <span class="dim">(${esc(d.vol_provenance || "")})</span>
         · round trip ${num(d.round_trip_bps, 1)}bp</span>
     </div>
-    <div class="rr21-law dim">
-      A pair of 2:1 barriers on a driftless tape is hit target-first <b>1/3</b> of the
-      time it resolves — for ANY stop, any asset, any hour. So the only two levers
-      are the <b>side</b> and <b>P(resolve)</b>; moving the barriers changes neither.
-    </div>
+    <div class="rr21-law acc-dn"><b>${esc(d.verdict || "")}</b></div>
     <table class="rr21-tbl">
-      <tr><th>lane</th><th>σ bps</th><th>P(resolve)</th><th>2:1 WR</th><th>E[R] net</th><th></th></tr>
+      <tr><th>lane</th><th>σ bps</th><th>P(resolve)</th><th>2:1 WR</th><th>ceiling</th><th></th></tr>
       ${rows}
     </table>
-    <div class="rr21-side">
-      side policy: <b>${esc(d.two_to_one_side || "")}</b>
-      — sized on <b>${pct(sp.rate_planned)}</b> target-first
-      (Wilson 95% lower bound), observed <b>${pct(sp.rate_observed)}</b>
-      <span class="dim">(40/48 resolved trades, ONE 2.5-month regime — the 83.3% is a
-      point estimate, not a rate this system can be expected to repeat)</span>.
+    <div class="rr21-law dim">
+      <b>Why the ceiling is 33.3%.</b> With no drift, P(+2b before −b) = 1/3 for
+      any b (optional stopping). A window that closes before either barrier is
+      reached only pulls the rate <i>below</i> 1/3, never above. So the 2:1
+      rate is 1/3 × P(resolve) and cannot exceed 33.3% — moving the barriers,
+      lengthening the lane or flipping the side cannot raise it.
+    </div>
+    <div class="rr21-side ${viable ? "buy" : "acc-dn"}">
+      <b>Best pair the ${num(bp.lane_minutes, 0)}m lane can host:
+      ${b.ratio || "—"}:1 at a ${num(b.stop_bps, 0)}bp stop</b> —
+      needs <b>${pct(b.win_rate_needed)}</b>, achieves <b>${pct(b.win_rate_achieved)}</b>
+      (${num(b.edge_pp, 1)}pp).
+      ${viable ? "" : `<b>No barrier pair clears its own round trip here.</b>
+        The ratio cancels out of both sides of the comparison, so this is true
+        at every target multiple and every stop size — arithmetic, not a
+        missing measurement.`}
+    </div>
+    <div class="rr21-side dim">
+      side: <b>${esc((d.side_policy || {}).label || "")}</b> —
+      8/48 resolved trades landed target-first (16.7%, p=0.008 vs fair);
+      reversed, 40/48 (83.3%). But flipping relabels the book and leaves the
+      total at −0.82R, so it carries <b>no size authority</b> and the
+      geometry is computed at edge 0.
     </div>`;
 }
 
@@ -3364,8 +3384,8 @@ async function loadCandles() {
     // EACH timeframe card aggregates the tape at its OWN interval
     // (user: every TF chart must be different — they were all the same
     // 1-minute series photocopied four times). Wider TF = wider bars.
-    const QINT = { tf1: 15, tf2: 1, tf3: 5, tf4: 5 };   // doc C-2 resolutions
-    const QWIN = { tf1: 1440, tf2: 44, tf3: 130, tf4: 247 };  // own horizon each
+    const QINT = { tf1: 5, tf2: 1, tf3: 5, tf4: 5 };    // doc C-2 resolutions
+    const QWIN = { tf1: 360, tf2: 44, tf3: 130, tf4: 247 };   // own horizon each
     if (S.tfBarsSymbol !== symbol) {
       S.tfBars = {}; S.tfBarsRevision = {}; S.tfBarsSymbol = symbol;
     }

@@ -153,7 +153,8 @@ def test_an_uncertified_24h_lane_says_why_instead_of_inventing_a_rate():
     assert s["win_rate"] is None
     assert s.get("reward_risk") is None
     why = tier_reason("BTC", "tf1")
-    assert "1440-minute" in why
+    from app.config import TIMEFRAMES
+    assert f"{TIMEFRAMES['tf1']['minutes']}-minute" in why
     assert "invent" in why.lower() or "no certified" in why.lower()
 
 

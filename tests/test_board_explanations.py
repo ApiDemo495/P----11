@@ -253,7 +253,8 @@ def test_warmup_names_the_actual_blocker():
     assert "GROSS move" in r and "bps" in r, r
 
     r2 = hp.tier_reason("SOL", "tf1")
-    assert "1440-minute" in r2, r2
+    from app.config import TIMEFRAMES
+    assert f"{TIMEFRAMES['tf1']['minutes']}-minute" in r2, r2
     assert "no certified" in r2.lower(), r2
 
 
