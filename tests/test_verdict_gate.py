@@ -42,7 +42,7 @@ def test_badge_is_derived_from_the_number_beside_it():
 def test_every_asset_floor_is_respected_not_the_flat_one():
     # BTC .385 / ETH .4042 / BNB .3657 / PAXG .4042 in this build; a confidence
     # between the flat floor and the asset floor must NOT be an ISSUE.
-    for sym in ("BTC", "ETH", "BNB", "PAXG"):
+    for sym in ("BTC", "ETH", "BNB", "SOL"):
         floor = config.asset_issue_floor(sym)
         assert floor > config.CONFIDENCE_FLOOR
         mid = (config.CONFIDENCE_FLOOR + floor) / 2
@@ -200,15 +200,15 @@ def test_noise_filter_knob_still_works_when_armed(monkeypatch):
 def test_abstain_mode_is_still_available_for_ab():
     import os
     for c in (100.0, 101.0, 102.0):
-        tg.observe("PAXG", "tf1", c)
+        tg.observe("SOL", "tf1", c)
     os.environ["TREND_GATE"] = "abstain"
     try:
-        out = tg.check("PAXG", "tf1", 1)
+        out = tg.check("SOL", "tf1", 1)
         assert out["blocked"] is True and out["flipped"] is False
         assert out["mode"] == "abstain"
         # the same call under the default mode flips instead
         os.environ.pop("TREND_GATE")
-        assert tg.check("PAXG", "tf1", 1)["flipped"] is True
+        assert tg.check("SOL", "tf1", 1)["flipped"] is True
     finally:
         os.environ.pop("TREND_GATE", None)
 
@@ -232,8 +232,8 @@ def test_gate_ignores_nonpositive_and_garbage_prices():
 
 def test_gate_is_bounded_memory():
     for i in range(500):
-        tg.observe("PAXG", "tf4", 1000.0 + i)
-    assert tg.stats()["PAXG|tf4"] == tg.TREND_LAG_ROWS + 1
+        tg.observe("SOL", "tf4", 1000.0 + i)
+    assert tg.stats()["SOL|tf4"] == tg.TREND_LAG_ROWS + 1
 
 
 def test_flip_reaches_the_badge_and_the_side():

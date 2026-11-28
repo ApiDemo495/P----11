@@ -409,7 +409,7 @@ class EraAccountant:
             "totals": dict(self.totals),
             "era_win_rate": round(wins / n, 4) if n else None,
             "last_era": hist[-1] if hist else None,
-            "friction_rule": ("one round trip (2×12 bps, PAXG 2×18) per "
+            "friction_rule": ("one round trip (2×12 bps) per "
                               "closed era — never relaxed"),
         }
 

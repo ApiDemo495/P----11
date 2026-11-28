@@ -29,7 +29,11 @@ def test_e9_never_dominant_on_up_tape():
 
 def test_quad_charts_aggregate_per_tf():
     js = open("static/app.js").read()
-    assert "QINT = { tf1: 1, tf2: 1, tf3: 5, tf4: 5 }" in js
+    # Resolution is per lane and must stay readable: tf1's window is 1440
+    # minutes, so 1-minute bars would be 1440 of them on screen — it
+    # aggregates at 15. The other lanes keep their original resolution.
+    assert "QINT = { tf1: 15, tf2: 1, tf3: 5, tf4: 5 }" in js
+    assert "QWIN = { tf1: 1440, tf2: 44, tf3: 130, tf4: 247 }" in js
     assert "agg(md.bars || [], QINT[tf] || 1)" in js
     # per-TF server charts: server revision when bound, else local history
     assert "S.tfBarsRevision[tf] = useSrv ? String(srv.revision" in js

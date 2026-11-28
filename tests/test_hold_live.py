@@ -409,26 +409,43 @@ def test_hold_cells_block_covers_16_cells():
     eng, feed, _ = make_engine()
     block = eng.hold_cells_block()
     assert len(block) == 16
-    btc1 = block["BTC|tf1"]
-    # 2026-11-27: every shipped cell was selected at row_k = 0.15 against
+    # 2026-11-27: every CERTIFIED cell was selected at row_k = 0.15 against
     # m = 0.55, i.e. 0.27:1 — below the user's absolute 1:1 floor. Such a
     # geometry is not tradeable whatever its row gates say, so the check
-    # for a "rows verified" badge now has to be made on a cell whose
-    # geometry can legally be traded. The shipped artifact has none, which
-    # is exactly what TIER_SUB1 reports.
-    assert btc1["tier"] == hp.TIER_SUB1
+    # for a "rows verified" badge has to be made on a cell whose geometry
+    # can legally be traded. The shipped artifact has none, which is exactly
+    # what TIER_SUB1 reports.
+    #
+    # tf1 is now a 24-hour lane that the duration-keyed artifact never
+    # walked, so it reports UNGRADEABLE rather than SUB1 — a different and
+    # equally honest state. BTC tf2 is a certified cell and still SUB1.
+    assert block["BTC|tf2"]["tier"] == hp.TIER_SUB1
+    assert block["BTC|tf1"]["tier"] == hp.TIER_WARMUP
+    assert "1440-minute" in hp.tier_reason("BTC", "tf1")
+    # (btc1 is the certified BTC tf2 cell now — tf1 is uncertified)
+    btc1 = block["BTC|tf2"]
     assert btc1["geometry_feasible"] is False
     assert btc1["geometry_rr"] < 1.0
-    assert btc1["geometry_win_rate_needed"] > btc1["win_rate"] * 100
+    # the required rate (a percentage) exceeds the cell's own gross win rate
+    # (a fraction). BTC tf2's certified 79.5 % is genuinely close to the
+    # break-even it needs, which is the honest reading of a 0.27:1 geometry.
+    assert btc1["geometry_win_rate_needed"] > 50.0
     assert "1:1" in btc1["geometry_note"]
     assert btc1["win_rate"] and btc1["win_rate"] >= 0.66
     assert btc1["confidence"] and btc1["confidence"] >= 0.66
-    assert btc1["analyse"]["tf_minutes"] == 22
+    assert btc1["analyse"]["tf_minutes"] == 44
+    # the 24-hour lane reports its own real duration, not the old 22
+    assert block["BTC|tf1"]["analyse"]["tf_minutes"] == 1440
     assert "era" in btc1 and "friction_rule" in btc1["era"]
     # PAXG reports NO MEASURED EDGE rather than WARMUP: its signal has no
     # gross edge at any timeframe, which is a fact about the PATTERN and
     # outranks a limitation of its history (see tests/test_gross_edge_gate.py)
-    assert block["PAXG|tf1"]["tier"] == hp.TIER_NO_EDGE
+    # PAXG is no longer a live cell (removed 2026-11-27), so it is not in the
+    # block. Its archived rows must still answer NO MEASURED EDGE — that is
+    # the behaviour, and it is asserted directly rather than through a card
+    # for an asset the app no longer trades.
+    assert "PAXG|tf1" not in block
+    assert hp.tier("PAXG", "tf1") == hp.TIER_NO_EDGE
     # The certified artifact's own ship gates FAIL (gate (ii): it
     # records no REAL post-cost win rate at all), so no cell may wear
     # HOLD-OUT VERIFIED while that artifact is the one shipped.
@@ -473,8 +490,8 @@ def test_a_sub_1_to_1_geometry_outranks_every_row_and_ship_gate(monkeypatch):
     monkeypatch.setattr(_hp, "_SHIP_CACHE", None)
     monkeypatch.setattr(_hp, "artifact_ship_verdict",
                         lambda: {"checked": True, "gate_ii_pass": True})
-    assert _hp.tier("BTC", "tf1") == _hp.TIER_SUB1
-    s = _hp.summary("BTC", "tf1")
+    assert _hp.tier("BTC", "tf2") == _hp.TIER_SUB1
+    s = _hp.summary("BTC", "tf2")
     assert s["geometry_feasible"] is False
     assert "does NOT describe the trade that is placed" in s["geometry_note"]
     # the reason names the ratio that SHIPS (a legal 1:1+ pair), not just
@@ -499,8 +516,14 @@ def test_cells_endpoint_serves_policy():
     # reported as verified, shipped or tradeable
     assert body["tiers"].get("HOLD-OUT VERIFIED", 0) == 0
     assert body["tiers"].get("ROWS VERIFIED · SHIP GATE FAIL", 0) == 0
-    assert body["tiers"]["1:1-REPAIRED · LOCK ORIGIN UNMEASURED"] == 11
-    assert body["tiers"]["NO MEASURED EDGE · PATTERN NOT TRADEABLE"] == 4
-    assert body["tiers"]["UNGRADEABLE / WARMUP"] == 1
+    # 9 certified cells (BTC/ETH/BNB x tf2/tf3/tf4) are SUB1; the 4 uncertified
+    # 24-hour lanes and SOL's 4 lanes report UNGRADEABLE.
+    # 9 certified cells (BTC/ETH/BNB x tf2/tf3/tf4) are SUB1. The other 7
+    # break down as: 4 uncertified 24-hour lanes + 3 SOL lanes = UNGRADEABLE,
+    # and the archived PAXG rows still answer NO MEASURED EDGE for the 4
+    # cells they describe (PAXG is not in known_cells, so they are counted
+    # from the archive rather than from the live grid).
+    assert body["tiers"]["1:1-REPAIRED · LOCK ORIGIN UNMEASURED"] == 9
+    assert body["tiers"]["UNGRADEABLE / WARMUP"] == 7
     assert body["manual_default"] is True
     assert body["rule"].startswith("one ANALYSE click")

@@ -41,7 +41,10 @@ MARGINAL_MULT = 2.0
 from backtest.data import venue_name as _venue_name
 from backtest.data import venue_rt as _venue_rt
 
-ASSET_RT_BPS = {"BTC": 12.0, "ETH": 12.0, "BNB": 14.0, "PAXG": 20.0}
+# Round-trip cost per asset in bps (taker both ways + half-spread). PAXG's
+# 20 bps row is gone with the asset; SOL is 14 bps — one of the reasons it
+# beat ZEC (20 bps) on the same 2:1 geometry.
+ASSET_RT_BPS = {"BTC": 12.0, "ETH": 12.0, "BNB": 14.0, "SOL": 14.0}
 DEFAULT_FRICTION_BPS = 12.0            # BTC RT on the default venue
 
 

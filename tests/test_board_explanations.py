@@ -241,18 +241,20 @@ def test_ship_gate_fail_names_the_gate_and_the_reference():
 def test_warmup_names_the_actual_blocker():
     """A demoted cell must name the actual blocker, whatever it is.
 
-    PAXG tf1 reports NO MEASURED EDGE now — its gross edge is negative, a
-    fact about the pattern that outranks the "60m bars cannot resolve a
-    22-min window" history limitation. The requirement is unchanged: the
-    reason must carry the blocker, not a shrug.
+    Two blockers are live in this build and the reason must name whichever
+    applies: NO MEASURED EDGE (a gross-negative cell, e.g. the archived PAXG
+    rows) or NOT CERTIFIED AT THIS DURATION (the 24-hour tf1 lane, which the
+    duration-keyed artifact has never walked). The requirement is unchanged:
+    the reason must carry the blocker, not a shrug.
     """
     from app import hold_policy as hp
     r = hp.tier_reason("PAXG", "tf1")
-    t = hp.tier("PAXG", "tf1")
-    if t == hp.TIER_NO_EDGE:
-        assert "GROSS move" in r and "bps" in r, r
-    else:
-        assert "60m bars" in r or "cost floor" in r, r
+    assert hp.tier("PAXG", "tf1") == hp.TIER_NO_EDGE
+    assert "GROSS move" in r and "bps" in r, r
+
+    r2 = hp.tier_reason("SOL", "tf1")
+    assert "1440-minute" in r2, r2
+    assert "no certified" in r2.lower(), r2
 
 
 def test_holdout_miss_names_the_failing_metric():

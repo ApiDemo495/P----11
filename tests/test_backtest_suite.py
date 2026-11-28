@@ -38,7 +38,7 @@ def test_settle_sl_wins_tie_and_friction_in_r():
 def test_settle_tp_and_paxg_friction_higher():
     sig = Signal(-1, 100.0, 101.0, 98.0, 0.5)         # short
     future = [Bar(1, 100, 100.5, 97.5, 99, 1)]
-    tr = settle("PAXG", sig, future[0], future)
+    tr = settle("SOL", sig, future[0], future)
     assert tr.exit_reason == "TP" and tr.r_gross == 2.0
     assert tr.r_net < 2.0                              # 18 bps charged
     tr2 = settle("BTC", sig, future[0], future)
@@ -59,7 +59,7 @@ def test_metrics_breakeven_and_ev():
 def test_correlated_drawdown_flag():
     mk = lambda a, ts: Trade(a, ts, "Long", 100, 99, 102, ts + 1000,
                              "SL", -1, -1.1, -1.1)
-    trades = [mk("BTC", 0), mk("ETH", 10), mk("BNB", 20), mk("PAXG", 30)]
+    trades = [mk("BTC", 0), mk("ETH", 10), mk("BNB", 20), mk("SOL", 30)]
     ev = correlated_drawdowns(trades)
     assert ev and set(ev[0]["assets_open_losing"]) == {"BTC", "ETH", "BNB"}
 

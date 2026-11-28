@@ -133,13 +133,16 @@ def test_filter_managed_cells_never_abstain():
     so the RSI-deep / top-quartile gates can never abstain — the old
     'mixed tape → not deep' block is gone by design (16 cells issue)."""
     from app import mandate_cfg as mc
+    # ETH tf2 is a CERTIFIED cell (tf1 is the 24-hour lane the artifact has
+    # never walked, so the managed bypass — which is what makes the filters
+    # inert — correctly does not apply to it).
     mixed = [100.0 + (0.4 if i % 2 else -0.3) for i in range(50)]
     feed = _hourly_feed("ETH", mixed)
-    ok, why = mc.filter_ok("ETH", "tf1", feed)
+    ok, why = mc.filter_ok("ETH", "tf2", feed)
     assert ok, why  # managed bypass (why is for BLOCKS only)
     crash = [100.0 - 0.5 * i for i in range(50)]
     feed2 = _hourly_feed("ETH", crash)
-    ok2, why2 = mc.filter_ok("ETH", "tf1", feed2)
+    ok2, why2 = mc.filter_ok("ETH", "tf2", feed2)
     assert ok2, why2
     # the legacy gate math still exists (for any future unmanaged cell)
     src = open(mc.__file__).read()
@@ -180,7 +183,7 @@ def test_confluence_managed_cells_bypass_vetoes():
     sibling never vetoes the hold side (hold-first, no abstention)."""
     from app import mandate_cfg as mc
     cases = [("ETH", "tf1", {"tf2": -1, "tf3": -1}),
-             ("PAXG", "tf3", {"tf4": -1}),
+             ("SOL", "tf3", {"tf4": -1}),
              ("BNB", "tf2", {"tf1": 1, "tf3": -1}),
              ("BTC", "tf2", {"tf1": -1, "tf3": -1, "tf4": -1})]
     for sym, tf, dirs in cases:

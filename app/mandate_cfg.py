@@ -32,13 +32,10 @@ Semantics wired into the engine (app/engine.py):
                    (tape features are computed on an HOURLY resample
                    of the feed so live semantics match the 1h-bar
                    measurement exactly).
-  * ``mode``      — per-asset system mode (overrides the global
-                   old/new selector for this asset).
   * ``k``, ``R``  — barrier geometry on the measured q80-MAE stop:
                    sl ×= k, tp = sl × R (OLD mode). Mandate cells use
                    the searched raw geometry — the generic asset
                    profile / TF envelope are skipped for them.
-  * ``new_rr``    — NEW-mode target multiple of the stop.
   * ``filter``    — issuance filter (also enforced in _tier_for):
                      gate       ATR% top-tercile of its trailing 120h
                      gate_topq  ATR% top-QUARTILE (stricter; WR search)
@@ -76,8 +73,7 @@ MANDATE: dict[str, dict] = {
     # 44h momentum with the REGIME impulse gate + majority cross-TF
     # agree; folds WR [0.75, .615, .615, .667, .769, .769] (6/6 ≥.60),
     # fold EV 6/6 positive.
-    "BTC": {"tfs": ("tf2", "tf4"), "direction": "fade_prev", "mode": "old",
-            "k": 0.6, "R": 1.0, "new_rr": None, "filter": "none",
+    "BTC": {"tfs": ("tf2", "tf4"), "direction": "fade_prev", "k": 0.6, "R": 1.0, "filter": "none",
             "align": "with", "agree": "majority",
             "measured": {"ev": 0.278, "n": 76, "win": 0.697,
                          "folds": "6/6 EV+, 6/6 WR≥0.60",
@@ -85,8 +81,7 @@ MANDATE: dict[str, dict] = {
                          "target_wr": 0.66}},
     # ETH: WR 70.5 % (Wilson 58.1–80.4) n=61 EV +0.381R PF 2.79 —
     # inv4g + deep RSI (≤30/≥70) abstention, no confluence needed.
-    "ETH": {"tfs": ("tf1", "tf2"), "direction": "fade_prev", "mode": "old",
-            "k": 0.75, "R": 1.25, "new_rr": None, "filter": "rsi_deep",
+    "ETH": {"tfs": ("tf1", "tf2"), "direction": "fade_prev", "k": 0.75, "R": 1.25, "filter": "rsi_deep",
             "align": "off", "agree": "off",
             "measured": {"ev": 0.381, "n": 61, "win": 0.705,
                          "folds": "5/6 EV+, 5/6 WR≥0.60",
@@ -94,23 +89,29 @@ MANDATE: dict[str, dict] = {
                          "target_wr": 0.66}},
     # BNB: WR 66.2 % (Wilson 55.4–75.7) n=80 EV +0.230R PF 1.80 —
     # top-ATR-quartile gate + UNANIMOUS cross-TF agree.
-    "BNB": {"tfs": ("tf2", "tf3"), "direction": "fade_prev", "mode": "old",
-            "k": 0.6, "R": 1.0, "new_rr": None, "filter": "gate_topq",
+    "BNB": {"tfs": ("tf2", "tf3"), "direction": "fade_prev", "k": 0.6, "R": 1.0, "filter": "gate_topq",
             "align": "off", "agree": "unanimous",
             "measured": {"ev": 0.230, "n": 80, "win": 0.662,
                          "folds": "5/6 EV+, 4/6 WR≥0.60",
                          "wilson": [0.554, 0.757], "label": "HIT",
                          "target_wr": 0.66}},
-    # PAXG: WR 70.5 % (Wilson 58.1–80.4) n=61 EV +0.302R PF 1.94 —
-    # 44h momentum + hourly RSI band + majority cross-TF agree.
-    # tf1/tf2 stay capped (ratio floor — never measured).
-    "PAXG": {"tfs": ("tf3", "tf4"), "direction": "mom44", "mode": "old",
-             "k": 0.6, "R": 1.0, "new_rr": None, "filter": "rsi_ext",
-             "align": "off", "agree": "majority",
-             "measured": {"ev": 0.302, "n": 61, "win": 0.705,
-                          "folds": "5/6 EV+, 5/6 WR≥0.60",
-                          "wilson": [0.581, 0.804], "label": "HIT",
-                          "target_wr": 0.66}},
+    # SOL: PRIOR — NO MEASURED MANDATE EXISTS FOR THIS ASSET YET.
+    # PAXG occupied this slot until 2026-11-27 and was removed on evidence:
+    # 209 windows, 44.0 % hit rate, -3.7 bps mean GROSS (i.e. losing before
+    # any fee), coefficient of variation 69 vs 3-5 for every other asset.
+    # Its mandate row above was a 2y backtest that did not survive contact
+    # with the certified walk, which is exactly why it is not being carried
+    # over to SOL by analogy.
+    #
+    # What SOL has instead: the same geometry every asset gets, the highest
+    # 2:1 win rate of the two candidates (29.9 % vs ZEC 29.5 % at the 24h
+    # lane) at half the round trip, and a per-asset profile in config.py
+    # marked as a prior. `tfs` is therefore the full lane set — nothing is
+    # capped on an assumption — and no `measured` block is claimed.
+    "SOL": {"tfs": ("tf1", "tf2", "tf3", "tf4"), "direction": "base",
+            "k": 0.65, "R": 1.30, "filter": "none",
+            "align": "off", "agree": "off",
+            "measured": None},
 }
 
 
@@ -122,21 +123,22 @@ MANDATE: dict[str, dict] = {
 # untouched holdout (see docs/WINRATE_AT_1_TO_1.md).
 #
 # The scan found the ratio is NOT cell-independent, which is why one
-# global NEW_TARGET_RR was the wrong shape of knob:
+# global target multiple was the wrong shape of knob. Cell counts of
+# positive-EV grid points at >= 1:1, AS MEASURED ON THE OLD LANES:
 #
-#   tf1 (22m)   0 of 56 grid points positive-EV at >= 1:1   median -0.057R
-#   tf2 (44m)   0 of 84                                     median -0.085R
-#   tf3 (130m) 39 of 84                                     median -0.012R
-#   tf4 (247m) 52 of 84                                     median +0.016R
+#   tf1 (22m)   0 of 56   median -0.057R      <- this lane no longer exists
+#   tf2 (44m)   0 of 84   median -0.085R
+#   tf3 (130m) 39 of 84   median -0.012R
+#   tf4 (247m) 52 of 84   median +0.016R
 #
-# The short windows have no measurable edge at a legal ratio; the long
-# ones do. Only three cells clear both the ratio floor AND positive EV on
-# the holdout. Their measured optimum differs per cell, so the table is
-# keyed by (asset, timeframe) rather than by asset.
+# That table is also the clearest argument for the 2026-11-27 change: at
+# 22 minutes there was no legal-ratio edge to find at all, on any of 56
+# grid points. Short windows cannot carry this geometry, which is why tf1
+# is now the 24-hour 2:1 lane instead of a 22-minute scalp.
 #
-# Cells absent from this table fall back to NEW_TARGET_RR (2.0).
-# Every number here is holdout — the value selected on train that produced
-# it is in the doc, not tuned against the holdout.
+# The three rows below are unaffected by that swap — none of them is tf1.
+# Cells absent from this table have no measured legal ratio and fall back
+# to the global default rather than being silenced.
 CELL_RR: dict[tuple[str, str], dict] = {
     # BTC 247m — rr 1.00, holdout WR 51.6 %, EV +0.0288 R, PF 1.127
     ("BTC", "tf4"): {"rr": 1.00, "holdout_wr": 0.516, "holdout_ev": 0.0288,
@@ -196,15 +198,14 @@ def allows(symbol: str, tf: str) -> bool:
     return tf in c["tfs"]
 
 
-def mode(symbol: str) -> str | None:
-    """Per-asset system mode override (None = follow the global setting)."""
-    c = cfg(symbol)
-    return c["mode"] if c else None
-
-
-def new_rr(symbol: str) -> float | None:
-    c = cfg(symbol)
-    return c.get("new_rr") if c else None
+# ── THE NEW SYSTEM IS DELETED (2026-11-27) ──────────────────────────────
+# `mode()` used to return a per-asset old/new override and `new_rr()` a
+# target multiple for the forecast system. Both are REMOVED, not defaulted
+# to "old": there is no selector left to set, so no code path can reach a
+# forecast-priced target. Every caller that used to read them is gone too
+# (app/engine.py). The OLD measured ladder is the only geometry the app
+# builds. This is deliberate — a flag that merely defaults off is a flag
+# that can be turned back on by a stale state file or an API call.
 
 
 def level_scale(symbol: str, tf: str) -> tuple[float, float] | None:

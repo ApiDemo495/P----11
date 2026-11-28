@@ -162,9 +162,15 @@ def test_hold_policy_badge_is_not_rendered_as_a_size_tier():
     `hold policy [TIER]` inside the same field every panel reads as a size."""
     from tests.test_engine import make_engine
     engine, _f, _ = make_engine()
-    out = engine._tier_for("BTC", "tf1", 0.5, direction=1)
+    # Use a MANAGED cell: the certification note is only appended for cells
+    # the hold policy actually manages, and tf1 (a 1440-minute lane) is
+    # uncertified — asserting on it would pass vacuously.
+    from app import hold_policy as hp
+    cells = [tf for tf in ("tf2", "tf3", "tf4") if hp.managed("BTC", tf)]
+    assert cells, "no managed BTC cell to test the badge on"
+    out = engine._tier_for("BTC", cells[0], 0.5, direction=1)
     rule = out.get("tier_rule") or ""
-    assert "hold-policy certification" in rule
+    assert "hold-policy certification" in rule, rule
     assert "hold policy [" not in rule
 
 

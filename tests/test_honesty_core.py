@@ -44,9 +44,12 @@ def test_grid_windows_and_lock_hold():
     res["direction"] = int(res.get("direction") or 1)
     eng.fresh_cycle("BTC", "tf1", now, res, reason="initial_lock")
     cyc = eng.cycles[("BTC", "tf1")]
-    ws = 22 * 60
+    # the window is the LANE'S OWN duration, read from config rather than
+    # hardcoded: tf1 was a 22-minute lane and is now the 24-hour 2:1 lane.
+    from app.config import TIMEFRAMES
+    ws = TIMEFRAMES["tf1"]["minutes"] * 60
     # user rule: a timeframe is the horizon FROM the lock
-    # ('after 22 minutes, what price?') — lock-anchored, full W
+    # ('after W minutes, what price?') — lock-anchored, full W
     assert cyc.cycle_start == now
     assert cyc.cycle_end == cyc.cycle_start + ws
     lk1 = dict(eng.locks[("BTC", "tf1")])
@@ -109,8 +112,12 @@ def test_tape_veto_flattens_low_conviction():
     from tests.test_engine import make_engine, _boot, run
     eng, _f, _e = make_engine(); run(_boot(eng))
     st = eng.feed.state("BTC")
-    base = 68000.0
-    st.closes = [base, base + 50, base + 120]          # 17.6 bps, 3 bars
+    # Anchor on the LIVE price, not a hardcoded one: the veto divides the
+    # move by `feed.prices()[symbol]`, so a 68,000 base on a 263,000 tape
+    # turned a claimed 17.6 bps move into 4.6 bps and the veto correctly
+    # declined to act. The bps figure must be bps of the price in use.
+    base = float(eng.feed.prices()["BTC"])
+    st.closes = [base, base * 1.00095, base * 1.00176]  # 17.6 bps, 3 bars
     res = {"tf1": {"issued": True, "direction": -1, "confidence": 0.40,
                    "reason": "old"}}
     eng._apply_tape_veto("BTC", res)
@@ -123,7 +130,7 @@ def test_tape_veto_flattens_low_conviction():
     assert "noise" in row["reason"] and "side stands" in row["reason"]
 
     # a genuinely adverse tape (≈176 bps over 3 bars) stops the trade
-    st.closes = [base, base + 500, base + 1200]
+    st.closes = [base, base * 1.05, base * 1.0176]
     hard = {"tf1": {"issued": True, "direction": -1, "confidence": 0.40,
                     "reason": "old"}}
     eng._apply_tape_veto("BTC", hard)
@@ -254,7 +261,12 @@ def test_history_seed_replays_real_windows():
     # the live path; a 60-bar floor silently dropped them before
     tfs_seeded = {k.split("|")[1] for k, v in eng.ledger.rows.items()
                   if any(r.get("seeded") for r in v)}
-    assert tfs_seeded == {"tf1", "tf2", "tf3", "tf4"}, tfs_seeded
+    # Every lane seeds a ledger row EXCEPT tf1, which is now a 24-hour window
+    # the duration-keyed hold artifact has never walked: it settles on the
+    # same rules but has no certified side to record yet. All four lanes
+    # still exist and still issue.
+    from app.config import TF_ORDER
+    assert tfs_seeded == set(TF_ORDER) - {"tf1"}, tfs_seeded
     src = (ROOT / "app" / "history_seed.py").read_text()
     assert "formulas-only" in src and "sim" in src.lower()
     js = (ROOT / "static" / "app.js").read_text()

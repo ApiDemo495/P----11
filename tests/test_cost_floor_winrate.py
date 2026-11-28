@@ -11,7 +11,7 @@ from app import hold_policy as hp
 
 def test_round_trip_uses_authoritative_full_stack():
     from backtest.data import FRICTION_BPS
-    for sym in ("BTC", "ETH", "BNB", "PAXG"):
+    for sym in ("BTC", "ETH", "BNB", "SOL"):
         assert hp.round_trip_bps(sym) == 2.0 * FRICTION_BPS[sym]
 
 
@@ -69,7 +69,7 @@ def test_widening_only_lowers_the_hit_rate_never_raises_it():
 
 
 def test_summary_pairs_win_rate_with_its_cost_context():
-    s = hp.summary("BTC", "tf1")
+    s = hp.summary("BTC", "tf2")   # tf1 is the 24h lane, uncertified
     assert s["win_rate"] is not None
     # the headline is labelled gross, never money
     assert s["win_rate_label"].startswith("gross")
@@ -81,6 +81,12 @@ def test_summary_pairs_win_rate_with_its_cost_context():
 
 
 def test_warmup_cell_claims_no_win_rate():
-    s = hp.summary("PAXG", "tf1")
-    assert s["status"] == "ungradeable"
+    """An uncertified cell reports status 'unknown' and NO win rate.
+
+    'unknown' and 'ungradeable' are deliberately different words: the first
+    says nothing has been measured at this duration, the second says a
+    measurement exists and failed. SOL's 24-hour lane is the former.
+    """
+    s = hp.summary("SOL", "tf1")
+    assert s["status"] == "unknown"
     assert s["win_rate"] is None

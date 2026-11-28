@@ -43,8 +43,10 @@ BINANCE_WS_VISION = "wss://data-stream.binance.vision"
 # the instant a real feed is healthy again (D-1).
 FEED_GRACE_S = 120.0
 REAL_STALE_S = 120.0          # binance silent this long -> demote to sim
-SIM_BASE_PRICES = {"BTC": 68000.0, "PAXG": 2650.0, "ETH": 3500.0, "BNB": 600.0}
-SIM_PER_MIN_VOL = {"BTC": 120.0, "PAXG": 18.0, "ETH": 1500.0, "BNB": 4200.0}
+# SOL ~$150 as of the 2026-11-27 swap for PAXG. Reference price only:
+# the sim feed is a fallback, never a quote.
+SIM_BASE_PRICES = {"BTC": 68000.0, "SOL": 150.0, "ETH": 3500.0, "BNB": 600.0}
+SIM_PER_MIN_VOL = {"BTC": 120.0, "SOL": 900.0, "ETH": 1500.0, "BNB": 4200.0}
 # Per-MINUTE return standard deviation of the simulator (matches the
 # backfill's `base_vol`): 7 bps for BTC, 2.1 bps for gold, 9 for ETH, 8 for
 # BNB. The live 1 Hz tick loop MUST divide these by sqrt(60) and every drift
@@ -53,7 +55,7 @@ SIM_PER_MIN_VOL = {"BTC": 120.0, "PAXG": 18.0, "ETH": 1500.0, "BNB": 4200.0}
 # indicators into cancellation ("always NO TRADE"), hit TP/SL within
 # seconds ("trades changing mid-window") and outran every chart refresh
 # ("chart price and analysis price don't match").
-SIM_BASE_VOL_MIN = {"BTC": 0.0007, "PAXG": 0.00021, "ETH": 0.0009, "BNB": 0.0008}
+SIM_BASE_VOL_MIN = {"BTC": 0.0007, "SOL": 0.0013, "ETH": 0.0009, "BNB": 0.0008}
 SIM_DRIFT_CHOICES = (-0.00045, -0.0002, 0.0, 0.0002, 0.00045)   # per MINUTE
 SIM_REGIME_MIN = (30, 240)          # regime length range, minutes
 
@@ -913,7 +915,7 @@ class MarketFeed:
         for sym in SYMBOL_ORDER:
             st = self.states[sym]
             price = SIM_BASE_PRICES[sym] * (1.0 + rng.gauss(0, 0.01))
-            base_vol = {"BTC": 0.0007, "PAXG": 0.00021, "ETH": 0.0009, "BNB": 0.0008}[sym]
+            base_vol = SIM_BASE_VOL_MIN[sym]
             drift = 0.0
             regime_left = 0
             vol_mult = 1.0
@@ -927,9 +929,12 @@ class MarketFeed:
                 regime_left -= 1
                 prev = price
                 ret = rng.gauss(drift, base_vol * vol_mult)
-                # PAXG is gold-pegged: strong mean reversion keeps it anchored
-                if sym == "PAXG":
-                    ret = 0.9 * ret - 0.02 * math.log(price / SIM_BASE_PRICES[sym])
+                # SOL is high-beta: give it a mild trend-persistence term
+                # rather than the gold peg's pull-to-anchor (PAXG removed
+                # 2026-11-27). This only shapes the SIMULATION so simulated
+                # windows resemble SOL's tape; it is not a claim about SOL.
+                if sym == "SOL":
+                    ret = ret + 0.03 * math.tanh(ret * 40.0)
                 price *= math.exp(ret)
                 volume = SIM_PER_MIN_VOL[sym] * rng.lognormvariate(0, 0.5) * vol_mult
                 # candle OHLC: open at previous close, wick proportional to vol
@@ -1002,14 +1007,12 @@ class MarketFeed:
                 if reg["left"] <= 0:
                     reg["left"] = rng.randint(*SIM_REGIME_MIN)
                     reg["drift"] = rng.choice(SIM_DRIFT_CHOICES)
-                    if sym == "PAXG":
-                        reg["drift"] *= 0.25
+                    if sym == "SOL":
+                        reg["drift"] *= 1.6      # high beta amplifies drift
                     reg["vol_mult"] = rng.choice([0.7, 1.0, 1.6, 2.4])
                 price = self._sim_price[sym]
                 swing = SIM_BASE_VOL_MIN[sym] * reg["vol_mult"]
                 close = price * math.exp(rng.gauss(reg["drift"], swing))
-                if sym == "PAXG":
-                    close += 0.02 * (SIM_BASE_PRICES[sym] - close)
                 wick = abs(close - price) * 0.5 + price * swing * 0.8
                 high = max(price, close) + wick * abs(rng.gauss(0.0, 1.0)) * 0.5
                 low = min(price, close) - wick * abs(rng.gauss(0.0, 1.0)) * 0.5
@@ -1067,14 +1070,12 @@ class MarketFeed:
                 if reg["left"] <= 0:
                     reg["left"] = rng.randint(*SIM_REGIME_MIN)
                     reg["drift"] = rng.choice(SIM_DRIFT_CHOICES)
-                    if sym == "PAXG":
-                        reg["drift"] *= 0.25      # gold stays peg-anchored
+                    if sym == "SOL":
+                        reg["drift"] *= 1.6       # high beta amplifies drift
                     reg["vol_mult"] = rng.choice([0.7, 1.0, 1.6, 2.4])
                 price *= math.exp(rng.gauss(reg["drift"] / 60.0,
                                             sigma_1s * reg["vol_mult"]))
-                if sym == "PAXG":
-                    # 2 % pull per MINUTE toward the peg (was per second)
-                    price += (0.02 / 60.0) * (SIM_BASE_PRICES[sym] - price)
+                # (no peg pull: PAXG was the only pegged asset)
                 self._sim_price[sym] = price
                 st.live_price = price
                 st.last_tick = time.time()

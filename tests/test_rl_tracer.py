@@ -37,7 +37,7 @@ def test_error_finder_damps_and_recovers():
     assert rl.damp.get(7) == 0.75, rl.damp
     assert taken and taken[0]["kind"] == "formula"
     # still bad after the cooldown -> deepens (floor 0.4)
-    _seed_rings(eng, "facc7", [-1.0] * 10, symbol="PAXG")
+    _seed_rings(eng, "facc7", [-1.0] * 10, symbol="SOL")
     rl.audit(eng)
     assert rl.damp[7] < 0.75 and rl.damp[7] >= 0.4
     # heals -> weight restored (isolated engine: pooled mean must be
@@ -138,9 +138,9 @@ def test_hedge_flow_tracer_sign_and_thin_tape():
     v, d = hedge_flow_tracer(feed, "BTC")
     assert v == 0.0 and "reason" in d
     # seed bars: BTC suddenly absorbs MOST of the volume -> rotation >0
-    for sym in ("BTC", "PAXG", "ETH", "BNB"):
+    for sym in ("BTC", "SOL", "ETH", "BNB"):
         x = feed.states[sym]
-        base = {"BTC": 80000.0, "PAXG": 4000.0,
+        base = {"BTC": 80000.0, "SOL": 150.0,
                 "ETH": 3000.0, "BNB": 600.0}[sym]
         for i in range(MIN_BARS):
             x.closes.append(base * (1 + 0.00001 * i))

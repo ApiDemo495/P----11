@@ -255,7 +255,14 @@ class SettlementLedger:
         graded = [r for r in rows if r.get("result") in ("win", "loss")]
         wins = sum(r.get("result") == "win" for r in graded)
         losses = len(graded) - wins
-        skipped = sum(r.get("result") == "skip" for r in rows)
+        # "skip" and "ungraded" are BOTH non-grades, and both must be
+        # visible. A row is written "ungraded" when the barriers were not
+        # available (see settle() above); it is deliberately excluded from
+        # the win rate but it is still a window that was CLOSED, and a
+        # caller checking "was this window settled at all?" was reading
+        # skipped == 0 next to a row that plainly existed. Counting them
+        # together answers that question without touching the win rate.
+        skipped = sum(r.get("result") in ("skip", "ungraded") for r in rows)
         resolved = []
         touch_counts = {state: 0 for state in TOUCH_STATES}
         for row in rows:

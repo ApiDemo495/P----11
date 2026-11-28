@@ -96,8 +96,17 @@ def test_settings_never_silently_swallow_a_feed_change():
     """`PUT /api/settings` dropped feed_mode, so a "saved" change did nothing."""
     src = open("app/main.py").read()
     i = src.index('@app.put("/api/settings")')
-    block = src[i:i + 1200]
+    # slice to the END OF THE HANDLER, not a fixed character count: a fixed
+    # window silently stops covering the function the moment a comment is
+    # added above the return (which is exactly what happened).
+    j = src.index("@app.post", i)
+    block = src[i:j]
     assert '"ignored"' in block, "unapplied keys must be named, not dropped"
+    # and the removed old/new selector must be REPORTED as unapplied, not
+    # silently accepted — a key that claims to switch the model while there
+    # is only one model is the defect this test exists for.
+    assert 'if k == "system_mode"' in block
+    assert "rejected.append(k)" in block
 
 
 def test_connect_route_exists():

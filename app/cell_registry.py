@@ -1,6 +1,6 @@
 """16 independent (asset × timeframe) parameter spaces (§2).
 
-Every one of the 16 cells — {BTC, ETH, BNB, PAXG} × {tf1 22m, tf2 44m,
+Every one of the 16 cells — {BTC, ETH, BNB, SOL} × {tf1 24h, tf2 44m,
 tf3 130m, tf4 247m} — is a distinct instrument-horizon pair with its own
 microstructure, fee-to-volatility ratio and autocorrelation. This
 registry keeps Θ_{a,τ} fully isolated:
@@ -28,7 +28,10 @@ from .config import SYMBOL_ORDER, TF_ORDER, TIMEFRAMES
 # horizon emphasis (§2.4): short horizons live on microstructure, long
 # horizons on vol-persistence / macro alignment
 _HORIZON = {
-    "tf1": {"micro_weight": 1.25, "macro_weight": 0.80, "hold_mult": 1.0},
+    # tf1 is the 24-hour 2:1 lane (it was a 22-minute scalp until
+    # 2026-11-27). It now reads on the same macro/vol-persistence axis as
+    # tf4, because that is what a 24-hour window is.
+    "tf1": {"micro_weight": 0.75, "macro_weight": 1.30, "hold_mult": 5.8},
     "tf2": {"micro_weight": 1.15, "macro_weight": 0.85, "hold_mult": 1.1},
     "tf3": {"micro_weight": 0.90, "macro_weight": 1.15, "hold_mult": 1.5},
     "tf4": {"micro_weight": 0.80, "macro_weight": 1.25, "hold_mult": 2.0},
@@ -45,9 +48,13 @@ _ASSET = {
     "BNB": {"edge_floor_bps": 5.0, "atr_sl": 0.9, "atr_tp": 1.4,
             "trailing_atr": 1.1, "conf_floor": 0.16,
             "notes": "exchange-ecosystem — step breakouts, lower noise"},
-    "PAXG": {"edge_floor_bps": 7.0, "atr_sl": 1.1, "atr_tp": 1.7,
-             "trailing_atr": 1.3, "conf_floor": 0.20,
-             "notes": "tokenized gold — low σ, macro risk-off decoupling"},
+    # SOL replaced PAXG on 2026-11-27. PAXG was removed on evidence (worst
+    # measured asset: 44.0 % WR, -768 bps gross over 209 windows). These
+    # numbers are a PRIOR — no certified walk exists for SOL yet — sized for
+    # a higher-beta asset: a wider stop, a wider target, a higher floor.
+    "SOL": {"edge_floor_bps": 9.0, "atr_sl": 1.3, "atr_tp": 1.8,
+            "trailing_atr": 1.5, "conf_floor": 0.22,
+            "notes": "high-beta L1 — wide ranges, trend legs (PRIOR, unmeasured)"},
 }
 
 

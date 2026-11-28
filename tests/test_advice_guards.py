@@ -207,10 +207,17 @@ def test_j_ops_endpoints_present():
 
 # ── K: config timeframe keys ───────────────────────────────────────────
 def test_k1_timeframe_keys_exact():
-    from app.config import TIMEFRAMES
+    from app.config import TIMEFRAMES, TWO_TO_ONE_LANE
+    # FOUR lanes. tf5 was the seg-16 position lane and tf1 was the 22-minute
+    # lane; on 2026-11-27 the 22-minute lane was REPLACED by the 24-hour 2:1
+    # lane (same key) and the separate tf5 was folded into it. Neither a
+    # fifth key nor a 22-minute tf1 may come back.
     assert set(TIMEFRAMES) == {"tf1", "tf2", "tf3", "tf4"}
     mins = {tf: TIMEFRAMES[tf]["minutes"] for tf in TIMEFRAMES}
-    assert mins == {"tf1": 22, "tf2": 44, "tf3": 130, "tf4": 247}
+    assert mins == {"tf1": 1440, "tf2": 44, "tf3": 130, "tf4": 247}
+    # tf1 is the 2:1 lane and must be the LONGEST window in the set
+    assert TWO_TO_ONE_LANE == "tf1"
+    assert min(mins.values()) == 44, "the 22-minute scalp lane is gone"
 
 
 # ── L: snapshot stays bounded (L-5: 16MB regression) ───────────────────

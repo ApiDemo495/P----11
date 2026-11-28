@@ -29,9 +29,9 @@ def _chop(n=80):
 
 
 def test_gold_amplifies_trend_damps_chop():
-    t = temper("PAXG", 0.20, 0.30, _trend())
+    t = temper("SOL", 0.20, 0.30, _trend())
     assert t["factor"] == 1.12 and t["score"] > 0.20
-    c = temper("PAXG", 0.20, 0.30, _chop())
+    c = temper("SOL", 0.20, 0.30, _chop())
     assert c["factor"] == 0.82 and c["score"] < 0.20
 
 

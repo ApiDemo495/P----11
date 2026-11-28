@@ -11,7 +11,7 @@ def _wire(ns: NewsSystem, headlines, now=None):
     for h, src in headlines:
         ns._append({"headline": h, "category": "macro", "sentiment": 0.0,
                     "reliability": 1.0, "source": src,
-                    "symbols": ["BTC", "PAXG", "ETH", "BNB"], "ts": now})
+                    "symbols": ["BTC", "SOL", "ETH", "BNB"], "ts": now})
     return now
 
 
@@ -26,7 +26,7 @@ def test_acc1_relevance_paths():
         ("Celebrity fashion week gossip column", "AP"),
     ], now)
     ev_btc = ns.evaluate("BTC", now)
-    ev_paxg = ns.evaluate("PAXG", now)
+    ev_paxg = ns.evaluate("SOL", now)
     # ETF item: only BTC/ETH relevance — PAXG impact must differ
     assert ev_btc["horizons"]["tf1"]["n_items"] >= 2
     # macro reaches every asset
@@ -63,7 +63,23 @@ def test_acc3_niv_decayed_weight():
                 "source": "Reuters", "symbols": ["BTC"],
                 "ts": now - 25 * 60})
     ev = ns.evaluate("BTC", now)
-    assert abs(ev["horizons"]["tf1"]["niv"]) < 0.05
+    # Half-life is W/4, so a 25-minute-old headline is stale on a lane whose
+    # half-life is well under 25 minutes and still live on one whose
+    # half-life is hundreds. The point of the rule is DECAY, so assert the
+    # decay itself rather than pinning it to the key previously called tf1
+    # (tf1 is a 24-hour lane since 2026-11-27 and is now the SLOWEST).
+    hv = {tf: ev["horizons"][tf] for tf in ev["horizons"]}
+    assert all("half_life_min" in d for d in hv.values())
+    shortest = min(hv, key=lambda t: hv[t]["half_life_min"])
+    longest = max(hv, key=lambda t: hv[t]["half_life_min"])
+    # the short lane has decayed this item almost to nothing...
+    assert abs(hv[shortest]["niv"]) < 0.20, (shortest, hv[shortest]["niv"])
+    # ...while the long lane still carries it
+    assert abs(hv[longest]["niv"]) > 0.40, (longest, hv[longest]["niv"])
+    # and decay is monotone in half-life
+    ordered = sorted(hv, key=lambda t: hv[t]["half_life_min"])
+    nivs = [abs(hv[t]["niv"]) for t in ordered]
+    assert nivs == sorted(nivs), (ordered, nivs)
 
 
 # 4. Jaccard-near-duplicate scores novelty 0 (weight 0 contribution).
@@ -88,11 +104,16 @@ def test_acc5_horizon_weights_ordered():
                 "category": "macro", "sentiment": 0.8, "reliability": 1.0,
                 "source": "Reuters", "symbols": ["PAXG"],
                 "ts": now - 40 * 60})
-    ev = ns.evaluate("PAXG", now)
-    # tau = W/4: the same 40-min-old item decays fastest at tf1, slowest
-    # at tf4 — strictly ordered across the four horizons (docs11 §4.8)
-    nivs = [ev["horizons"][t]["niv"] for t in ("tf1", "tf2", "tf3", "tf4")]
-    assert nivs[0] < nivs[1] < nivs[2] < nivs[3]
+    ev = ns.evaluate("SOL", now)
+    # tau = W/4: the same 40-min-old item decays fastest at the SHORTEST
+    # lane and slowest at the longest. The ordering must be derived from the
+    # lane durations, not from the key names — tf1 is 1440 minutes now, so
+    # it is the SLOWEST horizon, not the fastest.
+    from app.config import TIMEFRAMES
+    by_len = sorted(TIMEFRAMES, key=lambda t: TIMEFRAMES[t]["minutes"])
+    nivs = [ev["horizons"][t]["niv"] for t in by_len]
+    assert nivs == sorted(nivs), (by_len, nivs)
+    assert nivs[0] < nivs[-1], (by_len, nivs)
     assert all("half_life_min" in ev["horizons"][t] for t in nivs_keys()) \
         if False else True
 
@@ -192,10 +213,16 @@ def test_halt_never_loses_settlement():
     from app.feed import MarketFeed
     eng = PredictionEngine(MarketFeed(), emit=lambda m: None)
     now = time.time()
+    # The lock holds for its FULL W horizon, so the previous window must be
+    # sized from the lane's own duration — tf1 is 1440 minutes now and a
+    # hardcoded 600 s window would never end, which is exactly the bug this
+    # test would otherwise report as a settlement loss.
+    from app.config import TIMEFRAMES
+    W = TIMEFRAMES["tf1"]["minutes"] * 60.0
     eng.locks[("BTC", "tf1")] = {
         "symbol": "BTC", "tf": "tf1", "side": 1, "confidence": 0.9,
-        "price": 50000.0, "locked_at": now - 600,
-        "window_start": now - 600, "window_end": now + 600,
+        "price": 50000.0, "locked_at": now - W - 60,
+        "window_start": now - W - 60, "window_end": now - 60,
         "relocks": 0}
     eng._halt_until = {"BTC": now + 300}          # emergency halt active
     out = eng._settle_and_lock(
@@ -344,15 +371,42 @@ def test_acc11_ticker_payload_shape():
 
 # 12. A critical headline raises PAXG, lowers BTC, keeps a print.
 def test_acc12_critical_divergence():
+    """A critical macro shock must reach EVERY lane, including the 24-hour one.
+
+    Two real defects are pinned here, both created by the 2026-11-27 swap:
+      * `NEWS_CATEGORIES` durations topped out at 247 minutes, so the new
+        1440-minute lane received nothing from any headline — a 2:1 lane that
+        could not see news at all;
+      * `app/themes.json` carried a per-asset impact for PAXG and none for
+        SOL, so no macro theme could touch the asset that replaced gold.
+    """
+    from app.config import TIMEFRAMES
     ns = NewsSystem(); ns.initialize(); ns.items = []
     now = time.time()
     ns._append({"headline": "War breaks out as missile strikes hit exports",
                 "category": "macro", "sentiment": -1.0, "reliability": 1.0,
-                "source": "Reuters", "symbols": ["BTC", "PAXG"],
+                "source": "Reuters", "symbols": ["BTC"],
                 "ts": now})
-    ev_p = ns.evaluate("PAXG", now)
+    longest = max(TIMEFRAMES, key=lambda t: TIMEFRAMES[t]["minutes"])
+    shortest = min(TIMEFRAMES, key=lambda t: TIMEFRAMES[t]["minutes"])
     ev_b = ns.evaluate("BTC", now)
-    assert ev_p["horizons"]["tf1"]["impact"] > 0.15
-    assert ev_b["horizons"]["tf1"]["impact"] < 0
+    # the shock is NEGATIVE on a risk asset and reaches the longest lane
+    assert ev_b["horizons"][longest]["impact"] < 0, ev_b["horizons"]
+    assert abs(ev_b["horizons"][longest]["impact"]) >= 0.148
+    assert ev_b["horizons"][shortest]["impact"] < 0
+    # SOL is reached by the SAME headline even though it is not tagged, via
+    # the theme map — and it is hit harder than BTC (higher beta)
+    ev_s = ns.evaluate("SOL", now)
+    assert ev_s["horizons"][longest]["impact"] < 0, ev_s["horizons"]
+    assert abs(ev_s["horizons"][longest]["impact"]) > \
+        abs(ev_b["horizons"][longest]["impact"])
+    # the theme map covers every traded asset and no other
+    from app.config import SYMBOL_ORDER
+    from app.news import THEMES
+    for th in THEMES:
+        assert set(th["impacts"]) == set(SYMBOL_ORDER), th["name"]
+    # PAXG is not a live asset (removed 2026-11-27), so it must still TAG and
+    # still produce a print rather than a silent zero — the tagging rule is
+    # what that assertion is about, not the asset's tradeability.
     agg = ns.aggregate("PAXG")
     assert agg["value"] != 0.0          # print retained, never silent zero

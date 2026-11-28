@@ -220,7 +220,7 @@ def evaluate_sleeves(
     """Evaluate every certified ``open`` sleeve against the live tape.
 
     Returns a snapshot-safe payload. ``assets`` maps each UI asset to the
-    best sleeve evidence available for it, so BTC / ETH / BNB / PAXG all
+    best sleeve evidence available for it, so BTC / ETH / BNB / SOL all
     get a hero-card row whether or not they carry an open sleeve.
     """
     reg = registry if registry is not None else load_registry()

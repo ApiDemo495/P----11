@@ -95,11 +95,18 @@ def _scene(ctx: FormulaContext | None = None, cci_ref: float = 0.2,
 # Section 7 — news categories, weightages, scoring
 # ===========================================================================
 def test_news_category_table_exact():
+    # WEIGHTS are the spec's and are unchanged. DURATIONS moved for the three
+    # slow-burn categories: they were capped at 247 minutes (tf4, then the
+    # longest lane). Once tf1 became a 24-HOUR lane, every category was
+    # shorter than it, so the 2:1 lane received exactly 0.00 impact from
+    # every headline — a lane blind to its entire news feed. Policy, macro
+    # and conflict plainly keep moving markets for a day, so those reach
+    # 1440; the fast categories keep their original windows.
     expected = {
-        "regulatory": (0.25, 247), "institutional": (0.20, 130),
-        "protocol": (0.15, 44), "macro": (0.15, 130),
+        "regulatory": (0.25, 1440), "institutional": (0.20, 130),
+        "protocol": (0.15, 44), "macro": (0.15, 1440),
         "structure": (0.10, 44), "sentiment": (0.08, 22),
-        "geopolitical": (0.07, 247),
+        "geopolitical": (0.07, 1440),
     }
     assert set(NEWS_CATEGORIES) == set(expected)
     for name, (w, d) in expected.items():
@@ -119,17 +126,31 @@ def test_impact_score_and_freshness_exact():
 
 
 def test_timeframe_impact_distribution_exact():
-    # regulatory D=247: TF1 receives score*22/247 ... TF4 full score
-    assert tf_impact(1.0, 247, "tf1") == pytest.approx(22 / 247)
-    assert tf_impact(1.0, 247, "tf2") == pytest.approx(44 / 247)
-    assert tf_impact(1.0, 247, "tf3") == pytest.approx(130 / 247)
+    """impact = score * min(1, W/duration), and 0 when duration < W.
+
+    The LANES are the config's, so this is expressed in durations rather
+    than in the key names: tf1 is a 1440-minute lane now.
+    """
+    from app.config import TIMEFRAMES
+    W = {tf: TIMEFRAMES[tf]["minutes"] for tf in TIMEFRAMES}
+    assert W == {"tf1": 1440, "tf2": 44, "tf3": 130, "tf4": 247}
+
+    # A 1440-minute headline (the slow-burn categories) reaches every lane in
+    # proportion to the lane's own duration, and FULLY reaches tf1.
+    for tf in TIMEFRAMES:
+        assert tf_impact(1.0, 1440, tf) == pytest.approx(W[tf] / 1440)
+    assert tf_impact(1.0, 1440, "tf1") == pytest.approx(1.0)
+    assert tf_impact(1.0, 1440, "tf4") == pytest.approx(247 / 1440)
+
+    # A 44-minute headline cannot reach a longer lane at all.
+    assert tf_impact(1.0, 44, "tf2") == pytest.approx(1.0)
+    for longer in ("tf3", "tf4", "tf1"):
+        assert tf_impact(1.0, 44, longer) == 0.0
+
+    # A 247-minute headline reaches everything up to 247 and nothing above.
+    assert tf_impact(1.0, 247, "tf1") == 0.0          # 1440 > 247: gated off
     assert tf_impact(1.0, 247, "tf4") == pytest.approx(1.0)
-    # sentiment D=22: only TF1 (gated by D >= tf minutes)
-    assert tf_impact(1.0, 22, "tf1") == pytest.approx(1.0)
-    assert tf_impact(1.0, 22, "tf2") == 0.0
-    # institutional D=130: TF4 gated off
-    assert tf_impact(1.0, 130, "tf3") == pytest.approx(1.0)
-    assert tf_impact(1.0, 130, "tf4") == 0.0
+    assert tf_impact(1.0, 247, "tf3") == pytest.approx(130 / 247)
 
 
 def test_aggregate_clamped_and_signed():
@@ -150,7 +171,13 @@ def test_aggregate_clamped_and_signed():
                 "source": "t", "symbols": ["BTC"], "ts": now})
     assert ns.aggregate("BTC")["count"] == 10
     assert ns.stats()["dupes"] == 1
-    assert agg["impacts"]["tf4"] == pytest.approx(1.0)
+    # regulatory now reaches 1440 minutes, so every lane gets its share. Each
+    # headline contributes weight(0.25) * sentiment(1) * exp(-0.05*0) *
+    # reliability(1) = 0.25, and 10 of them sum to 2.5 before the clamp, so
+    # every lane that is reachable saturates at +1 EXCEPT tf4, which sees
+    # 10 * 0.25 * (247/1440) = 0.4288 (and is therefore not clamped).
+    assert agg["impacts"]["tf1"] == pytest.approx(1.0)
+    assert agg["impacts"]["tf4"] == pytest.approx(min(1.0, 10 * 0.25 * 247 / 1440), abs=1e-4)
     # opposing-magnitude helper
     assert ns.impact_against("BTC", +1) == 0.0
     assert ns.impact_against("BTC", -1) == pytest.approx(1.0)
@@ -574,7 +601,7 @@ def test_engine_results_carry_part3_fields():
         # two more record passes -> co-relation edges appear (>=3 samples)
         for _ in range(2):
             feed.tick(4)
-            for sym in ("BTC", "PAXG", "ETH", "BNB"):
+            for sym in ("BTC", "SOL", "ETH", "BNB"):
                 engine.compute_asset(sym, record=True, display=True)
         d2 = engine.display_systems[("BTC", "tf1")]
         assert len(d2["corelation"]["edges"]) > 0

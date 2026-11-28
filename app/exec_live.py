@@ -203,7 +203,7 @@ def step_live_book(engine, block: dict, now: float | None = None) -> dict:
     filled: list[dict] = []
     book = engine.portfolio
 
-    for symbol in ("ETH", "BTC", "BNB", "PAXG"):
+    for symbol in ("ETH", "BTC", "BNB", "SOL"):
         ok, why = tape_provenance(engine.feed, symbol)
         if not ok:
             reasons[symbol] = why

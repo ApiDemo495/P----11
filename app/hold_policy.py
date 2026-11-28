@@ -14,8 +14,8 @@ and exposes, per (asset, timeframe) cell:
     artifact),
     ``HOLDOUT ROWS · ERA n<3`` (BTC 247min, rows verified but a single
     holdout era), ``IN-SAMPLE SHADOW`` (BNB, single-year) / its
-    ``HOLDOUT MISS`` variant (PAXG 247min), ``UNGRADEABLE / WARMUP``
-    (PAXG tf1–tf3 — 1 h bars cannot resolve 22/44/130-min windows),
+    ``HOLDOUT MISS`` variant, ``UNGRADEABLE / WARMUP``
+    (1 h bars cannot resolve sub-hour windows),
   * measured win rate + Wilson interval (confidence source of truth).
 
 Side semantics are byte-identical to ``backtest.hold.build_sides`` for
@@ -101,8 +101,11 @@ def cell(symbol: str, tf: str) -> dict | None:
 
 
 def known_cells() -> list[tuple[str, str]]:
-    return [(s, t) for s in ("BTC", "ETH", "BNB", "PAXG")
-            for t in ("tf1", "tf2", "tf3", "tf4")]
+    from .config import SYMBOL_ORDER, TF_ORDER
+    # Derived from the ONE asset/lane definition, so removing an asset can
+    # never leave a phantom cell behind here (it previously listed six
+    # assets by hand).
+    return [(s, t) for s in SYMBOL_ORDER for t in TF_ORDER]
 
 
 def tier_counts() -> dict[str, int]:
@@ -162,14 +165,18 @@ TIER_NO_EDGE = "NO MEASURED EDGE · PATTERN NOT TRADEABLE"
 #   BNB  tf1  +10.6 (62)   tf2  +58.8 (65)   tf3 +144.5 (69)   tf4 +205.1 (67)
 #   BTC  tf1  +28.7 (59)   tf2  +45.6 (59)   tf3 +151.3 (62)   tf4 +235.6 (58)
 #   ETH  tf1  +40.6 (45)   tf2  +87.6 (45)   tf3 +290.5 (47)   tf4 +594.4 (46)
-#   PAXG tf1  -16.1 (45)   tf2   -0.7 (50)   tf3   -0.3 (56)   tf4   +0.2 (58)
+#   (PAXG removed 2026-11-27 — see the note below the table)
 #
 # Every BTC/ETH/BNB cell is gross-positive at EVERY confidence band
-# (+29.9 / +218.2 / +267.0 / +148.2 bps across the four bands). PAXG flips
-# sign between bands (-9.5 / -35.9 / +60.0 / -28.9) — that is noise, not an
-# edge. PAXG is also a different microstructure: it pays 18 bps a side trip
-# against a median |move| of 109 bps, versus 12 bps against 147-154 bps for
-# the crypto majors.
+# (+29.9 / +218.2 / +267.0 / +148.2 bps across the four bands).
+#
+# PAXG'S ROWS ARE GONE, and the reason is the whole point of this segment.
+# PAXG was the only asset that flipped sign between bands
+# (-9.5 / -35.9 / +60.0 / -28.9), and its per-cell means above were -16.1 /
+# -0.7 / -0.3 / +0.2 bps — the only asset in the set that was not positive
+# GROSS. It also paid 18 bps a side trip against a median |move| of 109 bps,
+# versus 12 bps against 147-154 bps for the crypto majors. A cell that is
+# not positive before any fee is not a fee problem; the asset was removed.
 CELL_GROSS_BPS: dict[tuple[str, str], dict[str, float]] = {
     ("BTC", "tf1"): {"gross": 28.7, "n": 59},
     ("BTC", "tf2"): {"gross": 45.6, "n": 59},
@@ -183,11 +190,33 @@ CELL_GROSS_BPS: dict[tuple[str, str], dict[str, float]] = {
     ("BNB", "tf2"): {"gross": 58.8, "n": 65},
     ("BNB", "tf3"): {"gross": 144.5, "n": 69},
     ("BNB", "tf4"): {"gross": 205.1, "n": 67},
+}
+# ── ARCHIVED: PAXG's measured rows, kept as the evidence FOR the removal ──
+# PAXG left the asset set on 2026-11-27 (app/config.py). These four numbers
+# are not deleted, because they are the reason: the only asset in the walk
+# that was not gross-positive in any cell. `has_gross_edge` therefore still
+# answers False for PAXG → the cell reports NO MEASURED EDGE, and the tier's
+# behaviour (label, no per-window veto) stays exercised and testable instead
+# of becoming dead code the moment the asset was swapped out. Nothing trades
+# PAXG: it is not in SYMBOL_ORDER, so no card, order or cell resolves for it.
+ARCHIVED_CELL_GROSS_BPS: dict[tuple[str, str], dict[str, float]] = {
     ("PAXG", "tf1"): {"gross": -16.1, "n": 45},
     ("PAXG", "tf2"): {"gross": -0.7, "n": 50},
     ("PAXG", "tf3"): {"gross": -0.3, "n": 56},
     ("PAXG", "tf4"): {"gross": 0.2, "n": 58},
 }
+CELL_GROSS_BPS.update(ARCHIVED_CELL_GROSS_BPS)
+
+# SOL is DELIBERATELY absent from CELL_GROSS_BPS.
+#
+# The table above is a measurement: 893 settled windows of this engine's own
+# walk over real tape. There is no equivalent walk for SOL or ZEC in this
+# repo (backtest/cache/ is empty, so it cannot be re-derived here), and
+# inventing a number would put a fabricated win rate on a live card. With no
+# row, gross_edge() returns None and both assets report the honest
+# UNGRADEABLE / WARMUP tier — the same state BTC/ETH/BNB were in before their
+# walk ran. Their cells, weights and learning state are all independent and
+# real; only the evidence is still pending.
 #: A cell needs this much measured gross edge to be called tradeable. Above
 #: zero but inside the noise of its own sample is not evidence, so the bar is
 #: "clears zero by more than a token margin".
@@ -430,7 +459,17 @@ def tier_reason(symbol: str, tf: str) -> str:
                 if _ge is not None else
                 "this cell has no measured gross edge")
     if c is None:
-        return "this cell is not in the certified hold-policy artifact"
+        # Say WHY it is missing, not just that it is. The artifact is keyed by
+        # LANE DURATION, so a lane whose window changed is a lane that was
+        # never certified — a specific, fixable fact. tf1 became a 24-hour
+        # window on 2026-11-27 (it was 22 minutes) and no certified walk
+        # exists at 1440 minutes yet, which is exactly this state.
+        _m = TF_MINUTES.get(tf)
+        return (f"no certified hold-policy row exists for a {_m}-minute "
+                f"window on {symbol}: the artifact is keyed by lane duration "
+                f"and this duration has not been walked. The cell still "
+                f"computes and still issues — it simply has no certified "
+                f"hit rate to quote yet, and quoting one would be invention.")
     if c.get("status") != "ok":
         why = str(c.get("why") or "").strip()
         return ("no configuration survives the cost floor on this cell's "
@@ -541,8 +580,23 @@ def summary(symbol: str, tf: str) -> dict[str, Any]:
         "tier_reason": tier_reason(symbol, tf),
     }
     if c is None:
+        # "unknown", NOT "ungradeable" — two different facts, and the card
+        # must not merge them. The artifact is keyed by lane DURATION and
+        # this duration has never been walked, so nothing has been measured
+        # here at all; "ungradeable" would say a measurement exists and
+        # failed, which is false and is the more damaging claim. tf1 became a
+        # 24-hour lane in this release and SOL arrived with it, so neither
+        # has a row yet. The BADGE says UNGRADEABLE / WARMUP, meaning "no
+        # verdict is available" — the payload says WHY that is, and quotes no
+        # rate in either case.
         base.update(status="unknown", side=None, win_rate=None,
-                    confidence=None, why="cell not in the hold policy")
+                    confidence=None,
+                    why=("no win rate: no certified hold-policy row exists "
+                         "yet for a "
+                         f"{TF_MINUTES.get(tf, '?')}-minute window"
+                         + (f" on {symbol}" if symbol else "")
+                         + " — this duration has never been walked, so there "
+                           "is nothing measured to quote"))
         return base
     if c.get("status") != "ok":
         base.update(status="ungradeable", side=None, win_rate=None,

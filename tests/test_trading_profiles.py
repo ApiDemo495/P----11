@@ -115,7 +115,7 @@ def test_public_cfg_masks_keys():
 
 
 def test_asset_profiles_differ_by_nature():
-    assert asset_profile("PAXG")["sl_mult"] > 1.2      # gold: wider
+    assert asset_profile("SOL")["sl_mult"] > 1.2       # high beta: wider
     assert asset_profile("ETH")["floor_mult"] > 1.1    # ETH: higher bar
     assert asset_profile("BNB")["sl_mult"] < 1.0       # BNB: tighter
     assert asset_profile("BTC")["sl_mult"] == 1.0

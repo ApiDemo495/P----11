@@ -5,6 +5,7 @@ T_remaining / tau_timeframe and acts as a confidence multiplier.
 """
 from __future__ import annotations
 
+import numpy as np
 import math
 
 from ._helpers import (
@@ -417,10 +418,16 @@ def f19_pmtl(ctx) -> float:
         if denom < EPS:
             continue
 
+        # PERFORMANCE (2026-11-27): the lag sweep was a Python generator per
+        # lag over up to n terms. It is a cross-correlation, so evaluate it as
+        # one vectorised dot per lag. Identical arithmetic and identical
+        # tie-breaking (first lag with strictly greater |ccf| wins, because
+        # the comparison below is still sequential and still strict).
+        _ra = np.asarray(ra[:n], dtype=np.float64)
+        _rt = np.asarray(rt[:n], dtype=np.float64)
         best_lag, best_ccf = 1, 0.0
         for lag in range(1, min(l_max, n - 1) + 1):
-            ccf_num = sum(ra[i + lag] * rt[i] for i in range(0, n - lag))
-            ccf = ccf_num / denom
+            ccf = float(np.dot(_ra[lag:], _rt[:n - lag])) / denom
             if abs(ccf) > abs(best_ccf):
                 best_lag, best_ccf = lag, ccf
 

@@ -40,7 +40,9 @@ def test_the_shipped_cost_stack_is_the_executed_venue():
     for sym, rt in ROUND_TRIP_BPS.items():
         assert asset_rt(sym) == pytest.approx(rt)
     # an unknown symbol must fail SAFE — never cheaper than a known one
-    assert asset_rt("UNKNOWN") >= ROUND_TRIP_BPS["PAXG"]
+    # the MOST expensive live asset is the fail-safe bound (PAXG, the dearer
+    # asset, is not tradeable any more; SOL is now the widest spread)
+    assert asset_rt("UNKNOWN") >= max(ROUND_TRIP_BPS.values())
     assert asset_rt("UNKNOWN") > ROUND_TRIP_BPS["BTC"]
 
 
@@ -147,8 +149,12 @@ def test_window_locks_still_expire_the_old_way(tmp_path):
             sl=95.0, confidence=0.5, created_at=now, gate_ok=True)
     row = pl.rows[-1]
     assert row["settle_mode"] == "window"
-    assert row["expires_at"] == now + 22 * 60
-    settled = pl.settle("BTC", "tf1", 101.0, now=now + 23 * 60,
+    # the lock expires after the LANE's own window, not a hardcoded 22
+    # minutes — tf1 is a 1440-minute lane since the retiming
+    from app.config import TIMEFRAMES
+    W = TIMEFRAMES["tf1"]["minutes"] * 60
+    assert row["expires_at"] == now + W
+    settled = pl.settle("BTC", "tf1", 101.0, now=now + W + 60,
                         side_now=-1)     # flip must NOT close a window lock
     assert len(settled) == 1
     assert settled[0]["status"] == "won"     # sign settle at expiry
@@ -167,8 +173,8 @@ def test_issue_bar_raises_every_asset_floor():
         assert 0.365 <= fl <= 0.4043, (sym, fl)
     assert floors["BTC"] == pytest.approx(0.385)      # fm 1.00
     assert floors["BNB"] == pytest.approx(0.3657)     # fm 0.95 (gentlest)
-    # ETH 1.20 and PAXG 1.10 both clamp to 1.05 — no starvation
-    assert floors["ETH"] == floors["PAXG"] == pytest.approx(0.4042)
+    # ETH 1.20 and SOL 1.25 both clamp to 1.05 — no starvation
+    assert floors["ETH"] == floors["SOL"] == pytest.approx(0.4042)
 
 
 def test_horizon_gate_charges_the_real_round_trip():

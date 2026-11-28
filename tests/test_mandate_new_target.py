@@ -61,8 +61,10 @@ def test_old_sigma_mean_formula_is_gone():
     # the ratio resolves most-specific-first: measured cell -> per-asset
     # mandate -> global default (docs/WINRATE_AT_1_TO_1.md)
     assert "_rr_cell = _mcfg_c.new_rr_cell(symbol, tf)" in src
-    assert ("_rr_n = _rr_cell or _mcfg_c.new_rr(symbol) or NEW_TARGET_RR"
-            in src)
+    # the per-asset forecast override is GONE with the new system
+    # (2026-11-27): the ratio is measured-cell -> global default only.
+    assert "_rr_n = _rr_cell or NEW_TARGET_RR" in src
+    assert "new_rr(" not in src
     assert "0.5 * min(1.0, abs(float(" in src   # factor kept (tilt, floored at 1:1)
 
 
@@ -83,6 +85,15 @@ def test_mandate_tiers_follow_measured_cells():
     from app import hold_policy as hp
     engine, _feed, _ = make_engine()
     for sym, tf in hp.known_cells():
+        # tf1 is a 24-hour lane the duration-keyed artifact has never walked,
+        # and SOL has no walk at all. Those cells are NOT certified, so the
+        # mandate lane cap applies to them — they are still issued, capped in
+        # size, which is the no-abstention behaviour. Everything certified
+        # must reach "full" at a huge score.
+        if tf == "tf1" or sym == "SOL":
+            out = engine._tier_for(sym, tf, 0.5)
+            assert out["tier"] in ("full", "watch-only"), (sym, tf, out)
+            continue
         out = engine._tier_for(sym, tf, 0.5)     # a huge score
         assert out["tier"] == "full", (sym, tf, out.get("tier_rule"))
         # the hold-policy CERTIFICATION badge is labelled as such — it used
@@ -107,12 +118,17 @@ def test_mandate_tiers_follow_measured_cells():
     assert counts.get("HOLDOUT ROWS · ERA n<3", 0) == 0
     assert counts.get("IN-SAMPLE SHADOW", 0) == 0
     assert counts.get("IN-SAMPLE SHADOW · HOLDOUT MISS", 0) == 0
-    # the rule outranks every gate above it
-    assert counts[hp.TIER_SUB1] == 11
-    # PAXG is demoted on GROSS EDGE (no signal before any fee), which
-    # outranks the geometry label — see tests/test_gross_edge_gate.py
-    assert counts[hp.TIER_NO_EDGE] == 4
-    assert counts["UNGRADEABLE / WARMUP"] == 1
+    # the rule outranks every gate above it. 9 = BTC/ETH/BNB x tf2/tf3/tf4,
+    # the certified sub-day cells (PAXG used to supply 2 of the 11; it is no
+    # longer an asset). tf1's 4 lanes and SOL's 4 lanes are uncertified and
+    # report UNGRADEABLE instead — 7 in total (4 tf1 lanes + 3 SOL lanes),
+    # the tf1 lanes being the 24-hour windows the artifact never walked.
+    assert counts[hp.TIER_SUB1] == 9
+    assert counts["UNGRADEABLE / WARMUP"] == 7
+    # PAXG's archived rows still answer NO MEASURED EDGE — outside the live
+    # grid, which is why it is not in tier_counts any more
+    assert counts.get(hp.TIER_NO_EDGE, 0) == 0
+    assert hp.tier("PAXG", "tf1") == hp.TIER_NO_EDGE
     # legacy fallback still caps when the hold record is absent
     import app.hold_policy as _hp
     old_path = os.environ.get("HOLD_WR_PATH")

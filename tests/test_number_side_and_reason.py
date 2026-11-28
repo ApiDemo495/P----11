@@ -37,7 +37,7 @@ def test_temper_cannot_discard_the_calibrated_confidence():
 
     # an asset WITH a tempering rule may legitimately damp the number —
     # that is the rule doing its job, and it states a factor when it does
-    for symbol in ("BTC", "ETH", "BNB", "PAXG"):
+    for symbol in ("BTC", "ETH", "BNB", "SOL"):
         r = temper(symbol, 0.01, 0.421, [100.0] * 60)
         if r["factor"] == 1.0:
             # no rule fired ⇒ the confidence it returns is the one it was
@@ -116,11 +116,14 @@ def test_no_certified_rate_never_renders_a_bare_n_a():
 def test_an_ungradeable_cell_prints_the_reason_it_has_no_rate():
     from app import hold_policy as hp
 
-    s = hp.summary("PAXG", "tf1")
-    assert s["status"] == "ungradeable"
+    s = hp.summary("SOL", "tf1")
+    # "unknown" (nothing measured at this duration), never "ungradeable"
+    # (a measurement exists and failed) — the card must not merge them.
+    assert s["status"] == "unknown"
     assert s["win_rate"] is None
     # the payload carries the why, and the card renders it
-    assert "cannot resolve" in (s.get("why") or "")
+    assert "no win rate" in (s.get("why") or "")
+    assert "never been walked" in (s.get("why") or "")
     js = open("static/app.js", encoding="utf-8").read()
     assert "c.why ?" in js
 
@@ -145,8 +148,11 @@ def test_resolve_reports_the_flipped_side_and_the_engine_adopts_it():
 def test_the_engine_publishes_the_resolved_side_not_the_raw_one():
     """The live defect: `signal` and `direction` kept the pre-flip side."""
     src = inspect.getsource(__import__("app.engine", fromlist=["x"]))
-    i = src.index("_side_resolved = direction")
-    block = src[i:i + 1800]
+    i_resolve = src.index("_side_resolved = direction")
+    # the publish must land before the levels are read off the cycle, so bound
+    # the window there rather than at an arbitrary character count
+    i_levels = src.index("_lv = _lv_from_cycle(cyc)", i_resolve)
+    block = src[i_resolve:i_levels]
     # resolve() is consulted with all four returns captured
     assert "_ok_r, _vd_r, _nt_r, _side_r = _v_resolve(" in block
     # and the published fields are overwritten when it differs
@@ -154,6 +160,9 @@ def test_the_engine_publishes_the_resolved_side_not_the_raw_one():
     assert 'res["signal"] = ("BUY" if _side_resolved > 0' in block
     # the pre-flip side stays visible for the divergence note
     assert 'res["direction_cci"] = direction' in block
+    # the 2:1 correction feeds the SAME resolved variable, never a second one
+    assert "two_to_one_direction" in block
+    assert "_side_resolved = _rr_dir" in block
 
 
 def test_the_side_is_resolved_before_any_level_is_built():

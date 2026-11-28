@@ -80,7 +80,7 @@ def test_measured_lane_still_gets_a_measured_verdict():
     """The new early-return must not swallow real measurements."""
     from app.cost_gate import measured
     found = None
-    for asset in ("BTC", "ETH", "BNB", "SOL", "PAXG"):
+    for asset in ("BTC", "ETH", "BNB", "SOL"):
         for tf in ("tf1", "tf2", "tf3", "tf4"):
             if measured(asset, tf)["n"] > 0:
                 found = (asset, tf)

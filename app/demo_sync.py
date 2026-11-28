@@ -29,7 +29,7 @@ from typing import Any, Callable
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CONFIG_PATH = DATA_DIR / "trading.json"
 SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "BNB": "BNBUSDT",
-           "PAXG": "PAXGUSDT"}
+           "SOL": "SOLUSDT"}
 BASES = {
     (True, "futures"): "https://testnet.binancefuture.com",
     (False, "futures"): "https://fapi.binance.com",

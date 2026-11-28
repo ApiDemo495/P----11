@@ -88,15 +88,24 @@ def test_the_66_percent_gate_reads_a_geometry_not_an_edge():
 
 
 def test_mandate_one_to_one_cells_are_the_hard_case():
-    """BTC / BNB / PAXG ship R = 1.0 in app/mandate_cfg.py while their own
-    direction rules are recorded at 52-53 % accuracy. On a 1:1 pair that
-    lands the barrier win rate near 53 %, not the documented 66 %."""
+    """BTC / BNB ship R = 1.0 in app/mandate_cfg.py while their own direction
+    rules are recorded at 52-53 % accuracy. On a 1:1 pair that lands the
+    barrier win rate near 53 %, not the documented 66 %.
+
+    SOL carries its OWN prior (R = 1.3), not a copy of BTC's: it is the
+    higher-volatility asset and its separate weightage is a requirement, so
+    it must NOT be asserted at 1.0.
+    """
     from app import mandate_cfg
 
-    for sym in ("BTC", "BNB", "PAXG"):
+    for sym in ("BTC", "BNB"):
         cell = mandate_cfg.cfg(sym)
         assert cell is not None
         assert float(cell["R"]) == pytest.approx(1.0), sym
+    # SOL is separate-weightage and above the floor
+    sol_r = float(mandate_cfg.cfg("SOL")["R"])
+    assert sol_r >= 1.0
+    assert sol_r != pytest.approx(float(mandate_cfg.cfg("BTC")["R"]))
     # 52.5 % direction accuracy == z 0.063 == 53.1 % barrier win rate,
     # against the 66 % the configuration is documented as having reached
     z = 0.0627
