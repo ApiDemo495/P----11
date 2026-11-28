@@ -86,7 +86,8 @@ def test_the_22_minute_lane_is_gone_and_its_key_is_the_2to1_lane():
     assert set(TIMEFRAMES) == set(TF_ORDER)
     mins = {tf: TIMEFRAMES[tf]["minutes"] for tf in TF_ORDER}
     assert 22 not in mins.values(), mins
-    assert mins["tf1"] == 1440
+    # the user's directive: six hours, not a 24-hour swing lane
+    assert mins["tf1"] == 360
     assert mins["tf1"] == max(mins.values())
     assert TWO_TO_ONE_LANE == "tf1"
     # tf1's own sub-targets must fit inside its new window
@@ -110,9 +111,13 @@ def test_display_metadata_does_not_describe_a_lane_that_is_gone():
     src = js.read_text()
     assert 'const TF = ["tf1", "tf2", "tf3", "tf4"];' in src
     assert "tf5" not in src, "the seg-16 fifth lane was folded into tf1"
-    assert "tf1: { mins: 1440" in src
+    assert "tf1: { mins: 360" in src
     # and the asset list matches, exactly
     assert 'const ASSETS = ["BTC", "SOL", "ETH", "BNB"];' in src
+    # the chart tables must agree with the server's lane minutes
+    from app.config import TIMEFRAMES
+    for tf, m in TIMEFRAMES.items():
+        assert f"{tf}: {m['minutes']}" in src, tf
 
 
 def test_the_new_system_has_no_switch_left_to_flip():
@@ -131,70 +136,117 @@ def test_the_measured_2to1_race_and_the_lane_that_hosts_it():
                                  race_summary)
 
     r = race_summary()
-    assert r["corrected_side"] == TWO_TO_ONE_SIDE
     assert r["fair_rate"] == pytest.approx(P_TP_FIRST_FAIR, abs=1e-4)
-    # the measured race is on the REVERSE of the shipped side, and both
-    # one-sided tests must be the ones recorded with the fixture
+    # the measured race is on the REVERSE of the shipped side...
     assert r["flipped_rate"] > r["shipped_rate"]
-    assert r["p_shipped_below_fair"] < 0.01
+    assert r["p_shipped_at_least_fair"] < 0.01
     assert MEASURED["resolved"] == MEASURED["tp_first"] + MEASURED["sl_first"]
-    # and the hosting lane is the 24-hour one
+    # ...but it is a LABEL with no size authority, because flipping a fixed
+    # 2:1 pair only relabels the book: resolved -24R <-> +24R, time-outs
+    # +24.8R <-> -24.8R, total -0.82R either way.
+    assert r["side_policy"]["size_authority"] == 0.0
+    assert r["side_policy"]["edge_used"] == 0.0
+    assert r["side_policy"]["pnl_if_flipped_r"] == pytest.approx(
+        -r["side_policy"]["pnl_if_shipped_r"], abs=1e-9)
+    assert TWO_TO_ONE_SIDE == "flipped"        # the label
+    # and the hosting lane is the SIX-HOUR one
     assert TWO_TO_ONE_LANE == "tf1"
-    assert TIMEFRAMES[TWO_TO_ONE_LANE]["minutes"] == 1440
+    assert TIMEFRAMES[TWO_TO_ONE_LANE]["minutes"] == 360
 
 
-# ────────── the 2:1 arithmetic is sized on the bound, not the point ──────
-def test_the_two_to_one_edge_is_the_conservative_bound_not_the_point():
-    """40/48 from ONE 2.5-month regime may inform a sign, not a magnitude."""
-    from app.rr_geometry import (P_TP_FIRST_FAIR, TWO_TO_ONE_EDGE,
-                                 TWO_TO_ONE_EDGE_OBSERVED,
-                                 TWO_TO_ONE_EDGE_SHIPPED,
-                                 TWO_TO_ONE_RATE_OBSERVED,
-                                 TWO_TO_ONE_RATE_PLANNED)
-    # the observed point estimate is 40/48 and is published as such
-    assert TWO_TO_ONE_RATE_OBSERVED == pytest.approx(40 / 48, abs=1e-9)
-    assert TWO_TO_ONE_EDGE_OBSERVED == pytest.approx(40 / 48 - 1 / 3, abs=1e-9)
-    # the PLANNING figure is the Wilson 95% lower bound, strictly below it
-    assert TWO_TO_ONE_RATE_PLANNED == pytest.approx(0.7042, abs=1e-4)
-    assert TWO_TO_ONE_RATE_PLANNED < TWO_TO_ONE_RATE_OBSERVED
-    assert TWO_TO_ONE_EDGE == pytest.approx(0.7042 - 1 / 3, abs=1e-4)
-    assert TWO_TO_ONE_EDGE < TWO_TO_ONE_EDGE_OBSERVED
-    # and the unflipped side is genuinely adverse, not merely neutral
-    assert TWO_TO_ONE_EDGE_SHIPPED == pytest.approx(8 / 48 - 1 / 3, abs=1e-9)
-    assert TWO_TO_ONE_EDGE_SHIPPED < 0.0 < P_TP_FIRST_FAIR + TWO_TO_ONE_EDGE
+# ──────── the 2:1 arithmetic obeys its own ceiling ────────
+def test_the_conditional_two_to_one_rate_never_exceeds_one_third():
+    """A zero-edge 2:1 pair wins 1/3 of the windows it resolves. Not 0.704.
 
-
-def test_cost_is_charged_once_and_only_on_the_time_out():
-    """The barriers are net-of-fee, so a stopped trade does not pay twice."""
-    from app.rr_geometry import lane_geometry
-    g = lane_geometry(1440.0, 16.6, 12.0, edge=0.3709)
-    res, rt, stop = (g["resolve_probability"], g["round_trip_bps"],
-                     g["stop_bps"])
-    # the stop IS the round trip: a loss already eats the fee
-    assert stop == pytest.approx(rt)
-    assert g["cost_r"] == pytest.approx((1 - res) * rt / stop, abs=1e-6)
-    # net is strictly below gross whenever the window can time out
-    assert g["expectancy_r"] < g["expectancy_r_gross"]
-    # a pair that always resolves charges nothing extra
-    always = lane_geometry(10 ** 9, 16.6, 12.0, edge=0.0)
-    assert always["resolve_probability"] == pytest.approx(1.0, abs=1e-3)
-    assert always["cost_r"] == pytest.approx(0.0, abs=1e-3)
-    assert always["expectancy_r"] == pytest.approx(0.0, abs=1e-3)
-
-
-def test_a_fair_pair_expects_zero_gross_at_every_window():
-    """The no-edge null must reproduce, or the whole table is mis-scaled."""
+    The previous release published `win_rate_conditional = 0.704` for a
+    zero-edge pair, which is more than twice the theoretical maximum. That
+    was an error (a mis-scaled touch curve plus a single-regime `edge`), and
+    this test pins the bound that rules it out.
+    """
+    from app.rr_geometry import (P_TP_FIRST_FAIR, SIMULATION, best_lane,
+                                 lane_geometry)
     from app.config import TIMEFRAMES
-    from app.rr_geometry import lane_geometry
-    for tf, m in TIMEFRAMES.items():
-        g = lane_geometry(float(m["minutes"]), 16.6, 12.0, edge=0.0)
-        assert g["expectancy_r_gross"] == pytest.approx(0.0, abs=1e-9), tf
+
+    # every lane, measured vol, no edge — none may cross 1/3
+    from app.rr_geometry import VOL_BPS_PER_SQRT_HOUR
+    lanes = {tf: float(m["minutes"]) for tf, m in TIMEFRAMES.items()}
+    for sym, v in VOL_BPS_PER_SQRT_HOUR.items():
+        if v is None:
+            continue
+        res = best_lane(12.0, v, lanes, 0.0)
+        for tf, d in res["lanes"].items():
+            assert d["win_rate_conditional"] <= P_TP_FIRST_FAIR + 1e-9, (sym, tf)
+            assert d["win_rate_unconditional"] <= P_TP_FIRST_FAIR + 1e-9, (sym, tf)
+            assert d["expectancy_r_gross"] <= 1e-9, (sym, tf)
+
+    # the simulation that proves the ceiling is stored with the code. A
+    # coarse monitoring grid may sit a hair above 1/3 (a path can straddle a
+    # barrier between samples); that artefact is bounded and converges.
+    from app.rr_geometry import MONITORING_SLACK
+    for row in SIMULATION["rows"]:
+        assert row["p_tp_given_resolved"] <= P_TP_FIRST_FAIR + MONITORING_SLACK, row
+    # a shorter window pulls the rate strictly BELOW 1/3
+    assert (SIMULATION["rows"][0]["p_tp_given_resolved"]
+            > SIMULATION["rows"][-1]["p_tp_given_resolved"])
+    # and refining the grid brings the excess back to zero
+    conv = SIMULATION["monitoring_convergence"]
+    assert abs(conv[-1]["excess_over_one_third"]) < abs(
+        conv[0]["excess_over_one_third"])
+    assert abs(conv[-1]["excess_over_one_third"]) < 0.01
+
+    g = lane_geometry(360.0, 49.9, 12.0, edge=0.0)
+    # rounded to 4dp on the payload
+    assert g["win_rate_conditional"] == pytest.approx(P_TP_FIRST_FAIR, abs=1e-4)
 
 
-def test_the_docs_record_exists_and_names_the_bound():
+def test_the_zero_edge_theorem_holds_across_the_whole_grid():
+    """achieved - needed = (P(resolve) - 1 - c/b)/(1+R) < 0, always."""
+    from app.rr_geometry import (ZERO_EDGE_THEOREM, breakeven_win_rate,
+                                 horizon_sigma, resolution_probability)
+
+    rt = 12.0
+    worst = -1e9
+    for minutes in (44, 130, 247, 360, 1440):
+        sig = horizon_sigma(49.9, minutes)
+        for ratio in (2, 3, 4, 5, 10, 20):
+            for stop in range(20, 1000, 20):
+                pr = resolution_probability(stop, sig)
+                achieved = pr / (1.0 + ratio)
+                needed = breakeven_win_rate(stop, stop * ratio, rt)
+                worst = max(worst, achieved - needed)
+    assert worst <= 1e-12, f"a zero-edge pair cleared its round trip: {worst}"
+    assert ZERO_EDGE_THEOREM["grid_checked"]["max_edge_found"] == 0.0
+    assert "never clear its round trip" in ZERO_EDGE_THEOREM["statement"]
+
+
+def test_an_unmeasured_asset_gets_no_rate_rather_than_a_prior():
+    """SOL has no price history here, so it must get `None`, not a guess."""
+    from app.rr_geometry import (VOL_BPS_PER_SQRT_HOUR, VOL_OBSERVATIONS,
+                                 vol_scale)
+
+    v, prov = vol_scale("SOL")
+    assert v is None
+    assert VOL_OBSERVATIONS["SOL"] == 0
+    assert "no price history" in prov
+    assert "invention" in prov
+    # the three majors ARE measured, and the count travels with the value
+    for sym in ("BTC", "ETH", "BNB"):
+        v2, prov2 = vol_scale(sym)
+        assert v2 is not None and v2 > 0
+        assert "measured_vol" in prov2
+        assert f"n={VOL_OBSERVATIONS[sym]}" in prov2
+    # an unknown symbol is unmeasured too — never silently BTC's prior
+    assert vol_scale("XRP")[0] is None
+
+
+def test_the_docs_record_exists_and_records_the_correction():
     """The code cites docs/TWO_TO_ONE.md — it must be there, and be honest."""
     from pathlib import Path
     doc = Path("docs/TWO_TO_ONE.md").read_text(encoding="utf-8")
     assert "1/3" in doc
-    assert "0.7042" in doc and "83.3" in doc
-    assert "single-regime" in doc.lower() or "one 2.5-month regime" in doc
+    # it must record that 60.6% was WRONG, not quietly drop it
+    assert "60.6" in doc and "cannot exist" in doc
+    assert "cancels" in doc
+    assert "never clear its own round trip" in doc
+    # and that the flip has no size authority
+    assert "size_authority" in doc

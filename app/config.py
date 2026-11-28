@@ -36,28 +36,29 @@ SYMBOL_ORDER: list[str] = ["BTC", "SOL", "ETH", "BNB"]
 # ---------------------------------------------------------------------------
 TIMEFRAMES: dict[str, dict] = {
     # ── THE 2:1 LANE ─────────────────────────────────────────────────────
-    # `tf1` used to be a 22-MINUTE lane. It is now the 24-hour 2:1 lane, and
-    # the 22-minute lane is gone. This is a replacement, not a rename:
+    # `tf1` hosts the 2:1 pair. It is a SIX-HOUR lane (user directive
+    # 2026-11-28: "I don't want swing app do that tf 1 to 6hours"). It used
+    # to be 22 minutes, then briefly 24 hours; neither is what the user
+    # asked for.
     #
-    #   * A 2:1 barrier pair wins the race exactly 1/3 of the time with no
-    #     edge, for ANY barrier size — optional stopping on a mean-zero
-    #     martingale, so no distribution is assumed. Moving the barriers
-    #     therefore does nothing (measured: the app's own win rate was
-    #     46.6 % at every barrier scale from 0.15x to 2.0x).
-    #   * What actually moves the number is whether the pair RESOLVES at
-    #     all inside the window. On this app's own 2:1 walk a 22-minute
-    #     window resolved 15.4 % of the time; 24 hours resolved 86.0 %.
-    #     Unconditional 2:1 win rate = 1/3 x P(resolve), so it runs 12.9 %
-    #     at 22 minutes and 71.7 % at 24 hours once the side is corrected
-    #     (see app/rr_geometry.py for every number and its source).
-    #   * The app's measured skill lives at a ~22-HOUR settlement interval.
-    #     A 22-minute window cannot express a 22-hour edge. That mismatch
-    #     is why the 22-minute lane is the worst possible host for this
-    #     geometry, and why it is the lane that had to go.
+    # WHAT THE LANE SIZE CAN AND CANNOT DO. A 2:1 barrier pair is hit
+    # target-first exactly 1/3 of the time it resolves — optional stopping
+    # on a mean-zero martingale, no distribution assumed, true for every
+    # barrier size and every window. Simulated here on 60k random walks at
+    # stop/sigma from 0.25 to 2.0: P(TP|resolved) = 0.339, 0.313, 0.123,
+    # 0.002 as the horizon SHORTENS. It never exceeds 1/3, and truncation
+    # only drags it BELOW 1/3. The window cannot raise the conditional
+    # rate. What it raises is P(resolve) — the share of windows that end on
+    # a barrier at all rather than on the clock — and therefore the
+    # UNCONDITIONAL 2:1 win rate, which is 1/3 x P(resolve) and is
+    # hard-capped at 1/3 = 33.3 % no matter how long the window runs.
     #
-    # No lane abstains: every window still issues a side (no-abstention
-    # mandate). This lane is where the 2:1 pair gets the time it needs.
-    "tf1": {"minutes": 1440, "targets": [360, 720, 1080, 1440]},
+    # At six hours, with the stop at 1.4 % of price (the 1:1 floor — a
+    # tighter stop can never clear the round trip), the pair resolves about
+    # 92 % of the time, so the unconditional 2:1 rate is about 30.7 %.
+    # Nothing above 33.3% is claimable here and nothing in this file
+    # claims it.
+    "tf1": {"minutes": 360, "targets": [90, 180, 270, 360]},
     "tf2": {"minutes": 44, "targets": [11, 22, 33, 44]},
     "tf3": {"minutes": 130, "targets": [30, 40, 90, 130]},
     "tf4": {"minutes": 247, "targets": [60, 120, 180, 247]},
@@ -67,6 +68,10 @@ TF_ORDER: list[str] = ["tf1", "tf2", "tf3", "tf4"]
 #: enough to be a win rate rather than a time-out statistic. `tf1` is that
 #: lane now — same key, 24 hours instead of 22 minutes.
 TWO_TO_ONE_LANE = "tf1"
+#: The 2:1 pair's stop, as a fraction of price. Pinned to the 1:1 FLOOR: the
+#: user's rule (never below 1:1) and the fee are the same constraint here,
+#: because a stop tighter than this cannot pay the round trip on a win.
+TWO_TO_ONE_STOP_PCT = 0.014
 
 # Lock strengths (Composite Confidence Index shift required to adjust a locked sub-target)
 LOCK_SHIFT_ADJUST: dict[str, float | None] = {

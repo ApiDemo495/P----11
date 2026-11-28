@@ -484,8 +484,9 @@ def test_grc_is_the_only_scheduled_mutation(live_engine):
 
 def test_timeframe_window_constants_match_spec():
     # tf1 is the 24-hour 2:1 lane (it was 22 minutes until 2026-11-27).
-    assert TIMEFRAMES["tf1"] == {"minutes": 1440,
-                                 "targets": [360, 720, 1080, 1440]}
+    # tf1 hosts the 2:1 pair as a SIX-HOUR lane (user directive 2026-11-28)
+    assert TIMEFRAMES["tf1"] == {"minutes": 360,
+                                 "targets": [90, 180, 270, 360]}
     assert TIMEFRAMES["tf2"] == {"minutes": 44, "targets": [11, 22, 33, 44]}
     assert TIMEFRAMES["tf3"] == {"minutes": 130, "targets": [30, 40, 90, 130]}
     assert TIMEFRAMES["tf4"] == {"minutes": 247, "targets": [60, 120, 180, 247]}

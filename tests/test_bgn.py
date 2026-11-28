@@ -67,15 +67,19 @@ def test_tf1_coupling_follows_the_formula_not_a_stale_constant():
     that describes a lane the app no longer has.
     """
     from app.config import TIMEFRAMES
-    assert TIMEFRAMES["tf1"]["minutes"] == 1440
+    # tf1 is the six-hour 2:1 lane (user directive 2026-11-28). Derive the
+    # expectation from config — pinning a minute count here is exactly the
+    # stale-constant failure this file guards against.
+    assert TIMEFRAMES["tf1"]["minutes"] == 360
     for other in ("tf2", "tf3", "tf4"):
         expect = base_coupling(TIMEFRAMES["tf1"]["minutes"],
                                TIMEFRAMES[other]["minutes"])
         assert math.isclose(BASE_COUPLING[("tf1", other)], expect, rel_tol=1e-12)
-    # and it IS genuinely decoupled from the SHORT lanes: the 24-hour lane
-    # shares almost no microstructure with a 44-minute one (0.015 vs the
-    # 0.846 the old 22-minute lane had with it).
-    assert BASE_COUPLING[("tf1", "tf2")] < 0.02
+    # and it IS decoupled from the SHORT lanes: the 6-hour lane shares far
+    # less microstructure with a 44-minute one than the old 22-minute lane
+    # did (0.846). Loose bound — the exact value follows the formula.
+    assert BASE_COUPLING[("tf1", "tf2")] < 0.30
+    assert BASE_COUPLING[("tf1", "tf2")] < BASE_COUPLING[("tf2", "tf3")]
 
 
 def test_base_coupling_symmetry():

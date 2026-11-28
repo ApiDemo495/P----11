@@ -133,14 +133,19 @@ def test_timeframe_impact_distribution_exact():
     """
     from app.config import TIMEFRAMES
     W = {tf: TIMEFRAMES[tf]["minutes"] for tf in TIMEFRAMES}
-    assert W == {"tf1": 1440, "tf2": 44, "tf3": 130, "tf4": 247}
+    assert W == {"tf1": 360, "tf2": 44, "tf3": 130, "tf4": 247}
 
     # A 1440-minute headline (the slow-burn categories) reaches every lane in
     # proportion to the lane's own duration, and FULLY reaches tf1.
     for tf in TIMEFRAMES:
         assert tf_impact(1.0, 1440, tf) == pytest.approx(W[tf] / 1440)
-    assert tf_impact(1.0, 1440, "tf1") == pytest.approx(1.0)
-    assert tf_impact(1.0, 1440, "tf4") == pytest.approx(247 / 1440)
+    # a 1440-minute headline reaches every lane in proportion to its own
+    # duration; only a lane that long would take all of it, and none is
+    longest = max(TIMEFRAMES, key=lambda t: W[t])
+    assert W[longest] == 360
+    assert tf_impact(1.0, 1440, longest) == pytest.approx(360 / 1440)
+    # tf1 is a 360-minute lane, so a 1440-minute headline reaches it in part
+    assert tf_impact(1.0, 1440, "tf1") == pytest.approx(360 / 1440)
 
     # A 44-minute headline cannot reach a longer lane at all.
     assert tf_impact(1.0, 44, "tf2") == pytest.approx(1.0)
@@ -171,13 +176,15 @@ def test_aggregate_clamped_and_signed():
                 "source": "t", "symbols": ["BTC"], "ts": now})
     assert ns.aggregate("BTC")["count"] == 10
     assert ns.stats()["dupes"] == 1
-    # regulatory now reaches 1440 minutes, so every lane gets its share. Each
-    # headline contributes weight(0.25) * sentiment(1) * exp(-0.05*0) *
-    # reliability(1) = 0.25, and 10 of them sum to 2.5 before the clamp, so
-    # every lane that is reachable saturates at +1 EXCEPT tf4, which sees
-    # 10 * 0.25 * (247/1440) = 0.4288 (and is therefore not clamped).
-    assert agg["impacts"]["tf1"] == pytest.approx(1.0)
-    assert agg["impacts"]["tf4"] == pytest.approx(min(1.0, 10 * 0.25 * 247 / 1440), abs=1e-4)
+    # regulatory reaches 1440 minutes, so every lane gets its share of each
+    # headline: weight(0.25) * sentiment(1) * exp(-0.05*0) * reliability(1)
+    # = 0.25, and 10 of them sum to 2.5 before the per-lane scaling.
+    #   tf1 (360m): 2.5 * 360/1440  = 0.625   <- not clamped
+    #   tf4 (247m): 2.5 * 247/1440  = 0.4288  <- not clamped
+    # Nobody saturates any more, which is the honest consequence of a
+    # 360-minute 2:1 lane sitting under a 1440-minute headline.
+    assert agg["impacts"]["tf1"] == pytest.approx(2.5 * 360 / 1440, abs=1e-4)
+    assert agg["impacts"]["tf4"] == pytest.approx(2.5 * 247 / 1440, abs=1e-4)
     # opposing-magnitude helper
     assert ns.impact_against("BTC", +1) == 0.0
     assert ns.impact_against("BTC", -1) == pytest.approx(1.0)
