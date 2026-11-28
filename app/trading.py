@@ -20,7 +20,7 @@ Doctrine: predictions must never be able to fire trades by accident.
 Orders: USDT-M futures MARKET entry + STOP_MARKET (SL) +
 TAKE_PROFIT_MARKET (TP), closePosition brackets, reduceOnly safety.
 Symbol mapping: BTC->BTCUSDT, ETH->ETHUSDT, BNB->BNBUSDT,
-PAXG->PAXGUSDT.
+SOL->SOLUSDT.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ DATA = Path(__file__).resolve().parent.parent / "data"
 CFG_PATH = DATA / "trading.json"
 LOG_PATH = DATA / "trading_log.json"
 SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "BNB": "BNBUSDT",
-           "PAXG": "PAXGUSDT"}
+           "SOL": "SOLUSDT"}
 TESTNET = "https://testnet.binancefuture.com"
 MAINNET = "https://fapi.binance.com"
 
@@ -56,7 +56,7 @@ DEFAULTS = {
     #   BTC    minNotional 100 USDT, stepSize 0.001 -> 0.002 BTC = ~136 USDT
     #   ETH    20 USDT, stepSize 0.001              -> ~22 USDT
     #   BNB    20 USDT, stepSize 0.010              -> ~22 USDT
-    #   PAXG   20 USDT, stepSize 0.001              -> ~22 USDT
+    #   SOL    20 USDT, stepSize 0.01               -> ~21 USDT
     #
     # The old default was 25.0, which cannot be filled on ANY of the four
     # symbols (BTC fails on three filters at once). 150 clears BTC's

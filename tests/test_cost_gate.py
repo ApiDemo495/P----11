@@ -90,10 +90,14 @@ def test_every_registry_lane_reports_its_evidence():
 
 def test_no_live_lane_is_called_tradable_at_current_costs():
     """The 2026-11 falsification left no lane with gross > friction."""
+    # PAXG's two rows are gone with the asset (2026-11-27). SOL is measured
+    # by the same gate but has NO row in cost_gate.MEASURED, so it reports
+    # "unmeasured" — a different and honest state, asserted separately in
+    # test_an_unmeasured_asset_is_not_called_blocked_or_tradable below.
     live = [("BTC", "intraday", 12.0), ("ETH", "intraday", 12.0),
-            ("BNB", "intraday", 12.0), ("PAXG", "intraday", 18.0),
+            ("BNB", "intraday", 12.0),
             ("BTC", "session", 12.0), ("ETH", "session", 12.0),
-            ("BNB", "session", 12.0), ("PAXG", "session", 18.0),
+            ("BNB", "session", 12.0),
             ("BTC", "swing", 12.0), ("ETH", "swing", 12.0),
             ("BNB", "swing", 12.0)]
     for asset, tf, fee in live:
@@ -182,3 +186,15 @@ def test_rejected_sleeves_are_recorded_not_deleted():
     assert rejected, "the record of what failed is part of the evidence"
     for name in rejected:
         assert cost_gate.sleeve_gate(name, 8.0)["state"] == "blocked"
+
+
+def test_an_unmeasured_asset_is_not_called_blocked_or_tradable():
+    """Unknown must read as unknown.
+
+    SOL arrived on 2026-11-27 with no out-of-fold measurement. The gate may
+    not dress that up as "blocked" (a verdict it has no evidence for) nor as
+    tradable. This also pins that PAXG's deleted rows were not carried over.
+    """
+    for tf in ("intraday", "session", "swing"):
+        g = gate("SOL", tf, 14.0)
+        assert g["state"] == "unmeasured", (tf, g)

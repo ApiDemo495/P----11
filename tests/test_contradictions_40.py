@@ -123,19 +123,38 @@ def test_summary_separates_infeasible_from_unpayable():
     (b) the geometry cannot pay at any target         -> cannot_pay_at_any_target
     """
     from app.hold_policy import summary
-    s = summary("BTC", "tf1")
+    # BTC tf2 (44 min) is the shortest CERTIFIED lane. tf1 is a 24-hour
+    # window as of 2026-11-27 and was never in the artifact, so it reports
+    # the "not certified at this duration" state instead of a cost verdict.
+    s = summary("BTC", "tf2")
     assert s["cost_infeasible"] is False
     assert s["cannot_pay_at_any_target"] is True
 
 
 def test_summary_quotes_the_multiple_of_round_trip_needed():
     from app.hold_policy import summary
-    s = summary("BTC", "tf1")
+    s = summary("BTC", "tf2")
     wr, rr = s["win_rate"], s["reward_risk"]
     expect = wr + (1 - wr) / rr
     assert s["tp_multiple_of_rt_needed"] == pytest.approx(expect, abs=1e-3)
     assert s["tp_multiple_of_rt_needed"] > 1.5      # the old fixed floor
     assert "x the round trip" in s["cost_what_would_pay"]
+
+
+def test_an_uncertified_24h_lane_says_why_instead_of_inventing_a_rate():
+    """The 2:1 lane is new; it must not borrow a 22-minute certification.
+
+    The hold-policy artifact is keyed by lane DURATION. tf1 is 1440 minutes
+    now, so it deliberately has no row. The honest answer is a reason that
+    names the duration — never a silent None and never a reused number.
+    """
+    from app.hold_policy import summary, tier_reason
+    s = summary("BTC", "tf1")
+    assert s["win_rate"] is None
+    assert s.get("reward_risk") is None
+    why = tier_reason("BTC", "tf1")
+    assert "1440-minute" in why
+    assert "invent" in why.lower() or "no certified" in why.lower()
 
 
 def test_every_graded_cell_gets_an_answer_not_just_an_alarm():

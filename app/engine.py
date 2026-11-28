@@ -60,6 +60,7 @@ from .config import (
     TARGET_SCALE,
     TF_ORDER,
     TIMEFRAMES,
+    TWO_TO_ONE_LANE,
     WEIGHT_IDS,
 )
 from .contracts import clamp_rung, rung_level   # canonical rung prices
@@ -516,7 +517,7 @@ class PredictionEngine:
         self.hindsight_mult: dict[tuple[str, str, int], float] = {}
         self.hindsight_changes: list[dict] = []
         # §1.1 composite keys: per (symbol, tf) — a tf-only key let
-        # BTC's review stamp every asset's cadence, so ETH/BNB/PAXG
+        # BTC's review stamp every asset's cadence, so ETH/BNB
         # skipped their own re-grade (the BTC-22m bleed root cause)
         self._hindsight_last: dict[tuple[str, str], float] = {}
         self._hindsight_reviewed_n: dict[tuple[str, str], int] = {}
@@ -3056,8 +3057,7 @@ class PredictionEngine:
         # ── per-asset mandate (2y real measurement, mandate_search):
         # a configured asset only issues on its measured TFs and past
         # its measured filter (§10: all four assets ≥ +0.070R full
-        # sample, 6/6 folds positive — PAXG recovered from the engine
-        # direction's −0.21R via the 44h-momentum rule on tf3/tf4).
+        # sample, 6/6 folds positive).
         # Non-measured cells are capped; the side still stands (the
         # ladder never suppresses it), only the tier caps.
         _mandate_note = ""
@@ -3109,8 +3109,7 @@ class PredictionEngine:
         # ── per-asset mandate (2y real measurement, mandate_search):
         # a configured asset only issues on its measured TFs and past
         # its measured filter (§10: all four assets ≥ +0.070R full
-        # sample, 6/6 folds positive — PAXG recovered from the engine
-        # direction's −0.21R via the 44h-momentum rule on tf3/tf4).
+        # sample, 6/6 folds positive).
         # Non-measured cells are capped; the side still stands (the
         # ladder never suppresses it), only the tier caps.
         if tier != "watch-only":
@@ -3124,7 +3123,7 @@ class PredictionEngine:
                         f"{', '.join(_c['tfs'])} (2y-measured cells)")
                 else:
                     _mandate_note = (
-                        " · PAXG capped watch-only by the 2y mandate "
+                        f" · {symbol} capped watch-only by the 2y mandate "
                         "(negative EV both modes, both splits)")
             else:
                 _mok, _mwhy = _mcfg.filter_ok(
@@ -3830,6 +3829,37 @@ class PredictionEngine:
             except Exception:
                 log.exception("side resolution failed %s/%s", symbol, tf)
                 _side_resolved = direction
+            # ── THE 2:1 SIDE CORRECTION (2026-11-27) ────────────────────
+            # The app's own 2:1 walk resolved 48 pairs and landed TP first
+            # 8 times = 16.7 %, against the 33.3 % a fair coin gives. That
+            # is significantly WORSE than no edge (one-sided exact binomial
+            # p = 0.008). The reverse side lands 83.3 % (p = 0.008) and it
+            # holds in both independent halves of the sample (73.9 % /
+            # 92.0 %). So the 2:1 pair is issued on the side the tape
+            # supports rather than the side that loses the race.
+            #
+            # This is NOT "abstain and take the other one" and it drops no
+            # window (no-abstention mandate): the same asset, the same
+            # window, the same barriers, one corrected sign, stated on the
+            # card so the user can see the trade is on the reverse side.
+            if tf == TWO_TO_ONE_LANE and _side_resolved in (-1, 1):
+                from .rr_geometry import (TWO_TO_ONE_SIDE as _rrs,
+                                          two_to_one_direction as _rr2)
+                _rr_dir = _rr2(_side_resolved, _rrs)
+                if _rr_dir in (-1, 1) and _rr_dir != _side_resolved:
+                    res["two_to_one_flip"] = {
+                        "applied": True, "lane": tf,
+                        "from": _side_resolved, "to": _rr_dir,
+                        "side_policy": _rrs,
+                        "why": ("the measured 2:1 race is on the reverse "
+                                "side: 16.7% as shipped (p=0.008 against), "
+                                "83.3% reversed (p=0.008 for)"),
+                        "source": "rr_geometry.two_to_one_direction",
+                    }
+                    _side_resolved = _rr_dir
+                    log.info("2:1 side corrected %s/%s %+d -> %+d (measured "
+                             "race is on the reverse side)",
+                             symbol, tf, -_rr_dir, _rr_dir)
             if _side_resolved != direction:
                 # keep the pre-flip side visible for the UI's divergence note
                 if res.get("direction_cci") is None:
@@ -4219,16 +4249,10 @@ class PredictionEngine:
                 log.exception("cognition pre-compute failed for %s|%s",
                               symbol, tf)
             try:
-                from . import mandate_cfg as _mcfg_t
-                _tmode = (str(self.agents.settings.get("system_mode", "old"))
-                          if _mcfg_t.mode(symbol) not in ("old", "new")
-                          else _mcfg_t.mode(symbol))
                 final["prediction_lock"] = self._seal_analysis_lock(
                     symbol, tf, final, store, res, cyc,
                     signature=(_cog or {}).get("signature"),
-                    target=("forecast price at horizon end"
-                            if _tmode == "new"
-                            else "measured TP/SL ladder"))
+                    target="measured TP/SL ladder")
                 # ── STALE-ANCHOR RECOVERY (live defect 2026-11-27) ──────
                 # The journal refuses a seal whose entry anchor is not the
                 # live market (or whose barriers the market has already
@@ -4286,8 +4310,7 @@ class PredictionEngine:
                                 target="re-anchored on the live price",
                                 source=str((self.analyse_job or {})
                                            .get("source") or "analyse"),
-                                system_mode=str(self.agents.settings.get(
-                                    "system_mode", "old")),
+                                system_mode="old",
                                 now_price=_live_r)
                     except Exception:
                         log.exception("stale-anchor re-seal failed for %s|%s",
@@ -6474,7 +6497,7 @@ class PredictionEngine:
         out = think(symbol=symbol, tf=tf, res=res, store=store,
                     graded=self._graded_rows(symbol, tf),
                     floor=float(CONFIDENCE_FLOOR),
-                    system_mode=str(self.agents.settings.get("system_mode", "old")))
+                    system_mode="old")
         cyc = _cyc
         if cyc is not None:
             out["verdict"] = cyc.verdict
@@ -6509,18 +6532,10 @@ class PredictionEngine:
         if tp is None:
             tp = final.get("prediction", {}).get("tp")
         sl = final.get("sl") or final.get("contract_sl")
-        # NEW system: the prediction being sealed is "price at horizon end",
-        # so the lock's target must be that forecast — sealing the measured
-        # ladder while labelling the call NEW would grade the wrong number.
-        _mode = str(self.agents.settings.get("system_mode", "old"))
+        # The sealed target is ALWAYS the measured ladder (old system). The
+        # forecast used to be able to override it here; the new system is
+        # deleted (2026-11-27), so there is no branch to take.
         from . import mandate_cfg as _mcfg_s
-        _mmode = _mcfg_s.mode(symbol)
-        if _mmode in ("old", "new"):
-            _mode = _mmode          # per-asset mandate mode wins
-        _fc = ((getattr(cyc, "forecast", {}) or {}).get("price")
-               if cyc is not None else None)
-        if _mode == "new" and _fc:
-            tp = float(_fc)
         # CERTIFIED HOLD POLICY — the sealed prediction carries the
         # cell's decoupled ROW geometry (TP = k_row·m_row·q80-scale,
         # SL = m_row·q80-scale) and the hold settlement rules.  The
@@ -6665,7 +6680,7 @@ class PredictionEngine:
             evidence=evidence,
             target=target,
             source=str((self.analyse_job or {}).get("source") or "analyse"),
-            system_mode=str(self.agents.settings.get("system_mode", "old")),
+            system_mode="old",
             cycle_id=(getattr(cyc, "cycle_id", None) if cyc else None),
             lock_id=(getattr(cyc, "lock_id", None) if cyc else None),
             # §18 era ride: the lock outlives the window (TP, SL or
@@ -6675,77 +6690,22 @@ class PredictionEngine:
         )
 
     # ==================================================================
-    # prediction SYSTEM selector (old ladder ⇄ new horizon forecast)
+    # prediction system — OLD ONLY
     # ==================================================================
-    def _retarget_display(self, cyc, mode: str) -> None:
-        """Point the DISPLAYED TP at the selected model's target.
-
-        Execution and settlement keep reading the frozen level contract, so
-        flipping the selector can never move the barrier a live trade or the
-        ledger is graded against. Only what the user sees as "the target"
-        changes, immediately — not at the next 22-minute boundary.
-        """
-        if cyc is None:
-            return
-        from . import mandate_cfg as _mcfg_r
-        _mmode = _mcfg_r.mode(getattr(cyc, "symbol", "") or "")
-        if _mmode in ("old", "new"):
-            mode = _mmode          # per-asset mandate mode wins
-        forecast = dict(cyc.forecast or {})
-        risk = dict(cyc.risk or {})
-        entry = float((cyc.level_contract or {}).get("entry")
-                      or risk.get("entry") or 0.0)
-        d = int(cyc.direction or 0)
-        if mode == "new":
-            fc = forecast.get("price")
-            if fc and entry > 0:
-                cyc.tp = float(fc)
-                cyc.tp_dist = abs(cyc.tp - entry)
-                cyc.sl = float(forecast.get("sl") or risk.get("sl") or cyc.sl)
-                cyc.sl_dist = (abs(entry - cyc.sl) if cyc.sl else cyc.sl_dist)
-                cyc.ratio = (round(cyc.tp_dist / cyc.sl_dist, 6)
-                             if cyc.sl_dist else cyc.ratio)
-                if cyc.targets:
-                    cyc.targets[-1].level = cyc.tp
-                forecast["mode"] = "new"
-                cyc.forecast = forecast
-        else:
-            measured_tp = risk.get("tp") or (cyc.level_contract or {}).get("tp")
-            if measured_tp:
-                cyc.tp = float(measured_tp)
-                if entry > 0:
-                    cyc.tp_dist = abs(cyc.tp - entry)
-                    cyc.ratio = (round(cyc.tp_dist / cyc.sl_dist, 6)
-                                 if cyc.sl_dist else cyc.ratio)
-                if cyc.targets:
-                    cyc.targets[-1].level = cyc.tp
-            forecast["mode"] = "old"
-            cyc.forecast = forecast
-        cyc.events.append({"ts": time.time(), "type": "system_mode",
-                           "mode": mode,
-                           "note": "display target switched; settlement "
-                                   "contract unchanged"})
-
-    def set_system_mode(self, mode: str) -> dict:
-        """Switch old/new prediction model everywhere, right now."""
-        mode = "new" if str(mode).lower() in ("new", "forecast", "horizon",
-                                              "1", "true") else "old"
-        self.agents.settings["system_mode"] = mode
-        self.agents.save_settings()
-        touched = 0
-        for cyc in self.cycles.values():
-            if cyc is not None:
-                self._retarget_display(cyc, mode)
-                touched += 1
-        self._save_cycles_state()
-        return {
-            "ok": True, "system_mode": mode, "cycles_retargeted": touched,
-            "label": ("NEW — the forecast price at the end of the timeframe "
-                      "is the target (stop kept)" if mode == "new" else
-                      "OLD — measured TP/SL ladder"),
-            "rule": ("the selector changes the model used from this window on; "
-                     "a trade/ledger already sealed keeps its contract"),
-        }
+    # The old-ladder ⇄ new-horizon-forecast selector, `_retarget_display`
+    # and `set_system_mode` were DELETED on 2026-11-27 on instruction:
+    # "remove new system completely, pure focus on old system".
+    #
+    # Deleted rather than defaulted, for a specific reason: a selector that
+    # merely defaults to "old" keeps two code paths alive, and the forecast
+    # path could still price a target if any stale state file, API call or
+    # saved setting said "new". There is now one geometry builder, one
+    # target, and nothing to switch.
+    #
+    # What the forecast STILL does: it is computed and shown, and graded at
+    # the window's horizon like any other call. It is a published opinion,
+    # not a barrier. That keeps the panel the user can read without letting
+    # an unsealed number set a stop.
 
     def _save_cycles_state(self) -> None:
         """Persist display retargets only if the lock/cycle writer supports it.
@@ -7077,7 +7037,7 @@ class PredictionEngine:
         * while inside a position, every CLOSED native bar runs the
           SL-first / TP-second first-touch check (SL wins ties),
         * side runs consume exactly one era record each; each close
-          pays the real round-trip friction (24 bps, PAXG 36).
+          pays the real round-trip friction (the asset's measured RT).
         """
         from bisect import bisect_left
         from . import hold_policy as _hp
@@ -8359,7 +8319,7 @@ class PredictionEngine:
             # ORIGINAL stop, because reading the already-scaled stop made
             # the published ratio R and no longer k x R — a mandate cell
             # asking for 2:1 shipped 1.667:1 on eight of sixteen cells
-            # (BTC tf2/tf4, ETH tf1/tf2, BNB tf2/tf3, PAXG tf3/tf4) with
+            # (BTC tf2/tf4, ETH tf1/tf2, BNB tf2/tf3) with
             # nothing on the card to say the number had moved.
             for _b in _blocks.values():
                 _sl0 = float(_b["sl_bps"])
@@ -8529,10 +8489,16 @@ class PredictionEngine:
         # measured block. Magnitude = σ-scaled expected move, tilted
         # by signal strength — labelled a model forecast, and graded
         # against the realised price at the horizon like any call.
-        _mode = str(self.agents.settings.get("system_mode", "old"))
-        _mmode = _mcfg_c.mode(symbol)
-        if _mmode in ("old", "new"):
-            _mode = _mmode          # per-asset mandate mode wins
+        # ── THE NEW (FORECAST) SYSTEM IS GONE ───────────────────────────
+        # This block used to pick a mode from the agents' settings and let a
+        # forecast price REPLACE cyc.tp. That is deleted, not disabled: the
+        # mode variable is a constant now and the forecast is computed only
+        # to be DISPLAYED (it is graded at the horizon like any call, and
+        # the card still shows it), never to price a target. The user's
+        # instruction was "remove new system completely, pure focus on old
+        # system" — a selector that happens to default to "old" would still
+        # be the new system waiting to be switched back on.
+        _mode = "old"
         _sigma = max(float(_horizon_block.get("sigma_bps") or 0.0),
                      float(_horizon_block.get("q50") or 0.0))
         # TAIL-UNIT SCALING (2y real-data mandate): the old formula
@@ -8566,11 +8532,14 @@ class PredictionEngine:
         # at >= 1:1 while tf4 has 52 of 84 — so a single global knob was
         # the wrong shape. A cell with no measurement keeps the default
         # rather than being silenced.
+        #   1. the ratio this exact (asset, tf) cell measured out of sample;
+        #   2. otherwise the global default.
+        # There is no per-asset forecast override any more: the new system
+        # is deleted, so this ratio is used ONLY to place the displayed
+        # forecast, never to set a barrier.
         _rr_cell = _mcfg_c.new_rr_cell(symbol, tf)
-        _rr_n = _rr_cell or _mcfg_c.new_rr(symbol) or NEW_TARGET_RR
-        _rr_src = ("measured cell ratio" if _rr_cell
-                   else "mandate override" if _mcfg_c.new_rr(symbol)
-                   else "global default")
+        _rr_n = _rr_cell or NEW_TARGET_RR
+        _rr_src = ("measured cell ratio" if _rr_cell else "global default")
         _mag = _factor * _rr_n * _sl_bps if _sl_bps > 0 \
             else _factor * _sigma
         _fc_price = round(_price0 * (1 + _dir * _mag / 1e4), 6) \
@@ -8589,14 +8558,7 @@ class PredictionEngine:
             "rr_evidence": (dict(_mcfg_c.CELL_RR.get((symbol, tf)) or {})
                             if _rr_cell else None),
         }
-        if _mode == "new" and _fc_price and _price0 > 0:
-            cyc.tp = _fc_price
-            cyc.sl = _horizon_block["sl"]
-            cyc.tp_dist = abs(_fc_price - _price0)
-            cyc.sl_dist = abs(_price0 - cyc.sl)
-            cyc.ratio = (round(cyc.tp_dist / cyc.sl_dist, 6)
-                         if cyc.sl_dist else None)
-            cyc.direction = cyc.forecast["direction"]
+        # (the forecast no longer prices anything — see the block above)
         # user rule: below 1:1 is not worth trading -> watch-only
         if (cyc.ratio is not None and cyc.ratio < 1.0):
             cyc.tier = "watch-only"
@@ -8604,14 +8566,6 @@ class PredictionEngine:
                                "ratio": cyc.ratio})
         cyc.events.append({"ts": now, "type": "cycle_fresh", "reason": reason})
         cyc.risk = dict(_horizon_block)
-        if _mode == "new" and _fc_price and _price0 > 0:
-            # NEW system: end-price forecast is TP; the measured catastrophic
-            # stop remains unchanged. Preserve both raw and effective evidence.
-            cyc.risk["raw_tp_bps"] = cyc.risk.get("tp_bps")
-            cyc.risk["tp"] = cyc.tp
-            cyc.risk["tp_dist"] = cyc.tp_dist
-            cyc.risk["tp_bps"] = cyc.tp_dist / _price0 * 1e4
-            cyc.risk["rr"] = cyc.risk["ratio"] = cyc.ratio
 
         # ── ONE CANONICAL CONTRACT PER (ASSET, TF, CYCLE) ───────────────
         # Frozen here, read by every panel: entry, TF-horizon TP, TP1..TP3
@@ -10073,28 +10027,11 @@ class PredictionEngine:
                                 reason="cycle lock/level contract failed validation",
                                 lock_id=cyc.lock_id, side=cyc.direction,
                                 revision=cyc.level_revision)
-                # SYSTEM SELECTOR (display): in NEW mode the target shown is
-                # the horizon forecast. The level CONTRACT keeps the measured
-                # ladder (settlement/execution read that), so this is the one
-                # place where the displayed TP may legitimately differ.
-                if (d and cyc is not None
-                        and str(self.agents.settings.get("system_mode", "old"))
-                        == "new"):
-                    _fc = (cyc.forecast or {}).get("price")
-                    if _fc:
-                        _entry_d = (float((cyc.level_contract or {})
-                                          .get("entry") or 0.0) or price)
-                        d["tp"] = float(_fc)
-                        d["tp_dist"] = (round(abs(float(_fc) - _entry_d), 6)
-                                        if _entry_d else None)
-                        if d.get("sl") is not None and _entry_d:
-                            _sl_d = abs(_entry_d - float(d["sl"]))
-                            d["ratio"] = (round(abs(float(_fc) - _entry_d)
-                                                / _sl_d, 6) if _sl_d else None)
-                        if d.get("targets"):
-                            d["targets"][-1]["level"] = float(_fc)
-                        d["system_mode"] = "new"
-                        d["tp_source"] = "forecast price at horizon end"
+                # The displayed TP is the contract TP. There is no forecast
+                # override any more (new system deleted 2026-11-27) — a card
+                # could previously show one target while the ledger graded a
+                # different one, which is the class of contradiction the user
+                # rejected outright.
                 if d and price > 0:
                     bs = self.branch_stats_cached(symbol, tf, d, price, now)
                     if bs:
@@ -10222,8 +10159,7 @@ class PredictionEngine:
             "state_version": self._state_version,
             "snapshot_ts": now,
             "phase": self.phase,
-            "system_mode": str(
-                self.agents.settings.get("system_mode", "old")),
+            "system_mode": "old",
             "grc": {
                 "count": self.grc_count,
                 "last": self.last_grc,

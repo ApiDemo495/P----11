@@ -6,7 +6,7 @@ issue decision, using measured tape regime (trend efficiency,
 volatility ratio, stretch from the mean):
 
   BTC   benchmark: no tempering — the reference behaviour.
-  PAXG  gold trends and gaps: AMPLIFY when the tape is actually
+  SOL   high-beta trend legs: AMPLIFY when the tape is actually
         trending (trend efficiency high), DAMP hard in chop — gold
         chop is head-fake territory.
   ETH   unpredictable: in a volatility blow-off (recent vol >> base)
@@ -67,13 +67,17 @@ def temper(symbol: str, score: float, confidence: float,
     r = regime(closes)
     s, conf = float(score), float(confidence)
     factor, action = 1.0, "reference behaviour (no tempering)"
-    if symbol == "PAXG":
+    if symbol == "SOL":
+        # SOL replaced PAXG 2026-11-27. Same shape of rule — momentum is
+        # amplified, chop is damped — because that is what a high-beta asset
+        # does; only the label changed. This is a stated prior, not a
+        # measurement of SOL.
         if r["trend_eff"] >= 0.45:
             factor = 1.12
-            action = f"gold trending (eff {r['trend_eff']}) — score amplified"
+            action = f"SOL trending (eff {r['trend_eff']}) — score amplified"
         elif r["trend_eff"] <= 0.25 and r["n"] >= 35:
             factor = 0.82
-            action = f"gold chopping (eff {r['trend_eff']}) — score damped"
+            action = f"SOL chopping (eff {r['trend_eff']}) — score damped"
     elif symbol == "ETH":
         if r["vol_ratio"] >= 1.35:
             factor = 0.78

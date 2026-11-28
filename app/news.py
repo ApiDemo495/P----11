@@ -117,7 +117,7 @@ _MACRO_BEAR = (
 # (advice §4.1 relevance.py; error C-4: "News irrelevant" -> count drops).
 _ASSET_KEYS: dict[str, tuple[str, ...]] = {
     "BTC": ("bitcoin", "btc", "crypto", "etf", "halving"),
-    "PAXG": ("gold", "paxg", "bullion", "xau"),
+    "SOL": ("solana", "sol ", "validator", "l1", "ecosystem"),
     "ETH": ("ethereum", "eth", "ether", "layer 2", "staking"),
     "BNB": ("bnb", "binance", "chain", "token"),
 }
@@ -196,7 +196,13 @@ NIV_DECAY_PER_MIN = 0.0115
 NIV_IMPULSE_WINDOW_MIN = 15.0
 NIV_RING_STEP_S = 90.0
 NIV_RING_MAX = 240
-_TF_HORIZON_WEIGHT = {"tf1": 1.0, "tf2": 5.0, "tf3": 15.0, "tf4": 60.0}
+# How far a headline's impact is allowed to reach, per lane. These are
+# ordered by LANE DURATION, and they were wrong the moment tf1 stopped being
+# a 22-minute lane: a 24-hour window is the FURTHEST horizon in the set, so
+# it carries the largest weight, while the 44-minute lane (tf2) is now the
+# shortest. Keeping the old numbers would have said news barely matters to a
+# 24-hour call and matters 60x to a 247-minute one.
+_TF_HORIZON_WEIGHT = {"tf1": 60.0, "tf2": 1.0, "tf3": 15.0, "tf4": 60.0}
 
 
 def enrich_item(item: dict) -> dict:
@@ -227,9 +233,9 @@ _SEED: list[tuple[str, str, float, int, tuple[str, ...]]] = [
     ("SEC signals review of staking services",
      "regulatory", -0.5, 25, ("ETH", "BTC")),
     ("Real yields slip after soft labor print",
-     "macro", 0.45, 28, ("PAXG",)),
-    ("Central bank gold purchases slow QoQ",
-     "institutional", -0.4, 70, ("PAXG",)),
+     "macro", 0.45, 28, ("SOL",)),
+    ("Solana ecosystem activity hits monthly high",
+     "protocol", 0.4, 45, ("SOL",)),
     ("L2 settlement volume hits monthly high",
      "protocol", 0.42, 18, ("ETH",)),
     ("Large validator queue exits observed",
@@ -678,7 +684,13 @@ class NewsSystem:
     _CRITICAL_WORDS = ("war", "hack", "ban", "halt", "attack", "sanctions",
                        "collapse", "depeg", "exploit", "invasion", "outage",
                        "default")
-    _MARKET_TERMS = ("bitcoin", "btc", "eth", "bnb", "gold", "paxg",
+    # A critical headline must ALSO name a market term to fire. This list
+    # was written for the gold slot: it carried "gold"/"paxg" and had no
+    # SOL term, so after the 2026-11-27 swap a war/ban/hack headline could
+    # never raise a critical flag on the asset that replaced gold. Terms for
+    # assets the app no longer trades are removed so the list cannot drift
+    # from SYMBOLS again.
+    _MARKET_TERMS = ("bitcoin", "btc", "eth", "bnb", "sol", "solana",
                      "exchange", "etf", "fed", "rate", "sec", "binance",
                      "coinbase", "market", "price")
 
@@ -1240,9 +1252,9 @@ def _symbol_tags(headline: str) -> list[str]:
         tags.append("ETH")
     if any(k in low for k in ("bnb", "binance")):
         tags.append("BNB")
-    if any(k in low for k in ("gold", "paxg")):
-        tags.append("PAXG")
-    return tags or ["BTC", "ETH", "BNB", "PAXG"]
+    if any(k in low for k in ("solana", "sol ", "validator")):
+        tags.append("SOL")
+    return tags or list(SYMBOL_ORDER)
 
 
 def _parse_ts(value: Any) -> float | None:      # pragma: no cover - external

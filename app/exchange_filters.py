@@ -116,7 +116,14 @@ BUNDLED: dict[str, Filters] = {
     "BTCUSDT": Filters(0.1, 0.001, 0.001, 100.0),
     "ETHUSDT": Filters(0.01, 0.001, 0.001, 20.0),
     "BNBUSDT": Filters(0.01, 0.01, 0.01, 20.0),
-    "PAXGUSDT": Filters(0.01, 0.001, 0.001, 20.0),
+    # SOL replaced PAXG on 2026-11-27 (PAXG was the worst measured asset).
+    # UNVERIFIED: no authoritative Binance readback was available in the
+    # build sandbox, so this is deliberately CONSERVATIVE (a low step and a
+    # high notional floor refuse rather than reject). The live /exchangeInfo
+    # fetch replaces it the moment it succeeds, and every surface labels the
+    # source field, so an unverified prior can never be mistaken for the
+    # exchange's own word.
+    "SOLUSDT": Filters(0.01, 0.01, 0.01, 20.0),
 }
 
 #: The cheapest legal order on the majors. BTC alone needs 100 USDT.
@@ -209,7 +216,7 @@ def for_symbol(symbol: str, transport=None) -> Filters:
 #: 100 USDT budget cannot be filled at all. Quoting "the minimum is 100"
 #: would be true of the filter and false of the order.
 REFERENCE_PRICE = {"BTCUSDT": 68000.0, "ETHUSDT": 2450.0,
-                   "BNBUSDT": 440.0, "PAXGUSDT": 3735.0}
+                   "BNBUSDT": 440.0, "SOLUSDT": 150.0}
 
 
 def min_order_usdt(symbol: str = "BTC", price: float | None = None,

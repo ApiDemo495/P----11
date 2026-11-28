@@ -37,7 +37,7 @@ RR_MIN = 1.0
 def test_live_geometry_is_never_below_one_to_one():
     """Every cell, every side, every scale the app can see at seal time."""
     checked = 0
-    for sym in ("BTC", "ETH", "BNB", "PAXG"):
+    for sym in ("BTC", "ETH", "BNB", "SOL"):
         for tf in ("tf1", "tf2", "tf3", "tf4"):
             g = hp.row_geometry(sym, tf)
             if g is None:
@@ -113,7 +113,9 @@ def test_the_floor_is_structural_not_aspirational():
 # ───────────────── 2. the certified geometry is named ─────────────────
 def test_a_sub_one_to_one_certified_geometry_is_never_tradeable():
     """No row or ship gate may outrank the rule."""
-    g = hp.sub_1_to_1_geometry("ETH", "tf1")
+    # ETH tf2 is a CERTIFIED cell; tf1 is the uncertified 24-hour lane and
+    # has no geometry to judge. The certified pair is row_k 0.15 / m 0.55.
+    g = hp.sub_1_to_1_geometry("ETH", "tf2")
     assert g is not None
     assert g["rr"] < RR_MIN
     assert g["feasible"] is False
@@ -123,7 +125,7 @@ def test_a_sub_one_to_one_certified_geometry_is_never_tradeable():
 
 
 def test_a_sub_one_to_one_cell_says_so_on_its_badge_and_payload():
-    s = hp.summary("ETH", "tf1")
+    s = hp.summary("ETH", "tf2")
     assert s["tier"] == hp.TIER_SUB1
     assert s["geometry_feasible"] is False
     assert s["geometry_rr"] < RR_MIN
@@ -143,11 +145,14 @@ def test_a_sub_one_to_one_cell_says_so_on_its_badge_and_payload():
 def test_every_shipped_cell_is_flagged_if_it_is_below_the_floor():
     """A sub-1:1 geometry is never allowed to wear a tradeable badge.
 
-    Counts moved from 12 to 11 when PAXG tf4 was demoted one step earlier:
-    its gross edge is +0.2 bps, i.e. no signal, and "no signal" is a more
-    fundamental failure than "wrong geometry" (see tests/test_gross_edge_gate.py).
-    The invariant tested here is unchanged — any cell whose geometry is
-    below the floor must carry TIER_SUB1.
+    Counts moved from 12 to 11 when PAXG tf4 was demoted (gross edge +0.2 bps,
+    i.e. no signal), and to 9 on 2026-11-27 when PAXG left the asset set
+    entirely: the certified grid is now BTC/ETH/BNB x tf2/tf3/tf4. The tf1
+    lanes and SOL are UNCERTIFIED, so they carry no geometry to judge — they
+    report UNGRADEABLE rather than a verdict they have not earned.
+
+    The invariant tested here is unchanged — any cell whose geometry IS known
+    and is below the floor must carry a non-tradeable badge.
     """
     flagged = 0
     for sym, tf in hp.known_cells():
@@ -162,20 +167,27 @@ def test_every_shipped_cell_is_flagged_if_it_is_below_the_floor():
             assert s["geometry_rr"] < RR_MIN
             flagged += 1
     # the shipped artifact has none above the floor; if that ever changes
-    # this assertion is the record of when it did
-    assert flagged == 12
-    # and of those, exactly one is demoted to NO_EDGE instead
+    # this assertion is the record of when it did. 9 = the certified cells.
+    assert flagged == 9
+    # every flagged cell is labelled SUB1 (NO_EDGE can no longer fire on a
+    # live cell: PAXG, the only gross-negative asset, is not in the grid —
+    # its archived rows are asserted in tests/test_gross_edge_gate.py)
     assert sum(1 for sym, tf in hp.known_cells()
                if hp.summary(sym, tf).get("geometry_feasible") is False
-               and hp.summary(sym, tf)["tier"] == hp.TIER_NO_EDGE) == 1
+               and hp.summary(sym, tf)["tier"] == hp.TIER_NO_EDGE) == 0
 
 
 def test_tier_counts_expose_the_violation_rather_than_hiding_it():
     counts = hp.tier_counts()
-    assert counts.get(hp.TIER_SUB1) == 11
-    # the 4 no-edge cells are named, not hidden inside another bucket
-    assert counts.get(hp.TIER_NO_EDGE) == 4
-    assert counts.get(hp.TIER_SUB1) + counts.get(hp.TIER_NO_EDGE) \
+    # 9 certified cells are below the 1:1 floor; the other 7 are uncertified
+    # (4 tf1 lanes + 3 SOL lanes) and say so rather than wearing a verdict.
+    assert counts.get(hp.TIER_SUB1) == 9
+    assert counts.get("UNGRADEABLE / WARMUP") == 7
+    # NO_EDGE has no live cell any more: the only gross-negative asset was
+    # PAXG and it is out of the grid (its archived rows are asserted in
+    # tests/test_gross_edge_gate.py). The live buckets must still add up.
+    assert counts.get(hp.TIER_NO_EDGE, 0) == 0
+    assert counts.get(hp.TIER_SUB1) + counts.get(hp.TIER_NO_EDGE, 0) \
         + counts.get("UNGRADEABLE / WARMUP", 0) == 16
     assert counts.get(hp.TIER_HOLDOUT, 0) == 0
 
@@ -257,7 +269,12 @@ def test_every_shipped_lock_is_at_or_above_the_floor():
             continue
         seen += 1
         assert r >= hp.RR_LIVE_MIN - 1e-6, (sym, tf, r)
-    assert seen >= 12, "live_rr stopped resolving — the floor is unverified"
+    # 9 = the certified cells. live_rr answers None for an uncertified cell
+    # (tf1's 4 lanes and SOL's 4), because it cannot invent a geometry the
+    # artifact never certified — so the floor is verified on every cell the
+    # app actually has a certified pair for.
+    assert seen >= 9, "live_rr stopped resolving — the floor is unverified"
+    assert seen < 16, "an uncertified cell must NOT resolve a live_rr"
 
 
 def test_tier_and_reason_agree_that_the_cell_is_unproven_not_forbidden():

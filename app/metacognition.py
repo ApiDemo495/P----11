@@ -40,9 +40,11 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Callable, Sequence
 
+from .config import SYMBOL_ORDER
+
 # ── the 16 Θ(a,τ) cells (mirrors app.cell_registry ids) ──────────────
 CELL_IDS: list[tuple[str, str]] = [
-    (sym, tf) for sym in ("BTC", "ETH", "BNB", "PAXG")
+    (sym, tf) for sym in SYMBOL_ORDER
     for tf in ("tf1", "tf2", "tf3", "tf4")
 ]
 

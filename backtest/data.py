@@ -25,7 +25,7 @@ class Bar:
 
 
 SYMBOLS = {"BTC": "BTC/USDT", "ETH": "ETH/USDT",
-           "BNB": "BNB/USDT", "PAXG": "PAXG/USDT"}
+           "BNB": "BNB/USDT", "SOL": "SOL/USDT"}
 
 # §18.1 per-side friction in bps of entry, charged once per side (era
 # accounting charges 2x this per era = the full round trip).
@@ -62,7 +62,10 @@ VENUE_RT_BPS: dict[str, float] = {
 DEFAULT_VENUE = "binance_fut"
 
 # per-side slippage beyond the fee, measured from the tape (bps of entry)
-SLIPPAGE_BPS = {"BTC": 1.0, "ETH": 1.0, "BNB": 2.0, "PAXG": 5.0}
+# per-side slippage beyond the fee, measured from the tape (bps of entry).
+# SOL 2.0: top-5 CEX perp, deep book — same band as BNB. PAXG's 5.0 row went
+# with PAXG (it was the thinnest book in the set).
+SLIPPAGE_BPS = {"BTC": 1.0, "ETH": 1.0, "BNB": 2.0, "SOL": 2.0}
 
 
 def venue_rt(symbol: str) -> float:
@@ -141,8 +144,8 @@ def sim_bars(symbol: str, n: int = 1200, seed: int = 7,
              start_t: int = 1_700_000_000) -> list[Bar]:
     """SYNTHETIC GBM-with-regimes bars for offline smoke tests only."""
     rng = random.Random(hash((symbol, seed)) & 0xFFFFFFFF)
-    base = {"BTC": 67000.0, "ETH": 3500.0, "BNB": 600.0, "PAXG": 2650.0}[symbol]
-    vol = {"BTC": 0.0011, "ETH": 0.0014, "BNB": 0.0013, "PAXG": 0.0004}[symbol]
+    base = {"BTC": 67000.0, "ETH": 3500.0, "BNB": 600.0, "SOL": 150.0}[symbol]
+    vol = {"BTC": 0.0011, "ETH": 0.0014, "BNB": 0.0013, "SOL": 0.0020}[symbol]
     price, drift, left, bars = base, 0.0, 0, []
     for i in range(n):
         if left <= 0:
@@ -151,8 +154,6 @@ def sim_bars(symbol: str, n: int = 1200, seed: int = 7,
         left -= 1
         o = price
         price *= math.exp(rng.gauss(drift, vol))
-        if symbol == "PAXG":
-            price += 0.01 * (base - price)
         wick = abs(rng.gauss(0, vol)) * 0.8
         bars.append(Bar(start_t + i * 60, o,
                         max(o, price) * (1 + wick), min(o, price) * (1 - wick),

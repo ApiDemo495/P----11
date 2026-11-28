@@ -63,6 +63,12 @@ _BUCKETS = ((0, 90, "intraday"), (90, 720, "session"),
 
 # Out-of-fold gross expectancy per round trip, sequential book, taker fills.
 # n / t_stat are carried so the note can never overstate the evidence.
+#
+# PAXG's three rows were REMOVED with the asset on 2026-11-27. They are not
+# carried over to SOL by analogy: an unmeasured row that reports the same
+# numbers as a deleted asset would be a fabricated measurement. SOL therefore
+# falls to _UNMEASURED and the gate says "no out-of-fold measurement" for it,
+# which is the truth.
 MEASURED: dict[tuple[str, str], dict] = {
     ("BTC", "intraday"): {"gross_bp": 0.6, "n": 15664, "t_stat": 3.0,
                           "source": "ensemble 1m h=60, 5 folds"},
@@ -70,24 +76,18 @@ MEASURED: dict[tuple[str, str], dict] = {
                           "source": "ensemble 1h h=12, 5 folds"},
     ("BNB", "intraday"): {"gross_bp": 3.0, "n": 899, "t_stat": 2.4,
                           "source": "ensemble 1h h=12, 5 folds"},
-    ("PAXG", "intraday"): {"gross_bp": -0.9, "n": 851, "t_stat": -1.0,
-                           "source": "ensemble 1h h=24, 5 folds"},
     ("BTC", "session"): {"gross_bp": 5.4, "n": 261, "t_stat": 1.3,
                          "source": "ensemble 1h pt3/sl1.5, 5 folds"},
     ("ETH", "session"): {"gross_bp": 7.7, "n": 241, "t_stat": 0.6,
                          "source": "ensemble 1h pt3/sl1.5, 5 folds"},
     ("BNB", "session"): {"gross_bp": 7.0, "n": 254, "t_stat": 0.9,
                          "source": "ensemble 1h pt3/sl1.5, 5 folds"},
-    ("PAXG", "session"): {"gross_bp": -8.4, "n": 219, "t_stat": -7.2,
-                          "source": "ensemble 1h pt3/sl1.5, 5 folds"},
     ("BTC", "swing"): {"gross_bp": 3.6, "n": 194, "t_stat": 1.6,
                        "source": "cascade fade k15 z4, 5 folds"},
     ("ETH", "swing"): {"gross_bp": -2.4, "n": 237, "t_stat": -2.2,
                        "source": "cascade fade k15 z4, 5 folds"},
     ("BNB", "swing"): {"gross_bp": 1.3, "n": 196, "t_stat": 2.1,
                        "source": "cascade fade k15 z4, 5 folds"},
-    ("PAXG", "swing"): {"gross_bp": 0.0, "n": 0, "t_stat": 0.0,
-                        "source": "no sub-hour archive"},
 }
 
 _UNMEASURED = {"gross_bp": 0.0, "n": 0, "t_stat": 0.0,
@@ -146,14 +146,6 @@ SLEEVES: dict[str, dict] = {
         "fee_bp": 8.0, "net_bp": -6.9, "profit_factor": 0.83,
         "boot_t": -1.23, "folds": "1/5",
         "note": "BNB does not catch up to BTC impulses in this sample",
-    },
-    "paxg_flight": {
-        "asset": "PAXG", "tf": "session", "status": "rejected",
-        "trigger": "as eth_catchup against gold",
-        "execution": "as eth_catchup", "period": "2026-01 -> 2026-09",
-        "n": 156, "gross_bp": 0.4, "fee_bp": 8.0, "net_bp": -7.6,
-        "profit_factor": 0.67, "boot_t": -1.44, "folds": "1/5",
-        "note": "gold decouples, it does not catch up",
     },
 }
 

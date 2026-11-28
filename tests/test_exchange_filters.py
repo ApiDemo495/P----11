@@ -91,21 +91,21 @@ def test_shipped_default_clears_every_symbol_floor():
     assert trading.DEFAULTS["max_order_usdt"] >= floor, (
         f"default {trading.DEFAULTS['max_order_usdt']} sits below the "
         f"{floor} USDT floor — no order could be placed at all")
-    for sym in ("BTC", "ETH", "BNB", "PAXG"):
+    for sym in ("BTC", "ETH", "BNB", "SOL"):
         assert ef.min_order_usdt(sym) <= trading.DEFAULTS["max_order_usdt"]
 
 
 def test_the_old_default_of_25_was_unfillable_on_every_symbol():
     """Not always for the same reason — but never fillable.
 
-    BTC failed all three filters at once. ETH/BNB/PAXG cleared their
+    BTC failed all three filters at once. ETH/BNB/SOL cleared their
     20 USDT minNotional but still failed LOT_SIZE, because
     round(25 / price, 6) is not a multiple of the 0.001 step. The bug was
     never one filter; it was that neither quantity nor price was ever
     made filter-aware.
     """
     prices = {"BTCUSDT": 68273.5, "ETHUSDT": 2450.0,
-              "BNBUSDT": 439.45, "PAXGUSDT": 3735.0}
+              "BNBUSDT": 439.45, "SOLUSDT": 150.0}
     for sym, px in prices.items():
         f = ef.for_symbol(sym)
         old_qty = round(25.0 / px, 6)
@@ -132,7 +132,7 @@ def _exec(symbol, px, budget, tp_bps=120.0, sl_bps=60.0):
 
 
 @pytest.mark.parametrize("symbol,px", [("BTC", 68273.5), ("ETH", 2450.0),
-                                       ("BNB", 439.45), ("PAXG", 3735.0)])
+                                       ("BNB", 439.45), ("SOL", 150.0)])
 def test_every_sent_order_is_legal(symbol, px):
     sent = _exec(symbol, px, trading.DEFAULTS["max_order_usdt"])
     f = ef.for_symbol(symbol)

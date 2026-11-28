@@ -35,7 +35,7 @@ def test_boost_earns_deepens_caps_and_withdraws():
     assert rl.factor(7) == pytest.approx(1.10) and 7 not in rl.damp
     # sustained winning after the cooldown deepens, never past the cap
     for _ in range(12):
-        _seed(eng, "facc7", [1.0] * 10, symbol="PAXG")
+        _seed(eng, "facc7", [1.0] * 10, symbol="SOL")
         rl.audit(eng)
         assert rl.boost[7] <= BOOST_CAP
     assert rl.boost[7] == pytest.approx(BOOST_CAP)

@@ -1550,10 +1550,11 @@ async def settings_put(body: dict) -> JSONResponse:
     rejected, applied = [], []
     for k, v in body.items():
         if k == "system_mode":
-            # this IS a real switch — it used to be dropped while the header
-            # button claimed it had changed the model
-            engine.set_system_mode(str(v))
-            applied.append(k)
+            # The old/new selector is DELETED (2026-11-27). This key is now
+            # rejected rather than silently accepted: reporting a model
+            # switch that cannot happen is the exact "the button claims it
+            # changed something" defect the user rejected.
+            rejected.append(k)
         elif k == "feed_mode":
             rejected.append(k)      # applied through /api/feeds/connect
         elif k in engine.agents.settings or k in KEY_ALIASES:
@@ -1567,8 +1568,7 @@ async def settings_put(body: dict) -> JSONResponse:
             rejected.append(k)
     return JSONResponse({"ok": True, "settings": _public_settings(),
                          "applied": sorted(set(applied)),
-                         "system_mode": engine.agents.settings.get(
-                             "system_mode", "old"),
+                         "system_mode": "old",
                          "ignored": sorted(set(rejected)),
                          "note": ("feed_mode is applied with "
                                   "POST /api/feeds/connect"
@@ -1577,15 +1577,24 @@ async def settings_put(body: dict) -> JSONResponse:
 
 @app.post("/api/system/mode")
 async def system_mode(body: dict) -> JSONResponse:
-    """Dedicated switch for OLD ladder ⇄ NEW horizon forecast."""
-    return JSONResponse(engine.set_system_mode(str(body.get("mode", "old"))))
+    """The old/new switch no longer exists — the new system was deleted.
+
+    Kept as an explicit refusal instead of a 404 so a stale client gets a
+    truthful answer ("there is only one system") rather than an error it
+    might retry forever.
+    """
+    return JSONResponse({"ok": True, "system_mode": "old",
+                         "applied": False, "removed": True,
+                         "note": ("the NEW forecast system was removed on "
+                                  "2026-11-27; the OLD measured ladder is "
+                                  "the only system the app builds")})
 
 
 @app.get("/api/system/mode")
 async def system_mode_get() -> JSONResponse:
-    return JSONResponse({"ok": True,
-                         "system_mode": engine.agents.settings.get(
-                             "system_mode", "old")})
+    return JSONResponse({"ok": True, "system_mode": "old",
+                         "systems": ["old"],
+                         "note": "single system — old measured ladder"})
 
 
 @app.get("/api/predictions")
@@ -1695,8 +1704,7 @@ async def trading_status() -> JSONResponse:
     body = {"ok": True, **engine.trader.status()}
     try:
         table = refresh()
-        floors = {sym: min_order_usdt(sym) for sym in
-                  ("BTC", "ETH", "BNB", "PAXG")}
+        floors = {sym: min_order_usdt(sym) for sym in SYMBOL_ORDER}
         budget = float((body.get("config") or {}).get("max_order_usdt")
                        or DEFAULTS["max_order_usdt"])
         body["exchange"] = {
@@ -1860,7 +1868,7 @@ async def cost_model() -> JSONResponse:
     name = venue()
     fee = float(VENUE_RT_BPS.get(name, VENUE_RT_BPS["binance_fut"]))
     assets = []
-    for sym in ("BTC", "ETH", "BNB", "PAXG"):
+    for sym in SYMBOL_ORDER:
         rt = asset_rt(sym)
         assets.append({
             "symbol": sym,
@@ -1885,6 +1893,77 @@ async def cost_model() -> JSONResponse:
                  "(MARKET orders on /fapi/v1/order = Binance USDⓈ-M "
                  "futures taker), plus measured slippage; override with "
                  "VENUE=<key> or PENNY_VENUE=1"),
+    })
+
+
+@app.get("/api/rr-geometry")
+async def rr_geometry_endpoint(symbol: str = "BTC") -> JSONResponse:
+    """Where a 2:1 barrier pair's win rate is actually highest — and on which
+    side.
+
+    Two independent facts decide a 2:1 win rate, and neither was visible in
+    the product before:
+
+    1. THE SIDE. P(hit +2b before -b) = 1/3 for ANY b on a driftless process
+       (optional stopping — no distribution assumed). This app's own 2:1
+       walk landed TP first on 8 of 48 resolved trades = 16.7 %, i.e.
+       significantly WORSE than a fair coin (one-sided p = 0.008); the
+       reverse side lands 83.3 % (p = 0.008) and holds in both halves. The
+       pair is therefore issued on the corrected side.
+    2. THE HORIZON. A barrier pair only produces a win if something touches
+       it. 22 minutes resolved 15.4 % of the time; 24 hours, 86.0 %.
+
+    Nothing here withholds a lane — every one is reported with its number.
+    """
+    from .config import TIMEFRAMES, TWO_TO_ONE_LANE
+    from .horizon import asset_rt
+    from .rr_geometry import (CALIBRATION, TWO_TO_ONE_EDGE,
+                              TWO_TO_ONE_EDGE_OBSERVED, TWO_TO_ONE_EDGE_SHIPPED,
+                              TWO_TO_ONE_RATE_OBSERVED, TWO_TO_ONE_RATE_PLANNED,
+                              TWO_TO_ONE_SIDE, best_lane, race_summary,
+                              vol_scale)
+    sym = str(symbol).upper()
+    v, prov = vol_scale(sym)
+    rt = asset_rt(sym)
+    lanes = {tf: float(m["minutes"]) for tf, m in TIMEFRAMES.items()}
+    # every lane is SIZED AND RANKED on the conservative edge, never on the
+    # 83.3 % point estimate from a single regime
+    res = best_lane(rt, v, lanes, TWO_TO_ONE_EDGE)
+    shipped = best_lane(rt, v, lanes, TWO_TO_ONE_EDGE_SHIPPED)
+    observed = best_lane(rt, v, lanes, TWO_TO_ONE_EDGE_OBSERVED)
+    return JSONResponse({
+        "ok": True, "symbol": sym,
+        "vol_bps_per_sqrt_hour": v, "vol_provenance": prov,
+        "round_trip_bps": rt,
+        "two_to_one_lane": TWO_TO_ONE_LANE,
+        "two_to_one_side": TWO_TO_ONE_SIDE,
+        "side_policy": {
+            "planned_on": "wilson95_lower_bound",
+            "rate_planned": round(TWO_TO_ONE_RATE_PLANNED, 4),
+            "rate_observed": round(TWO_TO_ONE_RATE_OBSERVED, 4),
+            "edge_planned": round(TWO_TO_ONE_EDGE, 4),
+            "edge_observed": round(TWO_TO_ONE_EDGE_OBSERVED, 4),
+            "why": ("40/48 resolved trades landed target-first on the reverse "
+                    "side (Wilson 95% lower bound 70.4%). That is 48 trades "
+                    "from ONE 2.5-month regime, so the app sizes on the lower "
+                    "bound and publishes the 83.3% beside it rather than "
+                    "quoting it."),
+        },
+        "calibration": CALIBRATION,
+        "measured_race": race_summary(),
+        "as_corrected": res,
+        "as_observed_point_estimate": {
+            "best": observed["best"],
+            "best_detail": observed["best_detail"]},
+        "as_shipped": {
+            "best": shipped["best"],
+            "best_detail": shipped["best_detail"]},
+        **res,
+        "note": ("a 2:1 hit rate cannot be raised by moving the barriers — "
+                 "P(TP first | resolved) is 1/3 for any stop on a driftless "
+                 "tape. It moves with the SIDE (the measured race is on the "
+                 "reverse of the shipped side) and with the window's sigma, "
+                 "which is why the 24h lane carries the highest 2:1 rate."),
     })
 
 

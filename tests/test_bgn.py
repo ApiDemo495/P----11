@@ -9,9 +9,15 @@ from app.history import HistoryStore
 def test_base_coupling_matches_spec_values():
     # exact values quoted in the specification (beta = 1.2 -> 2*beta^2 = 2.88)
     # tolerance covers the spec's own rounded intermediates (e.g. s23)
-    assert math.isclose(BASE_COUPLING[("tf1", "tf2")], 0.846, abs_tol=0.0015)
-    assert math.isclose(BASE_COUPLING[("tf1", "tf3")], 0.334, abs_tol=0.0015)
-    assert math.isclose(BASE_COUPLING[("tf1", "tf4")], 0.131, abs_tol=0.0015)
+    #
+    # ONLY THE PAIRS BETWEEN UNCHANGED LANES ARE PINNED. The spec constants
+    # s12=0.846 / s13=0.334 / s14=0.131 were computed for a 22-MINUTE tf1.
+    # tf1 is now the 24-hour 2:1 lane, so its couplings are genuinely
+    # different numbers, not drifted ones: the formula is
+    # exp(-ln(ti/tj)^2 / 2beta^2), and 22 min vs 1440 min is a far bigger
+    # ratio. The three tf1 pairs are therefore checked against the FORMULA
+    # (below) rather than against a constant that described a lane that no
+    # longer exists.
     assert math.isclose(BASE_COUPLING[("tf2", "tf3")], 0.664, abs_tol=0.0025)
     assert math.isclose(BASE_COUPLING[("tf2", "tf4")], 0.354, abs_tol=0.0025)
     assert math.isclose(BASE_COUPLING[("tf3", "tf4")], 0.867, abs_tol=0.0015)
@@ -44,13 +50,34 @@ def test_adjust_weighted_average_bootstrap():
         row = matrix[ti]
         assert row[ti] == max(row.values())
 
-    # distant timeframes are insulated: tf2's raw signal influences tf1 far
-    # more than it influences tf4 (s12 = 0.846 vs s42 = 0.354, normalized)
-    den1 = sum(matrix["tf1"].values())
-    den4 = sum(matrix["tf4"].values())
-    assert matrix["tf1"]["tf2"] / den1 > matrix["tf4"]["tf2"] / den4
+    # distant timeframes are insulated. The 44-minute lane's raw signal
+    # influences its 130-minute neighbour far more than the 24-HOUR lane
+    # (s23 = 0.664 vs s21, which is now tiny) — the same insulation property
+    # the old s12 > s42 assertion was checking, stated on pairs whose
+    # durations did not change.
+    den1 = sum(matrix["tf2"].values())
+    den4 = sum(matrix["tf1"].values())
+    assert matrix["tf2"]["tf3"] / den1 > matrix["tf1"]["tf3"] / den4
+
+
+def test_tf1_coupling_follows_the_formula_not_a_stale_constant():
+    """tf1's couplings must track its ACTUAL duration (24h since 2026-11-27).
+
+    Guards the specific failure mode this test file exists for: a constant
+    that describes a lane the app no longer has.
+    """
+    from app.config import TIMEFRAMES
+    assert TIMEFRAMES["tf1"]["minutes"] == 1440
+    for other in ("tf2", "tf3", "tf4"):
+        expect = base_coupling(TIMEFRAMES["tf1"]["minutes"],
+                               TIMEFRAMES[other]["minutes"])
+        assert math.isclose(BASE_COUPLING[("tf1", other)], expect, rel_tol=1e-12)
+    # and it IS genuinely decoupled from the SHORT lanes: the 24-hour lane
+    # shares almost no microstructure with a 44-minute one (0.015 vs the
+    # 0.846 the old 22-minute lane had with it).
+    assert BASE_COUPLING[("tf1", "tf2")] < 0.02
 
 
 def test_base_coupling_symmetry():
-    assert math.isclose(base_coupling(22, 44), base_coupling(44, 22))
-    assert base_coupling(22, 22) == 1.0
+    assert math.isclose(base_coupling(1440, 44), base_coupling(44, 1440))
+    assert base_coupling(1440, 1440) == 1.0

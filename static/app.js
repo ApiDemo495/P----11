@@ -5,12 +5,20 @@
 
 const TF = ["tf1", "tf2", "tf3", "tf4"];
 const TF_META = {
-  tf1: { mins: 22, tps: [5, 10, 15, 22] },
+  // tf1 IS THE 2:1 LANE. It used to be a 22-MINUTE lane and that lane is
+  // gone: a 2:1 pair wins one race in three with no edge no matter how the
+  // barriers are set, so the only thing that moves the number is whether
+  // the pair resolves inside the window. At 22 minutes it resolved 15.4 % of
+  // the time; at 24 hours, 86.0 %. The same key now carries 24 hours.
+  tf1: { mins: 1440, tps: [360, 720, 1080, 1440], twoToOne: true },
   tf2: { mins: 44, tps: [11, 22, 33, 44] },
   tf3: { mins: 130, tps: [30, 40, 90, 130] },
   tf4: { mins: 247, tps: [60, 120, 180, 247] },
 };
-const ASSETS = ["BTC", "PAXG", "ETH", "BNB"];
+// PAXG removed 2026-11-27 (worst measured asset: 44.0 % WR, -768 bps gross,
+// CV 69 vs 3-5 for everything else). SOL took the slot — it beat ZEC on the
+// same geometry (29.9 % vs 29.5 % 2:1 win rate) at half the round trip.
+const ASSETS = ["BTC", "SOL", "ETH", "BNB"];
 // genuine MARKET emotions, named for what each E-channel measures
 // (Pride/Envy/Guilt were not market emotions — removed). Retail vs
 // hedge crowd reads are computed server-side from these channels.
@@ -67,7 +75,7 @@ const FORMULA_LOGIC = {
   11:"buy-vs-sell volume delta at extremes → aggressor side",
   12:"gap fill probability vs prior range midpoint",
   13:"time-of-day seasonal drift component",
-  14:"cross-asset lead PAXG vs BTC residual direction",
+  14:"cross-asset lead SOL vs BTC residual direction",
   15:"drawdown depth/speed from window high → capitulation",
   16:"compression of true range → squeeze breakout potential",
   17:"imbalance of large-wick rejections → rejection strength",
@@ -2202,9 +2210,9 @@ function bindAutoChip() {
 }
 
 /* ═══════ chart source: OWN charts ⇄ TradingView (proper toggle) ═══════ */
-const TV_SYMS = { BTC: "BINANCE:BTCUSDT", PAXG: "BINANCE:PAXGUSDT",
+const TV_SYMS = { BTC: "BINANCE:BTCUSDT", SOL: "BINANCE:SOLUSDT",
                   ETH: "BINANCE:ETHUSDT", BNB: "BINANCE:BNBUSDT" };
-const TV_INT = { tf1: "5", tf2: "15", tf3: "60", tf4: "240" };
+const TV_INT = { tf1: "D", tf2: "15", tf3: "60", tf4: "240" };
 function applyChartSrc() {
   const mode = S.chartSrc || "binance";   // binance | tv | own
   $$("#seg-chart .seg-btn[data-chart]").forEach(b =>
@@ -2350,9 +2358,67 @@ async function loadCells() {
     // is how the panel could quote a 28.9bp round trip while the order
     // path paid 10 — nobody could see the two disagree.
     try { S.cost = await api("/api/cost-model"); } catch { /* keep last */ }
+    try { S.rr21 = await api("/api/rr-geometry?symbol=" + (S.symbol || "BTC")); }
+    catch { /* keep last */ }
     renderCells();
+    renderRR21();
   } catch { /* offline — keep last render */ }
 }
+// ── THE 2:1 CARD ──────────────────────────────────────────────────────
+// Two independent facts decide a 2:1 win rate and neither was on screen:
+// which SIDE wins the barrier race, and whether the window is long enough
+// for anything to touch the barriers at all. The arithmetic is printed
+// beside the number so it can be checked, and the observed 83.3% is shown
+// NEXT TO the 70.4% planning bound it is actually sized on — the first is
+// a single-regime point estimate and must never read as a promise.
+function renderRR21() {
+  const box = $("#rr21");
+  const d = S.rr21;
+  if (!box) return;
+  if (!d || !d.ok) { box.innerHTML = `<span class="dim">2:1 geometry unavailable</span>`; return; }
+  const sp = d.side_policy || {};
+  const lanes = (d.lanes || {});
+  const order = Object.keys(lanes).sort((a, b) => (lanes[b].win_rate_unconditional || 0) -
+                                                (lanes[a].win_rate_unconditional || 0));
+  const pct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
+  const rows = order.map((tf) => {
+    const L = lanes[tf] || {};
+    const best = tf === d.best;
+    const ok = (d.eligible || []).includes(tf);
+    return `<tr class="${best ? "rr-best" : ""}">
+      <td>${tf.toUpperCase()}<span class="dim"> · ${L.minutes}m</span>${best ? " ★" : ""}</td>
+      <td>${num(L.sigma_bps, 1)}</td>
+      <td>${pct(L.resolve_probability)}</td>
+      <td><b>${pct(L.win_rate_unconditional)}</b></td>
+      <td class="${L.expectancy_r > 0 ? "buy" : "sell"}">${L.expectancy_r > 0 ? "+" : ""}${num(L.expectancy_r, 2)}R</td>
+      <td class="dim">${ok ? "eligible" : "resolves &lt; 50% — time-outs, not wins"}</td></tr>`;
+  }).join("");
+  box.innerHTML = `
+    <div class="rr21-head">
+      <b>2:1 GEOMETRY — ${esc(d.symbol)}</b>
+      <span class="dim">· lane <b>${esc(d.two_to_one_lane || "—")}</b>
+        (${num((lanes[d.two_to_one_lane] || {}).minutes, 0)}m)
+        · vol ${num(d.vol_bps_per_sqrt_hour, 1)} bps/√h <span class="dim">(${esc(d.vol_provenance || "")})</span>
+        · round trip ${num(d.round_trip_bps, 1)}bp</span>
+    </div>
+    <div class="rr21-law dim">
+      A pair of 2:1 barriers on a driftless tape is hit target-first <b>1/3</b> of the
+      time it resolves — for ANY stop, any asset, any hour. So the only two levers
+      are the <b>side</b> and <b>P(resolve)</b>; moving the barriers changes neither.
+    </div>
+    <table class="rr21-tbl">
+      <tr><th>lane</th><th>σ bps</th><th>P(resolve)</th><th>2:1 WR</th><th>E[R] net</th><th></th></tr>
+      ${rows}
+    </table>
+    <div class="rr21-side">
+      side policy: <b>${esc(d.two_to_one_side || "")}</b>
+      — sized on <b>${pct(sp.rate_planned)}</b> target-first
+      (Wilson 95% lower bound), observed <b>${pct(sp.rate_observed)}</b>
+      <span class="dim">(40/48 resolved trades, ONE 2.5-month regime — the 83.3% is a
+      point estimate, not a rate this system can be expected to repeat)</span>.
+    </div>`;
+}
+
 function _tierCls(tier) {
   if (tier === "HOLD-OUT VERIFIED") return "tier-hold";
   if (tier === "HOLDOUT ROWS · ERA n<3") return "tier-rows";
@@ -2397,11 +2463,14 @@ function renderCells() {
     // 2026-11-27: "Why their is n/a?"). A cell with no certified win rate
     // is either UNGRADEABLE on its own history or has not been measured
     // yet, and those are different facts — say which, and why.
+    // ...and the panel said "ungradeable" for BOTH, which is the merge this
+    // comment forbids: "not measured" is a gap, "ungradeable" is a failed
+    // measurement. They now render differently and each carries its own why.
     const wr = c.win_rate != null ? `${(c.win_rate * 100).toFixed(1)}%` :
       (c.certified ? "—" :
-        (c.status === "ungradeable" || c.tier === "UNGRADEABLE / WARMUP")
+        c.status === "ungradeable"
           ? `<span class="dim" title="${esc(c.why || "")}">no rate — ungradeable</span>`
-          : `<span class="dim">no rate — not measured</span>`);
+          : `<span class="dim" title="${esc(c.why || "")}">no rate — not measured yet</span>`);
     // the number above is a GROSS first-touch hit rate — label it so it
     // can never be read as money
     const wrLabel = c.win_rate != null ? " <span class=\"dim\">gross</span>" : "";
@@ -3295,8 +3364,8 @@ async function loadCandles() {
     // EACH timeframe card aggregates the tape at its OWN interval
     // (user: every TF chart must be different — they were all the same
     // 1-minute series photocopied four times). Wider TF = wider bars.
-    const QINT = { tf1: 1, tf2: 1, tf3: 5, tf4: 5 };   // doc C-2 resolutions
-    const QWIN = { tf1: 22, tf2: 44, tf3: 130, tf4: 247 };  // own horizon each
+    const QINT = { tf1: 15, tf2: 1, tf3: 5, tf4: 5 };   // doc C-2 resolutions
+    const QWIN = { tf1: 1440, tf2: 44, tf3: 130, tf4: 247 };  // own horizon each
     if (S.tfBarsSymbol !== symbol) {
       S.tfBars = {}; S.tfBarsRevision = {}; S.tfBarsSymbol = symbol;
     }

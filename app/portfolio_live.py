@@ -446,7 +446,7 @@ class LivePortfolio:
         if size <= 0:
             return {"ok": False, "why": "no risk budget"}
 
-        friction_bps = 18.0 if sleeve.asset == "PAXG" else 12.0
+        friction_bps = 12.0
         slip = friction_bps * SLIPPAGE_SHARE_OF_FRICTION
         open_px = float(bar["o"])
         # adverse fill: pay up on entry
@@ -488,7 +488,7 @@ class LivePortfolio:
             if not px:
                 continue
             held = bar_index - pos.entry_bar
-            friction_bps = 18.0 if pos.asset == "PAXG" else 12.0
+            friction_bps = 12.0
             slip = friction_bps * SLIPPAGE_SHARE_OF_FRICTION
             hit_stop = (pos.direction > 0 and px["l"] <= pos.stop) or \
                        (pos.direction < 0 and px["h"] >= pos.stop)

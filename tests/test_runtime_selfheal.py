@@ -103,7 +103,7 @@ def test_sim_backfill_closes_a_clock_jump():
     feed = MarketFeed()
     m0 = int(time.time()) // 60 - 70        # minutes, the unit backfill uses
     t0 = m0 * 60
-    for sym in ("BTC", "ETH", "PAXG", "BNB"):
+    for sym in ("BTC", "ETH", "SOL", "BNB"):
         st = feed.states[sym]
         st.push_bar(t0, 100.0, 1.0, 100.0, 101.0, 99.0, source="sim")
         feed._sim_price[sym] = 100.0

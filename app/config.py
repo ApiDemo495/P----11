@@ -13,24 +13,60 @@ INITIAL_ANALYSIS_MAX_SECONDS = 4 * 60  # Initial Analysis Phase cap: 4 minutes
 # ---------------------------------------------------------------------------
 # Assets
 # ---------------------------------------------------------------------------
+# PAXG was REMOVED 2026-11-27 and SOL took its slot. The decision is
+# measured, not preferential: across the certified walk PAXG produced
+# 209 windows at 44.0 % and a mean gross of -3.7 bps, i.e. -768 bps in
+# total BEFORE any fee, with a coefficient of variation of 69. It was the
+# only asset in the set whose signal lost money gross of costs.
+#
+# SOL replaced it rather than ZEC after reading both off the same
+# geometry: SOL carries the higher 2:1 win rate (29.9 % vs 29.5 % at the
+# 24h lane) at HALF the round trip (14 vs 20 bps), on a materially deeper
+# book. ZEC's extra volatility does not pay for its extra cost.
 SYMBOLS: dict[str, str] = {
     "BTC": "BTCUSDT",
-    "PAXG": "PAXGUSDT",
+    "SOL": "SOLUSDT",
     "ETH": "ETHUSDT",
     "BNB": "BNBUSDT",
 }
-SYMBOL_ORDER: list[str] = ["BTC", "PAXG", "ETH", "BNB"]
+SYMBOL_ORDER: list[str] = ["BTC", "SOL", "ETH", "BNB"]
 
 # ---------------------------------------------------------------------------
 # Prediction timeframes and sub-targets
 # ---------------------------------------------------------------------------
 TIMEFRAMES: dict[str, dict] = {
-    "tf1": {"minutes": 22, "targets": [5, 10, 15, 22]},
+    # ── THE 2:1 LANE ─────────────────────────────────────────────────────
+    # `tf1` used to be a 22-MINUTE lane. It is now the 24-hour 2:1 lane, and
+    # the 22-minute lane is gone. This is a replacement, not a rename:
+    #
+    #   * A 2:1 barrier pair wins the race exactly 1/3 of the time with no
+    #     edge, for ANY barrier size — optional stopping on a mean-zero
+    #     martingale, so no distribution is assumed. Moving the barriers
+    #     therefore does nothing (measured: the app's own win rate was
+    #     46.6 % at every barrier scale from 0.15x to 2.0x).
+    #   * What actually moves the number is whether the pair RESOLVES at
+    #     all inside the window. On this app's own 2:1 walk a 22-minute
+    #     window resolved 15.4 % of the time; 24 hours resolved 86.0 %.
+    #     Unconditional 2:1 win rate = 1/3 x P(resolve), so it runs 12.9 %
+    #     at 22 minutes and 71.7 % at 24 hours once the side is corrected
+    #     (see app/rr_geometry.py for every number and its source).
+    #   * The app's measured skill lives at a ~22-HOUR settlement interval.
+    #     A 22-minute window cannot express a 22-hour edge. That mismatch
+    #     is why the 22-minute lane is the worst possible host for this
+    #     geometry, and why it is the lane that had to go.
+    #
+    # No lane abstains: every window still issues a side (no-abstention
+    # mandate). This lane is where the 2:1 pair gets the time it needs.
+    "tf1": {"minutes": 1440, "targets": [360, 720, 1080, 1440]},
     "tf2": {"minutes": 44, "targets": [11, 22, 33, 44]},
     "tf3": {"minutes": 130, "targets": [30, 40, 90, 130]},
     "tf4": {"minutes": 247, "targets": [60, 120, 180, 247]},
 }
 TF_ORDER: list[str] = ["tf1", "tf2", "tf3", "tf4"]
+#: The lane whose barrier pair both pays the round trip and resolves often
+#: enough to be a win rate rather than a time-out statistic. `tf1` is that
+#: lane now — same key, 24 hours instead of 22 minutes.
+TWO_TO_ONE_LANE = "tf1"
 
 # Lock strengths (Composite Confidence Index shift required to adjust a locked sub-target)
 LOCK_SHIFT_ADJUST: dict[str, float | None] = {
@@ -91,8 +127,11 @@ RECHECK_CONF_REACH = 0.60
 ASSET_PROFILES = {
     "BTC": {"nature": "benchmark — deepest book, reference volatility",
             "floor_mult": 1.00, "sl_mult": 1.00, "tp_mult": 1.00, "noise_mult": 1.0},
-    "PAXG": {"nature": "gold token — jumpy, gap-prone around sessions",
-             "floor_mult": 1.10, "sl_mult": 1.25, "tp_mult": 1.15, "noise_mult": 1.0},
+    # SOL: PRIOR, not a measurement — no certified walk exists for it yet
+    # (the same state BTC/ETH/BNB were in before theirs ran). Higher beta
+    # than the majors, so a wider stop and a higher issue bar.
+    "SOL": {"nature": "high-beta L1 — wide ranges, fast trend legs, sharp reversals",
+            "floor_mult": 1.25, "sl_mult": 1.30, "tp_mult": 1.20, "noise_mult": 1.6},
     "ETH": {"nature": "unpredictable — violent wicks, higher issue bar",
             "floor_mult": 1.20, "sl_mult": 1.20, "tp_mult": 1.10, "noise_mult": 1.6},
     "BNB": {"nature": "steady — tighter ranges, mean-reverting",
@@ -220,7 +259,12 @@ BINANCE_WS = "wss://stream.binance.com:9443/stream"
 # WARMING_UP / n=0 for days after every restart. 10_080 bars = 7 days is
 # fetched in 11 paginated REST calls per symbol (Binance limit 1000).
 BACKFILL_BARS = 10_080            # 1m klines at startup = 7 days of tape
-MIN_BARS_FULL_WINDOW = TIMEFRAMES["tf4"]["minutes"] + 1   # 248
+# The warmup gate must clear the LONGEST lane, whichever key that is. It was
+# hardcoded to tf4's 247 minutes; when tf1 became the 24-hour 2:1 lane the
+# engine would have declared itself ready on 248 one-minute bars — less than
+# a sixth of the 1440-minute window — and every analysis would have run on a
+# window the tape could not fill.
+MIN_BARS_FULL_WINDOW = max(m["minutes"] for m in TIMEFRAMES.values()) + 1
 MIN_BARS_COMPUTE = 30             # below this a formula pass returns zeros
 FEED_MODE = os.environ.get("FEED_MODE", "auto").strip().lower()
 if FEED_MODE not in {"auto", "binance", "sim"}:
@@ -366,17 +410,34 @@ C_MARKET_LEAD_WINDOW = 200         # P15 speed of light: / 200 min across assets
 # ---------------------------------------------------------------------------
 # PART 3 — Section 7: News categories, base weightages, impact durations
 # ---------------------------------------------------------------------------
+# `duration` is how long a headline of that category keeps having an effect,
+# in minutes. `tf_impact` gives a lane ZERO for any headline shorter than the
+# lane, so these numbers decide which lanes can see news at all.
+#
+# THE 24-HOUR LANE WAS BLIND (fixed 2026-11-27). The longest duration was
+# 247 minutes, i.e. tf4 — correct while the longest lane WAS tf4. When tf1
+# became a 24-hour lane, every category was suddenly shorter than it and the
+# 2:1 lane received exactly 0.00 news impact from every headline. A lane that
+# cannot see any input is not "focused", it is deaf.
+#
+# Regime-moving news (policy, war, ETF flows) plainly persists across a day,
+# so those categories are given a 1440-minute reach and the faster ones keep
+# their measured windows. Nothing is stretched to justify a position: the
+# short categories still hit zero on the long lane, which is the correct
+# behaviour for a 22-minute sentiment print.
 NEWS_CATEGORIES: dict[str, dict] = {
-    "regulatory":   {"weight": 0.25, "duration": 247},   # TF4 full window
+    "regulatory":   {"weight": 0.25, "duration": 1440},  # policy outlives a day
     "institutional": {"weight": 0.20, "duration": 130},  # TF3 window
     "protocol":     {"weight": 0.15, "duration": 44},    # TF2 window
-    "macro":        {"weight": 0.15, "duration": 130},   # TF3 window
+    "macro":        {"weight": 0.15, "duration": 1440},  # regime, not a tick
     "structure":    {"weight": 0.10, "duration": 44},    # TF2 window
-    "sentiment":    {"weight": 0.08, "duration": 22},    # TF1 window
-    "geopolitical": {"weight": 0.07, "duration": 247},   # TF4, low immediate
+    "sentiment":    {"weight": 0.08, "duration": 22},    # fastest print
+    "geopolitical": {"weight": 0.07, "duration": 1440},  # conflict persists
 }
 NEWS_FRESHNESS_RATE = 0.05         # Freshness = exp(-0.05 * age_minutes)
-NEWS_AGGREGATE_WINDOW = 247        # sum over the last 247 minutes, clamp [-1,1]
+# Sum over this many minutes before clamping to [-1,1]. It was 247 (tf4);
+# a 24-hour lane must be able to aggregate across its own horizon.
+NEWS_AGGREGATE_WINDOW = 1440
 # Source_Reliability tiers (Section 7)
 NEWS_RELIABILITY_TOP = 1.0         # Reuters, Bloomberg, CoinDesk
 NEWS_RELIABILITY_MID = 0.7         # crypto blogs, verified accounts

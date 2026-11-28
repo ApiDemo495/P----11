@@ -684,3 +684,31 @@ canvas { max-width: 100%; }
 .mind-node.warn i, .mind-node.conflict i { background: #c9a22722; color: var(--gold); }
 .mind-node.partial { border-color: var(--line); color: var(--dim); }
 .mind-link { width: 12px; height: 1px; background: var(--line); }
+
+/* ═══ 2:1 GEOMETRY — the lane table and the side policy ═══ */
+/* Deliberately compact: a 4-row table, one law line, one side line. The
+   user has rejected long/stretchy panels, so this is a fixed-height block
+   that reads at a glance and never grows with the number of lanes. */
+.rr21 {
+  margin-top: 10px;
+  border: 1px solid #1d1d2e;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #0b0b12;
+  font: 11.5px ui-monospace, monospace;
+}
+.rr21-head { font-size: 12px; color: #e8e8f4; margin-bottom: 4px; }
+.rr21-law {
+  font-size: 10.5px;
+  line-height: 1.45;
+  margin-bottom: 6px;
+  color: #9a9ab0;
+}
+.rr21-tbl { width: 100%; border-collapse: collapse; }
+.rr21-tbl th {
+  text-align: left; font-weight: 600; font-size: 10px;
+  color: #8a8aa3; padding: 2px 6px 3px 0; border-bottom: 1px solid #1d1d2e;
+}
+.rr21-tbl td { padding: 3px 6px 3px 0; white-space: nowrap; }
+.rr21-tbl tr.rr-best td { color: var(--gold, #c9a227); }
+.rr21-side { margin-top: 6px; font-size: 10.5px; line-height: 1.45; }

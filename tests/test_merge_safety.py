@@ -91,7 +91,9 @@ def test_paper_book_never_fabricates_a_fill():
     assert book["execution_status"] == "paused"
     # the reason is the specific fact, per asset — never a bare "paused"
     assert "simulated tape is excluded" in book["execution_reason"]
-    assert set(book["paused_assets"]) == {"ETH", "BTC", "BNB", "PAXG"}
+    # PAXG -> SOL on 2026-11-27; the pause set follows the asset set
+    from app.config import SYMBOL_ORDER
+    assert set(book["paused_assets"]) == set(SYMBOL_ORDER)
     # and the contract it would fill under is published either way
     assert "next 15m bar open" in book["execution_contract"]["fill"]
     assert book["entered_this_bar"] == []

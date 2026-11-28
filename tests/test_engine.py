@@ -46,11 +46,20 @@ class DummyFeed(MarketFeed):
         import random
         rng = random.Random(99)
         now = int(time.time())
-        start = now - 1010 * 60
-        for sym, base in [("BTC", 68000.0), ("PAXG", 2650.0), ("ETH", 3500.0), ("BNB", 600.0)]:
+        # seed enough one-minute bars to fill the LONGEST lane (tf1 = 24h),
+        # which is now the warmup gate. Production backfills 10080.
+        from app.config import MIN_BARS_FULL_WINDOW
+        _n = max(1010, MIN_BARS_FULL_WINDOW + 40)
+        start = now - _n * 60
+        # SOL took PAXG's slot on 2026-11-27 (PAXG removed as the worst
+        # measured asset). The fixture must seed exactly SYMBOL_ORDER.
+        from app.config import SYMBOL_ORDER
+        _BASE = {"BTC": 68000.0, "SOL": 150.0, "ETH": 3500.0, "BNB": 600.0}
+        for sym in SYMBOL_ORDER:
+            base = _BASE[sym]
             st = self.states[sym]
             p = base
-            for i in range(1010):
+            for i in range(_n):
                 # persistent trend with moderate noise so formulas align and
                 # Confidence_final can clear the 0.35 issuance floor
                 p *= math.exp(rng.gauss(0.0009, 0.00035))
@@ -124,8 +133,11 @@ async def _boot(engine=None):
     engine = engine or make_engine()[0]
     await engine.feed.start()          # production main.py does this at startup
     await engine.start()
-    # analysis loop converges quickly on the synthetic data
-    for _ in range(200):
+    # The first lock walks all 4 lanes on all 4 assets, and the tf1 lane is a
+    # 24-hour window (1441 one-minute bars per asset) — a legitimately bigger
+    # pass than the old 22-minute window. Budget ~120 s; it converges in
+    # well under half of that on the synthetic tape.
+    for _ in range(2400):
         if engine.phase == "live":
             break
         await asyncio.sleep(0.05)
@@ -139,7 +151,7 @@ def test_initial_analysis_locks_early_with_all_cycles(live_engine):
     assert engine.locked
     assert engine.phase == "live"
     assert engine.phase_warning is False       # converged before 4 minutes
-    for sym in ["BTC", "PAXG", "ETH", "BNB"]:
+    for sym in ["BTC", "SOL", "ETH", "BNB"]:
         for tf in TF_ORDER:
             cyc = engine.cycles[(sym, tf)]
             assert cyc.cycle_end - cyc.cycle_start == TIMEFRAMES[tf]["minutes"] * 60
@@ -252,7 +264,7 @@ def test_sequential_tp2_lock_only_on_tp1_hit(live_engine):
 # ---------------------------------------------------------------- lock strengths
 def test_tp1_adjusts_every_grc_tp2_requires_shift_over_0_3(live_engine):
     engine = live_engine.engine
-    sym, tf = "PAXG", "tf1"
+    sym, tf = "SOL", "tf1"
     cyc = engine.cycles[(sym, tf)]
     cyc.issued = True                          # unit-level state manufacturing
     cyc.direction = cyc.direction or 1
@@ -410,7 +422,7 @@ def test_sl_close_branch_invalidates_and_waits_for_grc(live_engine):
 # ---------------------------------------------------------------- Extreme Override
 def test_extreme_override_needs_all_three_conditions(live_engine):
     engine = live_engine.engine
-    sym, tf = "PAXG", "tf4"
+    sym, tf = "SOL", "tf4"
     cyc = engine.cycles[(sym, tf)]
     cyc.issued = True                          # unit-level state manufacturing
     cyc.direction = cyc.direction or 1
@@ -471,7 +483,9 @@ def test_grc_is_the_only_scheduled_mutation(live_engine):
 
 
 def test_timeframe_window_constants_match_spec():
-    assert TIMEFRAMES["tf1"] == {"minutes": 22, "targets": [5, 10, 15, 22]}
+    # tf1 is the 24-hour 2:1 lane (it was 22 minutes until 2026-11-27).
+    assert TIMEFRAMES["tf1"] == {"minutes": 1440,
+                                 "targets": [360, 720, 1080, 1440]}
     assert TIMEFRAMES["tf2"] == {"minutes": 44, "targets": [11, 22, 33, 44]}
     assert TIMEFRAMES["tf3"] == {"minutes": 130, "targets": [30, 40, 90, 130]}
     assert TIMEFRAMES["tf4"] == {"minutes": 247, "targets": [60, 120, 180, 247]}

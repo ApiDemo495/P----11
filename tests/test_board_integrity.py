@@ -156,7 +156,13 @@ def test_refusal_message_has_no_unformatted_placeholder(tmp_path):
     again = j.seal("BTC", "tf1", direction=1, entry=100.0, tp=101.0,
                    sl=99.0, confidence=0.4, created_at=10_010)
     why = " ".join(again["why"])
-    assert "{W}" not in why and "22-minute window" in why
+    # the window length must be INTERPOLATED, never a literal placeholder,
+    # and it must be THIS lane's real duration (tf1 = 1440 min since the
+    # 2026-11-27 swap; it was 22 minutes before that).
+    from app.config import TIMEFRAMES
+    mins = TIMEFRAMES["tf1"]["minutes"]
+    assert "{W}" not in why
+    assert f"{mins}-minute window" in why
 
 
 # ── 3. the app detects and reports its own inconsistencies ──────────────

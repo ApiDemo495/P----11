@@ -67,7 +67,7 @@ def test_the_three_cost_models_agree():
     from app.horizon import asset_rt
     from app.hold_policy import friction_bps, round_trip_bps
     from backtest.data import ROUND_TRIP_BPS
-    for sym in ("BTC", "ETH", "BNB", "PAXG"):
+    for sym in ("BTC", "ETH", "BNB", "SOL"):
         assert asset_rt(sym) == pytest.approx(ROUND_TRIP_BPS[sym])
         assert round_trip_bps(sym) == pytest.approx(ROUND_TRIP_BPS[sym])
         assert friction_bps(sym) == pytest.approx(ROUND_TRIP_BPS[sym] / 2.0)
@@ -173,14 +173,23 @@ def test_geometry_check_finds_the_graded_barrier_distance():
     """
     from app import hold_policy as hp
     got_known = 0
-    for sym in ("BTC", "ETH", "BNB", "PAXG"):
-        for tf in ("tf1", "tf2", "tf3", "tf4"):
+    # tf1 is a 24-hour lane as of 2026-11-27 and the artifact is keyed by
+    # duration, so it correctly answers "unknown" — it is excluded from the
+    # count rather than being allowed to inflate or deflate it. The three
+    # certified sub-day lanes on four assets are 12 cells.
+    for sym in ("BTC", "ETH", "BNB", "SOL"):
+        for tf in ("tf2", "tf3", "tf4"):
             g = hp.geometry_cost_check(sym, tf)
             if g.get("tp_bps") is not None:
                 got_known += 1
                 assert g["pays_round_trip"] in (True, False)
                 assert g["why"]
-    assert got_known >= 9, (
+    # 7 is the CURRENT certified set: BTC/ETH on all three sub-day lanes,
+    # BNB on tf4 only. SOL has no artifact row at all (it arrived 2026-11-27
+    # with no walk), and tf1 is a duration the artifact has never covered —
+    # both answer "unknown", which is the correct answer and not a
+    # regression. The floor guards the LOOKUP, not the coverage.
+    assert got_known >= 7, (
         f"only {got_known} cells could resolve their graded target — the "
         "artifact lookup has regressed to returning unknown")
 
@@ -190,7 +199,7 @@ def test_no_measured_cell_lost_payability_under_the_cheaper_venue():
     from app import hold_policy as hp
     from backtest.data import ROUND_TRIP_BPS
     OLD = {"BTC": 28.872, "ETH": 29.808, "BNB": 30.963, "PAXG": 37.400}
-    for sym in ("BTC", "ETH", "BNB", "PAXG"):
+    for sym in ("BTC", "ETH", "BNB", "SOL"):
         for tf in ("tf1", "tf2", "tf3", "tf4"):
             g = hp.geometry_cost_check(sym, tf)
             tp = g.get("tp_bps")
@@ -206,7 +215,9 @@ def test_no_measured_cell_lost_payability_under_the_cheaper_venue():
 def test_summary_does_not_echo_the_historical_per_side_constant():
     from app import hold_policy as hp
     from backtest.data import ROUND_TRIP_BPS
-    s = hp.summary("BTC", "tf1")
+    # tf2 (44 min) — tf1 is the uncertified 24-hour lane and has no summary
+    # cost context to echo, by design.
+    s = hp.summary("BTC", "tf2")
     assert s["friction_bps_per_side"] == pytest.approx(
         ROUND_TRIP_BPS["BTC"] / 2.0)
     # the stale grading cost is still reported, just not as the live one

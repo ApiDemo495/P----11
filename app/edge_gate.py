@@ -16,7 +16,7 @@ The gate is deliberately hostile:
     no "signal price" fills — the adverse-selection variant of
     ``next_bar`` that makes a strategy look worse, never better.
   * Round-trip friction charged in full (12 bps BTC/ETH/BNB, 18 bps
-    PAXG) on every trade, win or lose.
+    SOL) on every trade, win or lose.
   * Correlation-aware significance. Trades that overlap in time are not
     independent, and pooled sleeves across correlated assets are not
     independent either. The gate therefore reports BOTH an iid t and a

@@ -7,7 +7,10 @@ history store for rolling baselines.
 """
 from __future__ import annotations
 
+import collections
 import math
+
+import numpy as np
 
 from ._helpers import (
     abs_changes,
@@ -46,40 +49,81 @@ def f01_rpic(ctx) -> float:
     if n_pts < L + 1:
         return 0.0
 
-    # Path Identity Vectors for every (overlapping) sub-window of length L
-    pivs: list[list[float]] = []
-    for j in range(0, n_pts - L + 1):
-        sub = P[j:j + L]
-        net = sub[-1] - sub[0]
-        diffs = [sub[i + 1] - sub[i] for i in range(L - 1)]
-        dir_changes = sum(
-            1 for i in range(len(diffs) - 1)
-            if diffs[i] != 0 and diffs[i + 1] != 0 and sign(diffs[i]) != sign(diffs[i + 1])
-        )
-        # time of max/min within sub-window normalized to sub-window length
-        t_max = max(range(L), key=lambda i: sub[i])
-        t_min = min(range(L), key=lambda i: sub[i])
-        path_eff = sum(abs(d) for d in diffs) / (abs(net) + EPS)
-        pivs.append([
-            net / (sub[0] if abs(sub[0]) > EPS else EPS),      # [1] net return
-            max(sub) - min(sub),                               # [2] range traversed
-            dir_changes / L,                                   # [3] reversal frequency
-            t_max / L,                                         # [4] peak position
-            t_min / L,                                         # [5] trough position
-            path_eff,                                          # [6] path efficiency
-        ])
+    # Path Identity Vectors for every (overlapping) sub-window of length L.
+    #
+    # PERFORMANCE (2026-11-27). This used to build the PIVs in a Python loop
+    # and then take the average pairwise Euclidean distance in a DOUBLE loop
+    # over the sub-windows. That is O(n^2) with a Python-level inner loop,
+    # and it was cheap only because the window was short: at the old 22-minute
+    # lane L = 4 and there were ~19 PIVs. When tf1 became the 24-hour 2:1 lane
+    # the same first loop had W_eff+1 = 1441 points and L = floor(1441/5) = 288,
+    # giving 1154 PIVs and 665k python-level distance evaluations — 7.3 s for
+    # ONE formula on ONE cell, i.e. ~1.5 minutes for a single 16-cell pass.
+    #
+    # The maths is unchanged and the numbers below are identical; only the
+    # inner loops are gone. Sliding min/max come from monotonic deques and the
+    # rolling sums from cumsum, so the cost is linear in the window, and the
+    # PIV distance matrix is a single numpy broadcast.
+    n_win = n_pts - L + 1
+    arr = np.asarray(P, dtype=np.float64)
 
-    n_piv = len(pivs)
+    # rolling window sums -> path efficiency (sum |d| over each sub-window)
+    diffs_all = np.diff(arr)                      # len n_pts-1
+    seg = L - 1                                   # diffs per sub-window
+    abs_cum = np.concatenate(([0.0],
+                              np.cumsum(np.abs(diffs_all))))
+    sum_abs = abs_cum[seg:seg + n_win] - abs_cum[:n_win]
+
+    # sliding max / min and their FIRST index (arguments match max()/min())
+    def _slide(vals: np.ndarray, span: int, want_max: bool):
+        out = np.empty(n_win, dtype=np.float64)
+        idx = np.empty(n_win, dtype=np.int64)
+        dq: collections.deque[int] = collections.deque()
+        for i in range(len(vals)):
+            while dq and (vals[dq[-1]] <= vals[i] if want_max
+                          else vals[dq[-1]] >= vals[i]):
+                dq.pop()
+            dq.append(i)
+            if dq[0] <= i - span:
+                dq.popleft()
+            if i >= span - 1:
+                j = i - span + 1
+                out[j] = vals[dq[0]]
+                idx[j] = dq[0] - j
+        return out, idx
+
+    hi, hi_i = _slide(arr, L, True)
+    lo, lo_i = _slide(arr, L, False)
+
+    # direction changes: sign(d[i]) != sign(d[i+1]) with both non-zero
+    sd = np.sign(diffs_all)
+    flips = np.zeros(len(diffs_all), dtype=np.int64)
+    if len(diffs_all) > 1:
+        nz = (sd[:-1] != 0) & (sd[1:] != 0)
+        flips[1:] = (nz & (sd[:-1] != sd[1:])).astype(np.int64)
+    flip_cum = np.concatenate(([0], np.cumsum(flips)))
+    # flips within sub-window j = number of flip positions in [j, j+seg-1]
+    dir_changes = np.maximum(flip_cum[seg:seg + n_win] - flip_cum[:n_win], 0)
+
+    first = arr[:n_win]
+    net = arr[L - 1:L - 1 + n_win] - first
+    piv = np.column_stack([
+        net / np.where(np.abs(first) > EPS, first, EPS),   # [1] net return
+        hi - lo,                                           # [2] range
+        dir_changes / float(L),                            # [3] reversals
+        hi_i / float(L),                                   # [4] peak pos
+        lo_i / float(L),                                   # [5] trough pos
+        sum_abs / (np.abs(net) + EPS),                     # [6] efficiency
+    ])
+
+    n_piv = int(piv.shape[0])
     if n_piv < 2:
         return 0.0
 
     # Gamma(t): average pairwise Euclidean distance between all PIVs
-    total = 0.0
-    for i in range(n_piv):
-        a = pivs[i]
-        for j in range(i + 1, n_piv):
-            b = pivs[j]
-            total += math.sqrt(sum((a[d] - b[d]) ** 2 for d in range(6)))
+    _d = piv[:, None, :] - piv[None, :, :]
+    _dist = np.sqrt((_d * _d).sum(axis=2))
+    total = float(np.triu(_dist, 1).sum())
     gamma = 2.0 * total / (n_piv * (n_piv - 1))
     ctx.intermediates["gamma"] = gamma
 
@@ -99,8 +143,8 @@ def f01_rpic(ctx) -> float:
 
     # D_collapse: sign of recent-quarter net returns x (1 - Gamma/Gamma_max)
     quarter_start = int((n_pts - 1) * 0.75)
-    recent = pivs[quarter_start:] if quarter_start < n_piv else pivs
-    d_bias = sign(sum(p[0] for p in recent))
+    recent = piv[quarter_start:] if quarter_start < n_piv else piv
+    d_bias = sign(float(np.sum(recent[:, 0])))
     d_collapse = d_bias * (1.0 - ratio)
 
     return safe_tanh(ratio * d_collapse)

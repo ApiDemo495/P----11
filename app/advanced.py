@@ -546,7 +546,8 @@ def evt_tail(Pfull: list[float]) -> dict:
 def rmt_block(series: dict[str, list[float]]) -> dict:
     """Market mode from the 4-asset correlation matrix (equal-time
     returns). Marchenko-Pastur edge for N=4, T bars."""
-    syms = [s for s in ("BTC", "ETH", "BNB", "PAXG") if s in series]
+    from .config import SYMBOL_ORDER
+    syms = [s for s in SYMBOL_ORDER if s in series]
     if len(syms) < 3:
         return {"mode_share": None, "why": "thin"}
     rs = {}

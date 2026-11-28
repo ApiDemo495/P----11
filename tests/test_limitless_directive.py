@@ -25,7 +25,7 @@ def test_sixteen_cells_are_isolated():
     assert len(CELLS.snapshot()) >= 16
     btc1 = cell_params("BTC", "tf1")
     eth4 = cell_params("ETH", "tf4")
-    pax1 = cell_params("PAXG", "tf1")
+    pax1 = cell_params("SOL", "tf1")
     # per-asset personalities differ (no BTC fallback)
     assert btc1.edge_floor_bps != eth4.edge_floor_bps or btc1.atr_sl != eth4.atr_sl
     assert pax1.conf_floor != btc1.conf_floor
@@ -244,7 +244,13 @@ def test_sync_clock_five_countdowns():
         assert key in d, key
         assert d[key]["remaining_s"] >= 0
         assert d[key]["remaining"]  # formatted mm:ss
-    assert d["WINDOW_CLOSE_SETTLE"]["minutes"] in (1, 5, 22, 30, 60, 240)
+    # the settle cadence must be one of the app's real lane durations. tf1's
+    # 1440 replaces the old 22-minute lane, so the set follows config rather
+    # than a literal list that can drift from it.
+    from app.config import TIMEFRAMES
+    allowed = {1, 5, 30, 60, 240} | {m["minutes"]
+                                     for m in TIMEFRAMES.values()}
+    assert d["WINDOW_CLOSE_SETTLE"]["minutes"] in allowed
 
 
 def test_snapshot_stamps_and_per_asset_regime():
@@ -265,7 +271,7 @@ def test_snapshot_stamps_and_per_asset_regime():
     assert len(s1["metacog"]["statuses"]) == 16
     assert "committee" in s1
     # per-asset regime + cell on every TF card
-    for sym in ("BTC", "ETH", "BNB", "PAXG"):
+    for sym in ("BTC", "ETH", "BNB", "SOL"):
         for tf in ("tf1", "tf2", "tf3", "tf4"):
             d = s1["assets"][sym]["tfs"][tf]
             assert d.get("regime") is not None, f"{sym}|{tf} regime"
@@ -273,7 +279,7 @@ def test_snapshot_stamps_and_per_asset_regime():
             assert d.get("metacog_status") in ("SHADOW", "CONFIRMED")
     # no bleed: per-asset cell params differ somewhere across assets
     sl = {sym: s1["assets"][sym]["tfs"]["tf1"]["cell"]["atr_sl"]
-          for sym in ("BTC", "ETH", "BNB", "PAXG")}
+          for sym in ("BTC", "ETH", "BNB", "SOL")}
     assert len(set(sl.values())) > 1, sl
 
 

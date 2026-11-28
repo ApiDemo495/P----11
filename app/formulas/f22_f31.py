@@ -10,6 +10,8 @@ from __future__ import annotations
 import cmath
 import math
 
+import numpy as np
+
 from ._helpers import ema, linear_slope, mean, median, pct_returns, safe_tanh, sign, std_pop
 from ..config import HIST_R_ANOMALY
 
@@ -239,12 +241,22 @@ def f26_ifds(ctx) -> float:
     if half < 2:
         return 0.0
     # DFT power for k = 1..floor(W/2)
+    #
+    # PERFORMANCE (2026-11-27). This was a double loop — k x n — with a
+    # cmath.exp inside, i.e. O(W^2) transcendental calls. At the old
+    # 22-minute lane W was ~22 and it was free. At the 24-hour 2:1 lane W is
+    # 1440, so the inner product alone was ~1M cmath.exp calls and 2.9 s for
+    # one formula on one cell. np.fft.rfft computes exactly the same
+    # quantities, because
+    #     F[k] = sum_n r[n] * exp(-2*pi*i*k*n/W)
+    # is the definition the loop was evaluating. The only other change is
+    # that k is now the 0-based FFT index, so k == fft_index for k >= 1 and
+    # the DC term (index 0) is dropped exactly as `range(1, half+1)` did.
+    spec = np.fft.rfft(np.asarray(r, dtype=np.float64))
     powers: dict[int, float] = {}
     re_im: dict[int, complex] = {}
     for k in range(1, half + 1):
-        acc = 0j
-        for n_i, rv in enumerate(r):
-            acc += rv * cmath.exp(-2j * math.pi * k * n_i / W)
+        acc = complex(spec[k])
         powers[k] = (abs(acc) ** 2) / W
         re_im[k] = acc
 
